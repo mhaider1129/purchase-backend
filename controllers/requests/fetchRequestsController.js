@@ -133,6 +133,36 @@ const getMyRequests = async (req, res, next) => {
 };
 
 const getApprovalHistory = async (req, res, next) => {
+  const { status, from_date, to_date, department_id } = req.query;
+
+  const params = [req.user.id];
+  const conditions = [
+    `a.approver_id = $1`,
+    `a.status IN ('Approved', 'Rejected')`,
+  ];
+
+  if (status) {
+    params.push(status);
+    conditions.push(`a.status = $${params.length}`);
+  }
+
+  if (department_id) {
+    params.push(department_id);
+    conditions.push(`r.department_id = $${params.length}`);
+  }
+
+  if (from_date) {
+    params.push(from_date);
+    conditions.push(`a.approved_at >= $${params.length}`);
+  }
+
+  if (to_date) {
+    params.push(to_date);
+    conditions.push(`a.approved_at <= $${params.length}`);
+  }
+
+  const whereSQL = conditions.join(' AND ');
+
   try {
     const result = await pool.query(
       `SELECT
@@ -144,12 +174,13 @@ const getApprovalHistory = async (req, res, next) => {
          a.status AS decision,
          a.comments,
          a.approval_level,
-         a.approved_at AS approved_at
-       FROM approvals a
+         a.approved_at AS approved_at,
+         d.name AS department_name       FROM approvals a
        JOIN requests r ON a.request_id = r.id
-       WHERE a.approver_id = $1 AND a.status IN ('Approved', 'Rejected')
+       JOIN departments d ON r.department_id = d.id
+       WHERE ${whereSQL}
        ORDER BY a.approved_at DESC`,
-      [req.user.id],
+      params,
     );
 
     res.json(result.rows);
@@ -183,6 +214,8 @@ const getAllRequests = async (req, res, next) => {
     search,
     from_date,
     to_date,
+    status,
+    department_id,
     page = 1,
     limit = 10,
   } = req.query;
@@ -216,6 +249,16 @@ const getAllRequests = async (req, res, next) => {
     whereClauses.push(`r.created_at <= $${params.length}`);
   }
 
+    if (status) {
+    params.push(status);
+    whereClauses.push(`r.status = $${params.length}`);
+  }
+
+  if (department_id) {
+    params.push(department_id);
+    whereClauses.push(`r.department_id = $${params.length}`);
+  }
+
   if (sort === 'assigned') {
     orderBy = 'r.assigned_to NULLS LAST, r.created_at DESC';
   }
@@ -226,12 +269,14 @@ const getAllRequests = async (req, res, next) => {
     const result = await pool.query(
       `
       SELECT
-        r.*,
+        r.*, 
+        d.name AS department_name,
         u.name AS assigned_user_name,
         u.role AS assigned_user_role,
         ap.approval_level AS current_approval_level,
         au.role AS current_approver_role
       FROM requests r
+      JOIN departments d ON r.department_id = d.id
       LEFT JOIN users u ON r.assigned_to = u.id
       LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
       LEFT JOIN users au ON ap.approver_id = au.id

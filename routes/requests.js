@@ -72,8 +72,10 @@ router.get('/incomplete/operational', getOperationalIncomplete); // COO
 // 📤 Export to CSV / PDF
 // ==========================
 const buildFilteredQuery = (queryParams) => {
-  const { request_type, search, from_date, to_date } = queryParams;
-  let sql = `SELECT r.* FROM requests r WHERE 1=1`;
+  const { request_type, search, from_date, to_date, status, department_id } = queryParams;
+  let sql = `SELECT r.*, u.name AS assigned_user_name, d.name AS department_name FROM requests r`;
+  sql += ` LEFT JOIN users u ON r.assigned_to = u.id`;
+  sql += ` JOIN departments d ON r.department_id = d.id WHERE 1=1`;
   const values = [];
 
   if (request_type) {
@@ -94,6 +96,16 @@ const buildFilteredQuery = (queryParams) => {
   if (to_date) {
     values.push(to_date);
     sql += ` AND r.created_at <= $${values.length}`;
+  }
+
+    if (status) {
+    values.push(status);
+    sql += ` AND r.status = $${values.length}`;
+  }
+
+  if (department_id) {
+    values.push(department_id);
+    sql += ` AND r.department_id = $${values.length}`;
   }
 
   sql += ' ORDER BY r.created_at DESC';

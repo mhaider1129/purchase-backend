@@ -58,16 +58,25 @@ const deactivateUser = async (req, res, next) => {
 const assignUser = async (req, res, next) => {
   const { id } = req.params;
   const { role: actingRole } = req.user;
-  const { role, department_id, section_id } = req.body;
+  let { role, department_id, section_id } = req.body;
 
   if (!['admin', 'SCM'].includes(actingRole)) {
     return next(createHttpError(403, 'Only Admin or SCM can assign users'));
   }
 
+    // Convert params to integers and allow null when empty
+  const userId = parseInt(id, 10);
+  const departmentId = department_id ? parseInt(department_id, 10) : null;
+  const sectionId = section_id ? parseInt(section_id, 10) : null;
+
+  if (Number.isNaN(userId)) {
+    return next(createHttpError(400, 'Invalid user ID'));
+  }
+
   try {
     const result = await pool.query(
       `UPDATE users SET role = $1, department_id = $2, section_id = $3 WHERE id = $4 RETURNING id`,
-      [role, department_id, section_id, id]
+      [role, departmentId, sectionId, userId]
     );
     if (result.rowCount === 0) {
       return next(createHttpError(404, 'User not found'));

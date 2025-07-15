@@ -58,8 +58,8 @@ router.get('/:requestId', authenticateUser, async (req, res, next) => {
   }
 });
 
-// 📤 Download a file
-router.get('/download/:filename', (req, res, next) => {
+// 📤 Download a file (authentication required)
+router.get('/download/:filename', authenticateUser, (req, res, next) => {
   const sanitizedFilename = sanitize(req.params.filename);
   const filePath = path.join(__dirname, '..', 'uploads', sanitizedFilename);
 

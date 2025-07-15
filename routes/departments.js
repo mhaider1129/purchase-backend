@@ -6,6 +6,8 @@ const {
   createSection,
 } = require('../controllers/departmentsController');
 const pool = require('../config/db');
+const { authenticateUser } = require('../middleware/authMiddleware');
+router.use(authenticateUser); // 🔐 Protect all department routes
 
 
 router.get('/', getDepartmentsWithSections); // GET /api/departments

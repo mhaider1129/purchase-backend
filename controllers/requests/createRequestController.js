@@ -51,8 +51,17 @@ const assignApprover = async (client, role, departmentId, requestId, level) => {
 };
 
 const createRequest = async (req, res, next) => {
-  const { request_type, justification, budget_impact_month, items } = req.body;
+  let { request_type, justification, budget_impact_month, items } = req.body;
 
+  // Items may arrive as a JSON string when using multipart/form-data
+  if (typeof items === 'string') {
+    try {
+      items = JSON.parse(items);
+    } catch (err) {
+      return next(createHttpError(400, 'Invalid items payload'));
+    }
+  }
+  
   if (!Array.isArray(items)) return next(createHttpError(400, 'Items must be an array'));
   if (!req.user?.id || !req.user?.department_id) return next(createHttpError(400, 'Invalid user context'));
 
@@ -196,11 +205,22 @@ const createRequest = async (req, res, next) => {
       [request.id, requester_id, justification],
     );
 
+        if (Array.isArray(req.files) && req.files.length > 0) {
+      for (const file of req.files) {
+        await client.query(
+          `INSERT INTO attachments (request_id, file_name, file_path, uploaded_by)
+           VALUES ($1, $2, $3, $4)`,
+          [request.id, file.originalname, file.path, requester_id]
+        );
+      }
+    }
+
     await client.query('COMMIT');
     res.status(201).json({
       message: '✅ Request created successfully with approval routing',
       request_id: request.id,
       estimated_cost: estimatedCost,
+      attachments_uploaded: req.files?.length || 0,
     });
   } catch (err) {
     await client.query('ROLLBACK');

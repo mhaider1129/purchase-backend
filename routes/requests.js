@@ -4,6 +4,7 @@ const router = express.Router();
 const { authenticateUser } = require('../middleware/authMiddleware');
 router.use(authenticateUser); // 🔐 Protect all routes
 const { getCompletedAssignedRequests } = require('../controllers/requests/procurementHistoryController');
+const upload = require('../middleware/upload');
 
 // 🧩 Controllers
 const {
@@ -42,7 +43,7 @@ const pool = require('../config/db');
 // 📦 Core Request Operations
 // ==========================
 
-router.post('/', createRequest); // Create new request
+router.post('/', upload.array('attachments'), createRequest); // Create new request with optional attachments
 router.get('/', getAllRequests); // Admin/SCM view all
 router.get('/my', getMyRequests); // My submitted requests
 router.get('/my-maintenance', getMyMaintenanceRequests); // Maintenance only

@@ -185,6 +185,53 @@ const markRequestAsCompleted = async (req, res, next) => {
   }
 };
 
+const updateRequestCost = async (req, res, next) => {
+  const { id } = req.params;
+  const { estimated_cost } = req.body;
+  const { user_id, role } = req.user;
+
+  const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
+  if (!allowedRoles.includes(role)) {
+    return next(createHttpError(403, 'Unauthorized to update request cost'));
+  }
+
+  if (!estimated_cost || isNaN(estimated_cost) || Number(estimated_cost) <= 0) {
+    return next(createHttpError(400, 'Valid estimated_cost is required and must be > 0'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const reqRes = await client.query('SELECT id FROM requests WHERE id = $1', [id]);
+    if (reqRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    await client.query(
+      `UPDATE requests SET estimated_cost = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [estimated_cost, id]
+    );
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, 'Total Cost Updated', $2, $3)`,
+      [id, user_id, `Updated total cost to ${estimated_cost}`]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({ message: '✅ Request cost updated successfully', estimated_cost: Number(estimated_cost) });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to update request cost:', err.message);
+    next(createHttpError(500, 'Failed to update request cost'));
+  } finally {
+    client.release();
+  }
+};
+
 const approveMaintenanceRequest = async (req, res, next) => {
   const { request_id, decision, comments = '' } = req.body;
   const user_id = req.user.id;
@@ -251,5 +298,6 @@ module.exports = {
   assignRequestToProcurement,
   updateApprovalStatus,
   markRequestAsCompleted,
+  updateRequestCost,
   approveMaintenanceRequest,
 };

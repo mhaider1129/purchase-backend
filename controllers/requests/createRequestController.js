@@ -15,9 +15,18 @@ const APPROVAL_CHAINS = {
   'Non-Stock-Operational-0-10000': ['HOD', 'WarehouseManager', 'SCM', 'COO'],
   'Non-Stock-Operational-10001-999999999': ['HOD', 'WarehouseManager', 'SCM', 'COO', 'CFO'],
   'Medical Device-Medical-0-999999999': ['HOD', 'MedicalDevices', 'CMO', 'SCM', 'COO'],
+  'IT Item-Medical-0-999999999': ['HOD', 'SCM', 'COO'],
+  'IT Item-Operational-0-999999999': ['HOD', 'SCM', 'COO'],
 };
 
-const assignApprover = async (client, role, departmentId, requestId, level) => {
+const assignApprover = async (
+  client,
+  role,
+  departmentId,
+  requestId,
+  requestType,
+  level,
+) => {
   const globalRoles = ['CMO', 'COO', 'SCM', 'CEO'];
   const query = globalRoles.includes(role.toUpperCase())
     ? `SELECT id, email FROM users WHERE role = $1 AND is_active = true LIMIT 1`
@@ -44,8 +53,8 @@ const assignApprover = async (client, role, departmentId, requestId, level) => {
   if (approverId && level === 1 && approverEmail) {
     await sendEmail(
       approverEmail,
-      'Approval Required',
-      `A new request (ID: ${requestId}) requires your approval.`,
+      'New Purchase Request Awaiting Approval',
+      `You have a new ${requestType} request to review.\nRequest ID: ${requestId}\nPlease log in to the system to take action.`,
     );
   }
 };
@@ -82,6 +91,27 @@ const createRequest = async (req, res, next) => {
     }
     maintenance_ref_number = req.body.maintenance_ref_number || null;
     initiated_by_technician_id = req.user.id;
+  }
+
+  const itemNames = items.map((i) => i.item_name.toLowerCase());
+  let duplicateFound = false;
+  try {
+    const dupRes = await pool.query(
+      `SELECT 1
+       FROM requests r
+       JOIN requested_items ri ON r.id = ri.request_id
+       WHERE r.department_id = $1
+         AND r.request_type = $3
+         AND DATE_TRUNC('month', r.created_at) = DATE_TRUNC('month', CURRENT_DATE)
+         AND LOWER(ri.item_name) = ANY($2::text[])
+       LIMIT 1`,
+      [department_id, itemNames, request_type],
+    );
+    duplicateFound = dupRes.rowCount > 0;
+
+  } catch (err) {
+    console.error('❌ Error checking duplicates:', err);
+    return next(createHttpError(500, 'Failed to validate duplicate requests'));
   }
 
   const client = await pool.connect();
@@ -124,14 +154,15 @@ const createRequest = async (req, res, next) => {
     const request = requestRes.rows[0];
     if (!request?.id) throw createHttpError(500, '❌ Failed to retrieve request ID after insertion');
 
-    for (const item of items) {
-      const { item_name, quantity, unit_cost, available_quantity, intended_use } = item;
+    const itemIdMap = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const { item_name, quantity, unit_cost, available_quantity, intended_use } = items[idx];
       const total_cost = (parseInt(quantity) || 0) * (parseInt(unit_cost) || 0);
 
-      await client.query(
+      const inserted = await client.query(
         `INSERT INTO requested_items (
           request_id, item_name, quantity, unit_cost, total_cost, available_quantity, intended_use
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [
           request.id,
           item_name,
@@ -142,6 +173,7 @@ const createRequest = async (req, res, next) => {
           intended_use || null,
         ],
       );
+      itemIdMap[idx] = inserted.rows[0].id;
     }
 
     if (request_type === 'Maintenance') {
@@ -176,6 +208,8 @@ const createRequest = async (req, res, next) => {
         costKey = estimatedCost <= 10000 ? '0-10000' : '10001-999999999';
       } else if (request_type === 'Medical Device') {
         costKey = '0-999999999';
+      } else if (request_type === 'IT Item') {
+        costKey = '0-999999999';
       } else {
         throw createHttpError(400, `Unhandled request_type: ${request_type}`);
       }
@@ -194,7 +228,14 @@ const createRequest = async (req, res, next) => {
             [request.id, requester_id, i + 1],
           );
         } else {
-          await assignApprover(client, role, department_id, request.id, i + 1);
+          await assignApprover(
+            client,
+            role,
+            department_id,
+            request.id,
+            request_type,
+            i + 1,
+          );
         }
       }
     }
@@ -205,17 +246,64 @@ const createRequest = async (req, res, next) => {
       [request.id, requester_id, justification],
     );
 
-        if (Array.isArray(req.files) && req.files.length > 0) {
+    if (Array.isArray(req.files) && req.files.length > 0) {
+      const requestFiles = [];
+      const itemFiles = {};
+
       for (const file of req.files) {
+        if (file.fieldname === 'attachments') {
+          requestFiles.push(file);
+        } else if (file.fieldname.startsWith('item_')) {
+          const idx = parseInt(file.fieldname.split('_')[1], 10);
+          if (!Number.isNaN(idx)) {
+            itemFiles[idx] = itemFiles[idx] || [];
+            itemFiles[idx].push(file);
+          }
+        }
+      }
+
+      for (const file of requestFiles) {
         await client.query(
-          `INSERT INTO attachments (request_id, file_name, file_path, uploaded_by)
-           VALUES ($1, $2, $3, $4)`,
+          `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
+           VALUES ($1, NULL, $2, $3, $4)`,
           [request.id, file.originalname, file.path, requester_id]
         );
+      }
+
+      for (const [idx, files] of Object.entries(itemFiles)) {
+        const itemId = itemIdMap[idx];
+        if (!itemId) continue;
+        for (const file of files) {
+          await client.query(
+            `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [request.id, itemId, file.originalname, file.path, requester_id]
+          );
+        }
       }
     }
 
     await client.query('COMMIT');
+
+    if (duplicateFound) {
+      try {
+        const { rows } = await pool.query(
+          `SELECT email FROM users WHERE role IN ('ProcurementSupervisor', 'ProcurementSpecialist', 'SCM') AND is_active = true`
+        );
+        for (const row of rows) {
+          if (row.email) {
+            await sendEmail(
+              row.email,
+              'Duplicate Purchase Request Warning',
+              `Request ID ${request.id} may duplicate a submission from this month in department ${department_id}.`
+            );
+          }
+        }
+      } catch (notifyErr) {
+        console.error('❌ Failed to send duplicate warning emails:', notifyErr);
+      }
+    }
+    
     res.status(201).json({
       message: '✅ Request created successfully with approval routing',
       request_id: request.id,

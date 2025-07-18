@@ -8,6 +8,22 @@ const getDashboardSummary = async (req, res) => {
     const rejectedRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Rejected'");
     const pendingRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Pending'");
 
+    const avgApprovalRes = await pool.query(`
+      SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) / 86400 AS avg_days
+      FROM requests
+      WHERE status = 'Approved'
+    `);
+
+    const rejectionsByMonthRes = await pool.query(`
+      SELECT
+        TO_CHAR(created_at, 'YYYY-MM') AS month,
+        COUNT(*) AS rejected_count
+      FROM requests
+      WHERE status = 'Rejected'
+      GROUP BY month
+      ORDER BY month
+    `);
+
     const spendingByMonth = await pool.query(`
       SELECT
         TO_CHAR(created_at, 'YYYY-MM') AS month,
@@ -35,6 +51,8 @@ const getDashboardSummary = async (req, res) => {
       pending_requests: parseInt(pendingRes.rows[0].count),
       spending_by_month: spendingByMonth.rows,
       top_departments: topDepartments.rows,
+      avg_approval_time_days: parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
+      rejections_by_month: rejectionsByMonthRes.rows,
     });
   } catch (err) {
     console.error('❌ Failed to load dashboard summary:', err);
@@ -42,4 +60,32 @@ const getDashboardSummary = async (req, res) => {
   }
 };
 
-module.exports = { getDashboardSummary };
+const getDepartmentMonthlySpending = async (req, res) => {
+  const { role } = req.user;
+  if (!['admin', 'SCM'].includes(role)) {
+    return res.status(403).json({ message: 'Unauthorized' });
+  }
+
+  const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT d.name AS department,
+              TO_CHAR(r.created_at, 'YYYY-MM') AS month,
+              SUM(r.estimated_cost) AS total_cost
+       FROM requests r
+       JOIN departments d ON r.department_id = d.id
+       WHERE r.status = 'Approved'
+         AND EXTRACT(YEAR FROM r.created_at) = $1
+       GROUP BY d.name, month
+       ORDER BY d.name, month`,
+      [year]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch department spending:', err);
+    res.status(500).json({ error: 'Failed to fetch department spending' });
+  }
+};
+
+module.exports = { getDashboardSummary, getDepartmentMonthlySpending };

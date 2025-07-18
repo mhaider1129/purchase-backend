@@ -122,13 +122,13 @@ const handleApprovalDecision = async (req, res, next) => {
         [nextId],
       );
       const nextEmail = emailRes.rows[0]?.email;
-      if (nextEmail) {
-        await sendEmail(
-          nextEmail,
-          'Approval Required',
-          `A request (ID: ${approval.request_id}) is awaiting your approval.`,
-        );
-      }
+        if (nextEmail) {
+          await sendEmail(
+            nextEmail,
+            'Purchase Request Needs Your Review',
+            `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.\nPlease log in to review the details.`,
+          );
+        }
     }
 
     // 9. Check Final Request Status
@@ -150,13 +150,13 @@ const handleApprovalDecision = async (req, res, next) => {
         VALUES ($1, $2, $3, NULL)
       `, [approval.request_id, `Request marked ${newStatus}`, approver_id]);
     
-      if (request.requester_email) {
-        await sendEmail(
-          request.requester_email,
-          `Your request has been ${newStatus}`,
-          `Request ID ${approval.request_id} has been ${newStatus.toLowerCase()}.`,
-        );
-      }
+        if (request.requester_email) {
+          await sendEmail(
+            request.requester_email,
+            `Your purchase request ${approval.request_id} has been ${newStatus}`,
+            `Your ${request.request_type} request (ID: ${approval.request_id}) has been ${newStatus.toLowerCase()}.\nLog in to view the full details.`,
+          );
+        }
     }
 
     await client.query('COMMIT');

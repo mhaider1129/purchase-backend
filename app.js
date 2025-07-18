@@ -6,6 +6,7 @@ const dotenv = require('dotenv');
 const path = require('path');
 const pool = require('./config/db');
 const reassignPendingApprovals = require('./controllers/utils/reassignPendingApprovals');
+const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
 
 // Load environment variables
 dotenv.config();
@@ -50,6 +51,9 @@ const usersRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
 const departmentsRoutes = require('./routes/departments');
 const rolesRoutes = require('./routes/roles');
+const maintenanceStockRoutes = require('./routes/maintenanceStock');
+const procurementPlansRoutes = require('./routes/procurementPlans');
+const stockItemsRoutes = require('./routes/stockItems');
 
 const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -73,6 +77,9 @@ app.use('/api/users', authenticateUser, usersRoutes);
 app.use('/api/dashboard', authenticateUser, dashboardRoutes);
 app.use('/api/departments', authenticateUser, departmentsRoutes);
 app.use('/api/roles', authenticateUser, rolesRoutes);
+app.use('/api/maintenance-stock', authenticateUser, maintenanceStockRoutes);
+app.use('/api/procurement-plans', authenticateUser, procurementPlansRoutes);
+app.use('/api/stock-items', authenticateUser, stockItemsRoutes);
 
 // =========================
 // 🛠️ Utility Routes
@@ -111,6 +118,12 @@ app.listen(PORT, async () => {
   try {
     await reassignPendingApprovals();
     console.log('🔄 Pending approvals reassigned on startup');
+    await remindPendingApprovals();
+    setInterval(() => {
+      remindPendingApprovals().catch(err =>
+        console.error('❌ Reminder job failed:', err)
+      );
+    }, 24 * 60 * 60 * 1000); // daily
   } catch (err) {
     console.error('❌ Auto-reassignment error on startup:', err);
   }

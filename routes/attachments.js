@@ -15,6 +15,8 @@ function createHttpError(statusCode, message) {
   return err;
 }
 
+// 📥 Upload a file to a specific item
+
 // 📥 Upload a file to a request
 router.post('/:requestId', authenticateUser, upload.single('file'), async (req, res, next) => {
   const { requestId } = req.params;
@@ -24,8 +26,8 @@ router.post('/:requestId', authenticateUser, upload.single('file'), async (req, 
 
   try {
     const saved = await pool.query(
-      `INSERT INTO attachments (request_id, file_name, file_path, uploaded_by)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
+      `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
+       VALUES ($1, NULL, $2, $3, $4) RETURNING id`,
       [requestId, file.originalname, file.path, req.user.id]
     );
 
@@ -49,6 +51,49 @@ router.get('/:requestId', authenticateUser, async (req, res, next) => {
        FROM attachments
        WHERE request_id = $1`,
       [requestId]
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch attachments:', err.message);
+    next(createHttpError(500, 'Failed to fetch attachments'));
+  }
+});
+
+// 📥 Upload a file to a specific item
+router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req, res, next) => {
+  const { itemId } = req.params;
+  const file = req.file;
+
+  if (!file) return next(createHttpError(400, 'No file uploaded'));
+
+  try {
+    const saved = await pool.query(
+      `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
+       VALUES (NULL, $1, $2, $3, $4) RETURNING id`,
+      [itemId, file.originalname, file.path, req.user.id]
+    );
+
+    res.status(201).json({
+      message: '📎 File uploaded successfully',
+      attachmentId: saved.rows[0].id
+    });
+  } catch (err) {
+    console.error('❌ Upload error:', err.message);
+    next(createHttpError(500, 'Failed to upload attachment'));
+  }
+});
+
+// 📄 Fetch attachments for a specific item
+router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
+  const { itemId } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT id, file_name, file_path, uploaded_by, uploaded_at
+       FROM attachments
+       WHERE item_id = $1`,
+      [itemId]
     );
 
     res.json(result.rows);

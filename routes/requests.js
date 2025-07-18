@@ -24,6 +24,7 @@ const {
   approveMaintenanceRequest,
   getPendingMaintenanceApprovals,
   markRequestAsCompleted,
+  updateRequestCost,
   getClosedRequests
 } = require('../controllers/requestsController');
 
@@ -43,7 +44,7 @@ const pool = require('../config/db');
 // 📦 Core Request Operations
 // ==========================
 
-router.post('/', upload.array('attachments'), createRequest); // Create new request with optional attachments
+router.post('/', upload.any(), createRequest); // Create new request with optional attachments
 router.get('/', getAllRequests); // Admin/SCM view all
 router.get('/my', getMyRequests); // My submitted requests
 router.get('/my-maintenance', getMyMaintenanceRequests); // Maintenance only
@@ -54,6 +55,7 @@ router.get('/closed', getClosedRequests); // Completed or rejected requests
 router.get('/approval-history', getApprovalHistory); // My approval history
 router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
+router.put('/:id/cost', authenticateUser, updateRequestCost);
 
 
 // ==========================

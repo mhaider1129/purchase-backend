@@ -23,6 +23,7 @@ const {
   assignRequestToProcurement,
   updateApprovalStatus,
   markRequestAsCompleted,
+  updateRequestCost,
   approveMaintenanceRequest,
 } = require('./requests/updateRequestsController');
 
@@ -44,5 +45,6 @@ module.exports = {
   approveMaintenanceRequest,
   getRequestLogs,
   markRequestAsCompleted,
+  updateRequestCost,
   getClosedRequests,
   };

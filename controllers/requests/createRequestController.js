@@ -156,13 +156,27 @@ const createRequest = async (req, res, next) => {
 
     const itemIdMap = [];
     for (let idx = 0; idx < items.length; idx++) {
-      const { item_name, quantity, unit_cost, available_quantity, intended_use } = items[idx];
+      const {
+        item_name,
+        quantity,
+        unit_cost,
+        available_quantity,
+        intended_use,
+        specs,
+      } = items[idx];
       const total_cost = (parseInt(quantity) || 0) * (parseInt(unit_cost) || 0);
 
       const inserted = await client.query(
         `INSERT INTO requested_items (
-          request_id, item_name, quantity, unit_cost, total_cost, available_quantity, intended_use
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+          request_id,
+          item_name,
+          quantity,
+          unit_cost,
+          total_cost,
+          available_quantity,
+          intended_use,
+          specs
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         [
           request.id,
           item_name,
@@ -171,6 +185,7 @@ const createRequest = async (req, res, next) => {
           total_cost,
           available_quantity || null,
           intended_use || null,
+          specs || null,
         ],
       );
       itemIdMap[idx] = inserted.rows[0].id;

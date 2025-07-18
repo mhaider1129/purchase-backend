@@ -151,14 +151,22 @@ const markRequestAsCompleted = async (req, res, next) => {
     const itemCheck = await client.query(
       `SELECT COUNT(*) AS incomplete_count
        FROM requested_items
-       WHERE request_id = $1 AND (procurement_status IS NULL OR procurement_status = '')`,
+       WHERE request_id = $1
+         AND (
+           procurement_status IS NULL OR procurement_status = '' OR purchased_quantity IS NULL
+         )`,
       [id],
     );
 
     const incompleteCount = parseInt(itemCheck.rows[0].incomplete_count);
     if (incompleteCount > 0) {
       await client.query('ROLLBACK');
-      return next(createHttpError(400, 'Not all items have a procurement status.'));
+      return next(
+        createHttpError(
+          400,
+          'Not all items have a procurement status and purchased quantity.'
+        )
+      );
     }
 
     await client.query(

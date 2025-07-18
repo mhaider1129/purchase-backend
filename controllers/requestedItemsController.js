@@ -241,8 +241,69 @@ const updateItemProcurementStatus = async (req, res, next) => {
   }
 };
 
+// 🆕 Update purchased quantity of an item
+const updateItemPurchasedQuantity = async (req, res, next) => {
+  const { item_id } = req.params;
+  let { purchased_quantity } = req.body;
+  const { user_id, role } = req.user;
+
+  const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
+
+  if (!allowedRoles.includes(role)) {
+    return next(createHttpError(403, 'Unauthorized to update purchased quantity'));
+  }
+
+  purchased_quantity = Number(purchased_quantity);
+  if (isNaN(purchased_quantity) || purchased_quantity < 0) {
+    return next(createHttpError(400, 'Valid purchased_quantity is required'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const itemRes = await client.query(
+      `SELECT * FROM requested_items WHERE id = $1`,
+      [item_id]
+    );
+
+    if (itemRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Requested item not found'));
+    }
+
+    const item = itemRes.rows[0];
+
+    await client.query(
+      `UPDATE requested_items
+       SET purchased_quantity = $1,
+           procurement_updated_by = $2,
+           procurement_updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [purchased_quantity, user_id, item_id]
+    );
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, 'Purchased Quantity Updated', $2, $3)`,
+      [item.request_id, user_id, `Set purchased qty to ${purchased_quantity} for '${item.item_name}'`]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({ message: '✅ Purchased quantity updated successfully' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to update purchased quantity:', err.message);
+    next(createHttpError(500, 'Failed to update purchased quantity'));
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   addRequestedItems,
   updateItemCost,
-  updateItemProcurementStatus
+  updateItemProcurementStatus,
+  updateItemPurchasedQuantity,
 };

@@ -26,7 +26,7 @@ const getRequestDetails = async (req, res, next) => {
     const request = accessCheck.rows[0];
 
     const itemsRes = await pool.query(
-      `SELECT item_name, quantity, unit_cost, total_cost FROM requested_items WHERE request_id = $1`,
+      `SELECT item_name, quantity, purchased_quantity, unit_cost, total_cost, specs FROM requested_items WHERE request_id = $1`,
       [id],
     );
 
@@ -76,7 +76,7 @@ const getRequestItemsOnly = async (req, res, next) => {
 
     const itemsRes = await pool.query(
       `
-      SELECT id, item_name, quantity, unit_cost, total_cost, procurement_status, procurement_comment
+      SELECT id, item_name, quantity, purchased_quantity, unit_cost, total_cost, procurement_status, procurement_comment, specs
       FROM requested_items
       WHERE request_id = $1
       `,

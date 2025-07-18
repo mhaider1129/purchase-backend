@@ -8,7 +8,8 @@ const { authenticateUser } = require('../middleware/authMiddleware');
 const {
   addRequestedItems,
   updateItemCost,
-  updateItemProcurementStatus // 👈 Make sure this is added
+  updateItemProcurementStatus,
+  updateItemPurchasedQuantity
 } = require('../controllers/requestedItemsController');
 
 /**
@@ -31,5 +32,12 @@ router.put('/:id/cost', authenticateUser, updateItemCost);
  * @access  Private (SCM or ProcurementSupervisor/Specialist only)
  */
 router.put('/:item_id/procurement-status', authenticateUser, updateItemProcurementStatus);
+
+/**
+ * @route   PUT /api/requested-items/:item_id/purchased-quantity
+ * @desc    Update purchased quantity of a requested item
+ * @access  Private (SCM or ProcurementSupervisor/Specialist only)
+ */
+router.put('/:item_id/purchased-quantity', authenticateUser, updateItemPurchasedQuantity);
 
 module.exports = router;

@@ -98,10 +98,11 @@ const createRequest = async (req, res, next) => {
   const itemNames = items.map((i) => i.item_name.toLowerCase());
   let duplicateFound = false;
   try {
+    const table = request_type === 'Warehouse Supply' ? 'warehouse_supply_items' : 'requested_items';
     const dupRes = await pool.query(
       `SELECT 1
        FROM requests r
-       JOIN requested_items ri ON r.id = ri.request_id
+       JOIN ${table} ri ON r.id = ri.request_id
        WHERE r.department_id = $1
          AND r.request_type = $3
          AND DATE_TRUNC('month', r.created_at) = DATE_TRUNC('month', CURRENT_DATE)
@@ -190,7 +191,16 @@ const createRequest = async (req, res, next) => {
           specs || null,
         ],
       );
-      itemIdMap[idx] = inserted.rows[0].id;
+      const requestedItemId = inserted.rows[0].id;
+      itemIdMap[idx] = requestedItemId;
+
+      if (request_type === 'Warehouse Supply') {
+        await client.query(
+          `INSERT INTO warehouse_supply_items (request_id, requested_item_id, item_name, quantity)
+           VALUES ($1, $2, $3, $4)`,
+          [request.id, requestedItemId, item_name, quantity]
+        );
+      }
     }
 
     if (request_type === 'Maintenance') {

@@ -25,10 +25,18 @@ const getRequestDetails = async (req, res, next) => {
 
     const request = accessCheck.rows[0];
 
-    const itemsRes = await pool.query(
-      `SELECT item_name, quantity, purchased_quantity, unit_cost, total_cost, specs FROM requested_items WHERE request_id = $1`,
-      [id],
-    );
+    let itemsRes;
+    if (request.request_type === 'Warehouse Supply') {
+      itemsRes = await pool.query(
+        `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
+        [id]
+      );
+    } else {
+      itemsRes = await pool.query(
+        `SELECT item_name, quantity, purchased_quantity, unit_cost, total_cost, specs FROM requested_items WHERE request_id = $1`,
+        [id]
+      );
+    }
 
     let assignedUser = null;
     if (request.assigned_to) {
@@ -74,14 +82,24 @@ const getRequestItemsOnly = async (req, res, next) => {
       return next(createHttpError(404, 'Request not found or access denied'));
     }
 
-    const itemsRes = await pool.query(
-      `
+    let itemsRes;
+    const typeRes = await pool.query('SELECT request_type FROM requests WHERE id = $1', [id]);
+    const reqType = typeRes.rows[0]?.request_type;
+    if (reqType === 'Warehouse Supply') {
+      itemsRes = await pool.query(
+        `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
+        [id]
+      );
+    } else {
+      itemsRes = await pool.query(
+        `
       SELECT id, item_name, quantity, purchased_quantity, unit_cost, total_cost, procurement_status, procurement_comment, specs
       FROM requested_items
       WHERE request_id = $1
       `,
-      [id],
-    );
+        [id]
+      );
+    }
 
     res.json({ items: itemsRes.rows });
   } catch (err) {

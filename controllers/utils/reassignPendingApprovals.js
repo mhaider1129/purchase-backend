@@ -12,12 +12,14 @@ const reassignPendingApprovals = async () => {
   try {
     await client.query('BEGIN');
 
-    const { rows: inactiveApprovals } = await client.query(`
-      SELECT a.id AS approval_id, a.request_id, a.approval_level, u.role, u.department_id
-      FROM approvals a
-      JOIN users u ON a.approver_id = u.id
-      WHERE u.is_active = false AND a.status = 'Pending'
-    `);
+      const { rows: inactiveApprovals } = await client.query(`
+        SELECT a.id AS approval_id, a.request_id, a.approval_level, u.role, u.department_id
+        FROM approvals a
+        JOIN users u ON a.approver_id = u.id
+        WHERE u.is_active = false
+          AND a.status = 'Pending'
+          AND a.is_active = true
+      `);
 
     for (const approval of inactiveApprovals) {
       const { approval_id, request_id, approval_level, role, department_id } = approval;
@@ -62,10 +64,17 @@ const reassignPendingApprovals = async () => {
         } else {
           // Auto-approve
           await client.query(
-            `UPDATE approvals 
-             SET status = 'Approved', approved_at = CURRENT_TIMESTAMP, is_active = false 
+            `UPDATE approvals
+             SET status = 'Approved', approved_at = CURRENT_TIMESTAMP, is_active = false
              WHERE id = $1`,
             [approval_id]
+          );
+
+          await client.query(
+            `UPDATE approvals
+             SET is_active = true
+             WHERE request_id = $1 AND approval_level = $2 AND is_active = false`,
+            [request_id, approval_level + 1]
           );
 
           await client.query(

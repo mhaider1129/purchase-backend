@@ -17,6 +17,8 @@ const APPROVAL_CHAINS = {
   'Medical Device-Medical-0-999999999': ['HOD', 'MedicalDevices', 'CMO', 'SCM', 'COO'],
   'IT Item-Medical-0-999999999': ['HOD', 'SCM', 'COO'],
   'IT Item-Operational-0-999999999': ['HOD', 'SCM', 'COO'],
+  'Warehouse Supply-Medical-0-999999999': ['HOD', 'WarehouseManager'],
+  'Warehouse Supply-Operational-0-999999999': ['HOD', 'WarehouseManager'],
 };
 
 const assignApprover = async (
@@ -224,6 +226,8 @@ const createRequest = async (req, res, next) => {
       } else if (request_type === 'Medical Device') {
         costKey = '0-999999999';
       } else if (request_type === 'IT Item') {
+        costKey = '0-999999999';
+      } else if (request_type === 'Warehouse Supply') {
         costKey = '0-999999999';
       } else {
         throw createHttpError(400, `Unhandled request_type: ${request_type}`);

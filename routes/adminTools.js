@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticateUser } = require('../middleware/authMiddleware');
 const reassignPendingApprovals = require('../controllers/utils/reassignPendingApprovals');
+const { getAuditLog } = require('../controllers/auditLogController');
 const { successResponse, errorResponse } = require('../utils/responseFormatter');
 
 // 🔄 POST /api/admin-tools/reassign-approvals
@@ -30,5 +31,8 @@ router.post('/reassign-approvals', authenticateUser, async (req, res, next) => {
     return errorResponse(res, 500, 'Failed to reassign approvals');
   }
 });
+
+// 📜 GET /api/admin-tools/logs
+router.get('/logs', authenticateUser, getAuditLog);
 
 module.exports = router;

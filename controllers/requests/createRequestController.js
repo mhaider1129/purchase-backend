@@ -169,37 +169,41 @@ const createRequest = async (req, res, next) => {
       } = items[idx];
       const total_cost = (parseInt(quantity) || 0) * (parseInt(unit_cost) || 0);
 
-      const inserted = await client.query(
-        `INSERT INTO requested_items (
-          request_id,
-          item_name,
-          quantity,
-          unit_cost,
-          total_cost,
-          available_quantity,
-          intended_use,
-          specs
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-        [
-          request.id,
-          item_name,
-          quantity,
-          unit_cost,
-          total_cost,
-          available_quantity || null,
-          intended_use || null,
-          specs || null,
-        ],
-      );
-      const requestedItemId = inserted.rows[0].id;
-      itemIdMap[idx] = requestedItemId;
+      let requestedItemId = null;
+      if (request_type !== 'Warehouse Supply') {
+        const insertedReq = await client.query(
+          `INSERT INTO requested_items (
+            request_id,
+            item_name,
+            quantity,
+            unit_cost,
+            total_cost,
+            available_quantity,
+            intended_use,
+            specs
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+          [
+            request.id,
+            item_name,
+            quantity,
+            unit_cost,
+            total_cost,
+            available_quantity || null,
+            intended_use || null,
+            specs || null,
+          ],
+        );
+        requestedItemId = insertedReq.rows[0].id;
+        itemIdMap[idx] = requestedItemId;
+      }
 
       if (request_type === 'Warehouse Supply') {
-        await client.query(
-          `INSERT INTO warehouse_supply_items (request_id, requested_item_id, item_name, quantity)
-           VALUES ($1, $2, $3, $4)`,
-          [request.id, requestedItemId, item_name, quantity]
+        const wsRes = await client.query(
+          `INSERT INTO warehouse_supply_items (request_id, item_name, quantity)
+           VALUES ($1, $2, $3, $4) RETURNING id`,
+          [request.id, item_name, quantity]
         );
+        itemIdMap[idx] = wsRes.rows[0].id;
       }
     }
 

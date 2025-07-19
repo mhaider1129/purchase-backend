@@ -22,6 +22,13 @@ const addRequestedItems = async (req, res, next) => {
     await client.query('BEGIN');
     const insertedItems = [];
 
+    const typeRes = await client.query('SELECT request_type FROM requests WHERE id = $1', [request_id]);
+    const reqType = typeRes.rows[0]?.request_type;
+    if (!reqType) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
     for (const item of items) {
       const {
         item_name,
@@ -42,45 +49,54 @@ const addRequestedItems = async (req, res, next) => {
 
       const total_cost = unit_cost && quantity ? unit_cost * quantity : null;
 
-      const result = await client.query(
-        `INSERT INTO requested_items 
-          (request_id, item_name, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         RETURNING *`,
-        [
-          request_id,
-          item_name,
-          quantity,
-          unit_cost,
-          total_cost,
-          isNaN(available_quantity) ? null : available_quantity,
-          intended_use,
-          specs,
-          device_info,
-          purchase_type,
-          item_type
-        ]
-      );
-
-      insertedItems.push(result.rows[0]);
+      if (reqType === 'Warehouse Supply') {
+        const result = await client.query(
+          `INSERT INTO warehouse_supply_items (request_id, requested_item_id, item_name, quantity)
+           VALUES ($1, NULL, $2, $3)
+           RETURNING *`,
+          [request_id, item_name, quantity]
+        );
+        insertedItems.push(result.rows[0]);
+      } else {
+        const result = await client.query(
+          `INSERT INTO requested_items
+            (request_id, item_name, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           RETURNING *`,
+          [
+            request_id,
+            item_name,
+            quantity,
+            unit_cost,
+            total_cost,
+            isNaN(available_quantity) ? null : available_quantity,
+            intended_use,
+            specs,
+            device_info,
+            purchase_type,
+            item_type
+          ]
+        );
+        insertedItems.push(result.rows[0]);
+      }
     }
 
-    // 🧮 Update estimated cost
-    const totalRes = await client.query(
-      `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total FROM requested_items WHERE request_id = $1`,
-      [request_id]
-    );
+    let newEstimatedCost = null;
+    if (reqType !== 'Warehouse Supply') {
+      const totalRes = await client.query(
+        `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total FROM requested_items WHERE request_id = $1`,
+        [request_id]
+      );
+      newEstimatedCost = parseFloat(totalRes.rows[0].total);
 
-    const newEstimatedCost = parseFloat(totalRes.rows[0].total);
-
-    await client.query(
-      `UPDATE requests
-       SET estimated_cost = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2`,
-      [newEstimatedCost, request_id]
-    );
-
-    // 📝 Log the action
+      await client.query(
+        `UPDATE requests
+         SET estimated_cost = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [newEstimatedCost, request_id]
+      );
+    }
+    
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
        VALUES ($1, 'Items Added', $2, $3)`,

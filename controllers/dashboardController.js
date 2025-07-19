@@ -38,7 +38,7 @@ const getDashboardSummary = async (req, res) => {
       SELECT d.name, COUNT(*) AS request_count
       FROM requests r
       JOIN departments d ON r.department_id = d.id
-      JOIN sections s ON d.section_id = s.id
+      LEFT JOIN sections s ON r.section_id = s.id
       GROUP BY d.name
       ORDER BY request_count DESC
       LIMIT 5

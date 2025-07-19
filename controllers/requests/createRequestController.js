@@ -200,7 +200,7 @@ const createRequest = async (req, res, next) => {
       if (request_type === 'Warehouse Supply') {
         const wsRes = await client.query(
           `INSERT INTO warehouse_supply_items (request_id, item_name, quantity)
-           VALUES ($1, $2, $3, $4) RETURNING id`,
+           VALUES ($1, $2, $3) RETURNING id`,
           [request.id, item_name, quantity]
         );
         itemIdMap[idx] = wsRes.rows[0].id;

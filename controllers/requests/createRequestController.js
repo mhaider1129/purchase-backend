@@ -35,7 +35,13 @@ const assignApprover = async (
 
   if (role === 'WarehouseManager' && requestType === 'Non-Stock') {
     const opRes = await client.query(
-      `SELECT id FROM departments WHERE LOWER(type) = 'operational' LIMIT 1`,
+      `SELECT d.id
+       FROM departments d
+       JOIN users u ON u.department_id = d.id
+       WHERE LOWER(d.type) = 'operational'
+         AND u.role = 'WarehouseManager'
+         AND u.is_active = true
+       ORDER BY d.id LIMIT 1`,
     );
     targetDepartmentId = opRes.rows[0]?.id || departmentId;
   }
@@ -46,8 +52,14 @@ const assignApprover = async (
     requestDomain
   ) {
     const wsRes = await client.query(
-      `SELECT id FROM departments WHERE type = $1 LIMIT 1`,
-      [requestDomain],
+      `SELECT d.id
+         FROM departments d
+         JOIN users u ON u.department_id = d.id
+        WHERE LOWER(d.type) = $1
+          AND u.role = 'WarehouseManager'
+          AND u.is_active = TRUE
+        LIMIT 1`,
+      [requestDomain.toLowerCase()],
     );
     targetDepartmentId = wsRes.rows[0]?.id || targetDepartmentId;
   }

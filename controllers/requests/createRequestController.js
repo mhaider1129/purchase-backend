@@ -30,10 +30,19 @@ const assignApprover = async (
   level,
 ) => {
   const globalRoles = ['CMO', 'COO', 'SCM', 'CEO'];
+  let targetDepartmentId = departmentId;
+
+  if (role === 'WarehouseManager' && requestType === 'Non-Stock') {
+    const opRes = await client.query(
+      `SELECT id FROM departments WHERE type = 'operational' LIMIT 1`,
+    );
+    targetDepartmentId = opRes.rows[0]?.id || departmentId;
+  }
+
   const query = globalRoles.includes(role.toUpperCase())
     ? `SELECT id, email FROM users WHERE role = $1 AND is_active = true LIMIT 1`
     : `SELECT id, email FROM users WHERE role = $1 AND department_id = $2 AND is_active = true LIMIT 1`;
-  const values = globalRoles.includes(role.toUpperCase()) ? [role] : [role, departmentId];
+  const values = globalRoles.includes(role.toUpperCase()) ? [role] : [role, targetDepartmentId];
   const result = await client.query(query, values);
 
   const approverId = result.rows[0]?.id || null;
@@ -132,8 +141,15 @@ const createRequest = async (req, res, next) => {
 
     const deptRes = await client.query('SELECT type FROM departments WHERE id = $1', [department_id]);
     const deptType = deptRes.rows[0]?.type?.toLowerCase();
-    const requestDomain = deptType === 'medical' ? 'medical' : 'operational';
+    let requestDomain = deptType === 'medical' ? 'medical' : 'operational';
 
+    if (request_type === 'Warehouse Supply') {
+      const supplied = req.body.supply_domain?.toLowerCase();
+      if (['medical', 'operational'].includes(supplied)) {
+        requestDomain = supplied;
+      }
+    }
+    
     const requestRes = await client.query(
       `INSERT INTO requests (
         request_type, requester_id, department_id, section_id, justification,

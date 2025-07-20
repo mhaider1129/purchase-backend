@@ -28,15 +28,28 @@ const assignApprover = async (
   requestId,
   requestType,
   level,
+  requestDomain = null,
 ) => {
   const globalRoles = ['CMO', 'COO', 'SCM', 'CEO'];
   let targetDepartmentId = departmentId;
 
   if (role === 'WarehouseManager' && requestType === 'Non-Stock') {
     const opRes = await client.query(
-      `SELECT id FROM departments WHERE type = 'operational' LIMIT 1`,
+      `SELECT id FROM departments WHERE LOWER(type) = 'operational' LIMIT 1`,
     );
     targetDepartmentId = opRes.rows[0]?.id || departmentId;
+  }
+
+  if (
+    role === 'WarehouseManager' &&
+    requestType === 'Warehouse Supply' &&
+    requestDomain
+  ) {
+    const wsRes = await client.query(
+      `SELECT id FROM departments WHERE type = $1 LIMIT 1`,
+      [requestDomain],
+    );
+    targetDepartmentId = wsRes.rows[0]?.id || targetDepartmentId;
   }
 
   const query = globalRoles.includes(role.toUpperCase())
@@ -286,6 +299,7 @@ const createRequest = async (req, res, next) => {
             request.id,
             request_type,
             i + 1,
+            requestDomain,
           );
         }
       }

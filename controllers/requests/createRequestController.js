@@ -263,7 +263,9 @@ const createRequest = async (req, res, next) => {
         throw createHttpError(400, `Unhandled request_type: ${request_type}`);
       }
 
-      const chainKey = `${request_type}-${capitalize(deptType)}-${costKey}`;
+      const domainForChain =
+        request_type === 'Warehouse Supply' ? requestDomain : deptType;
+      const chainKey = `${request_type}-${capitalize(domainForChain)}-${costKey}`;
       const approvalRoles = APPROVAL_CHAINS[chainKey];
       if (!approvalRoles) throw createHttpError(400, `No approval chain found for ${chainKey}`);
 
@@ -322,16 +324,29 @@ const createRequest = async (req, res, next) => {
       for (const [idx, files] of Object.entries(itemFiles)) {
         const itemId = itemIdMap[idx];
         if (!itemId) continue;
-        for (const file of files) {
-          await client.query(
-            `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [request.id, itemId, file.originalname, file.path, requester_id]
-          );
-        }
+      for (const file of files) {
+        await client.query(
+          `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [request.id, itemId, file.originalname, file.path, requester_id]
+        );
       }
     }
+  }
 
+    // Ensure the earliest pending approval is active
+    await client.query(
+      `UPDATE approvals
+       SET is_active = TRUE
+       WHERE request_id = $1
+         AND approval_level = (
+           SELECT MIN(approval_level)
+           FROM approvals
+           WHERE request_id = $1 AND status = 'Pending'
+         )`,
+      [request.id]
+    );
+    
     await client.query('COMMIT');
 
     if (duplicateFound) {

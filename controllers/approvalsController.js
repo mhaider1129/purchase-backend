@@ -12,6 +12,10 @@ const rollbackWithError = async (client, res, next, status, msg) => {
 // 🔘 Handle Approval Decision
 const handleApprovalDecision = async (req, res, next) => {
   const { id } = req.params;
+  if (!/^\d+$/.test(id)) {
+    return next(createHttpError(400, 'Invalid approval ID'));
+  }
+  const approvalId = Number(id);
   const { status, comments } = req.body;
   // authMiddleware exposes the logged in user's id as `id`
   const approver_id = req.user.id;
@@ -26,7 +30,10 @@ const handleApprovalDecision = async (req, res, next) => {
     await client.query('BEGIN');
 
     // 1. Fetch Approval Row
-    const approvalRes = await client.query(`SELECT * FROM approvals WHERE id = $1`, [id]);
+    const approvalRes = await client.query(
+      `SELECT * FROM approvals WHERE id = $1`,
+      [approvalId]
+    );
     const approval = approvalRes.rows[0];
     if (!approval) return rollbackWithError(client, res, next, 404, 'Approval not found');
     if (approval.status !== 'Pending') return rollbackWithError(client, res, next, 403, `This approval has already been ${approval.status.toLowerCase()}.`);
@@ -78,14 +85,15 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     // 6. Update Approval Decision
-    await client.query(`
-      UPDATE approvals
+    await client.query(
+      `UPDATE approvals
       SET status = $1,
           comments = $2,
           approved_at = NOW(),
           is_active = FALSE
-          WHERE id = $3
-    `, [status, comments || null, id]);
+          WHERE id = $3`,
+      [status, comments || null, approvalId]
+    );
 
     // 7. Insert Audit Logs
     await client.query(`
@@ -93,10 +101,11 @@ const handleApprovalDecision = async (req, res, next) => {
       VALUES ($1, $2, $3, $4)
     `, [approval.request_id, `Approval ${status}`, approver_id, comments || null]);
 
-    await client.query(`
-      INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [id, approval.request_id, approver_id, status, comments || null]);
+    await client.query(
+      `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+      VALUES ($1, $2, $3, $4, $5)`,
+      [approvalId, approval.request_id, approver_id, status, comments || null]
+    );
 
     // 8. Activate Next Approval Step (only when approved)
     if (status === 'Approved') {

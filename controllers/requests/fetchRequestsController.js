@@ -383,6 +383,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `SELECT
+         a.id AS approval_id,
          r.id AS request_id,
          r.justification,
          r.maintenance_ref_number,
@@ -406,7 +407,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          AND a.approver_id = $1
          AND a.status = 'Pending'
          AND a.is_active = true
-       GROUP BY r.id, u.name, d.name, s.name
+       GROUP BY a.id, r.id, u.name, d.name, s.name
        ORDER BY r.created_at DESC`,
       [req.user.id]
     );

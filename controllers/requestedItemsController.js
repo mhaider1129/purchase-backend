@@ -1,12 +1,6 @@
 //controllers/requestedItemsController.js
 const pool = require('../config/db');
-
-// 🔧 Reusable error creator
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../utils/httpError');
 
 // 📦 Add multiple items to a request
 const addRequestedItems = async (req, res, next) => {
@@ -32,6 +26,7 @@ const addRequestedItems = async (req, res, next) => {
     for (const item of items) {
       const {
         item_name,
+        brand = null,
         quantity,
         unit_cost = null,
         available_quantity = null,
@@ -60,12 +55,13 @@ const addRequestedItems = async (req, res, next) => {
       } else {
         const result = await client.query(
           `INSERT INTO requested_items
-            (request_id, item_name, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            (request_id, item_name, brand, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            RETURNING *`,
           [
             request_id,
             item_name,
+            brand,
             quantity,
             unit_cost,
             total_cost,

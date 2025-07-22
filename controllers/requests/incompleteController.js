@@ -1,5 +1,5 @@
 const pool = require('../../config/db');
-const createHttpError = require('http-errors');
+const createHttpError = require('../../utils/httpError');
 
 // ✅ Admin / SCM – All incomplete requests
 const getAllIncomplete = async (req, res, next) => {

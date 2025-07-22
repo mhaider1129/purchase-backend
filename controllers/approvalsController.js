@@ -1,13 +1,7 @@
 // src/controllers/approvalsController.js
 const pool = require('../config/db');
 const { sendEmail } = require('../utils/emailService');
-
-// 🔧 Reusable HTTP error utility
-function createHttpError(statusCode, message) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  return error;
-}
+const createHttpError = require('../utils/httpError');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -86,8 +80,11 @@ const handleApprovalDecision = async (req, res, next) => {
     // 6. Update Approval Decision
     await client.query(`
       UPDATE approvals
-      SET status = $1, comments = $2, approved_at = NOW()
-      WHERE id = $3
+      SET status = $1,
+          comments = $2,
+          approved_at = NOW(),
+          is_active = FALSE
+          WHERE id = $3
     `, [status, comments || null, id]);
 
     // 7. Insert Audit Logs
@@ -101,27 +98,28 @@ const handleApprovalDecision = async (req, res, next) => {
       VALUES ($1, $2, $3, $4, $5)
     `, [id, approval.request_id, approver_id, status, comments || null]);
 
-    // 8. Activate Next Approval Step
-    const nextLevelRes = await client.query(
-      `UPDATE approvals SET is_active = TRUE
-       WHERE request_id = $1 AND approval_level = $2 AND is_active = FALSE
-       RETURNING id, approver_id`,
-      [approval.request_id, approval.approval_level + 1],
-    );
-
-    if (nextLevelRes.rowCount > 0) {
-      await client.query(
-        `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, $2, $3, NULL)`,
-        [approval.request_id, `Level ${approval.approval_level + 1} activated`, approver_id],
+    // 8. Activate Next Approval Step (only when approved)
+    if (status === 'Approved') {
+      const nextLevelRes = await client.query(
+        `UPDATE approvals SET is_active = TRUE
+         WHERE request_id = $1 AND approval_level = $2 AND is_active = FALSE
+         RETURNING id, approver_id`,
+        [approval.request_id, approval.approval_level + 1],
       );
 
-      const nextId = nextLevelRes.rows[0].id;
-      const emailRes = await client.query(
-        `SELECT u.email FROM approvals a JOIN users u ON a.approver_id = u.id WHERE a.id = $1`,
-        [nextId],
-      );
-      const nextEmail = emailRes.rows[0]?.email;
+      if (nextLevelRes.rowCount > 0) {
+        await client.query(
+          `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, $2, $3, NULL)`,
+          [approval.request_id, `Level ${approval.approval_level + 1} activated`, approver_id],
+        );
+
+        const nextId = nextLevelRes.rows[0].id;
+        const emailRes = await client.query(
+          `SELECT u.email FROM approvals a JOIN users u ON a.approver_id = u.id WHERE a.id = $1`,
+          [nextId],
+        );
+        const nextEmail = emailRes.rows[0]?.email;
         if (nextEmail) {
           await sendEmail(
             nextEmail,
@@ -129,6 +127,7 @@ const handleApprovalDecision = async (req, res, next) => {
             `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.\nPlease log in to review the details.`,
           );
         }
+      }
     }
 
     // 9. Check Final Request Status

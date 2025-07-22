@@ -1,11 +1,6 @@
 const pool = require('../../config/db');
 const path = require('path');
-
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../../utils/httpError');
 
 const uploadPlan = async (req, res, next) => {
   const department_id = req.body.department_id || req.user.department_id;

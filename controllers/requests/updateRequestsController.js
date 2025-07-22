@@ -1,10 +1,5 @@
 const pool = require('../../config/db');
-
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../../utils/httpError');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -287,7 +282,7 @@ const approveMaintenanceRequest = async (req, res, next) => {
         [comments, request_id, user_id],
       );
 
-      const { initializeApprovals } = require('./utils/initializeApprovals');
+      const { initializeApprovals } = require('../utils/initializeApprovals');
       await initializeApprovals(request_id, client);
     }
 

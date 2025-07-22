@@ -1,11 +1,6 @@
 const pool = require('../../config/db');
 const { sendEmail } = require('../../utils/emailService');
-
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../../utils/httpError');
 
 const APPROVAL_CHAINS = {
   'Stock-Medical-0-5000': ['HOD', 'CMO', 'SCM'],
@@ -202,6 +197,7 @@ const createRequest = async (req, res, next) => {
     for (let idx = 0; idx < items.length; idx++) {
       const {
         item_name,
+        brand,
         quantity,
         unit_cost,
         available_quantity,
@@ -216,16 +212,18 @@ const createRequest = async (req, res, next) => {
           `INSERT INTO requested_items (
             request_id,
             item_name,
+            brand,
             quantity,
             unit_cost,
             total_cost,
             available_quantity,
             intended_use,
             specs
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
           [
             request.id,
             item_name,
+            brand || null,
             quantity,
             unit_cost,
             total_cost,
@@ -251,7 +249,7 @@ const createRequest = async (req, res, next) => {
     if (request_type === 'Maintenance') {
       const designatedRequesterRes = await client.query(
         `SELECT id FROM users
-         WHERE role = 'requester'
+         WHERE LOWER(role) = 'requester'
            AND department_id = $1
            AND ($2::int IS NULL OR section_id = $2)
            AND is_active = true

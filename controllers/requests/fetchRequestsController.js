@@ -1,10 +1,5 @@
 const pool = require('../../config/db');
-
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../../utils/httpError');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -33,7 +28,7 @@ const getRequestDetails = async (req, res, next) => {
       );
     } else {
       itemsRes = await pool.query(
-        `SELECT item_name, quantity, purchased_quantity, unit_cost, total_cost, specs FROM requested_items WHERE request_id = $1`,
+        `SELECT item_name, brand, quantity, purchased_quantity, unit_cost, total_cost, specs FROM requested_items WHERE request_id = $1`,
         [id]
       );
     }
@@ -93,7 +88,7 @@ const getRequestItemsOnly = async (req, res, next) => {
     } else {
       itemsRes = await pool.query(
         `
-      SELECT id, item_name, quantity, purchased_quantity, unit_cost, total_cost, procurement_status, procurement_comment, specs
+      SELECT id, item_name, brand, quantity, purchased_quantity, unit_cost, total_cost, procurement_status, procurement_comment, specs
       FROM requested_items
       WHERE request_id = $1
       `,
@@ -354,8 +349,11 @@ const getPendingApprovals = async (req, res, next) => {
          r.status
        FROM requests r
        JOIN approvals a ON r.id = a.request_id
-       WHERE a.approver_id = $1 AND a.is_active = true AND a.status = 'Pending'
-       ORDER BY r.created_at DESC`,
+       WHERE a.approver_id = $1
+         AND a.is_active = true
+         AND a.status = 'Pending'
+         AND r.request_type != 'Maintenance'
+         ORDER BY r.created_at DESC`,
       [req.user.id],
     );
     res.json(result.rows);

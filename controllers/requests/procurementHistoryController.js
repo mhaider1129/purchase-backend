@@ -1,5 +1,5 @@
 const pool = require('../../config/db');
-const createHttpError = require('http-errors');
+const createHttpError = require('../../utils/httpError');
 
 const getCompletedAssignedRequests = async (req, res, next) => {
   const userId = req.user.id;

@@ -1,6 +1,6 @@
 // controllers/requestedItems/updateProcurementStatusController.js
 const pool = require('../../config/db');
-const createHttpError = require('http-errors');
+const createHttpError = require('../../utils/httpError');
 
 const updateItemProcurementStatus = async (req, res, next) => {
   const { item_id } = req.params;

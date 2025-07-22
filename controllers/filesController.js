@@ -2,12 +2,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const pool = require('../config/db');
-
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../utils/httpError');
 
 const deleteFile = async (req, res, next) => {
   const { id } = req.params;

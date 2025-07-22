@@ -1,10 +1,5 @@
 const pool = require('../config/db');
-
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../utils/httpError');
 
 // Get all maintenance stock items
 const getStockItems = async (req, res, next) => {

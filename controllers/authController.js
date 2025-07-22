@@ -2,13 +2,7 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
-// 🔧 Reusable HTTP error helper
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
-}
+const createHttpError = require('../utils/httpError');
 
 // 🔐 Login Handler
 const login = async (req, res, next) => {

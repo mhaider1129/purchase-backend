@@ -381,29 +381,37 @@ const getMyMaintenanceRequests = async (req, res, next) => {
 
 const getPendingMaintenanceApprovals = async (req, res, next) => {
   try {
-    const result = await pool.query(
+    const { rows } = await pool.query(
       `SELECT
          r.id AS request_id,
          r.justification,
-        r.maintenance_ref_number,
-        u.name AS technician_name,
+         r.maintenance_ref_number,
+         u.name AS requester_name,
          d.name AS department_name,
          s.name AS section_name,
-         r.created_at
+         r.created_at,
+         COALESCE(
+           JSON_AGG(
+             JSON_BUILD_OBJECT('item_name', ri.item_name, 'quantity', ri.quantity)
+           ) FILTER (WHERE ri.id IS NOT NULL),
+           '[]'
+         ) AS items
        FROM requests r
        JOIN users u ON r.requester_id = u.id
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN sections s ON r.section_id = s.id
        JOIN approvals a ON a.request_id = r.id
+       LEFT JOIN requested_items ri ON ri.request_id = r.id
        WHERE r.request_type = 'Maintenance'
          AND a.approver_id = $1
          AND a.status = 'Pending'
          AND a.is_active = true
+       GROUP BY r.id, u.name, d.name, s.name
        ORDER BY r.created_at DESC`,
-      [req.user.id],
+      [req.user.id]
     );
 
-    res.json(result.rows);
+    res.json(rows);
   } catch (err) {
     console.error('❌ Error fetching maintenance approvals:', err);
     next(createHttpError(500, 'Failed to fetch maintenance requests'));

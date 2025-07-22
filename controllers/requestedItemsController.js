@@ -178,12 +178,10 @@ const updateItemCost = async (req, res, next) => {
 
     await client.query(
       `UPDATE requested_items
-       SET unit_cost = $1,
-           total_cost = quantity * $1,
-           last_cost_updated_by = $2,
-           last_cost_updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3`,
-      [unit_cost, user_id, item_id]
+       SET unit_cost = $1::numeric,
+           total_cost = quantity * $1::numeric
+       WHERE id = $2`,
+      [unit_cost, item_id]
     );
 
     const totalRes = await client.query(

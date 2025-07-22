@@ -91,7 +91,7 @@ const assignApprover = async (
 };
 
 const createRequest = async (req, res, next) => {
-  let { request_type, justification, budget_impact_month, items } = req.body;
+  let { request_type, justification, items } = req.body;
 
   // Items may arrive as a JSON string when using multipart/form-data
   if (typeof items === 'string') {
@@ -173,16 +173,15 @@ const createRequest = async (req, res, next) => {
     const requestRes = await client.query(
       `INSERT INTO requests (
         request_type, requester_id, department_id, section_id, justification,
-        budget_impact_month, estimated_cost, request_domain,
+        estimated_cost, request_domain,
         maintenance_ref_number, initiated_by_technician_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [
         request_type,
         requester_id,
         department_id,
         section_id,
         justification,
-        budget_impact_month,
         estimatedCost,
         requestDomain,
         maintenance_ref_number,
@@ -208,30 +207,56 @@ const createRequest = async (req, res, next) => {
 
       let requestedItemId = null;
       if (request_type !== 'Warehouse Supply') {
-        const insertedReq = await client.query(
-          `INSERT INTO requested_items (
-            request_id,
-            item_name,
-            brand,
-            quantity,
-            unit_cost,
-            total_cost,
-            available_quantity,
-            intended_use,
-            specs
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-          [
-            request.id,
-            item_name,
-            brand || null,
-            quantity,
-            unit_cost,
-            total_cost,
-            available_quantity || null,
-            intended_use || null,
-            specs || null,
-          ],
-        );
+        let insertedReq;
+        if (request_type === 'Stock') {
+          insertedReq = await client.query(
+            `INSERT INTO requested_items (
+              request_id,
+              item_name,
+              brand,
+              quantity,
+              unit_cost,
+              total_cost,
+              available_quantity,
+              intended_use,
+              specs
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+            [
+              request.id,
+              item_name,
+              brand || null,
+              quantity,
+              unit_cost,
+              total_cost,
+              available_quantity || null,
+              intended_use || null,
+              specs || null,
+            ],
+          );
+        } else {
+          insertedReq = await client.query(
+            `INSERT INTO requested_items (
+              request_id,
+              item_name,
+              quantity,
+              unit_cost,
+              total_cost,
+              available_quantity,
+              intended_use,
+              specs
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            [
+              request.id,
+              item_name,
+              quantity,
+              unit_cost,
+              total_cost,
+              available_quantity || null,
+              intended_use || null,
+              specs || null,
+            ],
+          );
+        }
         requestedItemId = insertedReq.rows[0].id;
         itemIdMap[idx] = requestedItemId;
       }

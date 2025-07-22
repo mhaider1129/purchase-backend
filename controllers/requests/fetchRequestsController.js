@@ -385,9 +385,8 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
       `SELECT
          r.id AS request_id,
          r.justification,
-         r.maintenance_ref_number,
-         r.budget_impact_month,
-         u.name AS technician_name,
+        r.maintenance_ref_number,
+        u.name AS technician_name,
          d.name AS department_name,
          s.name AS section_name,
          r.created_at

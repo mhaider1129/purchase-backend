@@ -53,26 +53,49 @@ const addRequestedItems = async (req, res, next) => {
         );
         insertedItems.push(result.rows[0]);
       } else {
-        const result = await client.query(
-          `INSERT INTO requested_items
-            (request_id, item_name, brand, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-           RETURNING *`,
-          [
-            request_id,
-            item_name,
-            brand,
-            quantity,
-            unit_cost,
-            total_cost,
-            isNaN(available_quantity) ? null : available_quantity,
-            intended_use,
-            specs,
-            device_info,
-            purchase_type,
-            item_type
-          ]
-        );
+        let result;
+        if (reqType === 'Stock') {
+          result = await client.query(
+            `INSERT INTO requested_items
+              (request_id, item_name, brand, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             RETURNING *`,
+            [
+              request_id,
+              item_name,
+              brand,
+              quantity,
+              unit_cost,
+              total_cost,
+              isNaN(available_quantity) ? null : available_quantity,
+              intended_use,
+              specs,
+              device_info,
+              purchase_type,
+              item_type
+            ]
+          );
+        } else {
+          result = await client.query(
+            `INSERT INTO requested_items
+              (request_id, item_name, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             RETURNING *`,
+            [
+              request_id,
+              item_name,
+              quantity,
+              unit_cost,
+              total_cost,
+              isNaN(available_quantity) ? null : available_quantity,
+              intended_use,
+              specs,
+              device_info,
+              purchase_type,
+              item_type
+            ]
+          );
+        }
         insertedItems.push(result.rows[0]);
       }
     }

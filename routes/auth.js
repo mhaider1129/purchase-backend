@@ -18,8 +18,8 @@ router.post('/register', authenticateUser, async (req, res) => {
     return res.status(403).json({ success: false, message: 'Only admin or SCM can register users' });
   }
 
-  if (!name || !email || !password || !role || !department_id || !section_id) {
-    return res.status(400).json({ success: false, message: 'All fields are required' });
+  if (!name || !email || !password || !role || !department_id) {
+    return res.status(400).json({ success: false, message: 'All fields except section are required' });
   }
 
   try {
@@ -31,11 +31,13 @@ router.post('/register', authenticateUser, async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    const sectionIdValue = section_id || null;
+
     const newUser = await pool.query(
       `INSERT INTO users (name, email, password, role, department_id, section_id)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, name, email, role, department_id, section_id`,
-      [name, email, hashedPassword, role, department_id, section_id]
+      [name, email, hashedPassword, role, department_id, sectionIdValue]
     );
 
     return res.status(201).json({

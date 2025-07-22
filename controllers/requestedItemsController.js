@@ -141,7 +141,8 @@ const addRequestedItems = async (req, res, next) => {
 
 // 💲 Update unit cost of a single item
 const updateItemCost = async (req, res, next) => {
-  const { item_id } = req.params;
+  const { id } = req.params;
+  const item_id = id;
   const { unit_cost } = req.body;
   const { user_id, role } = req.user;
 

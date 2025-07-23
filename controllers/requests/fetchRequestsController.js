@@ -113,10 +113,15 @@ const getMyRequests = async (req, res, next) => {
     if (search) {
       params.push(`%${search.toLowerCase()}%`);
       searchClause = `
-        AND EXISTS (
-          SELECT 1 FROM requested_items ri
-          WHERE ri.request_id = r.id
-            AND LOWER(ri.item_name) LIKE $${params.length}
+        AND (
+          LOWER(r.justification) LIKE $${params.length}
+          OR LOWER(r.request_type) LIKE $${params.length}
+          OR CAST(r.id AS TEXT) LIKE $${params.length}
+          OR EXISTS (
+            SELECT 1 FROM requested_items ri
+            WHERE ri.request_id = r.id
+              AND LOWER(ri.item_name) LIKE $${params.length}
+          )
         )`;
     }
 
@@ -249,7 +254,16 @@ const getAllRequests = async (req, res, next) => {
 
   if (search) {
     params.push(`%${search.toLowerCase()}%`);
-    whereClauses.push(`(LOWER(r.justification) LIKE $${params.length} OR LOWER(r.request_type) LIKE $${params.length})`);
+    whereClauses.push(`(
+      LOWER(r.justification) LIKE $${params.length}
+      OR LOWER(r.request_type) LIKE $${params.length}
+      OR CAST(r.id AS TEXT) LIKE $${params.length}
+      OR EXISTS (
+        SELECT 1 FROM requested_items ri
+        WHERE ri.request_id = r.id
+          AND LOWER(ri.item_name) LIKE $${params.length}
+      )
+    )`);
   }
 
   if (from_date) {

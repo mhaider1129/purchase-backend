@@ -2,18 +2,21 @@ const pool = require('../../config/db');
 const { sendEmail } = require('../../utils/emailService');
 const createHttpError = require('../../utils/httpError');
 
-const APPROVAL_CHAINS = {
-  'Stock-Medical-0-5000': ['HOD', 'CMO', 'SCM'],
-  'Stock-Medical-5001-999999999': ['HOD', 'CMO', 'SCM', 'CFO'],
-  'Stock-Operational-0-999999999': ['HOD', 'SCM', 'COO'],
-  'Non-Stock-Medical-0-999999999': ['HOD', 'WarehouseManager', 'CMO', 'SCM', 'COO'],
-  'Non-Stock-Operational-0-10000': ['HOD', 'WarehouseManager', 'SCM', 'COO'],
-  'Non-Stock-Operational-10001-999999999': ['HOD', 'WarehouseManager', 'SCM', 'COO', 'CFO'],
-  'Medical Device-Medical-0-999999999': ['HOD', 'MedicalDevices', 'CMO', 'SCM', 'COO'],
-  'IT Item-Medical-0-999999999': ['HOD', 'SCM', 'COO'],
-  'IT Item-Operational-0-999999999': ['HOD', 'SCM', 'COO'],
-  'Warehouse Supply-Medical-0-999999999': ['HOD', 'WarehouseManager'],
-  'Warehouse Supply-Operational-0-999999999': ['HOD', 'WarehouseManager'],
+/**
+ * Fetch approval routing configuration from the database.
+ * Returns an array of objects: { approval_level, role }
+ */
+const fetchApprovalRoutes = async (client, requestType, departmentType, cost) => {
+  const { rows } = await client.query(
+    `SELECT approval_level, role
+       FROM approval_routes
+      WHERE request_type = $1
+        AND department_type = $2
+        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(max_amount, 999999999)
+      ORDER BY approval_level`,
+    [requestType, departmentType, cost]
+  );
+  return rows;
 };
 
 const assignApprover = async (
@@ -290,41 +293,29 @@ const createRequest = async (req, res, next) => {
         [request.id, designatedRequesterId],
       );
     } else {
-      const capitalize = (s = '') => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-
-      let costKey;
-      if (request_type === 'Stock' && deptType === 'medical') {
-        costKey = estimatedCost <= 5000 ? '0-5000' : '5001-999999999';
-      } else if (request_type === 'Stock') {
-        costKey = '0-999999999';
-      } else if (request_type === 'Non-Stock' && deptType === 'medical') {
-        costKey = '0-999999999';
-      } else if (request_type === 'Non-Stock') {
-        costKey = estimatedCost <= 10000 ? '0-10000' : '10001-999999999';
-      } else if (request_type === 'Medical Device') {
-        costKey = '0-999999999';
-      } else if (request_type === 'IT Item') {
-        costKey = '0-999999999';
-      } else if (request_type === 'Warehouse Supply') {
-        costKey = '0-999999999';
-      } else {
-        throw createHttpError(400, `Unhandled request_type: ${request_type}`);
-      }
-
       const domainForChain =
         request_type === 'Warehouse Supply' ? requestDomain : deptType;
-      const chainKey = `${request_type}-${capitalize(domainForChain)}-${costKey}`;
-      const approvalRoles = APPROVAL_CHAINS[chainKey];
-      if (!approvalRoles) throw createHttpError(400, `No approval chain found for ${chainKey}`);
 
-      for (let i = 0; i < approvalRoles.length; i++) {
-        const role = approvalRoles[i];
+      const routes = await fetchApprovalRoutes(
+        client,
+        request_type,
+        domainForChain,
+        estimatedCost
+      );
 
-        if (role === req.user.role && i === 0) {
+      if (!routes.length) {
+        throw createHttpError(
+          400,
+          `No approval routes configured for ${request_type} - ${domainForChain}`
+        );
+      }
+
+      for (const { role, approval_level } of routes) {
+        if (role === req.user.role && approval_level === 1) {
           await client.query(
             `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
              VALUES ($1, $2, $3, false, 'Approved', CURRENT_TIMESTAMP)`,
-            [request.id, requester_id, i + 1],
+            [request.id, requester_id, approval_level]
           );
         } else {
           await assignApprover(
@@ -333,8 +324,8 @@ const createRequest = async (req, res, next) => {
             department_id,
             request.id,
             request_type,
-            i + 1,
-            requestDomain,
+            approval_level,
+            requestDomain
           );
         }
       }

@@ -10,7 +10,7 @@ const getAuditLog = async (req, res, next) => {
     from_date,
     to_date,
     page = 1,
-    limit = 10
+    limit = 10,
   } = req.query;
 
   // Sanitize and limit pagination
@@ -29,53 +29,80 @@ const getAuditLog = async (req, res, next) => {
   const values = [];
 
   if (request_id) {
-    filters.push(`l.request_id = $${values.length + 1}`);
+    filters.push(`log.request_id = $${values.length + 1}`);
     values.push(request_id);
   }
 
   if (approver_id) {
-    filters.push(`l.approver_id = $${values.length + 1}`);
+    filters.push(`log.actor_id = $${values.length + 1}`);
     values.push(approver_id);
   }
 
   if (action) {
-    filters.push(`LOWER(l.action) LIKE LOWER($${values.length + 1})`);
+    filters.push(`LOWER(log.action) LIKE LOWER($${values.length + 1})`);
     values.push(`%${action}%`);
   }
 
   if (from_date) {
-    filters.push(`l.created_at >= $${values.length + 1}`);
+    filters.push(`log.created_at >= $${values.length + 1}`);
     values.push(from_date);
   }
 
   if (to_date) {
-    filters.push(`l.created_at <= $${values.length + 1}`);
+    filters.push(`log.created_at <= $${values.length + 1}`);
     values.push(to_date);
   }
 
   let query = `
-    SELECT 
-      l.id,
-      l.request_id,
-      l.approval_id,
-      l.approver_id,
-      u.name AS approver_name,
-      u.role AS approver_role,
-      l.action,
-      l.comments,
-      l.created_at,
+    SELECT
+      log.id,
+      log.request_id,
+      log.approval_id,
+      log.actor_id,
+      log.actor_name,
+      log.action,
+      log.comments,
+      log.created_at,
+      log.log_type,
       r.justification,
       COUNT(*) OVER() AS total_count
-    FROM approval_logs l
-    LEFT JOIN users u ON l.approver_id = u.id
-    JOIN requests r ON l.request_id = r.id
+    FROM (
+      SELECT
+        l.id,
+        l.request_id,
+        l.approval_id,
+        l.approver_id AS actor_id,
+        u.name AS actor_name,
+        l.action,
+        l.comments,
+        l.created_at,
+        'approval' AS log_type
+      FROM approval_logs l
+      LEFT JOIN users u ON l.approver_id = u.id
+
+      UNION ALL
+
+      SELECT
+        rl.id,
+        rl.request_id,
+        NULL AS approval_id,
+        rl.actor_id,
+        u2.name AS actor_name,
+        rl.action,
+        rl.comments,
+        rl.timestamp AS created_at,
+        'request' AS log_type
+      FROM request_logs rl
+      LEFT JOIN users u2 ON rl.actor_id = u2.id
+    ) log
+    JOIN requests r ON log.request_id = r.id
   `;
 
   if (filters.length > 0) {
     query += ' WHERE ' + filters.join(' AND ');
   }
 
-  query += ` ORDER BY l.created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`;
+  query += ` ORDER BY log.created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`;
   values.push(limit, (page - 1) * limit);
 
   try {
@@ -89,8 +116,8 @@ const getAuditLog = async (req, res, next) => {
       count: totalCount,
       logs: result.rows.map(({ total_count, ...log }) => ({
         ...log,
-        created_at: new Date(log.created_at).toISOString()
-      }))
+        created_at: new Date(log.created_at).toISOString(),
+      })),
     });
   } catch (err) {
     console.error('❌ getAuditLog failed:', err);

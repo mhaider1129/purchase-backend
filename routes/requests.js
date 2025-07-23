@@ -88,7 +88,15 @@ const buildFilteredQuery = (queryParams) => {
 
   if (search) {
     values.push(`%${search}%`);
-    sql += ` AND r.justification ILIKE $${values.length}`;
+    sql += ` AND (
+      r.justification ILIKE $${values.length}
+      OR r.request_type ILIKE $${values.length}
+      OR CAST(r.id AS TEXT) ILIKE $${values.length}
+      OR EXISTS (
+        SELECT 1 FROM requested_items ri
+        WHERE ri.request_id = r.id AND ri.item_name ILIKE $${values.length}
+      )
+    )`;
   }
 
   if (from_date) {

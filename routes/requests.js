@@ -34,6 +34,8 @@ const {
   getOperationalIncomplete
 } = require('../controllers/requests/incompleteController');
 
+const { generateRfx } = require('../controllers/requestsController');
+
 const assignRequestToUser = require('../controllers/requests/assignRequestController');
 
 const { Parser } = require('json2csv');
@@ -172,6 +174,7 @@ router.get('/export/pdf', async (req, res) => {
 // ==========================
 router.get('/:id/items', getRequestItemsOnly);
 router.get('/:id/logs', getRequestLogs);
+router.get('/:id/rfx', generateRfx);
 router.get('/:id', getRequestDetails);
 
 // ==========================

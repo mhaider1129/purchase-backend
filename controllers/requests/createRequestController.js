@@ -112,6 +112,27 @@ const createRequest = async (req, res, next) => {
     return next(createHttpError(403, 'Only warehouse staff can submit stock requests'));
   }
 
+  if (request_type === 'Medication') {
+    const { rows } = await pool.query(
+      'SELECT name FROM departments WHERE id = $1',
+      [req.user.department_id]
+    );
+    const deptName = rows[0]?.name?.toLowerCase() || '';
+
+    const allowedDepartments = ['pharmacy', 'physicians'];
+    if (
+      req.user.role.toLowerCase() !== 'requester' ||
+      !allowedDepartments.includes(deptName)
+    ) {
+      return next(
+        createHttpError(
+          403,
+          'Only Pharmacy or Physicians department requesters can submit medication requests'
+        )
+      );
+    }
+  }
+
   const requester_id = req.user.id;
   const department_id = req.body.target_department_id || req.user.department_id;
   const section_id = req.body.target_section_id || req.user.section_id || null;

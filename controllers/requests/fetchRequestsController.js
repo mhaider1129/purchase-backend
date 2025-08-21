@@ -433,6 +433,31 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
   }
 };
 
+const getAuditApprovedRejectedRequests = async (req, res, next) => {
+  const { role } = req.user;
+  if (role !== 'audit') {
+    return next(createHttpError(403, 'Access denied'));
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT r.id, r.request_type, r.justification, r.status,
+              MAX(a.approved_at) AS approval_timestamp
+         FROM requests r
+         JOIN approvals a ON r.id = a.request_id
+        WHERE r.request_type IN ('IT Item', 'Stock', 'Non-Stock')
+          AND r.status IN ('Approved', 'Rejected')
+        GROUP BY r.id, r.request_type, r.justification, r.status
+        ORDER BY approval_timestamp DESC`
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch audit requests:', err);
+    next(createHttpError(500, 'Failed to fetch audit requests'));
+  }
+};
+
 const getClosedRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
@@ -483,6 +508,7 @@ module.exports = {
   getProcurementUsers,
   getMyMaintenanceRequests,
   getPendingMaintenanceApprovals,
+  getAuditApprovedRejectedRequests,
   getClosedRequests,
   getRequestLogs,
 };

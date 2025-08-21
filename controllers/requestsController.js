@@ -15,6 +15,7 @@ const {
   getProcurementUsers,
   getMyMaintenanceRequests,
   getPendingMaintenanceApprovals,
+  getAuditApprovedRejectedRequests,
   getClosedRequests,
   getRequestLogs,
 } = require('./requests/fetchRequestsController');
@@ -28,6 +29,7 @@ const {
 } = require('./requests/updateRequestsController');
 
 const { generateRfx } = require('./requests/generateRfxController');
+const { printRequest } = require('./requests/printRequestController');
 
 module.exports = {
   createRequest,
@@ -48,6 +50,8 @@ module.exports = {
   getRequestLogs,
   markRequestAsCompleted,
   updateRequestCost,
+  getAuditApprovedRejectedRequests,
   getClosedRequests,
   generateRfx,
+  printRequest,
 };

@@ -19,13 +19,15 @@ const {
   getRequestDetails,
   getRequestItemsOnly,
   getRequestLogs,
+  printRequest,
   updateApprovalStatus,
   assignRequestToProcurement,
   approveMaintenanceRequest,
   getPendingMaintenanceApprovals,
   markRequestAsCompleted,
   updateRequestCost,
-  getClosedRequests
+  getClosedRequests,
+  getAuditApprovedRejectedRequests
 } = require('../controllers/requestsController');
 
 const {
@@ -54,6 +56,7 @@ router.get('/pending-approvals', getPendingApprovals); // My approvals
 router.get('/assigned', getAssignedRequests); // Assigned to me (procurement)
 router.get('/completed-assigned', getCompletedAssignedRequests); // Procurement completed history
 router.get('/closed', getClosedRequests); // Completed or rejected requests
+router.get('/audit/approved-rejected', getAuditApprovedRejectedRequests); // Audit view
 router.get('/approval-history', getApprovalHistory); // My approval history
 router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
@@ -175,6 +178,7 @@ router.get('/export/pdf', async (req, res) => {
 router.get('/:id/items', getRequestItemsOnly);
 router.get('/:id/logs', getRequestLogs);
 router.get('/:id/rfx', generateRfx);
+router.get('/:id/print', printRequest);
 router.get('/:id', getRequestDetails);
 
 // ==========================

@@ -3,15 +3,15 @@ const pool = require('../config/db');
 
 const getDashboardSummary = async (req, res) => {
   try {
-    const totalRes = await pool.query('SELECT COUNT(*) FROM requests');
-    const approvedRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Approved'");
-    const rejectedRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Rejected'");
-    const pendingRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Pending'");
+    const totalRes = await pool.query("SELECT COUNT(*) FROM requests WHERE request_type <> 'Warehouse Supply'");
+    const approvedRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Approved' AND request_type <> 'Warehouse Supply'");
+    const rejectedRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Rejected' AND request_type <> 'Warehouse Supply'");
+    const pendingRes = await pool.query("SELECT COUNT(*) FROM requests WHERE status = 'Pending' AND request_type <> 'Warehouse Supply'");
 
     const avgApprovalRes = await pool.query(`
       SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) / 86400 AS avg_days
       FROM requests
-      WHERE status = 'Approved'
+      WHERE status = 'Approved' AND request_type <> 'Warehouse Supply'
     `);
 
     const rejectionsByMonthRes = await pool.query(`
@@ -19,7 +19,7 @@ const getDashboardSummary = async (req, res) => {
         TO_CHAR(created_at, 'YYYY-MM') AS month,
         COUNT(*) AS rejected_count
       FROM requests
-      WHERE status = 'Rejected'
+      WHERE status = 'Rejected' AND request_type <> 'Warehouse Supply'
       GROUP BY month
       ORDER BY month
     `);
@@ -29,7 +29,7 @@ const getDashboardSummary = async (req, res) => {
         TO_CHAR(created_at, 'YYYY-MM') AS month,
         SUM(estimated_cost) AS total_cost
       FROM requests
-      WHERE status = 'Approved'
+      WHERE status = 'Approved' AND request_type <> 'Warehouse Supply'
       GROUP BY month
       ORDER BY month
     `);
@@ -39,6 +39,7 @@ const getDashboardSummary = async (req, res) => {
       FROM requests r
       JOIN departments d ON r.department_id = d.id
       LEFT JOIN sections s ON r.section_id = s.id
+      WHERE r.request_type <> 'Warehouse Supply'
       GROUP BY d.name
       ORDER BY request_count DESC
       LIMIT 5
@@ -76,6 +77,7 @@ const getDepartmentMonthlySpending = async (req, res) => {
        FROM requests r
        JOIN departments d ON r.department_id = d.id
        WHERE r.status = 'Approved'
+         AND r.request_type <> 'Warehouse Supply'
          AND EXTRACT(YEAR FROM r.created_at) = $1
        GROUP BY d.name, month
        ORDER BY d.name, month`,

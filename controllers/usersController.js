@@ -52,7 +52,7 @@ const deactivateUser = async (req, res, next) => {
 const assignUser = async (req, res, next) => {
   const { id } = req.params;
   const { role: actingRole } = req.user;
-  let { role, department_id, section_id } = req.body;
+  let { role, department_id, section_id, can_request_medication } = req.body;
 
   if (!['admin', 'SCM'].includes(actingRole)) {
     return next(createHttpError(403, 'Only Admin or SCM can assign users'));
@@ -62,6 +62,10 @@ const assignUser = async (req, res, next) => {
   const userId = parseInt(id, 10);
   const departmentId = department_id ? parseInt(department_id, 10) : null;
   const sectionId = section_id ? parseInt(section_id, 10) : null;
+  const canRequestMedication =
+    typeof can_request_medication === 'undefined'
+      ? null
+      : can_request_medication === true || can_request_medication === 'true';
 
   if (Number.isNaN(userId)) {
     return next(createHttpError(400, 'Invalid user ID'));
@@ -69,8 +73,13 @@ const assignUser = async (req, res, next) => {
 
   try {
     const result = await pool.query(
-      `UPDATE users SET role = $1, department_id = $2, section_id = $3 WHERE id = $4 RETURNING id`,
-      [role, departmentId, sectionId, userId]
+      `UPDATE users
+         SET role = $1,
+             department_id = $2,
+             section_id = $3,
+             can_request_medication = COALESCE($4, can_request_medication)
+       WHERE id = $5 RETURNING id`,
+      [role, departmentId, sectionId, canRequestMedication, userId]
     );
     if (result.rowCount === 0) {
       return next(createHttpError(404, 'User not found'));

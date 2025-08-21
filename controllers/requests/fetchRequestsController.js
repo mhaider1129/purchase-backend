@@ -440,7 +440,9 @@ const getClosedRequests = async (req, res, next) => {
        FROM requests r
        LEFT JOIN users u ON r.assigned_to = u.id
        WHERE r.status IN ('completed', 'Rejected')
-       ORDER BY r.updated_at DESC`
+         AND r.requester_id = $1
+       ORDER BY r.updated_at DESC`,
+      [req.user.id]
     );
 
     res.json(result.rows);

@@ -127,21 +127,14 @@ const createRequest = async (req, res, next) => {
   }
 
     if (request_type === "Medication") {
-    const { rows } = await pool.query(
-      "SELECT name FROM departments WHERE id = $1",
-      [req.user.department_id],
-    );
-    const deptName = rows[0]?.name?.toLowerCase() || "";
-
-    const allowedDepartments = ["pharmacy", "physicians"];
     if (
       req.user.role.toLowerCase() !== "requester" ||
-      !allowedDepartments.includes(deptName)
+      !req.user.can_request_medication
     ) {
       return next(
         createHttpError(
           403,
-          "Only Pharmacy or Physicians department requesters can submit medication requests",
+          "You are not authorized to submit medication requests",
         ),
       );
     }

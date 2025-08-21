@@ -14,10 +14,11 @@ router.get('/me', authenticateUser, async (req, res, next) => {
     const result = await pool.query(
       `SELECT u.id, u.name, u.email, u.role,
               u.department_id, d.name AS department_name,
-              u.section_id, s.name AS section_name
-         FROM users u
-         LEFT JOIN departments d ON u.department_id = d.id
-         LEFT JOIN sections s ON u.section_id = s.id
+              u.section_id, s.name AS section_name,
+              u.can_request_medication
+        FROM users u
+        LEFT JOIN departments d ON u.department_id = d.id
+        LEFT JOIN sections s ON u.section_id = s.id
         WHERE u.id = $1`,
       [userId]
     );
@@ -44,7 +45,7 @@ router.get('/', authenticateUser, async (req, res, next) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, name, email, role, department_id, section_id, is_active FROM users ORDER BY role, name'
+      'SELECT id, name, email, role, department_id, section_id, is_active, can_request_medication FROM users ORDER BY role, name'
     );
     res.json(result.rows);
   } catch (err) {

@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
+const os = require('os');
 const pool = require('./config/db');
 const reassignPendingApprovals = require('./controllers/utils/reassignPendingApprovals');
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
@@ -13,6 +14,18 @@ dotenv.config();
 
 // Initialize Express app
 const app = express();
+
+function getLANIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if ((iface.family === 'IPv4' || iface.family === 4) && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '0.0.0.0';
+}
 
 // =========================
 // 🛡️ Middleware Setup
@@ -119,8 +132,9 @@ app.use(errorHandler);
 // 🚀 Start Server
 // =========================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, async () => {
-  console.log(`🚀 Server started on port ${PORT}`);
+const HOST = process.env.HOST || getLANIP();
+app.listen(PORT, HOST, async () => {
+  console.log(`🚀 Server started on http://${HOST}:${PORT}`);
   try {
     await reassignPendingApprovals();
     console.log('🔄 Pending approvals reassigned on startup');

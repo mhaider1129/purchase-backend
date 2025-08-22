@@ -19,6 +19,7 @@ const upsertStockItem = async (req, res, next) => {
   const { id } = req.params;
   const { item_name, quantity } = req.body;
   const userRole = req.user.role;
+  
   const allowedRoles = ['WarehouseManager', 'warehouse_manager'];
 
   if (!allowedRoles.includes(userRole)) {

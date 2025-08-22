@@ -117,10 +117,10 @@ const createRequest = async (req, res, next) => {
   if (!req.user?.id || !req.user?.department_id)
     return next(createHttpError(400, "Invalid user context"));
 
-  if (
-    request_type === "Stock" &&
-    !["warehouse_keeper", "warehouse_manager"].includes(req.user.role)
-  ) {
+  const userRole = (req.user.role || "").toLowerCase().replace(/_/g, "");
+  const warehouseRoles = ["warehousekeeper", "warehousemanager"];
+
+  if (request_type === "Stock" && !warehouseRoles.includes(userRole)) {
     return next(
       createHttpError(403, "Only warehouse staff can submit stock requests"),
     );

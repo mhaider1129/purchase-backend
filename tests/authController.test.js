@@ -1,13 +1,13 @@
 const { login } = require('../controllers/authController');
 const pool = require('../config/db');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
 jest.mock('../config/db', () => ({
   query: jest.fn()
 }));
 
-jest.mock('bcryptjs', () => ({
+jest.mock('bcrypt', () => ({
   compare: jest.fn()
 }));
 

@@ -1,6 +1,6 @@
 //controller/authController.js
 const pool = require('../config/db');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const createHttpError = require('../utils/httpError');
 

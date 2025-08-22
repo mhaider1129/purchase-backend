@@ -90,4 +90,59 @@ const getDepartmentMonthlySpending = async (req, res) => {
   }
 };
 
-module.exports = { getDashboardSummary, getDepartmentMonthlySpending };
+const getLifecycleAnalytics = async (req, res) => {
+  const { role } = req.user;
+  if (!['admin', 'SCM'].includes(role)) {
+    return res.status(403).json({ message: 'Unauthorized' });
+  }
+
+  try {
+    const avgApprovalRes = await pool.query(`
+      SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) / 86400 AS avg_days
+      FROM requests
+      WHERE status = 'Approved' AND request_type <> 'Warehouse Supply'
+    `);
+
+    const stageDurationRes = await pool.query(`
+      SELECT approval_level, AVG(EXTRACT(EPOCH FROM (approved_at - created_at))) / 86400 AS avg_days
+      FROM approvals
+      WHERE status = 'Approved'
+      GROUP BY approval_level
+      ORDER BY approval_level
+    `);
+
+    const stageDurations = stageDurationRes.rows.map((r) => ({
+      stage: r.approval_level,
+      avg_days: parseFloat(r.avg_days) || 0,
+    }));
+    const bottleneck = stageDurations.reduce(
+      (max, cur) => (cur.avg_days > (max?.avg_days || 0) ? cur : max),
+      null,
+    );
+
+    const spendRes = await pool.query(`
+      SELECT COALESCE(item_type, 'Uncategorized') AS category, SUM(total_cost) AS total_cost
+      FROM requested_items ri
+      JOIN requests r ON ri.request_id = r.id
+      WHERE r.status = 'Approved'
+      GROUP BY category
+      ORDER BY total_cost DESC
+    `);
+
+    res.json({
+      avg_approval_time_days:
+        parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
+      stage_durations: stageDurations,
+      bottleneck_stage: bottleneck,
+      spend_by_category: spendRes.rows.map((r) => ({
+        category: r.category,
+        total_cost: parseFloat(r.total_cost),
+      })),
+    });
+  } catch (err) {
+    console.error('❌ Failed to fetch lifecycle analytics:', err);
+    res.status(500).json({ error: 'Failed to fetch lifecycle analytics' });
+  }
+};
+
+module.exports = { getDashboardSummary, getDepartmentMonthlySpending, getLifecycleAnalytics };

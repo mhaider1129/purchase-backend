@@ -104,11 +104,13 @@ const getLifecycleAnalytics = async (req, res) => {
     `);
 
     const stageDurationRes = await pool.query(`
-      SELECT approval_level, AVG(EXTRACT(EPOCH FROM (approved_at - created_at))) / 86400 AS avg_days
-      FROM approvals
-      WHERE status = 'Approved'
-      GROUP BY approval_level
-      ORDER BY approval_level
+      SELECT a.approval_level,
+             AVG(EXTRACT(EPOCH FROM (a.approved_at - r.created_at))) / 86400 AS avg_days
+      FROM approvals a
+      JOIN requests r ON a.request_id = r.id
+      WHERE a.status = 'Approved'
+      GROUP BY a.approval_level
+      ORDER BY a.approval_level
     `);
 
     const stageDurations = stageDurationRes.rows.map((r) => ({
@@ -121,11 +123,11 @@ const getLifecycleAnalytics = async (req, res) => {
     );
 
     const spendRes = await pool.query(`
-      SELECT COALESCE(item_type, 'Uncategorized') AS category, SUM(total_cost) AS total_cost
+      SELECT COALESCE(ri.item_name, 'Uncategorized') AS category, SUM(ri.total_cost) AS total_cost
       FROM requested_items ri
       JOIN requests r ON ri.request_id = r.id
       WHERE r.status = 'Approved'
-      GROUP BY category
+      GROUP BY 1
       ORDER BY total_cost DESC
     `);
 

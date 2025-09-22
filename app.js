@@ -37,11 +37,36 @@ const defaultAllowedOrigins = [
   'http://127.0.0.1:5173',
 ];
 
-const parseOrigins = value =>
-  value
-    .split(',')
+const stripQuotes = text => text.replace(/^['"]|['"]$/g, '');
+
+const parseOrigins = raw => {
+  if (!raw) {
+    return [];
+  }
+
+  const value = raw.trim();
+
+  if (!value) {
+    return [];
+  }
+
+  if (value.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.map(item => String(item)).map(stripQuotes);
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to parse JSON CORS origin list, falling back to delimiter parsing.', error.message);
+    }
+  }
+
+  return value
+    .split(/[\s,;\n\r]+/)
+    .map(stripQuotes)
     .map(origin => origin.trim())
     .filter(Boolean);
+};
 
 const normalizeOrigin = origin => origin.replace(/\/+$/, '').toLowerCase();
 

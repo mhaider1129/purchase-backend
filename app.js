@@ -30,7 +30,69 @@ function getLANIP() {
 // =========================
 // 🛡️ Middleware Setup
 // =========================
-app.use(cors());
+const defaultAllowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+];
+
+const parseOrigins = value =>
+  value
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+
+const normalizeOrigin = origin => origin.replace(/\/+$/, '').toLowerCase();
+
+const envConfiguredOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.FRONTEND_ORIGIN,
+  process.env.CLIENT_URL,
+  process.env.WEBAPP_URL,
+  process.env.APP_URL,
+  process.env.CORS_ALLOWED_ORIGINS,
+  process.env.CORS_ORIGINS,
+  process.env.ALLOWED_ORIGINS,
+]
+  .filter(Boolean)
+  .flatMap(value => parseOrigins(value));
+
+const allowedOrigins = Array.from(
+  new Set(
+    [...defaultAllowedOrigins, ...envConfiguredOrigins]
+      .filter(Boolean)
+      .map(normalizeOrigin)
+  )
+);
+
+if (allowedOrigins.length > 0) {
+  console.log('✅ Allowed CORS origins:', allowedOrigins);
+} else {
+  console.warn('⚠️ No CORS origins configured — only same-origin requests without an Origin header will be accepted.');
+}
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    const normalizedOrigin = normalizeOrigin(origin);
+
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    console.warn(`🚫 Blocked CORS origin: ${origin}`);
+    return callback(null, false);
+  },
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // =========================

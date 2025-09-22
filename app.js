@@ -91,7 +91,21 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-app.use(cors(corsOptions));
+const corsMiddleware = cors(corsOptions);
+
+app.use((req, res, next) => {
+  corsMiddleware(req, res, err => {
+    if (err) {
+      return next(err);
+    }
+
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(corsOptions.optionsSuccessStatus);
+    }
+
+    return next();
+  });
+});
 app.use(express.json());
 
 // =========================

@@ -3,11 +3,18 @@ const path = require('path');
 const createHttpError = require('../../utils/httpError');
 
 const uploadPlan = async (req, res, next) => {
-  const department_id = req.body.department_id || req.user.department_id;
+  const department_id =
+    req.body.department_id && req.body.department_id !== 'null'
+      ? parseInt(req.body.department_id, 10)
+      : req.user.department_id;
   const plan_year = parseInt(req.body.plan_year, 10);
 
-  if (!plan_year || !req.file) {
+  if (Number.isNaN(plan_year) || !req.file) {
     return next(createHttpError(400, 'plan_year and file are required'));
+  }
+
+  if (Number.isNaN(department_id)) {
+    return next(createHttpError(400, 'department_id must be a valid number'));
   }
 
   try {

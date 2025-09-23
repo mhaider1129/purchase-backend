@@ -3,17 +3,30 @@ const createHttpError = require('../../utils/httpError');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
-  const userId = req.user.id;
+  const { id: userId, role } = req.user;
+  const isPrivilegedViewer = ['admin', 'SCM'].includes(role);
 
   try {
-    const accessCheck = await pool.query(
-      `SELECT r.*
-       FROM requests r
-       LEFT JOIN approvals a ON r.id = a.request_id
-       WHERE r.id = $1 AND (r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
-       LIMIT 1`,
-      [id, userId],
-    );
+    let accessCheck;
+
+    if (isPrivilegedViewer) {
+      accessCheck = await pool.query(
+        `SELECT r.*
+         FROM requests r
+         WHERE r.id = $1
+         LIMIT 1`,
+        [id],
+      );
+    } else {
+      accessCheck = await pool.query(
+        `SELECT r.*
+         FROM requests r
+         LEFT JOIN approvals a ON r.id = a.request_id
+         WHERE r.id = $1 AND (r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
+         LIMIT 1`,
+        [id, userId],
+      );
+    }
 
     if (accessCheck.rowCount === 0)
       return next(createHttpError(404, 'Request not found or access denied'));
@@ -55,31 +68,44 @@ const getRequestDetails = async (req, res, next) => {
 
 const getRequestItemsOnly = async (req, res, next) => {
   const { id } = req.params;
-  const userId = req.user.id;
-
+  const { id: userId, role } = req.user;
+  const isPrivilegedViewer = ['admin', 'SCM'].includes(role);
+  
   try {
-    const accessCheck = await pool.query(
-      `
-      SELECT r.id
-      FROM requests r
-      LEFT JOIN approvals a ON r.id = a.request_id
-      WHERE r.id = $1
-        AND (
-          r.requester_id = $2
-          OR a.approver_id = $2
-          OR r.assigned_to = $2
-        )
-      `,
-      [id, userId],
-    );
+    let accessCheck;
+
+    if (isPrivilegedViewer) {
+      accessCheck = await pool.query(
+        `SELECT r.id, r.request_type
+         FROM requests r
+         WHERE r.id = $1
+         LIMIT 1`,
+        [id],
+      );
+    } else {
+      accessCheck = await pool.query(
+        `
+        SELECT r.id, r.request_type
+        FROM requests r
+        LEFT JOIN approvals a ON r.id = a.request_id
+        WHERE r.id = $1
+          AND (
+            r.requester_id = $2
+            OR a.approver_id = $2
+            OR r.assigned_to = $2
+          )
+        LIMIT 1
+        `,
+        [id, userId],
+      );
+    }
 
     if (accessCheck.rowCount === 0) {
       return next(createHttpError(404, 'Request not found or access denied'));
     }
 
     let itemsRes;
-    const typeRes = await pool.query('SELECT request_type FROM requests WHERE id = $1', [id]);
-    const reqType = typeRes.rows[0]?.request_type;
+    const reqType = accessCheck.rows[0]?.request_type;
     if (reqType === 'Warehouse Supply') {
       itemsRes = await pool.query(
         `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,

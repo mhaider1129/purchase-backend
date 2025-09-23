@@ -3,16 +3,11 @@ const createHttpError = require('../utils/httpError');
 
 // Create a new stock item request (Warehouse Manager)
 const createStockItemRequest = async (req, res, next) => {
-  const { name, description } = req.body;
+  const { name, description, unit } = req.body;
   const { id: rawUserId, role } = req.user;
   const userId = parseInt(rawUserId, 10);
 
   if (!Number.isInteger(userId)) {
-    return next(createHttpError(400, 'Invalid user ID format'));
-  }
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-  if (!uuidRegex.test(userId)) {
     return next(createHttpError(400, 'Invalid user ID format'));
   }
   if (!['WarehouseManager', 'warehouse_manager'].includes(role)) {

@@ -39,6 +39,8 @@ const defaultAllowedOrigins = [
   'https://localhost:5173',
   'https://127.0.0.1:3000',
   'https://127.0.0.1:5173',
+  'https://wici-procurement.org',
+  'https://www.wici-procurement.org',
 ];
 
 const stripQuotes = text => text.replace(/^['"]|['"]$/g, '');

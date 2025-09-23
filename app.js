@@ -35,6 +35,10 @@ const defaultAllowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:5173',
+  'https://localhost:3000',
+  'https://localhost:5173',
+  'https://127.0.0.1:3000',
+  'https://127.0.0.1:5173',
 ];
 
 const stripQuotes = text => text.replace(/^['"]|['"]$/g, '');
@@ -83,6 +87,10 @@ const envConfiguredOrigins = [
   .filter(Boolean)
   .flatMap(value => parseOrigins(value));
 
+const envConfiguredHosts = [process.env.CORS_ALLOWED_HOSTS]
+  .filter(Boolean)
+  .flatMap(value => parseOrigins(value));
+
 const allowedOrigins = Array.from(
   new Set(
     [...defaultAllowedOrigins, ...envConfiguredOrigins]
@@ -91,10 +99,42 @@ const allowedOrigins = Array.from(
   )
 );
 
+const extractHost = value => {
+  if (!value || value === '*') {
+    return null;
+  }
+
+  const candidate = value.includes('://') ? value : `https://${value}`;
+
+  try {
+    const url = new URL(candidate);
+    return url.host.toLowerCase();
+  } catch (error) {
+    const stripped = candidate
+      .replace(/^[^:]+:\/\//, '')
+      .replace(/\/.*$/, '')
+      .trim();
+
+    return stripped ? stripped.toLowerCase() : null;
+  }
+};
+
+const allowedHosts = Array.from(
+  new Set(
+    [...allowedOrigins, ...envConfiguredHosts]
+      .map(extractHost)
+      .filter(Boolean)
+  )
+);
+
 if (allowedOrigins.length > 0) {
   console.log('✅ Allowed CORS origins:', allowedOrigins);
 } else {
   console.warn('⚠️ No CORS origins configured — only same-origin requests without an Origin header will be accepted.');
+}
+
+if (allowedHosts.length > 0) {
+  console.log('✅ Allowed CORS hosts:', allowedHosts);
 }
 
 const corsOptions = {
@@ -106,6 +146,18 @@ const corsOptions = {
     const normalizedOrigin = normalizeOrigin(origin);
 
     if (allowedOrigins.includes('*') || allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    let originHost = null;
+
+    try {
+      originHost = new URL(origin).host.toLowerCase();
+    } catch (error) {
+      originHost = extractHost(origin);
+    }
+
+    if (originHost && allowedHosts.includes(originHost)) {
       return callback(null, true);
     }
 

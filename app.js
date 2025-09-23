@@ -1,7 +1,6 @@
 // app.js
 
 const express = require('express');
-const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
 const os = require('os');
@@ -89,43 +88,11 @@ const envConfiguredOrigins = [
   .filter(Boolean)
   .flatMap(value => parseOrigins(value));
 
-const envConfiguredHosts = [process.env.CORS_ALLOWED_HOSTS]
-  .filter(Boolean)
-  .flatMap(value => parseOrigins(value));
-
 const allowedOrigins = Array.from(
   new Set(
     [...defaultAllowedOrigins, ...envConfiguredOrigins]
       .filter(Boolean)
       .map(normalizeOrigin)
-  )
-);
-
-const extractHost = value => {
-  if (!value || value === '*') {
-    return null;
-  }
-
-  const candidate = value.includes('://') ? value : `https://${value}`;
-
-  try {
-    const url = new URL(candidate);
-    return url.host.toLowerCase();
-  } catch (error) {
-    const stripped = candidate
-      .replace(/^[^:]+:\/\//, '')
-      .replace(/\/.*$/, '')
-      .trim();
-
-    return stripped ? stripped.toLowerCase() : null;
-  }
-};
-
-const allowedHosts = Array.from(
-  new Set(
-    [...allowedOrigins, ...envConfiguredHosts]
-      .map(extractHost)
-      .filter(Boolean)
   )
 );
 
@@ -135,57 +102,58 @@ if (allowedOrigins.length > 0) {
   console.warn('⚠️ No CORS origins configured — only same-origin requests without an Origin header will be accepted.');
 }
 
-if (allowedHosts.length > 0) {
-  console.log('✅ Allowed CORS hosts:', allowedHosts);
-}
+const allowedOriginsSet = new Set(allowedOrigins);
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin) {
-      return callback(null, true);
-    }
+const allowOrigin = origin =>
+  allowedOriginsSet.has('*') || allowedOriginsSet.has(normalizeOrigin(origin));
 
-    const normalizedOrigin = normalizeOrigin(origin);
+const appendCorsHeaders = (req, res) => {
+  const origin = req.headers.origin;
 
-    if (allowedOrigins.includes('*') || allowedOrigins.includes(normalizedOrigin)) {
-      return callback(null, true);
-    }
+  if (origin && allowOrigin(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
 
-    let originHost = null;
+  res.header('Vary', 'Origin');
 
-    try {
-      originHost = new URL(origin).host.toLowerCase();
-    } catch (error) {
-      originHost = extractHost(origin);
-    }
+  const requestHeaders = req.header('Access-Control-Request-Headers');
+  if (requestHeaders) {
+    res.header('Access-Control-Allow-Headers', requestHeaders);
+  } else {
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
 
-    if (originHost && allowedHosts.includes(originHost)) {
-      return callback(null, true);
-    }
-
-    console.warn(`🚫 Blocked CORS origin: ${origin}`);
-    return callback(null, false);
-  },
-  credentials: true,
-  optionsSuccessStatus: 204,
-  preflightContinue: true,
+  res.header(
+    'Access-Control-Allow-Methods',
+    'GET,POST,PUT,PATCH,DELETE,OPTIONS'
+  );
 };
 
-const corsMiddleware = cors(corsOptions);
-
 app.use((req, res, next) => {
-  corsMiddleware(req, res, err => {
-    if (err) {
-      return next(err);
-    }
+  const origin = req.headers.origin;
+
+  if (origin && !allowOrigin(origin)) {
+    console.warn(`🚫 Blocked CORS origin: ${origin}`);
 
     if (req.method === 'OPTIONS') {
-      res.status(corsOptions.optionsSuccessStatus).end();
+      appendCorsHeaders(req, res);
+      res.sendStatus(403);
       return;
     }
 
-    next();
-  });
+    res.status(403).json({ message: 'CORS: Origin not allowed' });
+    return;
+  }
+
+  appendCorsHeaders(req, res);
+
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+
+  next();
 });
 app.use(express.json());
 

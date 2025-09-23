@@ -114,6 +114,7 @@ const corsOptions = {
   },
   credentials: true,
   optionsSuccessStatus: 204,
+  preflightContinue: true,
 };
 
 const corsMiddleware = cors(corsOptions);
@@ -125,10 +126,11 @@ app.use((req, res, next) => {
     }
 
     if (req.method === 'OPTIONS') {
-      return res.sendStatus(corsOptions.optionsSuccessStatus);
+      res.status(corsOptions.optionsSuccessStatus).end();
+      return;
     }
 
-    return next();
+    next();
   });
 });
 app.use(express.json());

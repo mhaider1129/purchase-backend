@@ -159,11 +159,16 @@ const getMyRequests = async (req, res, next) => {
         r.estimated_cost,
         r.status,
         r.created_at,
+        ap.approval_level AS current_approval_level,
+        au.role AS current_approver_role,
+        au.name AS current_approver_name,
         EXISTS (
           SELECT 1 FROM approvals a
           WHERE a.request_id = r.id AND a.is_urgent = true
         ) AS is_urgent
        FROM requests r
+       LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
+       LEFT JOIN users au ON ap.approver_id = au.id
        WHERE r.requester_id = $1${searchClause}
        ORDER BY r.created_at DESC`,
       params,
@@ -358,6 +363,38 @@ const getAllRequests = async (req, res, next) => {
   }
 };
 
+const buildItemSummary = (rows = []) => {
+  const summary = {
+    total_items: 0,
+    purchased_count: 0,
+    pending_count: 0,
+    not_procured_count: 0,
+    calculated_total_cost: 0,
+  };
+
+  rows.forEach((item) => {
+    summary.total_items += 1;
+
+    const status = (item.procurement_status || '').toLowerCase();
+    if (status === 'purchased' || status === 'completed') {
+      summary.purchased_count += 1;
+    } else if (status === 'not_procured' || status === 'canceled') {
+      summary.not_procured_count += 1;
+    } else {
+      summary.pending_count += 1;
+    }
+
+    const quantity = Number(item.purchased_quantity ?? item.quantity ?? 0);
+    const unitCost = Number(item.unit_cost ?? 0);
+    if (!Number.isNaN(quantity) && !Number.isNaN(unitCost)) {
+      summary.calculated_total_cost += quantity * unitCost;
+    }
+  });
+
+  summary.calculated_total_cost = Number(summary.calculated_total_cost.toFixed(2));
+  return summary;
+};
+
 const getAssignedRequests = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -370,7 +407,31 @@ const getAssignedRequests = async (req, res) => {
       [userId],
     );
 
-    return successResponse(res, 'Assigned requests fetched', result.rows);
+    const requests = result.rows;
+    if (!requests.length) {
+      return successResponse(res, 'Assigned requests fetched', []);
+    }
+
+    const requestIds = requests.map((row) => row.id);
+    const itemsRes = await pool.query(
+      `SELECT request_id, procurement_status, unit_cost, quantity, purchased_quantity
+       FROM requested_items
+       WHERE request_id = ANY($1::int[])`,
+      [requestIds],
+    );
+
+    const groupedByRequest = itemsRes.rows.reduce((acc, item) => {
+      if (!acc[item.request_id]) acc[item.request_id] = [];
+      acc[item.request_id].push(item);
+      return acc;
+    }, {});
+
+    const enriched = requests.map((row) => ({
+      ...row,
+      status_summary: buildItemSummary(groupedByRequest[row.id] || []),
+    }));
+
+    return successResponse(res, 'Assigned requests fetched', enriched);
   } catch (err) {
     console.error('❌ Error in getAssignedRequests:', err);
     return errorResponse(res, 500, 'Internal server error');

@@ -6,7 +6,8 @@ const { authenticateUser } = require('../middleware/authMiddleware');
 const {
   handleApprovalDecision,
   getApprovalDetailsForRequest,
-  getApprovalSummary
+  getApprovalSummary,
+  updateApprovalItems,
 } = require('../controllers/approvalsController');
 
 // 📊 GET /api/approvals/summary
@@ -20,6 +21,10 @@ router.get('/request/:request_id/approvals', authenticateUser, getApprovalDetail
 // ✅ PATCH /api/approvals/:id/decision
 // → Submit an approval or rejection for a specific approval entry
 router.patch('/:id/decision', authenticateUser, handleApprovalDecision);
+
+// ✅ PATCH /api/approvals/:id/items
+// → Record approval decisions for selected items under an approval
+router.patch('/:id/items', authenticateUser, updateApprovalItems);
 
 // Optionally:
 // router.get('/summary/statistics', authenticateUser, getApprovalSummary); // alternate route

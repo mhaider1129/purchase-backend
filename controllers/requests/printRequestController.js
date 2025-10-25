@@ -1,5 +1,6 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
+const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 
 const ordinalSuffix = (n) => {
   const s = ['th', 'st', 'nd', 'rd'];
@@ -40,9 +41,22 @@ const printRequest = async (req, res, next) => {
         `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
         [id]
       );
-    } else {
+      await ensureRequestedItemApprovalColumns();
       itemsRes = await pool.query(
-        `SELECT item_name, brand, quantity, purchased_quantity, unit_cost, total_cost, specs FROM requested_items WHERE request_id = $1`,
+        `SELECT
+           item_name,
+           brand,
+           quantity,
+           purchased_quantity,
+           unit_cost,
+           total_cost,
+           specs,
+           approval_status,
+           approval_comments,
+           approved_by,
+           approved_at
+         FROM requested_items
+         WHERE request_id = $1`,
         [id]
       );
     }

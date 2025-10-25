@@ -23,6 +23,7 @@ const {
   updateApprovalStatus,
   assignRequestToProcurement,
   approveMaintenanceRequest,
+  reassignMaintenanceRequestToRequester,
   getPendingMaintenanceApprovals,
   markRequestAsCompleted,
   updateRequestCost,
@@ -68,6 +69,7 @@ router.put('/:id/cost', authenticateUser, updateRequestCost);
 // ==========================
 router.get('/pending-maintenance-approvals', getPendingMaintenanceApprovals);
 router.post('/approve-maintenance', approveMaintenanceRequest);
+router.put('/maintenance/reassign-to-requester', reassignMaintenanceRequestToRequester);
 
 // ==========================
 // ⏳ Incomplete Request Views

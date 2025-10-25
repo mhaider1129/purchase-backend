@@ -284,16 +284,18 @@ const createRequest = async (req, res, next) => {
             `INSERT INTO requested_items (
               request_id,
               item_name,
+              brand,
               quantity,
               unit_cost,
               total_cost,
               available_quantity,
               intended_use,
               specs
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [
               request.id,
               item_name,
+              brand || null,
               quantity,
               unit_cost,
               total_cost,
@@ -442,6 +444,16 @@ const createRequest = async (req, res, next) => {
       [request.id],
     );
 
+    const { rows: pendingApprovals } = await client.query(
+      `SELECT a.approval_level, u.name AS approver_name, u.role AS approver_role
+         FROM approvals a
+         LEFT JOIN users u ON u.id = a.approver_id
+        WHERE a.request_id = $1 AND a.status = 'Pending'
+        ORDER BY a.approval_level ASC
+        LIMIT 1`,
+      [request.id],
+    );
+
     await client.query("COMMIT");
 
     if (duplicateFound) {
@@ -463,11 +475,22 @@ const createRequest = async (req, res, next) => {
       }
     }
 
+    const nextApproval = pendingApprovals[0] || null;
+
     res.status(201).json({
       message: "✅ Request created successfully with approval routing",
       request_id: request.id,
+      request_type,
       estimated_cost: estimatedCost,
       attachments_uploaded: req.files?.length || 0,
+      next_approval: nextApproval
+        ? {
+            level: nextApproval.approval_level,
+            approver_name: nextApproval.approver_name || null,
+            approver_role: nextApproval.approver_role || null,
+          }
+        : null,
+      duplicate_detected: duplicateFound,
     });
   } catch (err) {
     await client.query("ROLLBACK");

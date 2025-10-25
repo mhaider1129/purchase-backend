@@ -257,20 +257,29 @@ app.use(errorHandler);
 // =========================
 // 🚀 Start Server
 // =========================
-const PORT = process.env.PORT || 5000;
-const HOST = process.env.HOST || getLANIP();
-app.listen(PORT, HOST, async () => {
-  console.log(`🚀 Server started on http://${HOST}:${PORT}`);
-  try {
-    await reassignPendingApprovals();
-    console.log('🔄 Pending approvals reassigned on startup');
-    await remindPendingApprovals();
-    setInterval(() => {
-      remindPendingApprovals().catch(err =>
-        console.error('❌ Reminder job failed:', err)
-      );
-    }, 24 * 60 * 60 * 1000); // daily
-  } catch (err) {
-    console.error('❌ Auto-reassignment error on startup:', err);
-  }
-});
+const startServer = (port = process.env.PORT || 5000, host = process.env.HOST || getLANIP()) => {
+  const server = app.listen(port, host, async () => {
+    console.log(`🚀 Server started on http://${host}:${port}`);
+    try {
+      await reassignPendingApprovals();
+      console.log('🔄 Pending approvals reassigned on startup');
+      await remindPendingApprovals();
+      setInterval(() => {
+        remindPendingApprovals().catch(err =>
+          console.error('❌ Reminder job failed:', err)
+        );
+      }, 24 * 60 * 60 * 1000); // daily
+    } catch (err) {
+      console.error('❌ Auto-reassignment error on startup:', err);
+    }
+  });
+
+  return server;
+};
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = app;
+module.exports.startServer = startServer;

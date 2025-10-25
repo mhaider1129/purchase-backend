@@ -2,6 +2,7 @@
 const pool = require('../config/db');
 const { sendEmail } = require('../utils/emailService');
 const createHttpError = require('../utils/httpError');
+const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -24,6 +25,8 @@ const handleApprovalDecision = async (req, res, next) => {
   if (!['Approved', 'Rejected'].includes(status)) {
     return next(createHttpError(400, 'Invalid status value'));
   }
+
+  await ensureRequestedItemApprovalColumns();
 
   const client = await pool.connect();
   try {
@@ -147,6 +150,30 @@ const handleApprovalDecision = async (req, res, next) => {
     if (statuses.includes('Rejected')) newStatus = 'Rejected';
     else if (statuses.every(s => s === 'Approved')) newStatus = 'Approved';
 
+    let itemSummary = null;
+    if (request.request_type !== 'Warehouse Supply') {
+      const summaryRes = await client.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE approval_status = 'Approved') AS approved,
+           COUNT(*) FILTER (WHERE approval_status = 'Rejected') AS rejected,
+           COUNT(*) FILTER (
+             WHERE approval_status IS NULL OR approval_status = 'Pending'
+           ) AS pending
+         FROM requested_items
+         WHERE request_id = $1`,
+        [approval.request_id]
+      );
+
+      if (summaryRes.rowCount > 0) {
+        const summaryRow = summaryRes.rows[0];
+        itemSummary = {
+          approved: Number(summaryRow.approved || 0),
+          rejected: Number(summaryRow.rejected || 0),
+          pending: Number(summaryRow.pending || 0),
+        };
+      }
+    }
+
     if (newStatus) {
       await client.query(`
         UPDATE requests SET status = $1, updated_at = NOW()
@@ -171,12 +198,206 @@ const handleApprovalDecision = async (req, res, next) => {
 
     res.json({
       message: `✅ Approval ${status.toLowerCase()} successfully`,
-      updatedRequestStatus: newStatus || 'Pending'
+      updatedRequestStatus: newStatus || 'Pending',
+      itemApprovalSummary: itemSummary,
     });
 
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Approval decision failed:', err);
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+// 🔘 Allow approvers to record decisions for individual items before final approval
+const updateApprovalItems = async (req, res, next) => {
+  const { id } = req.params;
+  if (!/^\d+$/.test(id)) {
+    return next(createHttpError(400, 'Invalid approval ID'));
+  }
+
+  const items = Array.isArray(req.body.items) ? req.body.items : null;
+  if (!items || items.length === 0) {
+    return next(createHttpError(400, 'At least one item decision is required'));
+  }
+
+  await ensureRequestedItemApprovalColumns();
+
+  const approverId = req.user.id;
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const approvalRes = await client.query(
+      `SELECT id, request_id, approver_id, status, is_active
+         FROM approvals
+         WHERE id = $1
+         FOR UPDATE`,
+      [Number(id)]
+    );
+
+    const approval = approvalRes.rows[0];
+    if (!approval) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Approval not found'));
+    }
+
+    if (approval.approver_id !== approverId) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'You are not authorized to update items for this approval'));
+    }
+
+    if (!approval.is_active || approval.status !== 'Pending') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'Only active pending approvals can update item decisions'));
+    }
+
+    const requestRes = await client.query(
+      `SELECT request_type FROM requests WHERE id = $1`,
+      [approval.request_id]
+    );
+
+    if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Associated request not found'));
+    }
+
+    if (requestRes.rows[0].request_type === 'Warehouse Supply') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Item-level approvals are not supported for warehouse supply requests'));
+    }
+
+    const statusMap = {
+      approved: 'Approved',
+      rejected: 'Rejected',
+      pending: 'Pending',
+    };
+
+    const updatedItems = [];
+    const summaryAdjustments = { Approved: 0, Rejected: 0, Pending: 0 };
+    const seenItemIds = new Set();
+
+    for (const itemDecision of items) {
+      const rawItemId = itemDecision?.item_id ?? itemDecision?.id;
+      if (!/^\d+$/.test(String(rawItemId || ''))) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'Each item must include a valid numeric id'));
+      }
+
+      const itemId = Number(rawItemId);
+      if (seenItemIds.has(itemId)) {
+        continue;
+      }
+      seenItemIds.add(itemId);
+
+      const normalizedStatus = String(itemDecision.status || '')
+        .trim()
+        .toLowerCase();
+      const finalStatus = statusMap[normalizedStatus];
+
+      if (!finalStatus) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'Invalid item status supplied'));
+      }
+
+      const itemRes = await client.query(
+        `SELECT id FROM requested_items WHERE id = $1 AND request_id = $2`,
+        [itemId, approval.request_id]
+      );
+
+      if (itemRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(404, `Requested item ${itemId} not found for this request`));
+      }
+
+      const updateRes = await client.query(
+        `UPDATE requested_items
+           SET approval_status = $1,
+               approval_comments = $2,
+               approved_by = CASE WHEN $1 IN ('Approved','Rejected') THEN $3 ELSE NULL END,
+               approved_at = CASE WHEN $1 IN ('Approved','Rejected') THEN NOW() ELSE NULL END
+         WHERE id = $4 AND request_id = $5
+         RETURNING id, item_name, approval_status, approval_comments, approved_at`,
+        [
+          finalStatus,
+          itemDecision.comments || null,
+          approverId,
+          itemId,
+          approval.request_id,
+        ]
+      );
+
+      const updated = updateRes.rows[0];
+      updatedItems.push({
+        id: updated.id,
+        item_name: updated.item_name,
+        approval_status: updated.approval_status,
+        approval_comments: updated.approval_comments,
+        approved_at: updated.approved_at,
+      });
+
+      summaryAdjustments[finalStatus] += 1;
+    }
+
+    const summaryRes = await client.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE approval_status = 'Approved') AS approved,
+         COUNT(*) FILTER (WHERE approval_status = 'Rejected') AS rejected,
+         COUNT(*) FILTER (
+           WHERE approval_status IS NULL OR approval_status = 'Pending'
+         ) AS pending
+       FROM requested_items
+       WHERE request_id = $1`,
+      [approval.request_id]
+    );
+
+    const summaryRow = summaryRes.rows[0] || {};
+    const summary = {
+      approved: Number(summaryRow.approved || 0),
+      rejected: Number(summaryRow.rejected || 0),
+      pending: Number(summaryRow.pending || 0),
+    };
+
+    const commentFragments = [];
+    if (summaryAdjustments.Approved > 0) {
+      commentFragments.push(`${summaryAdjustments.Approved} item(s) approved`);
+    }
+    if (summaryAdjustments.Rejected > 0) {
+      commentFragments.push(`${summaryAdjustments.Rejected} item(s) rejected`);
+    }
+    if (summaryAdjustments.Pending > 0) {
+      commentFragments.push(`${summaryAdjustments.Pending} item(s) set to pending`);
+    }
+
+    const commentText = commentFragments.join(', ');
+
+    if (commentText) {
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Item approvals updated', $2, $3)`,
+        [approval.request_id, approverId, commentText]
+      );
+
+      await client.query(
+        `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+         VALUES ($1, $2, $3, 'Items Reviewed', $4)`,
+        [approval.id, approval.request_id, approverId, commentText]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: '✅ Item decisions recorded successfully',
+      updatedItems,
+      summary,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to update item approvals:', err);
     next(err);
   } finally {
     client.release();
@@ -256,5 +477,6 @@ const getApprovalSummary = async (req, res, next) => {
 module.exports = {
   handleApprovalDecision,
   getApprovalSummary,
-  getApprovalDetailsForRequest
+  getApprovalDetailsForRequest,
+  updateApprovalItems,
 };

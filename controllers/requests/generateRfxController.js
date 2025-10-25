@@ -1,6 +1,7 @@
 const pool = require('../../config/db');
 const PDFDocument = require('pdfkit');
 const createHttpError = require('../../utils/httpError');
+const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 
 const generateRfx = async (req, res, next) => {
   const { id } = req.params;
@@ -31,10 +32,13 @@ const generateRfx = async (req, res, next) => {
     }
 
     const request = requestRes.rows[0];
+    await ensureRequestedItemApprovalColumns();
+
     const itemsRes = await pool.query(
       `SELECT item_name, quantity, unit, description
        FROM requested_items
-       WHERE request_id = $1`,
+       WHERE request_id = $1
+         AND (approval_status IS NULL OR approval_status = 'Approved')`,
       [id]
     );
 

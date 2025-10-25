@@ -26,6 +26,7 @@ const {
   markRequestAsCompleted,
   updateRequestCost,
   approveMaintenanceRequest,
+  reassignMaintenanceRequestToRequester,
 } = require('./requests/updateRequestsController');
 
 const { generateRfx } = require('./requests/generateRfxController');
@@ -47,6 +48,7 @@ module.exports = {
   getMyMaintenanceRequests,
   getPendingMaintenanceApprovals,
   approveMaintenanceRequest,
+  reassignMaintenanceRequestToRequester,
   getRequestLogs,
   markRequestAsCompleted,
   updateRequestCost,

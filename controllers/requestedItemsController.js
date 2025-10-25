@@ -146,8 +146,8 @@ const updateItemCost = async (req, res, next) => {
   const { unit_cost } = req.body;
   const { user_id, role } = req.user;
 
-  if (!unit_cost || isNaN(unit_cost) || unit_cost <= 0) {
-    return next(createHttpError(400, 'Valid unit cost is required and must be > 0'));
+  if (unit_cost === undefined || unit_cost === null || isNaN(unit_cost) || unit_cost < 0) {
+    return next(createHttpError(400, 'Valid unit cost is required and must be zero or greater'));
   }
 
   const client = await pool.connect();
@@ -227,8 +227,22 @@ const updateItemProcurementStatus = async (req, res, next) => {
 
   const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
 
+  const allowedStatuses = [
+    'pending',
+    'purchased',
+    'not_procured',
+    'completed',
+    'canceled',
+  ];
+
   if (!allowedRoles.includes(role)) {
     return next(createHttpError(403, 'Unauthorized to update procurement status'));
+  }
+
+  if (!procurement_status || !allowedStatuses.includes(procurement_status)) {
+    return next(
+      createHttpError(400, 'Invalid procurement status provided'),
+    );
   }
 
   const client = await pool.connect();

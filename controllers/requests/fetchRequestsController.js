@@ -1,5 +1,6 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
+const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -39,9 +40,24 @@ const getRequestDetails = async (req, res, next) => {
         `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
         [id]
       );
-    } else {
+      await ensureRequestedItemApprovalColumns();
       itemsRes = await pool.query(
-        `SELECT item_name, brand, quantity, purchased_quantity, unit_cost, total_cost, specs FROM requested_items WHERE request_id = $1`,
+        `SELECT
+           id,
+           item_name,
+           brand,
+           quantity,
+           available_quantity,
+           purchased_quantity,
+           unit_cost,
+           total_cost,
+           specs,
+           approval_status,
+           approval_comments,
+           approved_by,
+           approved_at
+         FROM requested_items
+         WHERE request_id = $1`,
         [id]
       );
     }
@@ -111,10 +127,25 @@ const getRequestItemsOnly = async (req, res, next) => {
         `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
         [id]
       );
-    } else {
+      await ensureRequestedItemApprovalColumns();
       itemsRes = await pool.query(
         `
-      SELECT id, item_name, brand, quantity, purchased_quantity, unit_cost, total_cost, procurement_status, procurement_comment, specs
+      SELECT
+        id,
+        item_name,
+        brand,
+        quantity,
+        available_quantity,
+        purchased_quantity,
+        unit_cost,
+        total_cost,
+        procurement_status,
+        procurement_comment,
+        specs,
+        approval_status,
+        approval_comments,
+        approved_by,
+        approved_at
       FROM requested_items
       WHERE request_id = $1
       `,
@@ -130,26 +161,60 @@ const getRequestItemsOnly = async (req, res, next) => {
 };
 
 const getMyRequests = async (req, res, next) => {
-  const { search } = req.query;
+  const {
+    search,
+    status,
+    requestType,
+    request_type,
+    from_date,
+    to_date,
+    fromDate,
+    toDate,
+  } = req.query;
 
   try {
     const params = [req.user.id];
-    let searchClause = '';
+    const conditions = [`r.requester_id = $1`];
+
+    if (status) {
+      params.push(status);
+      conditions.push(`r.status = $${params.length}`);
+    }
+
+    const normalizedType = requestType || request_type;
+    if (normalizedType) {
+      params.push(normalizedType);
+      conditions.push(`r.request_type = $${params.length}`);
+    }
+
+    const startDate = from_date || fromDate;
+    if (startDate) {
+      params.push(startDate);
+      conditions.push(`r.created_at >= $${params.length}`);
+    }
+
+    const endDate = to_date || toDate;
+    if (endDate) {
+      params.push(endDate);
+      conditions.push(`r.created_at <= $${params.length}`);
+    }
 
     if (search) {
       params.push(`%${search.toLowerCase()}%`);
-      searchClause = `
-        AND (
-          LOWER(r.justification) LIKE $${params.length}
-          OR LOWER(r.request_type) LIKE $${params.length}
-          OR CAST(r.id AS TEXT) LIKE $${params.length}
+      const placeholder = `$${params.length}`;
+      conditions.push(`(
+          LOWER(r.justification) LIKE ${placeholder}
+          OR LOWER(r.request_type) LIKE ${placeholder}
+          OR CAST(r.id AS TEXT) LIKE ${placeholder}
           OR EXISTS (
             SELECT 1 FROM requested_items ri
             WHERE ri.request_id = r.id
-              AND LOWER(ri.item_name) LIKE $${params.length}
+              AND LOWER(ri.item_name) LIKE ${placeholder}
           )
-        )`;
+        )`);
     }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const result = await pool.query(
       `SELECT
@@ -169,7 +234,7 @@ const getMyRequests = async (req, res, next) => {
        FROM requests r
        LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
        LEFT JOIN users au ON ap.approver_id = au.id
-       WHERE r.requester_id = $1${searchClause}
+       ${whereClause}
        ORDER BY r.created_at DESC`,
       params,
     );
@@ -276,6 +341,8 @@ const getAllRequests = async (req, res, next) => {
 
   if (filter === 'unassigned') {
     whereClauses.push('r.assigned_to IS NULL');
+    params.push('Approved');
+    whereClauses.push(`r.status = $${params.length}`);
   }
 
   if (request_type) {

@@ -297,10 +297,142 @@ const approveMaintenanceRequest = async (req, res, next) => {
   }
 };
 
+const reassignMaintenanceRequestToRequester = async (req, res, next) => {
+  const { request_id, approval_id } = req.body;
+
+  if (!request_id || !approval_id) {
+    return next(createHttpError(400, 'request_id and approval_id are required'));
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const approvalRes = await client.query(
+      `SELECT
+         a.approver_id,
+         a.status,
+         a.is_active,
+         a.approval_level,
+         r.department_id,
+         r.section_id,
+         r.request_type,
+         r.requester_id
+       FROM approvals a
+       JOIN requests r ON r.id = a.request_id
+       WHERE a.id = $1 AND a.request_id = $2
+       FOR UPDATE`,
+      [approval_id, request_id],
+    );
+
+    if (approvalRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Approval not found for this request'));
+    }
+
+    const approval = approvalRes.rows[0];
+
+    if (approval.request_type !== 'Maintenance') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Reassignment is only available for maintenance requests'));
+    }
+
+    if (approval.approval_level !== 1) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Only level 1 approvals can be reassigned to a department requester'));
+    }
+
+    if (approval.status !== 'Pending' || approval.is_active === false) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Only pending, active approvals can be reassigned'));
+    }
+
+    if (approval.approver_id !== req.user.id) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'You are not the active approver for this request'));
+    }
+
+    const designatedRes = await client.query(
+      `SELECT id, name
+         FROM users
+        WHERE LOWER(role) = 'requester'
+          AND department_id = $1
+          AND ($2::INT IS NULL OR section_id = $2)
+          AND is_active = true
+        ORDER BY id
+        LIMIT 1`,
+      [approval.department_id, approval.section_id],
+    );
+
+    if (designatedRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'No active department requester found for this request'));
+    }
+
+    const designatedRequester = designatedRes.rows[0];
+
+    if (designatedRequester.id === approval.approver_id) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Request is already assigned to the department requester'));
+    }
+
+    await client.query(
+      `UPDATE approvals
+         SET approver_id = $1,
+             updated_at = NOW()
+       WHERE id = $2`,
+      [designatedRequester.id, approval_id],
+    );
+
+    await client.query(
+      `UPDATE requests
+         SET requester_id = $1,
+             updated_at = NOW()
+       WHERE id = $2`,
+      [designatedRequester.id, request_id],
+    );
+
+    await client.query(
+      `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [approval_id, request_id, req.user.id, 'Reassigned', `Reassigned to department requester ${designatedRequester.name || designatedRequester.id}`],
+    );
+
+    const previousRequester = approval.requester_id || 'none';
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        request_id,
+        'Requester Reassigned',
+        req.user.id,
+        `Requester changed from ${previousRequester} to ${designatedRequester.name || designatedRequester.id}`,
+      ],
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: '✅ Maintenance request reassigned to department requester',
+      request_id,
+      approval_id,
+      new_requester_id: designatedRequester.id,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to reassign maintenance request to requester:', err);
+    next(createHttpError(500, 'Failed to reassign request to department requester'));
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   assignRequestToProcurement,
   updateApprovalStatus,
   markRequestAsCompleted,
   updateRequestCost,
   approveMaintenanceRequest,
+  reassignMaintenanceRequestToRequester,
 };

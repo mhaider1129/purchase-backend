@@ -60,6 +60,27 @@ const getRequestDetails = async (req, res, next) => {
          WHERE request_id = $1`,
         [id]
       );
+    } else {
+      await ensureRequestedItemApprovalColumns();
+      itemsRes = await pool.query(
+        `SELECT
+           id,
+           item_name,
+           brand,
+           quantity,
+           available_quantity,
+           purchased_quantity,
+           unit_cost,
+           total_cost,
+           specs,
+           approval_status,
+           approval_comments,
+           approved_by,
+           approved_at
+         FROM requested_items
+         WHERE request_id = $1`,
+        [id]
+      );
     }
 
     let assignedUser = null;
@@ -127,6 +148,31 @@ const getRequestItemsOnly = async (req, res, next) => {
         `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
         [id]
       );
+      await ensureRequestedItemApprovalColumns();
+      itemsRes = await pool.query(
+        `
+      SELECT
+        id,
+        item_name,
+        brand,
+        quantity,
+        available_quantity,
+        purchased_quantity,
+        unit_cost,
+        total_cost,
+        procurement_status,
+        procurement_comment,
+        specs,
+        approval_status,
+        approval_comments,
+        approved_by,
+        approved_at
+      FROM requested_items
+      WHERE request_id = $1
+      `,
+        [id]
+      );
+    } else {
       await ensureRequestedItemApprovalColumns();
       itemsRes = await pool.query(
         `

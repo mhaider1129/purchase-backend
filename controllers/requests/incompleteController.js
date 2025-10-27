@@ -17,7 +17,7 @@ const getAllIncomplete = async (req, res, next) => {
       LEFT JOIN sections s ON r.section_id = s.id
       WHERE r.status = 'Approved'
         AND EXISTS (
-          SELECT 1 FROM requested_items ri
+          SELECT 1 FROM public.requested_items ri
           WHERE ri.request_id = r.id
             AND (ri.procurement_status IS NULL OR ri.procurement_status NOT IN ('purchased', 'completed'))
         )
@@ -48,7 +48,7 @@ const getMedicalIncomplete = async (req, res, next) => {
       WHERE r.status = 'Approved'
         AND r.request_domain = 'medical'
         AND EXISTS (
-          SELECT 1 FROM requested_items ri
+          SELECT 1 FROM public.requested_items ri
           WHERE ri.request_id = r.id
             AND (ri.procurement_status IS NULL OR ri.procurement_status NOT IN ('purchased', 'completed'))
         )
@@ -79,7 +79,7 @@ const getOperationalIncomplete = async (req, res, next) => {
       WHERE r.status = 'Approved'
         AND r.request_domain = 'operational'
         AND EXISTS (
-          SELECT 1 FROM requested_items ri
+          SELECT 1 FROM public.requested_items ri
           WHERE ri.request_id = r.id
             AND (ri.procurement_status IS NULL OR ri.procurement_status NOT IN ('purchased', 'completed'))
         )

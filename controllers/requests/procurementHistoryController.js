@@ -17,7 +17,7 @@ const getCompletedAssignedRequests = async (req, res, next) => {
           OR LOWER(r.request_type) LIKE $${params.length}
           OR CAST(r.id AS TEXT) LIKE $${params.length}
           OR EXISTS (
-            SELECT 1 FROM requested_items ri
+            SELECT 1 FROM public.requested_items ri
             WHERE ri.request_id = r.id
               AND LOWER(ri.item_name) LIKE $${params.length}
           )

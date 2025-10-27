@@ -38,7 +38,7 @@ const generateRfx = async (req, res, next) => {
 
     const itemsRes = await pool.query(
       `SELECT item_name, quantity, unit, description
-       FROM requested_items
+       FROM public.requested_items
        WHERE request_id = $1
          AND (approval_status IS NULL OR approval_status = 'Approved')`,
       [id]

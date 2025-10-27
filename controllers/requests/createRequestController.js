@@ -196,7 +196,7 @@ const createRequest = async (req, res, next) => {
     const table =
       request_type === "Warehouse Supply"
         ? "warehouse_supply_items"
-        : "requested_items";
+        : "public.requested_items";
     const dupRes = await pool.query(
       `SELECT 1
        FROM requests r
@@ -311,7 +311,7 @@ const createRequest = async (req, res, next) => {
         let insertedReq;
         if (request_type === "Stock") {
           insertedReq = await client.query(
-            `INSERT INTO requested_items (
+            `INSERT INTO public.requested_items (
               request_id,
               item_name,
               brand,
@@ -336,7 +336,7 @@ const createRequest = async (req, res, next) => {
           );
         } else {
           insertedReq = await client.query(
-            `INSERT INTO requested_items (
+            `INSERT INTO public.requested_items (
               request_id,
               item_name,
               brand,

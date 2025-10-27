@@ -58,7 +58,7 @@ const getRequestDetails = async (req, res, next) => {
            approval_comments,
            approved_by,
            approved_at
-         FROM requested_items
+         FROM public.requested_items
          WHERE request_id = $1`,
         [id]
       );
@@ -79,7 +79,7 @@ const getRequestDetails = async (req, res, next) => {
            approval_comments,
            approved_by,
            approved_at
-         FROM requested_items
+         FROM public.requested_items
          WHERE request_id = $1`,
         [id]
       );
@@ -169,7 +169,7 @@ const getRequestItemsOnly = async (req, res, next) => {
         approval_comments,
         approved_by,
         approved_at
-      FROM requested_items
+      FROM public.requested_items
       WHERE request_id = $1
       `,
         [id]
@@ -194,7 +194,7 @@ const getRequestItemsOnly = async (req, res, next) => {
         approval_comments,
         approved_by,
         approved_at
-      FROM requested_items
+      FROM public.requested_items
       WHERE request_id = $1
       `,
         [id]
@@ -255,7 +255,7 @@ const getMyRequests = async (req, res, next) => {
           OR LOWER(r.request_type) LIKE ${placeholder}
           OR CAST(r.id AS TEXT) LIKE ${placeholder}
           OR EXISTS (
-            SELECT 1 FROM requested_items ri
+            SELECT 1 FROM public.requested_items ri
             WHERE ri.request_id = r.id
               AND LOWER(ri.item_name) LIKE ${placeholder}
           )
@@ -408,7 +408,7 @@ const getAllRequests = async (req, res, next) => {
       OR LOWER(r.request_type) LIKE $${params.length}
       OR CAST(r.id AS TEXT) LIKE $${params.length}
       OR EXISTS (
-        SELECT 1 FROM requested_items ri
+        SELECT 1 FROM public.requested_items ri
         WHERE ri.request_id = r.id
           AND LOWER(ri.item_name) LIKE $${params.length}
       )
@@ -538,7 +538,7 @@ const getAssignedRequests = async (req, res) => {
     const requestIds = requests.map((row) => row.id);
     const itemsRes = await pool.query(
       `SELECT request_id, procurement_status, unit_cost, quantity, purchased_quantity
-       FROM requested_items
+       FROM public.requested_items
        WHERE request_id = ANY($1::int[])`,
       [requestIds],
     );
@@ -572,9 +572,13 @@ const getPendingApprovals = async (req, res, next) => {
          r.estimated_cost,
          r.status,
          r.project_id,
-         p.name AS project_name
+         p.name AS project_name,
+         d.name AS department_name,
+         s.name AS section_name
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
+       LEFT JOIN departments d ON r.department_id = d.id
+       LEFT JOIN sections s ON r.section_id = s.id
        JOIN approvals a ON r.id = a.request_id
        WHERE a.approver_id = $1
          AND a.is_active = true
@@ -632,7 +636,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
        LEFT JOIN sections s ON r.section_id = s.id
        JOIN approvals a ON a.request_id = r.id
        LEFT JOIN projects p ON r.project_id = p.id
-       LEFT JOIN requested_items ri ON ri.request_id = r.id
+       LEFT JOIN public.requested_items ri ON ri.request_id = r.id
        WHERE r.request_type = 'Maintenance'
          AND a.approver_id = $1
          AND a.status = 'Pending'

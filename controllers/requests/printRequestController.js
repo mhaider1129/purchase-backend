@@ -58,7 +58,7 @@ const printRequest = async (req, res, next) => {
            approval_comments,
            approved_by,
            approved_at
-         FROM requested_items
+         FROM public.requested_items
          WHERE request_id = $1`,
         [id]
       );
@@ -77,7 +77,7 @@ const printRequest = async (req, res, next) => {
            approval_comments,
            approved_by,
            approved_at
-         FROM requested_items
+         FROM public.requested_items
          WHERE request_id = $1`,
         [id]
       );

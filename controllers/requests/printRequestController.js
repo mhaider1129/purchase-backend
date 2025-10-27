@@ -33,6 +33,9 @@ const printRequest = async (req, res, next) => {
     );
 
     const request = updateRes.rows[0];
+    if (request) {
+      request.project_name = accessRes.rows[0]?.project_name || null;
+    }
     const count = currentCount + 1;
 
     let itemsRes;

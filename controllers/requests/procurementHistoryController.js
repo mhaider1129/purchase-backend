@@ -25,8 +25,9 @@ const getCompletedAssignedRequests = async (req, res, next) => {
     }
 
     const result = await pool.query(
-      `SELECT r.*, u.name AS requester_name, u.role AS requester_role
+      `SELECT r.*, p.name AS project_name, u.name AS requester_name, u.role AS requester_role
        FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
        WHERE r.assigned_to = $1 AND r.status = 'completed'${searchClause}
        ORDER BY r.completed_at DESC NULLS LAST`,

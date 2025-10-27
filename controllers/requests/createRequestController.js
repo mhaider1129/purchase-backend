@@ -103,6 +103,18 @@ const assignApprover = async (
 const createRequest = async (req, res, next) => {
   let { request_type, justification, items } = req.body;
 
+  const rawProjectId = req.body?.project_id;
+  let projectId = null;
+  if (rawProjectId !== undefined && rawProjectId !== null && rawProjectId !== '') {
+    const candidate = String(rawProjectId).trim();
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(candidate)) {
+      return next(createHttpError(400, 'Invalid project selected'));
+    }
+    projectId = candidate;
+  }
+
   // Items may arrive as a JSON string when using multipart/form-data
   if (typeof items === "string") {
     try {
@@ -189,6 +201,17 @@ const createRequest = async (req, res, next) => {
   try {
     await client.query("BEGIN");
 
+    if (projectId !== null) {
+      const projectCheck = await client.query(
+        `SELECT id FROM projects WHERE id = $1 AND is_active IS DISTINCT FROM FALSE`,
+        [projectId],
+      );
+
+      if (projectCheck.rowCount === 0) {
+        throw createHttpError(400, 'Selected project was not found or is inactive');
+      }
+    }
+
     let estimatedCost = 0;
     if (request_type !== "Stock") {
       estimatedCost = items.reduce((sum, item) => {
@@ -216,8 +239,9 @@ const createRequest = async (req, res, next) => {
       `INSERT INTO requests (
         request_type, requester_id, department_id, section_id, justification,
         estimated_cost, request_domain,
-        maintenance_ref_number, initiated_by_technician_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        maintenance_ref_number, initiated_by_technician_id,
+        project_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
         request_type,
         requester_id,
@@ -228,6 +252,7 @@ const createRequest = async (req, res, next) => {
         requestDomain,
         maintenance_ref_number,
         initiated_by_technician_id,
+        projectId,
       ],
     );
 
@@ -495,7 +520,11 @@ const createRequest = async (req, res, next) => {
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Error creating request:", err);
-    next(createHttpError(500, "Failed to create request"));
+    if (err?.statusCode) {
+      next(err);
+    } else {
+      next(createHttpError(500, "Failed to create request"));
+    }
   } finally {
     client.release();
   }

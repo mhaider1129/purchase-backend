@@ -19,7 +19,8 @@ const generateRfx = async (req, res, next) => {
 
   try {
     const requestRes = await pool.query(
-      `SELECT r.*, d.name AS department_name, p.name AS project_name, u.name AS requester_name
+      `SELECT r.*, d.name AS department_name, p.name AS project_name,
+              COALESCE(r.temporary_requester_name, u.name) AS requester_name
        FROM requests r
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN projects p ON r.project_id = p.id

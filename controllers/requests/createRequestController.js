@@ -138,7 +138,7 @@ const createRequest = async (req, res, next) => {
     );
   }
 
-    if (request_type === "Medication") {
+  if (request_type === "Medication") {
     if (
       req.user.role.toLowerCase() !== "requester" ||
       !req.user.can_request_medication
@@ -156,6 +156,11 @@ const createRequest = async (req, res, next) => {
   const department_id = req.body.target_department_id || req.user.department_id;
   const section_id = req.body.target_section_id || req.user.section_id || null;
 
+  const rawTempRequester =
+    req.body.temporary_requester_name ?? req.body.temporaryRequesterName ?? '';
+  const temporaryRequesterName =
+    typeof rawTempRequester === 'string' ? rawTempRequester.trim() : '';
+
   let maintenance_ref_number = null;
   let initiated_by_technician_id = null;
 
@@ -170,6 +175,15 @@ const createRequest = async (req, res, next) => {
     }
     maintenance_ref_number = req.body.maintenance_ref_number || null;
     initiated_by_technician_id = req.user.id;
+
+    if (!temporaryRequesterName) {
+      return next(
+        createHttpError(
+          400,
+          "Provide the name of the department requester for this maintenance submission",
+        ),
+      );
+    }
   }
 
   const itemNames = items.map((i) => i.item_name.toLowerCase());
@@ -195,6 +209,17 @@ const createRequest = async (req, res, next) => {
   } catch (err) {
     console.error("❌ Error checking duplicates:", err);
     return next(createHttpError(500, "Failed to validate duplicate requests"));
+  }
+
+  if (request_type === "Maintenance") {
+    try {
+      await pool.query(
+        "ALTER TABLE requests ADD COLUMN IF NOT EXISTS temporary_requester_name TEXT",
+      );
+    } catch (err) {
+      console.error("❌ Failed ensuring temporary_requester_name column:", err);
+      return next(createHttpError(500, "Failed to prepare maintenance request metadata"));
+    }
   }
 
   const client = await pool.connect();
@@ -240,8 +265,8 @@ const createRequest = async (req, res, next) => {
         request_type, requester_id, department_id, section_id, justification,
         estimated_cost, request_domain,
         maintenance_ref_number, initiated_by_technician_id,
-        project_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        project_id, temporary_requester_name
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [
         request_type,
         requester_id,
@@ -253,6 +278,7 @@ const createRequest = async (req, res, next) => {
         maintenance_ref_number,
         initiated_by_technician_id,
         projectId,
+        request_type === "Maintenance" ? temporaryRequesterName : null,
       ],
     );
 
@@ -345,27 +371,72 @@ const createRequest = async (req, res, next) => {
     }
 
     if (request_type === "Maintenance") {
-      const designatedRequesterRes = await client.query(
-        `SELECT id FROM users
-         WHERE LOWER(role) = 'requester'
-           AND department_id = $1
-           AND ($2::int IS NULL OR section_id = $2)
-           AND is_active = true
-         LIMIT 1`,
-        [department_id, section_id],
-      );
-      const designatedRequesterId = designatedRequesterRes.rows[0]?.id;
-      if (!designatedRequesterId)
-        throw createHttpError(
-          400,
-          "No designated requester found for this section",
+      const autoSteps = [
+        {
+          level: 0,
+          comment: `Temporary requester confirmed: ${temporaryRequesterName}`,
+        },
+        {
+          level: 1,
+          comment: 'HOD step auto-approved for maintenance pilot',
+        },
+        {
+          level: 2,
+          comment: 'Warehouse step auto-approved for maintenance pilot',
+        },
+      ];
+
+      for (const step of autoSteps) {
+        await client.query(
+          `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at, comments)
+           VALUES ($1, NULL, $2, FALSE, 'Approved', NOW(), $3)`,
+          [request.id, step.level, step.comment],
         );
 
-      await client.query(
-        `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status)
-        VALUES ($1, $2, 1, true, 'Pending')`,
-        [request.id, designatedRequesterId],
-      );
+        await client.query(
+          `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, $2, $3, $4)`,
+          [
+            request.id,
+            `Level ${step.level} auto-approved`,
+            requester_id,
+            step.comment,
+          ],
+        );
+      }
+
+      let nextLevel = 3;
+      if (deptType === 'medical') {
+        await assignApprover(
+          client,
+          'CMO',
+          department_id,
+          request.id,
+          request_type,
+          nextLevel,
+          requestDomain,
+        );
+      } else {
+        await assignApprover(
+          client,
+          'SCM',
+          department_id,
+          request.id,
+          request_type,
+          nextLevel,
+          requestDomain,
+        );
+        nextLevel += 1;
+        await assignApprover(
+          client,
+          'COO',
+          department_id,
+          request.id,
+          request_type,
+          nextLevel,
+          requestDomain,
+        );
+      }
     } else {
       const domainForChain =
         request_type === "Warehouse Supply" ? requestDomain : deptType;
@@ -508,6 +579,7 @@ const createRequest = async (req, res, next) => {
       request_type,
       estimated_cost: estimatedCost,
       attachments_uploaded: req.files?.length || 0,
+      temporary_requester_name: request.temporary_requester_name || null,
       next_approval: nextApproval
         ? {
             level: nextApproval.approval_level,

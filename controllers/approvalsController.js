@@ -3,6 +3,20 @@ const pool = require('../config/db');
 const { sendEmail } = require('../utils/emailService');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
+const { assignApprover } = require('./requests/createRequestController');
+
+const fetchApprovalRoutes = async (client, requestType, departmentType, cost) => {
+  const { rows } = await client.query(
+    `SELECT approval_level, role
+       FROM approval_routes
+      WHERE request_type = $1
+        AND department_type = $2
+        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(max_amount, 999999999)
+      ORDER BY approval_level`,
+    [requestType, departmentType, cost],
+  );
+  return rows;
+};
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -113,6 +127,127 @@ const handleApprovalDecision = async (req, res, next) => {
 
     // 8. Activate Next Approval Step (only when approved)
     if (status === 'Approved') {
+      if (
+        request.request_type === 'Maintenance' &&
+        request.initiated_by_technician_id &&
+        approval.approval_level === 0
+      ) {
+        const { rows: higherLevels } = await client.query(
+          `SELECT 1
+             FROM approvals
+            WHERE request_id = $1 AND approval_level > 0
+            LIMIT 1`,
+          [approval.request_id],
+        );
+
+        if (higherLevels.length === 0) {
+          await client.query(
+            `UPDATE requests
+                SET requester_id = $1,
+                    updated_at = NOW()
+              WHERE id = $2`,
+            [approver_id, approval.request_id],
+          );
+          request.requester_id = approver_id;
+
+          await client.query(
+            `INSERT INTO request_logs (request_id, action, actor_id, comments)
+             VALUES ($1, $2, $3, $4)`,
+            [
+              approval.request_id,
+              'Requester confirmation recorded',
+              approver_id,
+              'Maintenance request ownership transferred to department requester',
+            ],
+          );
+
+          const { rows: newRequesterEmailRows } = await client.query(
+            `SELECT email FROM users WHERE id = $1`,
+            [approver_id],
+          );
+          if (newRequesterEmailRows[0]?.email) {
+            request.requester_email = newRequesterEmailRows[0].email;
+          }
+
+          let departmentType = request.request_domain;
+          if (!departmentType) {
+            const deptTypeRes = await client.query(
+              `SELECT type FROM departments WHERE id = $1`,
+              [request.department_id],
+            );
+            departmentType = deptTypeRes.rows[0]?.type || null;
+          }
+          departmentType = departmentType ? departmentType.toLowerCase() : null;
+
+          if (!departmentType) {
+            const existing = await client.query(
+              `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+              [approval.request_id, approval.approval_level + 1],
+            );
+            if (existing.rowCount === 0) {
+              await assignApprover(
+                client,
+                'SCM',
+                request.department_id,
+                approval.request_id,
+                request.request_type,
+                approval.approval_level + 1,
+                request.request_domain,
+              );
+            }
+          } else {
+            const routes = await fetchApprovalRoutes(
+              client,
+              request.request_type,
+              departmentType,
+              request.estimated_cost || 0,
+            );
+
+            if (!routes.length) {
+              const existing = await client.query(
+                `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+                [approval.request_id, approval.approval_level + 1],
+              );
+              if (existing.rowCount === 0) {
+                await assignApprover(
+                  client,
+                  'SCM',
+                  request.department_id,
+                  approval.request_id,
+                  request.request_type,
+                  approval.approval_level + 1,
+                  request.request_domain,
+                );
+              }
+            } else {
+              for (const { role, approval_level } of routes) {
+                if (approval_level <= approval.approval_level) {
+                  continue;
+                }
+
+                const existing = await client.query(
+                  `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+                  [approval.request_id, approval_level],
+                );
+                if (existing.rowCount > 0) {
+                  continue;
+                }
+
+                await assignApprover(
+                  client,
+                  role,
+                  request.department_id,
+                  approval.request_id,
+                  request.request_type,
+                  approval_level,
+                  request.request_domain,
+                );
+              }
+            }
+          }
+        }
+      }
+
       const nextLevelRes = await client.query(
         `UPDATE approvals SET is_active = TRUE
          WHERE request_id = $1 AND approval_level = $2 AND is_active = FALSE

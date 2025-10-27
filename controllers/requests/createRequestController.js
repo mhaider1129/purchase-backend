@@ -306,7 +306,7 @@ const createRequest = async (req, res, next) => {
         console.warn(
           `⚠️ No approval routes configured for ${request_type} - ${domainForChain}. Falling back to SCM approval.`,
         );
-        await assignApprover(
+        const { inserted } = await assignApprover(
           client,
           "SCM",
           department_id,
@@ -315,7 +315,15 @@ const createRequest = async (req, res, next) => {
           1,
           requestDomain,
         );
+
+              if (!inserted) {
+          throw createHttpError(
+            400,
+            "Unable to queue SCM approver for this request. Please contact an administrator.",
+          );
+        }
       } else {
+        let pendingApprovalsQueued = false;
         for (const { role, approval_level } of routes) {
           if (role === req.user.role && approval_level === 1) {
             await client.query(
@@ -324,7 +332,7 @@ const createRequest = async (req, res, next) => {
               [request.id, requester_id, approval_level],
             );
           } else {
-            await assignApprover(
+            const { inserted } = await assignApprover(
               client,
               role,
               department_id,
@@ -332,6 +340,26 @@ const createRequest = async (req, res, next) => {
               request_type,
               approval_level,
               requestDomain,
+            );
+            pendingApprovalsQueued = pendingApprovalsQueued || Boolean(inserted);
+          }
+        }
+
+        if (!pendingApprovalsQueued) {
+          const { inserted: fallbackInserted } = await assignApprover(
+            client,
+            "SCM",
+            department_id,
+            request.id,
+            request_type,
+            1,
+            requestDomain,
+          );
+
+          if (!fallbackInserted) {
+            throw createHttpError(
+              400,
+              "No eligible approvers were found for this request. Please contact an administrator.",
             );
           }
         }

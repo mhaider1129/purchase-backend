@@ -363,7 +363,7 @@ const createRequest = async (req, res, next) => {
 
       await client.query(
         `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status)
-        VALUES ($1, $2, 1, true, 'Pending')`,
+        VALUES ($1, $2, 0, true, 'Pending')`,
         [request.id, designatedRequesterId],
       );
     } else {

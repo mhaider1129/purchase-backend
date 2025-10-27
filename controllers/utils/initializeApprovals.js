@@ -70,48 +70,68 @@ const initializeApprovals = async (request_id, externalClient = null) => {
     );
     const requesterRole = requesterRoleRes.rows[0]?.role || null;
 
+    const normalizedRequesterRole = requesterRole
+      ? requesterRole.toLowerCase()
+      : null;
+
     const { rows: maxLevelRows } = await client.query(
       `SELECT COALESCE(MAX(approval_level), 0) AS max_level
          FROM approvals
         WHERE request_id = $1`,
       [request_id],
     );
-    let currentLevel = Number(maxLevelRows[0]?.max_level || 0);
+    const existingMaxLevel = Number(maxLevelRows[0]?.max_level || 0);
 
     let inserted = false;
+    let lastAssignedLevel = existingMaxLevel;
 
-    if (!routes.length) {
-      // Fallback to SCM approval if no routes are configured
-      currentLevel += 1;
-      await assignApprover(
-        client,
-        'SCM',
-        request.department_id,
-        request.id,
-        request.request_type,
-        currentLevel,
-        request.request_domain,
-      );
-      inserted = true;
-    } else {
+    if (routes.length) {
       for (const { role, approval_level } of routes) {
-        if (approval_level === 1 && requesterRole && role === requesterRole) {
-          // Requester already approved at level 0
+        if (Number(approval_level) <= existingMaxLevel) {
+          // Skip any stages that already exist (e.g. the requester at level 0)
           continue;
         }
 
-        currentLevel += 1;
+        const normalizedRouteRole = role ? role.toLowerCase() : '';
+
+        if (
+          normalizedRequesterRole &&
+          normalizedRouteRole === normalizedRequesterRole &&
+          Number(approval_level) <= existingMaxLevel + 1
+        ) {
+          // Avoid duplicating the requester stage when it already approved the request
+          continue;
+        }
+
         await assignApprover(
           client,
           role,
           request.department_id,
           request.id,
           request.request_type,
-          currentLevel,
+          Number(approval_level),
           request.request_domain,
         );
         inserted = true;
+        if (Number(approval_level) > lastAssignedLevel) {
+          lastAssignedLevel = Number(approval_level);
+        }
       }
+    }
+
+    if (!inserted) {
+      // Fallback to SCM approval if no routes are configured beyond the requester
+      const fallbackLevel = lastAssignedLevel + 1 || 1;
+      await assignApprover(
+        client,
+        'SCM',
+        request.department_id,
+        request.id,
+        request.request_type,
+        fallbackLevel,
+        request.request_domain,
+      );
+      inserted = true;
     }
 
     if (inserted) {

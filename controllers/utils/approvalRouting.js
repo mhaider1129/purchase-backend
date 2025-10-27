@@ -76,26 +76,28 @@ const assignApprover = async (
   const approverId = result.rows[0]?.id || null;
   const approverEmail = result.rows[0]?.email || null;
 
+  if (!approverId) {
+    console.warn(
+      `⚠️ No active user found for role ${role} while assigning level ${level} on request ${requestId}. Skipping stage.`,
+    );
+    return { approverId: null, inserted: false };
+  }
+
   await client.query(
     `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [
-      requestId,
-      approverId,
-      level,
-      approverId ? level === 1 : false,
-      approverId ? 'Pending' : 'Approved',
-      approverId ? null : new Date(),
-    ],
+     VALUES ($1, $2, $3, $4, 'Pending', NULL)`,
+    [requestId, approverId, level, level === 1],
   );
 
-  if (approverId && level === 1 && approverEmail) {
+  if (level === 1 && approverEmail) {
     await sendEmail(
       approverEmail,
       'New Purchase Request Awaiting Approval',
       `You have a new ${requestType} request to review.\nRequest ID: ${requestId}\nPlease log in to the system to take action.`,
     );
   }
+
+  return { approverId, inserted: true };
 };
 
 module.exports = {

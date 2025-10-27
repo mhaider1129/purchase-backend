@@ -62,6 +62,25 @@ const printRequest = async (req, res, next) => {
          WHERE request_id = $1`,
         [id]
       );
+    } else {
+      await ensureRequestedItemApprovalColumns();
+      itemsRes = await pool.query(
+        `SELECT
+           item_name,
+           brand,
+           quantity,
+           purchased_quantity,
+           unit_cost,
+           total_cost,
+           specs,
+           approval_status,
+           approval_comments,
+           approved_by,
+           approved_at
+         FROM requested_items
+         WHERE request_id = $1`,
+        [id]
+      );
     }
 
     let assignedUser = null;
@@ -76,7 +95,7 @@ const printRequest = async (req, res, next) => {
     res.json({
       message: `Request printed for the ${ordinalSuffix(count)} time`,
       request,
-      items: itemsRes.rows,
+      items: itemsRes?.rows || [],
       assigned_user: assignedUser,
       print_count: count,
     });

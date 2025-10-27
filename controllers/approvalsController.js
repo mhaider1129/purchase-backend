@@ -453,16 +453,17 @@ const updateApprovalItems = async (req, res, next) => {
         `UPDATE requested_items
            SET approval_status = $1,
                approval_comments = $2,
-               approved_by = CASE WHEN $1 IN ('Approved','Rejected') THEN $3 ELSE NULL END,
-               approved_at = CASE WHEN $1 IN ('Approved','Rejected') THEN NOW() ELSE NULL END
-         WHERE id = $4 AND request_id = $5
+               approved_by = CASE WHEN $1 IN ('Approved','Rejected') THEN $3::uuid ELSE NULL::uuid END,
+               approved_at = CASE WHEN $6 IN ('Approved','Rejected') THEN NOW() ELSE NULL END
+               WHERE id = $4 AND request_id = $5
          RETURNING id, item_name, approval_status, approval_comments, approved_at`,
         [
           finalStatus,
-          itemDecision.comments || null,
+          itemDecision.comments ?? null,
           approverId,
           itemId,
           approval.request_id,
+          finalStatus,
         ]
       );
 

@@ -1,6 +1,10 @@
 const pool = require("../../config/db");
 const { sendEmail } = require("../../utils/emailService");
 const createHttpError = require("../../utils/httpError");
+const {
+  insertAttachment,
+  attachmentsHasItemIdColumn,
+} = require("../../utils/attachmentSchema");
 
 /**
  * Fetch approval routing configuration from the database.
@@ -507,22 +511,36 @@ const createRequest = async (req, res, next) => {
       }
 
       for (const file of requestFiles) {
-        await client.query(
-          `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
-           VALUES ($1, NULL, $2, $3, $4)`,
-          [request.id, file.originalname, file.path, requester_id],
-        );
+        await insertAttachment(client, {
+          requestId: request.id,
+          itemId: null,
+          fileName: file.originalname,
+          filePath: file.path,
+          uploadedBy: requester_id,
+        });
       }
+
+      const supportsItemAttachments = await attachmentsHasItemIdColumn(client);
 
       for (const [idx, files] of Object.entries(itemFiles)) {
         const itemId = itemIdMap[idx];
         if (!itemId) continue;
-        for (const file of files) {
-          await client.query(
-            `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
-           VALUES ($1, $2, $3, $4, $5)`,
-            [request.id, itemId, file.originalname, file.path, requester_id],
+
+        if (!supportsItemAttachments) {
+          console.warn(
+            `⚠️ Skipping item-level attachments for item index ${idx} because the database schema does not support item bindings.`,
           );
+          continue;
+        }
+
+        for (const file of files) {
+          await insertAttachment(client, {
+            requestId: request.id,
+            itemId,
+            fileName: file.originalname,
+            filePath: file.path,
+            uploadedBy: requester_id,
+          });
         }
       }
     }

@@ -521,7 +521,7 @@ const getAssignedRequests = async (req, res) => {
     const result = await pool.query(
       `SELECT r.*, p.name AS project_name,
               COALESCE(r.temporary_requester_name, u.name) AS requester_name,
-              CASE WHEN r.temporary_requester_name IS NOT NULL THEN "Temporary Requester" ELSE u.role END AS requester_role
+              CASE WHEN r.temporary_requester_name IS NOT NULL THEN 'Temporary Requester' ELSE u.role END AS requester_role
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id

@@ -6,6 +6,10 @@ const fs = require('fs');
 const pool = require('../config/db');
 const upload = require('../middleware/upload');
 const { authenticateUser } = require('../middleware/authMiddleware');
+const {
+  insertAttachment,
+  attachmentsHasItemIdColumn,
+} = require('../utils/attachmentSchema');
 const sanitize = require('sanitize-filename');
 
 // 🔧 Local error helper
@@ -25,11 +29,13 @@ router.post('/:requestId', authenticateUser, upload.single('file'), async (req, 
   if (!file) return next(createHttpError(400, 'No file uploaded'));
 
   try {
-    const saved = await pool.query(
-      `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
-       VALUES ($1, NULL, $2, $3, $4) RETURNING id`,
-      [requestId, file.originalname, file.path, req.user.id]
-    );
+    const saved = await insertAttachment(pool, {
+      requestId,
+      itemId: null,
+      fileName: file.originalname,
+      filePath: file.path,
+      uploadedBy: req.user.id,
+    });
 
     res.status(201).json({
       message: '📎 File uploaded successfully',
@@ -68,11 +74,23 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
   if (!file) return next(createHttpError(400, 'No file uploaded'));
 
   try {
-    const saved = await pool.query(
-      `INSERT INTO attachments (request_id, item_id, file_name, file_path, uploaded_by)
-       VALUES (NULL, $1, $2, $3, $4) RETURNING id`,
-      [itemId, file.originalname, file.path, req.user.id]
-    );
+    const supportsItemAttachments = await attachmentsHasItemIdColumn(pool);
+    if (!supportsItemAttachments) {
+      return next(
+        createHttpError(
+          400,
+          'Item-level attachments are not supported by the current database schema'
+        )
+      );
+    }
+
+    const saved = await insertAttachment(pool, {
+      requestId: null,
+      itemId,
+      fileName: file.originalname,
+      filePath: file.path,
+      uploadedBy: req.user.id,
+    });
 
     res.status(201).json({
       message: '📎 File uploaded successfully',
@@ -89,6 +107,11 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
   const { itemId } = req.params;
 
   try {
+    const supportsItemAttachments = await attachmentsHasItemIdColumn(pool);
+    if (!supportsItemAttachments) {
+      return res.json([]);
+    }
+
     const result = await pool.query(
       `SELECT id, file_name, file_path, uploaded_by, uploaded_at
        FROM attachments
@@ -113,6 +136,7 @@ router.get('/download/:filename', authenticateUser, (req, res, next) => {
       console.warn('🟥 File not found:', filePath);
       return next(createHttpError(404, 'File not found'));
     }
+
 
     res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
     res.setHeader('Content-Type', 'application/octet-stream');

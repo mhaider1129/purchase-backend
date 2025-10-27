@@ -19,9 +19,10 @@ const generateRfx = async (req, res, next) => {
 
   try {
     const requestRes = await pool.query(
-      `SELECT r.*, d.name AS department_name, u.name AS requester_name
+      `SELECT r.*, d.name AS department_name, p.name AS project_name, u.name AS requester_name
        FROM requests r
        JOIN departments d ON r.department_id = d.id
+       LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
        WHERE r.id = $1`,
       [id]
@@ -61,6 +62,9 @@ const generateRfx = async (req, res, next) => {
     doc.text(`Department: ${request.department_name}`);
     doc.text(`Requester: ${request.requester_name}`);
     doc.text(`Justification: ${request.justification}`);
+    if (request.project_name) {
+      doc.text(`Project: ${request.project_name}`);
+    }
     doc.moveDown();
 
     doc.fontSize(14).text('Items:', { underline: true });

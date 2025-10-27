@@ -12,16 +12,18 @@ const getRequestDetails = async (req, res, next) => {
 
     if (isPrivilegedViewer) {
       accessCheck = await pool.query(
-        `SELECT r.*
+        `SELECT r.*, p.name AS project_name
          FROM requests r
+         LEFT JOIN projects p ON r.project_id = p.id
          WHERE r.id = $1
          LIMIT 1`,
         [id],
       );
     } else {
       accessCheck = await pool.query(
-        `SELECT r.*
+        `SELECT r.*, p.name AS project_name
          FROM requests r
+         LEFT JOIN projects p ON r.project_id = p.id
          LEFT JOIN approvals a ON r.id = a.request_id
          WHERE r.id = $1 AND (r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
          LIMIT 1`,
@@ -270,6 +272,8 @@ const getMyRequests = async (req, res, next) => {
         r.estimated_cost,
         r.status,
         r.created_at,
+        r.project_id,
+        p.name AS project_name,
         ap.approval_level AS current_approval_level,
         au.role AS current_approver_role,
         au.name AS current_approver_name,
@@ -278,6 +282,7 @@ const getMyRequests = async (req, res, next) => {
           WHERE a.request_id = r.id AND a.is_urgent = true
         ) AS is_urgent
        FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
        LEFT JOIN users au ON ap.approver_id = au.id
        ${whereClause}
@@ -440,7 +445,8 @@ const getAllRequests = async (req, res, next) => {
     const result = await pool.query(
       `
       SELECT
-        r.*, 
+        r.*,
+        p.name AS project_name,
         d.name AS department_name,
         u.name AS assigned_user_name,
         u.role AS assigned_user_role,
@@ -448,6 +454,7 @@ const getAllRequests = async (req, res, next) => {
         au.role AS current_approver_role
       FROM requests r
       JOIN departments d ON r.department_id = d.id
+      LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN users u ON r.assigned_to = u.id
       LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
       LEFT JOIN users au ON ap.approver_id = au.id
@@ -512,8 +519,9 @@ const getAssignedRequests = async (req, res) => {
   try {
     const userId = req.user.id;
     const result = await pool.query(
-      `SELECT r.*, u.name AS requester_name, u.role AS requester_role
+      `SELECT r.*, p.name AS project_name, u.name AS requester_name, u.role AS requester_role
        FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
        WHERE r.assigned_to = $1 AND r.status != 'completed'
        ORDER BY r.created_at DESC`,
@@ -560,8 +568,11 @@ const getPendingApprovals = async (req, res, next) => {
          r.request_type,
          r.justification,
          r.estimated_cost,
-         r.status
+         r.status,
+         r.project_id,
+         p.name AS project_name
        FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
        JOIN approvals a ON r.id = a.request_id
        WHERE a.approver_id = $1
          AND a.is_active = true
@@ -580,7 +591,7 @@ const getPendingApprovals = async (req, res, next) => {
 const getMyMaintenanceRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT id, justification, maintenance_ref_number, status, created_at
+      `SELECT id, justification, maintenance_ref_number, status, created_at, project_id
        FROM requests
        WHERE request_type = 'Maintenance' AND initiated_by_technician_id = $1
        ORDER BY created_at DESC`,
@@ -605,6 +616,8 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          d.name AS department_name,
          s.name AS section_name,
          r.created_at,
+         r.project_id,
+         p.name AS project_name,
          COALESCE(
            JSON_AGG(
              JSON_BUILD_OBJECT('item_name', ri.item_name, 'quantity', ri.quantity)
@@ -616,12 +629,13 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN sections s ON r.section_id = s.id
        JOIN approvals a ON a.request_id = r.id
+       LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN requested_items ri ON ri.request_id = r.id
        WHERE r.request_type = 'Maintenance'
          AND a.approver_id = $1
          AND a.status = 'Pending'
          AND a.is_active = true
-       GROUP BY a.id, r.id, u.name, d.name, s.name
+       GROUP BY a.id, r.id, u.name, d.name, s.name, p.name
        ORDER BY r.created_at DESC`,
       [req.user.id]
     );
@@ -642,12 +656,14 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `SELECT r.id, r.request_type, r.justification, r.status,
+              r.project_id, p.name AS project_name,
               MAX(a.approved_at) AS approval_timestamp
          FROM requests r
+         LEFT JOIN projects p ON r.project_id = p.id
          JOIN approvals a ON r.id = a.request_id
         WHERE r.request_type IN ('IT Item', 'Stock', 'Non-Stock')
           AND r.status IN ('Approved', 'Rejected')
-        GROUP BY r.id, r.request_type, r.justification, r.status
+        GROUP BY r.id, r.request_type, r.justification, r.status, p.name
         ORDER BY approval_timestamp DESC`
     );
 
@@ -661,8 +677,9 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
 const getClosedRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT r.*, u.name AS assigned_user_name
+      `SELECT r.*, p.name AS project_name, u.name AS assigned_user_name
        FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN users u ON r.assigned_to = u.id
        WHERE r.status IN ('completed', 'Rejected')
          AND r.requester_id = $1

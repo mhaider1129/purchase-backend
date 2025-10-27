@@ -5,13 +5,15 @@ const createHttpError = require('../../utils/httpError');
 const getAllIncomplete = async (req, res, next) => {
   try {
     const result = await pool.query(`
-      SELECT DISTINCT r.*, 
-                      d.name AS department_name, 
+      SELECT DISTINCT r.*,
+                      p.name AS project_name,
+                      d.name AS department_name,
                       s.name AS section_name,
                       u.name AS requester_name
       FROM requests r
       JOIN users u ON r.requester_id = u.id
       JOIN departments d ON r.department_id = d.id
+      LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
       WHERE r.status = 'Approved'
         AND EXISTS (
@@ -33,13 +35,15 @@ const getAllIncomplete = async (req, res, next) => {
 const getMedicalIncomplete = async (req, res, next) => {
   try {
     const result = await pool.query(`
-      SELECT DISTINCT r.*, 
-                      d.name AS department_name, 
+      SELECT DISTINCT r.*,
+                      p.name AS project_name,
+                      d.name AS department_name,
                       s.name AS section_name,
                       u.name AS requester_name
       FROM requests r
       JOIN users u ON r.requester_id = u.id
       JOIN departments d ON r.department_id = d.id
+      LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
       WHERE r.status = 'Approved'
         AND r.request_domain = 'medical'
@@ -62,13 +66,15 @@ const getMedicalIncomplete = async (req, res, next) => {
 const getOperationalIncomplete = async (req, res, next) => {
   try {
     const result = await pool.query(`
-      SELECT DISTINCT r.*, 
-                      d.name AS department_name, 
+      SELECT DISTINCT r.*,
+                      p.name AS project_name,
+                      d.name AS department_name,
                       s.name AS section_name,
                       u.name AS requester_name
       FROM requests r
       JOIN users u ON r.requester_id = u.id
       JOIN departments d ON r.department_id = d.id
+      LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
       WHERE r.status = 'Approved'
         AND r.request_domain = 'operational'

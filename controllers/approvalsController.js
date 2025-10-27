@@ -45,8 +45,9 @@ const handleApprovalDecision = async (req, res, next) => {
 
     // 2. Fetch Request
     const requestRes = await client.query(
-      `SELECT r.*, u.email AS requester_email
+      `SELECT r.*, p.name AS project_name, u.email AS requester_email
        FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
        WHERE r.id = $1`,
       [approval.request_id]

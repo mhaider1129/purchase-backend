@@ -103,7 +103,7 @@ const initializeApprovals = async (request_id, externalClient = null) => {
           continue;
         }
 
-        await assignApprover(
+        const { inserted: stageInserted } = await assignApprover(
           client,
           role,
           request.department_id,
@@ -112,9 +112,12 @@ const initializeApprovals = async (request_id, externalClient = null) => {
           Number(approval_level),
           request.request_domain,
         );
-        inserted = true;
-        if (Number(approval_level) > lastAssignedLevel) {
-          lastAssignedLevel = Number(approval_level);
+
+        if (stageInserted) {
+          inserted = true;
+          if (Number(approval_level) > lastAssignedLevel) {
+            lastAssignedLevel = Number(approval_level);
+          }
         }
       }
     }
@@ -122,7 +125,7 @@ const initializeApprovals = async (request_id, externalClient = null) => {
     if (!inserted) {
       // Fallback to SCM approval if no routes are configured beyond the requester
       const fallbackLevel = lastAssignedLevel + 1 || 1;
-      await assignApprover(
+      const { inserted: fallbackInserted } = await assignApprover(
         client,
         'SCM',
         request.department_id,
@@ -131,7 +134,15 @@ const initializeApprovals = async (request_id, externalClient = null) => {
         fallbackLevel,
         request.request_domain,
       );
+
+      if (!fallbackInserted) {
+        throw new Error(
+          'No SCM approver is configured to continue this maintenance workflow.',
+        );
+      }
+
       inserted = true;
+      lastAssignedLevel = fallbackLevel;
     }
 
     if (inserted) {

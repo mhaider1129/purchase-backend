@@ -3,6 +3,7 @@ const pool = require('../config/db');
 const { sendEmail } = require('../utils/emailService');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
+const getColumnType = require('../utils/getColumnType');
 const { assignApprover } = require('./requests/createRequestController');
 
 const fetchApprovalRoutes = async (client, requestType, departmentType, cost) => {
@@ -367,11 +368,13 @@ const updateApprovalItems = async (req, res, next) => {
   await ensureRequestedItemApprovalColumns();
 
   const rawApproverId = req.user?.id;
-  let approverId = null;
+  const approverIdAsString = rawApproverId != null ? String(rawApproverId) : null;
+
+  let approverIdAsInteger = null;
   if (typeof rawApproverId === 'number' && Number.isInteger(rawApproverId)) {
-    approverId = rawApproverId;
+    approverIdAsInteger = rawApproverId;
   } else if (typeof rawApproverId === 'string' && /^\d+$/.test(rawApproverId)) {
-    approverId = Number.parseInt(rawApproverId, 10);
+    approverIdAsInteger = Number.parseInt(rawApproverId, 10);
   }
   const client = await pool.connect();
 
@@ -392,7 +395,10 @@ const updateApprovalItems = async (req, res, next) => {
       return next(createHttpError(404, 'Approval not found'));
     }
 
-    if (String(approval.approver_id) !== String(approverId)) {
+    const approvalApproverId =
+      approval.approver_id != null ? String(approval.approver_id) : null;
+
+    if ((approvalApproverId ?? '') !== (approverIdAsString ?? '')) {
       await client.query('ROLLBACK');
       return next(createHttpError(403, 'You are not authorized to update items for this approval'));
     }
@@ -426,6 +432,31 @@ const updateApprovalItems = async (req, res, next) => {
     const updatedItems = [];
     const summaryAdjustments = { Approved: 0, Rejected: 0, Pending: 0 };
     const seenItemIds = new Set();
+
+    const approvedByColumnTypeRaw = await getColumnType(
+      'public',
+      'requested_items',
+      'approved_by',
+      client,
+    );
+
+    const approvedByColumnType = approvedByColumnTypeRaw
+      ? approvedByColumnTypeRaw.toLowerCase()
+      : null;
+
+    const approvedByPrefersString =
+      approvedByColumnType &&
+      ['uuid', 'text', 'varchar', 'character varying'].includes(approvedByColumnType);
+
+    const approvedByPrefersInteger =
+      approvedByColumnType &&
+      ['integer', 'int4', 'bigint', 'int8', 'smallint', 'int2'].includes(approvedByColumnType);
+
+    const resolvedApproverValue = approvedByPrefersString
+      ? approverIdAsString ?? null
+      : approvedByPrefersInteger
+      ? approverIdAsInteger ?? null
+      : approverIdAsInteger ?? approverIdAsString ?? null;
 
     for (const itemDecision of items) {
       const rawItemId = itemDecision?.item_id ?? itemDecision?.id;
@@ -466,14 +497,14 @@ const updateApprovalItems = async (req, res, next) => {
         `UPDATE public.requested_items
            SET approval_status = $1,
                approval_comments = $2,
-               approved_by = CASE WHEN $6 THEN $3 ELSE NULL END,
+               approved_by = CASE WHEN $6 THEN $3::public.requested_items.approved_by%TYPE ELSE NULL END,
                approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
          WHERE id = $4 AND request_id = $5
          RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by`,
         [
           finalStatus,
           itemDecision.comments ?? null,
-          approverId,
+          resolvedApproverValue,
           itemId,
           approval.request_id,
           isFinalDecision,

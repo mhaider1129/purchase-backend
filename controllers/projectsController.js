@@ -3,6 +3,11 @@ const createHttpError = require('../utils/httpError');
 
 const normalizeName = (name = '') => name.trim();
 
+const canManageProjects = (req) => {
+  const role = (req.user?.role || '').toUpperCase();
+  return role === 'SCM' || role === 'ADMIN';
+};
+
 const getProjects = async (req, res, next) => {
   try {
     const { rows } = await pool.query(
@@ -26,8 +31,7 @@ const createProject = async (req, res, next) => {
     return next(createHttpError(400, 'Project name is required'));
   }
 
-  const role = (req.user?.role || '').toUpperCase();
-  if (!['SCM', 'ADMIN'].includes(role)) {
+  if (!canManageProjects(req)) {
     return next(createHttpError(403, 'Only SCM or Admin can create projects'));
   }
 
@@ -55,7 +59,78 @@ const createProject = async (req, res, next) => {
   }
 };
 
+const getAllProjects = async (req, res, next) => {
+  if (!canManageProjects(req)) {
+    return next(createHttpError(403, 'Only SCM or Admin can view all projects'));
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, is_active, created_at
+         FROM projects
+        ORDER BY LOWER(name)`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch all projects:', err);
+    next(createHttpError(500, 'Failed to fetch projects'));
+  }
+};
+
+const deactivateProject = async (req, res, next) => {
+  if (!canManageProjects(req)) {
+    return next(createHttpError(403, 'Only SCM or Admin can deactivate projects'));
+  }
+
+  const projectId = Number.parseInt(req.params.id, 10);
+
+  if (!Number.isInteger(projectId)) {
+    return next(createHttpError(400, 'Invalid project ID'));
+  }
+
+  try {
+    const existing = await pool.query(
+      `SELECT id, name, is_active, created_at
+         FROM projects
+        WHERE id = $1
+        LIMIT 1`,
+      [projectId]
+    );
+
+    if (existing.rowCount === 0) {
+      return next(createHttpError(404, 'Project not found'));
+    }
+
+    const project = existing.rows[0];
+
+    if (project.is_active === false) {
+      return res.json({
+        message: `ℹ️ Project "${project.name}" is already deactivated`,
+        project,
+      });
+    }
+
+    const update = await pool.query(
+      `UPDATE projects
+          SET is_active = FALSE
+        WHERE id = $1
+        RETURNING id, name, is_active, created_at`,
+      [projectId]
+    );
+
+    res.json({
+      message: `✅ Project "${update.rows[0].name}" deactivated successfully`,
+      project: update.rows[0],
+    });
+  } catch (err) {
+    console.error('❌ Failed to deactivate project:', err);
+    next(createHttpError(500, 'Failed to deactivate project'));
+  }
+};
+
 module.exports = {
   getProjects,
   createProject,
+  getAllProjects,
+  deactivateProject,
 };

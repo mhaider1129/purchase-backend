@@ -20,8 +20,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret'; // 🔐 Use a se
 // 🔐 POST /auth/register (Protected - Admin or SCM only)
 // ============================
 router.post('/register', authenticateUser, async (req, res) => {
-  const { name, email, password, role, department_id , section_id } = req.body;
-
+  const {
+    name,
+    email,
+    password,
+    role,
+    department_id,
+    section_id,
+    employee_id,
+  } = req.body;
   try {
     ensureScmOrAdmin(req.user);
   } catch (error) {
@@ -31,27 +38,52 @@ router.post('/register', authenticateUser, async (req, res) => {
     });
   }
 
-  if (!name || !email || !password || !role || !department_id) {
-    return res.status(400).json({ success: false, message: 'All fields except section are required' });
+  const trimmedName = typeof name === 'string' ? name.trim() : '';
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedRole = typeof role === 'string' ? role.trim() : '';
+  const employeeId = typeof employee_id === 'string' ? employee_id.trim() : '';
+  const departmentId = parseInt(department_id, 10);
+  const hasSectionId = section_id !== undefined && section_id !== null && section_id !== '';
+  const sectionId = hasSectionId ? parseInt(section_id, 10) : null;
+
+  if (!trimmedName || !normalizedEmail || !password || !normalizedRole || Number.isNaN(departmentId) || !employeeId) {
+    return res.status(400).json({ success: false, message: 'Name, email, password, role, employee ID, and department are required' });
+  }
+
+  if (hasSectionId && Number.isNaN(sectionId)) {
+    return res.status(400).json({ success: false, message: 'Section is invalid' });
   }
 
   try {
-    const normalizedEmail = normalizeEmail(email);
     const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
     if (existingUser.rows.length > 0) {
       return res.status(409).json({ success: false, message: 'User already exists' });
     }
 
+    const employeeIdInUse = await pool.query('SELECT id FROM users WHERE employee_id = $1', [employeeId]);
+    if (employeeIdInUse.rows.length > 0) {
+      return res.status(409).json({ success: false, message: 'Employee ID is already assigned to another user' });
+    }
+
+    const pendingEmployeeId = await pool.query(
+      `SELECT id FROM user_registration_requests WHERE employee_id = $1 AND status = 'pending'`,
+      [employeeId]
+    );
+
+    if (pendingEmployeeId.rows.length > 0) {
+      return res.status(409).json({ success: false, message: 'Employee ID has a pending registration request' });
+    }
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    const sectionIdValue = section_id || null;
+    const sectionIdValue = sectionId === null ? null : sectionId;
 
     const newUser = await pool.query(
-      `INSERT INTO users (name, email, password, role, department_id, section_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, email, role, department_id, section_id`,
-      [name, normalizedEmail, hashedPassword, role, department_id, sectionIdValue]
+      `INSERT INTO users (name, email, password, role, department_id, section_id, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, email, role, department_id, section_id, employee_id`,
+      [trimmedName, normalizedEmail, hashedPassword, normalizedRole, departmentId, sectionIdValue, employeeId]
     );
 
     return res.status(201).json({
@@ -125,16 +157,27 @@ router.post('/login', async (req, res) => {
 // 📝 POST /auth/register-request (Public)
 // ============================
 router.post('/register-request', async (req, res) => {
-  const { name, email, password, department_id, section_id, requested_role } = req.body || {};
+  const {
+    name,
+    email,
+    password,
+    department_id,
+    section_id,
+    requested_role,
+    employee_id,
+  } = req.body || {};
 
-  if (!name || !email || !password || !department_id) {
+  const trimmedName = typeof name === 'string' ? name.trim() : '';
+  const normalizedEmail = normalizeEmail(email);
+  const employeeId = typeof employee_id === 'string' ? employee_id.trim() : '';
+
+  if (!trimmedName || !normalizedEmail || !password || !department_id || !employeeId) {
     return res.status(400).json({
       success: false,
-      message: 'Name, email, password, and department are required',
+      message: 'Name, email, password, employee ID, and department are required',
     });
   }
 
-  const normalizedEmail = normalizeEmail(email);
   const role = (requested_role || 'requester').trim() || 'requester';
   const allowedSelfRegistrationRoles = new Set(['requester']);
 
@@ -164,6 +207,11 @@ router.post('/register-request', async (req, res) => {
       return res.status(409).json({ success: false, message: 'An account with this email already exists' });
     }
 
+    const employeeIdInUse = await pool.query('SELECT 1 FROM users WHERE employee_id = $1', [employeeId]);
+    if (employeeIdInUse.rowCount > 0) {
+      return res.status(409).json({ success: false, message: 'An account with this employee ID already exists' });
+    }
+
     const pendingRequest = await pool.query(
       `SELECT status FROM user_registration_requests WHERE LOWER(email) = LOWER($1) AND status = 'pending'`,
       [normalizedEmail]
@@ -173,14 +221,23 @@ router.post('/register-request', async (req, res) => {
       return res.status(409).json({ success: false, message: 'A pending request already exists for this email' });
     }
 
+    const pendingEmployeeId = await pool.query(
+      `SELECT status FROM user_registration_requests WHERE employee_id = $1 AND status = 'pending'`,
+      [employeeId]
+    );
+
+    if (pendingEmployeeId.rowCount > 0) {
+      return res.status(409).json({ success: false, message: 'A pending request already exists for this employee ID' });
+    }
+
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
     const { rows } = await pool.query(
       `INSERT INTO user_registration_requests
-        (name, email, password_hash, requested_role, department_id, section_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, email, requested_role AS role, department_id, section_id, status, created_at`,
-      [name.trim(), normalizedEmail, passwordHash, role, departmentId, sectionId]
+        (name, email, password_hash, requested_role, department_id, section_id, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, email, requested_role AS role, department_id, section_id, employee_id, status, created_at`,
+      [trimmedName, normalizedEmail, passwordHash, role, departmentId, sectionId, employeeId]
     );
 
     return res.status(201).json({
@@ -217,6 +274,7 @@ router.get('/register-requests', authenticateUser, async (req, res) => {
               d.name AS department_name,
               r.section_id,
               s.name AS section_name,
+              r.employee_id,
               r.status,
               r.rejection_reason,
               r.reviewer_id,
@@ -262,7 +320,7 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     await client.query('BEGIN');
 
     const requestRes = await client.query(
-      `SELECT id, name, email, password_hash, requested_role, department_id, section_id, status
+      `SELECT id, name, email, password_hash, requested_role, department_id, section_id, employee_id, status
          FROM user_registration_requests
         WHERE id = $1
         FOR UPDATE`,
@@ -289,10 +347,22 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
       return res.status(409).json({ success: false, message: 'A user with this email already exists' });
     }
 
+    const employeeId = typeof request.employee_id === 'string' ? request.employee_id.trim() : '';
+    if (!employeeId) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Account request is missing an employee ID' });
+    }
+
+    const employeeIdInUse = await client.query('SELECT id FROM users WHERE employee_id = $1', [employeeId]);
+    if (employeeIdInUse.rowCount > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Employee ID is already assigned to another user' });
+    }
+
     const newUser = await client.query(
-      `INSERT INTO users (name, email, password, role, department_id, section_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, email, role, department_id, section_id`,
+      `INSERT INTO users (name, email, password, role, department_id, section_id, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, email, role, department_id, section_id, employee_id`,
       [
         request.name,
         normalizedEmail,
@@ -300,6 +370,7 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
         request.requested_role,
         request.department_id,
         request.section_id,
+        employeeId,
       ]
     );
 

@@ -464,11 +464,11 @@ const updateApprovalItems = async (req, res, next) => {
 
       const updateRes = await client.query(
         `UPDATE public.requested_items
-           SET approval_status = $1,
+           SET approval_status = $1::public.requested_items.approval_status%TYPE,
                approval_comments = $2,
-               approved_by = CASE WHEN $1 IN ('Approved','Rejected') THEN $3::public.requested_items.approved_by%TYPE ELSE NULL::public.requested_items.approved_by%TYPE END,
-               approved_at = CASE WHEN $1 IN ('Approved','Rejected') THEN NOW() ELSE NULL END
-               WHERE id = $4 AND request_id = $5
+               approved_by = CASE WHEN $1 IN ('Approved','Rejected') THEN $3::uuid ELSE NULL::uuid END,
+               approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
+         WHERE id = $4 AND request_id = $5
          RETURNING id, item_name, approval_status, approval_comments, approved_at`,
         [
           finalStatus,
@@ -476,6 +476,7 @@ const updateApprovalItems = async (req, res, next) => {
           approverId,
           itemId,
           approval.request_id,
+          isFinalDecision,
         ]
       );
 

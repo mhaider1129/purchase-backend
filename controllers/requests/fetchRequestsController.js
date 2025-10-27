@@ -519,7 +519,9 @@ const getAssignedRequests = async (req, res) => {
   try {
     const userId = req.user.id;
     const result = await pool.query(
-      `SELECT r.*, p.name AS project_name, u.name AS requester_name, u.role AS requester_role
+      `SELECT r.*, p.name AS project_name,
+              COALESCE(r.temporary_requester_name, u.name) AS requester_name,
+              CASE WHEN r.temporary_requester_name IS NOT NULL THEN "Temporary Requester" ELSE u.role END AS requester_role
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
@@ -612,7 +614,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          r.id AS request_id,
          r.justification,
          r.maintenance_ref_number,
-         u.name AS requester_name,
+         COALESCE(r.temporary_requester_name, u.name) AS requester_name,
          d.name AS department_name,
          s.name AS section_name,
          r.created_at,
@@ -635,7 +637,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          AND a.approver_id = $1
          AND a.status = 'Pending'
          AND a.is_active = true
-       GROUP BY a.id, r.id, u.name, d.name, s.name, p.name
+       GROUP BY a.id, r.id, r.temporary_requester_name, u.name, d.name, s.name, p.name
        ORDER BY r.created_at DESC`,
       [req.user.id]
     );

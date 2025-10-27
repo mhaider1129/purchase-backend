@@ -9,7 +9,7 @@ const getAllIncomplete = async (req, res, next) => {
                       p.name AS project_name,
                       d.name AS department_name,
                       s.name AS section_name,
-                      u.name AS requester_name
+                      COALESCE(r.temporary_requester_name, u.name) AS requester_name
       FROM requests r
       JOIN users u ON r.requester_id = u.id
       JOIN departments d ON r.department_id = d.id
@@ -39,7 +39,7 @@ const getMedicalIncomplete = async (req, res, next) => {
                       p.name AS project_name,
                       d.name AS department_name,
                       s.name AS section_name,
-                      u.name AS requester_name
+                      COALESCE(r.temporary_requester_name, u.name) AS requester_name
       FROM requests r
       JOIN users u ON r.requester_id = u.id
       JOIN departments d ON r.department_id = d.id
@@ -70,7 +70,7 @@ const getOperationalIncomplete = async (req, res, next) => {
                       p.name AS project_name,
                       d.name AS department_name,
                       s.name AS section_name,
-                      u.name AS requester_name
+                      COALESCE(r.temporary_requester_name, u.name) AS requester_name
       FROM requests r
       JOIN users u ON r.requester_id = u.id
       JOIN departments d ON r.department_id = d.id

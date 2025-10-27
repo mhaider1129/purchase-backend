@@ -3,6 +3,7 @@ const pool = require('../config/db');
 const { sendEmail } = require('../utils/emailService');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
+const getColumnType = require('../utils/getColumnType');
 const { assignApprover } = require('./requests/createRequestController');
 
 const fetchApprovalRoutes = async (client, requestType, departmentType, cost) => {
@@ -41,6 +42,11 @@ const handleApprovalDecision = async (req, res, next) => {
   }
 
   await ensureRequestedItemApprovalColumns();
+
+  const approverId = req.user?.id ?? null;
+  if (!approverId) {
+    return next(createHttpError(403, 'Unable to identify the current approver'));
+  }
 
   const client = await pool.connect();
   try {
@@ -295,7 +301,7 @@ const handleApprovalDecision = async (req, res, next) => {
            COUNT(*) FILTER (
              WHERE approval_status IS NULL OR approval_status = 'Pending'
            ) AS pending
-         FROM requested_items
+         FROM public.requested_items
          WHERE request_id = $1`,
         [approval.request_id]
       );
@@ -361,7 +367,15 @@ const updateApprovalItems = async (req, res, next) => {
 
   await ensureRequestedItemApprovalColumns();
 
-  const approverId = req.user.id;
+  const rawApproverId = req.user?.id;
+  const approverIdAsString = rawApproverId != null ? String(rawApproverId) : null;
+
+  let approverIdAsInteger = null;
+  if (typeof rawApproverId === 'number' && Number.isInteger(rawApproverId)) {
+    approverIdAsInteger = rawApproverId;
+  } else if (typeof rawApproverId === 'string' && /^\d+$/.test(rawApproverId)) {
+    approverIdAsInteger = Number.parseInt(rawApproverId, 10);
+  }
   const client = await pool.connect();
 
   try {
@@ -381,7 +395,10 @@ const updateApprovalItems = async (req, res, next) => {
       return next(createHttpError(404, 'Approval not found'));
     }
 
-    if (approval.approver_id !== approverId) {
+    const approvalApproverId =
+      approval.approver_id != null ? String(approval.approver_id) : null;
+
+    if ((approvalApproverId ?? '') !== (approverIdAsString ?? '')) {
       await client.query('ROLLBACK');
       return next(createHttpError(403, 'You are not authorized to update items for this approval'));
     }
@@ -416,6 +433,31 @@ const updateApprovalItems = async (req, res, next) => {
     const summaryAdjustments = { Approved: 0, Rejected: 0, Pending: 0 };
     const seenItemIds = new Set();
 
+    const approvedByColumnTypeRaw = await getColumnType(
+      'public',
+      'requested_items',
+      'approved_by',
+      client,
+    );
+
+    const approvedByColumnType = approvedByColumnTypeRaw
+      ? approvedByColumnTypeRaw.toLowerCase()
+      : null;
+
+    const approvedByPrefersString =
+      approvedByColumnType &&
+      ['uuid', 'text', 'varchar', 'character varying'].includes(approvedByColumnType);
+
+    const approvedByPrefersInteger =
+      approvedByColumnType &&
+      ['integer', 'int4', 'bigint', 'int8', 'smallint', 'int2'].includes(approvedByColumnType);
+
+    const resolvedApproverValue = approvedByPrefersString
+      ? approverIdAsString ?? null
+      : approvedByPrefersInteger
+      ? approverIdAsInteger ?? null
+      : approverIdAsInteger ?? approverIdAsString ?? null;
+
     for (const itemDecision of items) {
       const rawItemId = itemDecision?.item_id ?? itemDecision?.id;
       if (!/^\d+$/.test(String(rawItemId || ''))) {
@@ -440,7 +482,7 @@ const updateApprovalItems = async (req, res, next) => {
       }
 
       const itemRes = await client.query(
-        `SELECT id FROM requested_items WHERE id = $1 AND request_id = $2`,
+        `SELECT id FROM public.requested_items WHERE id = $1 AND request_id = $2`,
         [itemId, approval.request_id]
       );
 
@@ -449,21 +491,23 @@ const updateApprovalItems = async (req, res, next) => {
         return next(createHttpError(404, `Requested item ${itemId} not found for this request`));
       }
 
+      const isFinalDecision = finalStatus === 'Approved' || finalStatus === 'Rejected';
+
       const updateRes = await client.query(
-        `UPDATE requested_items
+        `UPDATE public.requested_items
            SET approval_status = $1,
                approval_comments = $2,
-               approved_by = CASE WHEN $1 IN ('Approved','Rejected') THEN $3::uuid ELSE NULL::uuid END,
-               approved_at = CASE WHEN $6 IN ('Approved','Rejected') THEN NOW() ELSE NULL END
-               WHERE id = $4 AND request_id = $5
-         RETURNING id, item_name, approval_status, approval_comments, approved_at`,
+               approved_by = CASE WHEN $6 THEN $3::public.requested_items.approved_by%TYPE ELSE NULL END,
+               approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
+         WHERE id = $4 AND request_id = $5
+         RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by`,
         [
           finalStatus,
           itemDecision.comments ?? null,
-          approverId,
+          resolvedApproverValue,
           itemId,
           approval.request_id,
-          finalStatus,
+          isFinalDecision,
         ]
       );
 
@@ -474,6 +518,7 @@ const updateApprovalItems = async (req, res, next) => {
         approval_status: updated.approval_status,
         approval_comments: updated.approval_comments,
         approved_at: updated.approved_at,
+        approved_by: updated.approved_by,
       });
 
       summaryAdjustments[finalStatus] += 1;
@@ -486,7 +531,7 @@ const updateApprovalItems = async (req, res, next) => {
          COUNT(*) FILTER (
            WHERE approval_status IS NULL OR approval_status = 'Pending'
          ) AS pending
-       FROM requested_items
+       FROM public.requested_items
        WHERE request_id = $1`,
       [approval.request_id]
     );
@@ -514,13 +559,13 @@ const updateApprovalItems = async (req, res, next) => {
     if (commentText) {
       await client.query(
         `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, 'Item approvals updated', $2, $3)`,
+         VALUES ($1, 'Item approvals updated', $2::request_logs.actor_id%TYPE, $3)`,
         [approval.request_id, approverId, commentText]
       );
 
       await client.query(
         `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
-         VALUES ($1, $2, $3, 'Items Reviewed', $4)`,
+         VALUES ($1, $2, $3::approval_logs.approver_id%TYPE, 'Items Reviewed', $4)`,
         [approval.id, approval.request_id, approverId, commentText]
       );
     }

@@ -100,7 +100,7 @@ const buildFilteredQuery = (queryParams) => {
       OR r.request_type ILIKE $${values.length}
       OR CAST(r.id AS TEXT) ILIKE $${values.length}
       OR EXISTS (
-        SELECT 1 FROM requested_items ri
+        SELECT 1 FROM public.requested_items ri
         WHERE ri.request_id = r.id AND ri.item_name ILIKE $${values.length}
       )
     )`;

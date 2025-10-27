@@ -145,7 +145,7 @@ const markRequestAsCompleted = async (req, res, next) => {
 
     const itemCheck = await client.query(
       `SELECT COUNT(*) AS incomplete_count
-       FROM requested_items
+       FROM public.requested_items
        WHERE request_id = $1
          AND (
            procurement_status IS NULL OR procurement_status = '' OR purchased_quantity IS NULL

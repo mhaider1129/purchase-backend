@@ -21,7 +21,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
 
   try {
     const result = await pool.query(
-      `UPDATE requested_items
+      `UPDATE public.requested_items
        SET procurement_status = $1,
            procurement_comment = $2,
            procurement_updated_by = $3,

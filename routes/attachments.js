@@ -12,59 +12,65 @@ const {
 } = require('../utils/attachmentSchema');
 const sanitize = require('sanitize-filename');
 
+const BACKEND_ROOT = path.join(__dirname, '..');
+const UPLOADS_DIR = path.join(BACKEND_ROOT, 'uploads');
+
+// 🧭 Normalize the stored file path so the database always receives a
+// predictable value ("uploads/<file>") even if Multer gives us an absolute
+// path. This keeps previously-saved files backwards compatible.
+function toStoredPath(filePath) {
+  if (!filePath) return '';
+
+  const absolutePath = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(BACKEND_ROOT, filePath);
+
+  const relativeToBackend = path.relative(BACKEND_ROOT, absolutePath);
+  if (relativeToBackend && !relativeToBackend.startsWith('..')) {
+    return relativeToBackend.replace(/\\/g, '/');
+  }
+
+  const relativeToUploads = path.relative(UPLOADS_DIR, absolutePath);
+  if (relativeToUploads && !relativeToUploads.startsWith('..')) {
+    return path.join('uploads', relativeToUploads).replace(/\\/g, '/');
+  }
+
+  return path.join('uploads', path.basename(absolutePath)).replace(/\\/g, '/');
+}
+
+// 🔗 Prepare an attachment row for API responses with normalized paths and a
+// direct download URL for the frontend.
+function serializeAttachment(row) {
+  if (!row) return row;
+
+  const storedPath = row.file_path || '';
+  const absolutePath = path.isAbsolute(storedPath)
+    ? storedPath
+    : path.resolve(BACKEND_ROOT, storedPath);
+
+  const relativeToUploads = path.relative(UPLOADS_DIR, absolutePath);
+  const normalizedRelative =
+    relativeToUploads && !relativeToUploads.startsWith('..')
+      ? relativeToUploads.replace(/\\/g, '/')
+      : path.basename(absolutePath);
+
+  const normalizedPath = path.join('uploads', normalizedRelative).replace(/\\/g, '/');
+  const filename = path.basename(normalizedRelative);
+
+  return {
+    ...row,
+    file_path: normalizedPath,
+    file_url: `/${normalizedPath}`,
+    download_url: `/api/attachments/download/${encodeURIComponent(filename)}`,
+  };
+}
+
 // 🔧 Local error helper
 function createHttpError(statusCode, message) {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
 }
-
-// 📥 Upload a file to a specific item
-
-// 📥 Upload a file to a request
-router.post('/:requestId', authenticateUser, upload.single('file'), async (req, res, next) => {
-  const { requestId } = req.params;
-  const file = req.file;
-
-  if (!file) return next(createHttpError(400, 'No file uploaded'));
-
-  try {
-    const saved = await insertAttachment(pool, {
-      requestId,
-      itemId: null,
-      fileName: file.originalname,
-      filePath: file.path,
-      uploadedBy: req.user.id,
-    });
-
-    res.status(201).json({
-      message: '📎 File uploaded successfully',
-      attachmentId: saved.rows[0].id
-    });
-  } catch (err) {
-    console.error('❌ Upload error:', err.message);
-    next(createHttpError(500, 'Failed to upload attachment'));
-  }
-});
-
-// 📄 Fetch all attachments for a request
-router.get('/:requestId', authenticateUser, async (req, res, next) => {
-  const { requestId } = req.params;
-
-  try {
-    const result = await pool.query(
-      `SELECT id, file_name, file_path, uploaded_by, uploaded_at
-       FROM attachments
-       WHERE request_id = $1`,
-      [requestId]
-    );
-
-    res.json(result.rows);
-  } catch (err) {
-    console.error('❌ Failed to fetch attachments:', err.message);
-    next(createHttpError(500, 'Failed to fetch attachments'));
-  }
-});
 
 // 📥 Upload a file to a specific item
 router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req, res, next) => {
@@ -88,7 +94,7 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
       requestId: null,
       itemId,
       fileName: file.originalname,
-      filePath: file.path,
+      filePath: toStoredPath(file.path),
       uploadedBy: req.user.id,
     });
 
@@ -119,7 +125,7 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
       [itemId]
     );
 
-    res.json(result.rows);
+    res.json(result.rows.map(serializeAttachment));
   } catch (err) {
     console.error('❌ Failed to fetch attachments:', err.message);
     next(createHttpError(500, 'Failed to fetch attachments'));
@@ -142,6 +148,51 @@ router.get('/download/:filename', authenticateUser, (req, res, next) => {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.download(filePath);
   });
+});
+
+// 📥 Upload a file to a request
+router.post('/:requestId', authenticateUser, upload.single('file'), async (req, res, next) => {
+  const { requestId } = req.params;
+  const file = req.file;
+
+  if (!file) return next(createHttpError(400, 'No file uploaded'));
+
+  try {
+    const saved = await insertAttachment(pool, {
+      requestId,
+      itemId: null,
+      fileName: file.originalname,
+      filePath: toStoredPath(file.path),
+      uploadedBy: req.user.id,
+    });
+
+    res.status(201).json({
+      message: '📎 File uploaded successfully',
+      attachmentId: saved.rows[0].id
+    });
+  } catch (err) {
+    console.error('❌ Upload error:', err.message);
+    next(createHttpError(500, 'Failed to upload attachment'));
+  }
+});
+
+// 📄 Fetch all attachments for a request
+router.get('/:requestId', authenticateUser, async (req, res, next) => {
+  const { requestId } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT id, file_name, file_path, uploaded_by, uploaded_at
+       FROM attachments
+       WHERE request_id = $1`,
+      [requestId]
+    );
+
+    res.json(result.rows.map(serializeAttachment));
+  } catch (err) {
+    console.error('❌ Failed to fetch attachments:', err.message);
+    next(createHttpError(500, 'Failed to fetch attachments'));
+  }
 });
 
 // 🗑️ Delete a file (only by uploader or admin)

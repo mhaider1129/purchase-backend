@@ -56,7 +56,7 @@ const addRequestedItems = async (req, res, next) => {
         let result;
         if (reqType === 'Stock') {
           result = await client.query(
-            `INSERT INTO requested_items
+            `INSERT INTO public.requested_items
               (request_id, item_name, brand, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              RETURNING *`,
@@ -77,7 +77,7 @@ const addRequestedItems = async (req, res, next) => {
           );
         } else {
           result = await client.query(
-            `INSERT INTO requested_items
+            `INSERT INTO public.requested_items
               (request_id, item_name, brand, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              RETURNING *`,
@@ -103,7 +103,7 @@ const addRequestedItems = async (req, res, next) => {
     let newEstimatedCost = null;
     if (reqType !== 'Warehouse Supply') {
       const totalRes = await client.query(
-        `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total FROM requested_items WHERE request_id = $1`,
+        `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total FROM public.requested_items WHERE request_id = $1`,
         [request_id]
       );
       newEstimatedCost = parseFloat(totalRes.rows[0].total);
@@ -156,7 +156,7 @@ const updateItemCost = async (req, res, next) => {
 
     const itemRes = await client.query(
       `SELECT ri.*, r.assigned_to
-       FROM requested_items ri
+       FROM public.requested_items ri
        JOIN requests r ON ri.request_id = r.id
        WHERE ri.id = $1`,
       [item_id]
@@ -177,7 +177,7 @@ const updateItemCost = async (req, res, next) => {
     }
 
     await client.query(
-      `UPDATE requested_items
+      `UPDATE public.requested_items
        SET unit_cost = $1::numeric,
            total_cost = quantity * $1::numeric
        WHERE id = $2`,
@@ -185,7 +185,7 @@ const updateItemCost = async (req, res, next) => {
     );
 
     const totalRes = await client.query(
-      `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total FROM requested_items WHERE request_id = $1`,
+      `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total FROM public.requested_items WHERE request_id = $1`,
       [item.request_id]
     );
 
@@ -250,7 +250,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
     await client.query('BEGIN');
 
     const itemRes = await client.query(
-      `SELECT * FROM requested_items WHERE id = $1`,
+      `SELECT * FROM public.requested_items WHERE id = $1`,
       [item_id]
     );
 
@@ -262,7 +262,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
     const item = itemRes.rows[0];
 
     await client.query(
-      `UPDATE requested_items
+      `UPDATE public.requested_items
        SET procurement_status = $1,
            procurement_comment = $2,
            procurement_updated_by = $3,
@@ -311,7 +311,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
     await client.query('BEGIN');
 
     const itemRes = await client.query(
-      `SELECT * FROM requested_items WHERE id = $1`,
+      `SELECT * FROM public.requested_items WHERE id = $1`,
       [item_id]
     );
 
@@ -323,7 +323,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
     const item = itemRes.rows[0];
 
     await client.query(
-      `UPDATE requested_items
+      `UPDATE public.requested_items
        SET purchased_quantity = $1,
            procurement_updated_by = $2,
            procurement_updated_at = CURRENT_TIMESTAMP

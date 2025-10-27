@@ -192,7 +192,7 @@ const getLifecycleAnalytics = async (req, res) => {
 
     const spendRes = await pool.query(`
       SELECT COALESCE(ri.item_name, 'Uncategorized') AS category, SUM(ri.total_cost) AS total_cost
-      FROM requested_items ri
+      FROM public.requested_items ri
       JOIN requests r ON ri.request_id = r.id
       WHERE r.status = 'Approved'
       GROUP BY 1
@@ -204,7 +204,7 @@ const getLifecycleAnalytics = async (req, res) => {
         SELECT
           ri.request_id,
           MIN(ri.procurement_updated_at) AS po_timestamp
-        FROM requested_items ri
+        FROM public.requested_items ri
         WHERE ri.procurement_status IN ('purchased', 'completed')
           AND ri.procurement_updated_at IS NOT NULL
         GROUP BY ri.request_id

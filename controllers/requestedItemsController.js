@@ -5,7 +5,7 @@ const createHttpError = require('../utils/httpError');
 // 📦 Add multiple items to a request
 const addRequestedItems = async (req, res, next) => {
   const { request_id, items } = req.body;
-  const { user_id } = req.user;
+  const { id: user_id } = req.user;
 
   if (!request_id || !Array.isArray(items) || items.length === 0) {
     return next(createHttpError(400, 'Invalid input: request_id and items are required'));
@@ -144,9 +144,10 @@ const updateItemCost = async (req, res, next) => {
   const { id } = req.params;
   const item_id = id;
   const { unit_cost } = req.body;
-  const { user_id, role } = req.user;
+  const { id: user_id, role } = req.user;
 
-  if (unit_cost === undefined || unit_cost === null || isNaN(unit_cost) || unit_cost < 0) {
+  const parsedUnitCost = Number(unit_cost);
+  if (Number.isNaN(parsedUnitCost) || parsedUnitCost < 0) {
     return next(createHttpError(400, 'Valid unit cost is required and must be zero or greater'));
   }
 
@@ -168,10 +169,17 @@ const updateItemCost = async (req, res, next) => {
     }
 
     const item = itemRes.rows[0];
+    const procurementRoles = ['ProcurementSupervisor', 'ProcurementSpecialist'];
     const isSCM = role === 'SCM';
     const isAssignedUser = item.assigned_to === user_id;
+    const isProcurementRole = procurementRoles.includes(role);
 
     if (!isSCM && !isAssignedUser) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'You are not authorized to update this cost'));
+    }
+
+    if (!isSCM && !isProcurementRole) {
       await client.query('ROLLBACK');
       return next(createHttpError(403, 'You are not authorized to update this cost'));
     }
@@ -181,7 +189,7 @@ const updateItemCost = async (req, res, next) => {
        SET unit_cost = $1::numeric,
            total_cost = quantity * $1::numeric
        WHERE id = $2`,
-      [unit_cost, item_id]
+      [parsedUnitCost, item_id]
     );
 
     const totalRes = await client.query(
@@ -201,7 +209,11 @@ const updateItemCost = async (req, res, next) => {
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
        VALUES ($1, 'Unit Cost Updated', $2, $3)`,
-      [item.request_id, user_id, `Updated unit cost for '${item.item_name}' (ID: ${item_id}) to ${unit_cost}`]
+      [
+        item.request_id,
+        user_id,
+        `Updated unit cost for '${item.item_name}' (ID: ${item_id}) to ${parsedUnitCost}`,
+      ]
     );
 
     await client.query('COMMIT');
@@ -223,7 +235,7 @@ const updateItemCost = async (req, res, next) => {
 const updateItemProcurementStatus = async (req, res, next) => {
   const { item_id } = req.params;
   const { procurement_status, procurement_comment } = req.body;
-  const { user_id, role } = req.user;
+  const { id: user_id, role } = req.user;
 
   const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
 
@@ -293,7 +305,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
 const updateItemPurchasedQuantity = async (req, res, next) => {
   const { item_id } = req.params;
   let { purchased_quantity } = req.body;
-  const { user_id, role } = req.user;
+  const { id: user_id, role } = req.user;
 
   const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
 

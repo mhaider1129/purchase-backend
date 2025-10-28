@@ -6,11 +6,24 @@ const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { authenticateUser } = require('../middleware/authMiddleware');
 const createHttpError = require('http-errors');
+const checkColumnExists = require('../utils/checkColumnExists');
 
 const normalizeEmail = (email = '') => email.trim().toLowerCase();
 const ensureScmOrAdmin = (user) => {
   if (!user || !['admin', 'SCM'].includes(user.role)) {
     throw createHttpError(403, 'Only admin or SCM can perform this action');
+  }
+};
+
+const ensureUsersUpdatedAtColumn = async () => {
+  try {
+    return await checkColumnExists({
+      table: 'users',
+      column: 'updated_at',
+    });
+  } catch (err) {
+    console.error('❌ Failed to detect updated_at column on users table:', err);
+    return false;
   }
 };
 
@@ -513,10 +526,16 @@ router.put('/change-password', authenticateUser, async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-    await pool.query('UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2', [
-      hashedPassword,
-      req.user.id,
-    ]);
+    const hasUpdatedAtColumn = await ensureUsersUpdatedAtColumn();
+    const updateQuery = hasUpdatedAtColumn
+      ? 'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2'
+      : 'UPDATE users SET password = $1 WHERE id = $2';
+
+    if (!hasUpdatedAtColumn) {
+      console.warn('⚠️ users.updated_at column missing; skipping timestamp update for password change');
+    }
+
+    await pool.query(updateQuery, [hashedPassword, req.user.id]);
 
     return res.status(200).json({ success: true, message: 'Password updated successfully' });
   } catch (err) {

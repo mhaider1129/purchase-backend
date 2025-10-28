@@ -94,9 +94,16 @@ const getRequestDetails = async (req, res, next) => {
       assignedUser = assignedRes.rows[0] || null;
     }
 
+    const shouldHideRejectedItems =
+      request.status === 'Approved' && request.assigned_to === req.user.id;
+
+    const filteredItems = shouldHideRejectedItems
+      ? itemsRes.rows.filter((item) => item.approval_status !== 'Rejected')
+      : itemsRes.rows;
+
     res.json({
       request,
-      items: itemsRes.rows,
+      items: filteredItems,
       assigned_user: assignedUser,
     });
   } catch (err) {
@@ -115,7 +122,7 @@ const getRequestItemsOnly = async (req, res, next) => {
 
     if (isPrivilegedViewer) {
       accessCheck = await pool.query(
-        `SELECT r.id, r.request_type
+        `SELECT r.id, r.request_type, r.status, r.assigned_to
          FROM requests r
          WHERE r.id = $1
          LIMIT 1`,
@@ -124,7 +131,7 @@ const getRequestItemsOnly = async (req, res, next) => {
     } else {
       accessCheck = await pool.query(
         `
-        SELECT r.id, r.request_type
+        SELECT r.id, r.request_type, r.status, r.assigned_to
         FROM requests r
         LEFT JOIN approvals a ON r.id = a.request_id
         WHERE r.id = $1
@@ -143,8 +150,9 @@ const getRequestItemsOnly = async (req, res, next) => {
       return next(createHttpError(404, 'Request not found or access denied'));
     }
 
+    const requestMeta = accessCheck.rows[0];
     let itemsRes;
-    const reqType = accessCheck.rows[0]?.request_type;
+    const reqType = requestMeta?.request_type;
     if (reqType === 'Warehouse Supply') {
       itemsRes = await pool.query(
         `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
@@ -201,7 +209,14 @@ const getRequestItemsOnly = async (req, res, next) => {
       );
     }
 
-    res.json({ items: itemsRes.rows });
+    const shouldHideRejectedItems =
+      requestMeta?.status === 'Approved' && requestMeta?.assigned_to === req.user.id;
+
+    const filteredItems = shouldHideRejectedItems
+      ? itemsRes.rows.filter((item) => item.approval_status !== 'Rejected')
+      : itemsRes.rows;
+
+    res.json({ items: filteredItems });
   } catch (err) {
     console.error('❌ Error in getRequestItemsOnly:', err);
     next(createHttpError(500, 'Failed to fetch request items'));
@@ -536,14 +551,19 @@ const getAssignedRequests = async (req, res) => {
     }
 
     const requestIds = requests.map((row) => row.id);
+    const requestStatusById = new Map(requests.map((row) => [row.id, row.status]));
     const itemsRes = await pool.query(
-      `SELECT request_id, procurement_status, unit_cost, quantity, purchased_quantity
+      `SELECT request_id, procurement_status, unit_cost, quantity, purchased_quantity, approval_status
        FROM public.requested_items
        WHERE request_id = ANY($1::int[])`,
       [requestIds],
     );
 
     const groupedByRequest = itemsRes.rows.reduce((acc, item) => {
+      const requestStatus = requestStatusById.get(item.request_id);
+      if (requestStatus === 'Approved' && item.approval_status === 'Rejected') {
+        return acc;
+      }
       if (!acc[item.request_id]) acc[item.request_id] = [];
       acc[item.request_id].push(item);
       return acc;

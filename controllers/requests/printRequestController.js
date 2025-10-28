@@ -14,9 +14,10 @@ const printRequest = async (req, res, next) => {
 
   try {
     const accessRes = await pool.query(
-      `SELECT r.*, COALESCE(r.print_count, 0) AS print_count
+      `SELECT r.*, COALESCE(r.print_count, 0) AS print_count, d.name AS department_name
        FROM requests r
        LEFT JOIN approvals a ON r.id = a.request_id
+       LEFT JOIN departments d ON r.department_id = d.id
        WHERE r.id = $1 AND (r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
        LIMIT 1`,
       [id, userId]
@@ -35,6 +36,7 @@ const printRequest = async (req, res, next) => {
     const request = updateRes.rows[0];
     if (request) {
       request.project_name = accessRes.rows[0]?.project_name || null;
+      request.department_name = accessRes.rows[0]?.department_name || null;
     }
     const count = currentCount + 1;
 

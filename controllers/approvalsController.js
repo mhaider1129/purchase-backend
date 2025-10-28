@@ -432,6 +432,7 @@ const updateApprovalItems = async (req, res, next) => {
 
     const updatedItems = [];
     const summaryAdjustments = { Approved: 0, Rejected: 0, Pending: 0 };
+    const lockedItems = [];
     const seenItemIds = new Set();
 
     const approvedByColumnTypeRaw = await getColumnType(
@@ -501,13 +502,35 @@ const updateApprovalItems = async (req, res, next) => {
       }
 
       const itemRes = await client.query(
-        `SELECT id FROM public.requested_items WHERE id = $1 AND request_id = $2`,
+        `SELECT id, approval_status, approved_by
+           FROM public.requested_items
+          WHERE id = $1 AND request_id = $2`,
         [itemId, approval.request_id]
       );
 
       if (itemRes.rowCount === 0) {
         await client.query('ROLLBACK');
         return next(createHttpError(404, `Requested item ${itemId} not found for this request`));
+      }
+
+      const existingItem = itemRes.rows[0];
+      const existingApprovedBy = existingItem.approved_by;
+      const existingApprovedByNormalized =
+        existingApprovedBy != null ? String(existingApprovedBy) : null;
+      const resolvedApproverValueNormalized =
+        resolvedApproverValue != null ? String(resolvedApproverValue) : null;
+
+      const isLockedRejected =
+        existingItem.approval_status === 'Rejected' &&
+        existingApprovedByNormalized != null &&
+        existingApprovedByNormalized !== (resolvedApproverValueNormalized ?? '');
+
+      if (isLockedRejected) {
+        lockedItems.push({
+          id: existingItem.id,
+          approval_status: existingItem.approval_status,
+        });
+        continue;
       }
 
       const isFinalDecision = finalStatus === 'Approved' || finalStatus === 'Rejected';
@@ -595,6 +618,7 @@ const updateApprovalItems = async (req, res, next) => {
       message: '✅ Item decisions recorded successfully',
       updatedItems,
       summary,
+      lockedItems,
     });
   } catch (err) {
     await client.query('ROLLBACK');

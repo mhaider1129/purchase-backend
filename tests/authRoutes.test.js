@@ -90,6 +90,7 @@ describe('PUT /auth/change-password', () => {
         rowCount: 1,
         rows: [{ password: 'hashed' }],
       })
+      .mockResolvedValueOnce({ rowCount: 1 })
       .mockResolvedValueOnce({ rowCount: 1 });
 
     bcrypt.compare
@@ -105,6 +106,12 @@ describe('PUT /auth/change-password', () => {
 
     expect(bcrypt.genSalt).toHaveBeenCalledWith(10);
     expect(bcrypt.hash).toHaveBeenCalledWith('newPassword1', 'salt');
+    expect(pool.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('FROM information_schema.columns'),
+      ['public', 'users', 'updated_at']
+    );
+
     expect(pool.query).toHaveBeenLastCalledWith(
       'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2',
       ['hashed-new', 1]

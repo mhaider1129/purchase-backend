@@ -368,6 +368,7 @@ const updateApprovalItems = async (req, res, next) => {
   await ensureRequestedItemApprovalColumns();
 
   const rawApproverId = req.user?.id;
+  const approverId = rawApproverId ?? null;
   const approverIdAsString = rawApproverId != null ? String(rawApproverId) : null;
 
   let approverIdAsInteger = null;
@@ -452,6 +453,24 @@ const updateApprovalItems = async (req, res, next) => {
       approvedByColumnType &&
       ['integer', 'int4', 'bigint', 'int8', 'smallint', 'int2'].includes(approvedByColumnType);
 
+    const approvedByCastFragment = (() => {
+      switch (approvedByColumnType) {
+        case 'uuid':
+          return '::uuid';
+        case 'integer':
+        case 'int4':
+          return '::int4';
+        case 'bigint':
+        case 'int8':
+          return '::int8';
+        case 'smallint':
+        case 'int2':
+          return '::int2';
+        default:
+          return '';
+      }
+    })();
+
     const resolvedApproverValue = approvedByPrefersString
       ? approverIdAsString ?? null
       : approvedByPrefersInteger
@@ -497,7 +516,7 @@ const updateApprovalItems = async (req, res, next) => {
         `UPDATE public.requested_items
            SET approval_status = $1,
                approval_comments = $2,
-               approved_by = CASE WHEN $6 THEN $3::public.requested_items.approved_by%TYPE ELSE NULL END,
+               approved_by = CASE WHEN $6 THEN $3${approvedByCastFragment} ELSE NULL END,
                approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
          WHERE id = $4 AND request_id = $5
          RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by`,
@@ -558,14 +577,14 @@ const updateApprovalItems = async (req, res, next) => {
 
     if (commentText) {
       await client.query(
-        `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, 'Item approvals updated', $2::request_logs.actor_id%TYPE, $3)`,
+        `INSERT INTO public.request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Item approvals updated', $2, $3)`,
         [approval.request_id, approverId, commentText]
       );
 
       await client.query(
-        `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
-         VALUES ($1, $2, $3::approval_logs.approver_id%TYPE, 'Items Reviewed', $4)`,
+        `INSERT INTO public.approval_logs (approval_id, request_id, approver_id, action, comments)
+         VALUES ($1, $2, $3, 'Items Reviewed', $4)`,
         [approval.id, approval.request_id, approverId, commentText]
       );
     }

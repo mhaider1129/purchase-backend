@@ -132,7 +132,7 @@ const updateApprovalStatus = async (req, res, next) => {
 
 const markRequestAsCompleted = async (req, res, next) => {
   const { id } = req.params;
-  const { user_id, role } = req.user;
+  const { id: user_id, role } = req.user;
 
   const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
   if (!allowedRoles.includes(role)) {
@@ -191,7 +191,7 @@ const markRequestAsCompleted = async (req, res, next) => {
 const updateRequestCost = async (req, res, next) => {
   const { id } = req.params;
   const { estimated_cost } = req.body;
-  const { user_id, role } = req.user;
+  const { id: user_id, role } = req.user;
 
   const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
   if (!allowedRoles.includes(role)) {

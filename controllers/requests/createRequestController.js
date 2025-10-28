@@ -5,6 +5,7 @@ const {
   insertAttachment,
   attachmentsHasItemIdColumn,
 } = require("../../utils/attachmentSchema");
+const { toStoredPath } = require("../../utils/attachmentPaths");
 
 /**
  * Fetch approval routing configuration from the database.
@@ -515,7 +516,7 @@ const createRequest = async (req, res, next) => {
           requestId: request.id,
           itemId: null,
           fileName: file.originalname,
-          filePath: file.path,
+          filePath: toStoredPath(file.path),
           uploadedBy: requester_id,
         });
       }
@@ -538,7 +539,7 @@ const createRequest = async (req, res, next) => {
             requestId: request.id,
             itemId,
             fileName: file.originalname,
-            filePath: file.path,
+            filePath: toStoredPath(file.path),
             uploadedBy: requester_id,
           });
         }

@@ -10,60 +10,12 @@ const {
   insertAttachment,
   attachmentsHasItemIdColumn,
 } = require('../utils/attachmentSchema');
+const {
+  UPLOADS_DIR,
+  toStoredPath,
+  serializeAttachment,
+} = require('../utils/attachmentPaths');
 const sanitize = require('sanitize-filename');
-
-const BACKEND_ROOT = path.join(__dirname, '..');
-const UPLOADS_DIR = path.join(BACKEND_ROOT, 'uploads');
-
-// 🧭 Normalize the stored file path so the database always receives a
-// predictable value ("uploads/<file>") even if Multer gives us an absolute
-// path. This keeps previously-saved files backwards compatible.
-function toStoredPath(filePath) {
-  if (!filePath) return '';
-
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(BACKEND_ROOT, filePath);
-
-  const relativeToBackend = path.relative(BACKEND_ROOT, absolutePath);
-  if (relativeToBackend && !relativeToBackend.startsWith('..')) {
-    return relativeToBackend.replace(/\\/g, '/');
-  }
-
-  const relativeToUploads = path.relative(UPLOADS_DIR, absolutePath);
-  if (relativeToUploads && !relativeToUploads.startsWith('..')) {
-    return path.join('uploads', relativeToUploads).replace(/\\/g, '/');
-  }
-
-  return path.join('uploads', path.basename(absolutePath)).replace(/\\/g, '/');
-}
-
-// 🔗 Prepare an attachment row for API responses with normalized paths and a
-// direct download URL for the frontend.
-function serializeAttachment(row) {
-  if (!row) return row;
-
-  const storedPath = row.file_path || '';
-  const absolutePath = path.isAbsolute(storedPath)
-    ? storedPath
-    : path.resolve(BACKEND_ROOT, storedPath);
-
-  const relativeToUploads = path.relative(UPLOADS_DIR, absolutePath);
-  const normalizedRelative =
-    relativeToUploads && !relativeToUploads.startsWith('..')
-      ? relativeToUploads.replace(/\\/g, '/')
-      : path.basename(absolutePath);
-
-  const normalizedPath = path.join('uploads', normalizedRelative).replace(/\\/g, '/');
-  const filename = path.basename(normalizedRelative);
-
-  return {
-    ...row,
-    file_path: normalizedPath,
-    file_url: `/${normalizedPath}`,
-    download_url: `/api/attachments/download/${encodeURIComponent(filename)}`,
-  };
-}
 
 // 🔧 Local error helper
 function createHttpError(statusCode, message) {
@@ -135,7 +87,7 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
 // 📤 Download a file (authentication required)
 router.get('/download/:filename', authenticateUser, (req, res, next) => {
   const sanitizedFilename = sanitize(req.params.filename);
-  const filePath = path.join(__dirname, '..', 'uploads', sanitizedFilename);
+  const filePath = path.join(UPLOADS_DIR, sanitizedFilename);
 
   fs.access(filePath, fs.constants.F_OK, err => {
     if (err) {

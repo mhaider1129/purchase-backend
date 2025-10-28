@@ -3,9 +3,13 @@ const ATTACHMENTS_SCHEMA = 'public';
 
 let attachmentItemIdSupported = null;
 
+function resetAttachmentsItemIdSupportCache() {
+  attachmentItemIdSupported = null;
+}
+
 async function attachmentsHasItemIdColumn(queryable) {
-  if (attachmentItemIdSupported !== null) {
-    return attachmentItemIdSupported;
+  if (attachmentItemIdSupported === true) {
+    return true;
   }
 
   try {
@@ -18,13 +22,19 @@ async function attachmentsHasItemIdColumn(queryable) {
         LIMIT 1`,
       [ATTACHMENTS_SCHEMA, ATTACHMENTS_TABLE]
     );
-    attachmentItemIdSupported = rows.length > 0;
+    const supported = rows.length > 0;
+
+    if (supported) {
+      attachmentItemIdSupported = true;
+    }
+
+    return supported;
   } catch (err) {
     console.error('⚠️ Failed to inspect attachments schema:', err.message);
     attachmentItemIdSupported = true;
   }
 
-  return attachmentItemIdSupported;
+  return true;
 }
 
 async function insertAttachment(queryable, { requestId = null, itemId = null, fileName, filePath, uploadedBy }) {
@@ -59,4 +69,5 @@ async function insertAttachment(queryable, { requestId = null, itemId = null, fi
 module.exports = {
   insertAttachment,
   attachmentsHasItemIdColumn,
+  resetAttachmentsItemIdSupportCache,
 };

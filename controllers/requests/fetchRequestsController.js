@@ -374,7 +374,7 @@ const getProcurementUsers = async (req, res, next) => {
   try {
     const result = await pool.query(`
       SELECT id, name FROM users
-      WHERE role IN ('ProcurementSupervisor', 'ProcurementSpecialist', 'SCM')
+      WHERE role IN ('ProcurementSpecialist', 'SCM')
       AND is_active = true
     `);
     res.json(result.rows);

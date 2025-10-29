@@ -29,14 +29,14 @@ router.put('/:id/cost', authenticateUser, updateItemCost);
 /**
  * @route   PUT /api/requested-items/:item_id/procurement-status
  * @desc    Update procurement status of a requested item
- * @access  Private (SCM or ProcurementSupervisor/Specialist only)
+ * @access  Private (SCM or ProcurementSpecialist only)
  */
 router.put('/:item_id/procurement-status', authenticateUser, updateItemProcurementStatus);
 
 /**
  * @route   PUT /api/requested-items/:item_id/purchased-quantity
  * @desc    Update purchased quantity of a requested item
- * @access  Private (SCM or ProcurementSupervisor/Specialist only)
+ * @access  Private (SCM or ProcurementSpecialist only)
  */
 router.put('/:item_id/purchased-quantity', authenticateUser, updateItemPurchasedQuantity);
 

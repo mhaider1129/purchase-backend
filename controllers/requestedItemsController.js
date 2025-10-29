@@ -169,7 +169,7 @@ const updateItemCost = async (req, res, next) => {
     }
 
     const item = itemRes.rows[0];
-    const procurementRoles = ['ProcurementSupervisor', 'ProcurementSpecialist'];
+    const procurementRoles = ['ProcurementSpecialist'];
     const isSCM = role === 'SCM';
     const isAssignedUser = item.assigned_to === user_id;
     const isProcurementRole = procurementRoles.includes(role);
@@ -237,7 +237,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
   const { procurement_status, procurement_comment } = req.body;
   const { id: user_id, role } = req.user;
 
-  const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
+  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
 
   const allowedStatuses = [
     'pending',
@@ -307,7 +307,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
   let { purchased_quantity } = req.body;
   const { id: user_id, role } = req.user;
 
-  const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
+  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
 
   if (!allowedRoles.includes(role)) {
     return next(createHttpError(403, 'Unauthorized to update purchased quantity'));

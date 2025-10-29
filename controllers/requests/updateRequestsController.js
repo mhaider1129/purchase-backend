@@ -1,5 +1,6 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
+const { assignApprover } = require('./createRequestController');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -8,7 +9,7 @@ const assignRequestToProcurement = async (req, res, next) => {
 
   try {
     const userCheck = await pool.query(
-      `SELECT id FROM users WHERE id = $1 AND role IN ('ProcurementSupervisor','ProcurementSpecialist')`,
+      `SELECT id FROM users WHERE id = $1 AND role = 'ProcurementSpecialist'`,
       [user_id],
     );
     if (userCheck.rowCount === 0)
@@ -28,11 +29,33 @@ const assignRequestToProcurement = async (req, res, next) => {
 
 const updateApprovalStatus = async (req, res, next) => {
   const approval_id = req.params.id;
-  const { status: decision, comments = '', is_urgent = false } = req.body;
+  const {
+    status: decision,
+    comments = '',
+    is_urgent = false,
+    estimated_cost: estimatedCostInput,
+  } = req.body;
   const approver_id = req.user.id;
 
   if (!['Approved', 'Rejected'].includes(decision)) {
     return next(createHttpError(400, 'Approval status must be either Approved or Rejected'));
+  }
+
+  const sanitizedEstimatedCost =
+    estimatedCostInput !== undefined &&
+    estimatedCostInput !== null &&
+    String(estimatedCostInput).trim() !== ''
+      ? Number(estimatedCostInput)
+      : null;
+
+  if (sanitizedEstimatedCost !== null) {
+    if (Number.isNaN(sanitizedEstimatedCost) || sanitizedEstimatedCost <= 0) {
+      return next(createHttpError(400, 'estimated_cost must be a positive number'));
+    }
+
+    if (req.user.role !== 'SCM') {
+      return next(createHttpError(403, 'Only SCM can update estimated cost during approval'));
+    }
   }
 
   const client = await pool.connect();
@@ -71,10 +94,37 @@ const updateApprovalStatus = async (req, res, next) => {
     );
 
     const reqRes = await client.query(
-      `SELECT request_type, department_id FROM requests WHERE id = $1`,
+      `SELECT request_type, department_id, request_domain, estimated_cost
+         FROM requests
+        WHERE id = $1`,
       [request_id],
     );
-    const { request_type, department_id } = reqRes.rows[0];
+    const requestRow = reqRes.rows[0];
+    const { request_type, department_id } = requestRow;
+
+    let effectiveEstimatedCost = Number(requestRow.estimated_cost) || 0;
+
+    if (sanitizedEstimatedCost !== null) {
+      effectiveEstimatedCost = sanitizedEstimatedCost;
+
+      await client.query(
+        `UPDATE requests
+            SET estimated_cost = $1,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2`,
+        [sanitizedEstimatedCost, request_id],
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Estimated Cost Updated', $2, $3)`,
+        [
+          request_id,
+          approver_id,
+          `SCM set estimated cost to ${sanitizedEstimatedCost}`,
+        ],
+      );
+    }
 
     if (request_type === 'Maintenance' && currentApproval.approval_level === 1) {
       await client.query(`UPDATE requests SET requester_id = $1 WHERE id = $2`, [approver_id, request_id]);
@@ -103,6 +153,102 @@ const updateApprovalStatus = async (req, res, next) => {
       if (decision === 'Rejected') {
         await client.query(`UPDATE requests SET status = 'Rejected' WHERE id = $1`, [request_id]);
       } else {
+        if (req.user.role === 'SCM' && effectiveEstimatedCost > 5000) {
+          const { rowCount: cfoExists } = await client.query(
+            `SELECT 1
+               FROM approvals a
+               JOIN users u ON a.approver_id = u.id
+              WHERE a.request_id = $1
+                AND UPPER(u.role) = 'CFO'
+              LIMIT 1`,
+            [request_id],
+          );
+
+          if (cfoExists === 0) {
+            const deptRes = await client.query(
+              `SELECT type
+                 FROM departments
+                WHERE id = $1`,
+              [department_id],
+            );
+            const deptType = deptRes.rows[0]?.type?.toLowerCase() || null;
+            const domainForRoutes =
+              request_type === 'Warehouse Supply'
+                ? requestRow.request_domain || deptType || 'operational'
+                : deptType || requestRow.request_domain || 'operational';
+
+            let insertionLevel = currentApproval.approval_level + 1;
+
+            const { rows: cfoRouteRows } = await client.query(
+              `SELECT approval_level
+                 FROM approval_routes
+                WHERE request_type = $1
+                  AND department_type = $2
+                  AND role = 'CFO'
+                  AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(max_amount, 999999999)
+                ORDER BY approval_level
+                LIMIT 1`,
+              [request_type, domainForRoutes, effectiveEstimatedCost],
+            );
+
+            if (cfoRouteRows.length > 0) {
+              insertionLevel = cfoRouteRows[0].approval_level;
+            } else {
+              const { rows: cooRows } = await client.query(
+                `SELECT approval_level
+                   FROM approvals a
+                   JOIN users u ON a.approver_id = u.id
+                  WHERE a.request_id = $1
+                    AND UPPER(u.role) = 'COO'
+                  LIMIT 1`,
+                [request_id],
+              );
+
+              if (cooRows.length > 0) {
+                insertionLevel = cooRows[0].approval_level;
+              }
+            }
+
+            const { rows: approvalsToShift } = await client.query(
+              `SELECT id, approval_level
+                 FROM approvals
+                WHERE request_id = $1
+                  AND approval_level >= $2
+                ORDER BY approval_level DESC`,
+              [request_id, insertionLevel],
+            );
+
+            for (const row of approvalsToShift) {
+              await client.query(
+                `UPDATE approvals
+                    SET approval_level = $1
+                  WHERE id = $2`,
+                [row.approval_level + 1, row.id],
+              );
+            }
+
+            await assignApprover(
+              client,
+              'CFO',
+              department_id,
+              request_id,
+              request_type,
+              insertionLevel,
+              requestRow.request_domain,
+            );
+
+            await client.query(
+              `INSERT INTO request_logs (request_id, action, actor_id, comments)
+               VALUES ($1, 'Approval Route Updated', $2, $3)`,
+              [
+                request_id,
+                approver_id,
+                `Inserted CFO approval at level ${insertionLevel} after estimated cost ${effectiveEstimatedCost}`,
+              ],
+            );
+          }
+        }
+
         const nextApprovalRes = await client.query(
           `SELECT id FROM approvals WHERE request_id = $1 AND approval_level = $2`,
           [request_id, currentApproval.approval_level + 1],
@@ -134,7 +280,7 @@ const markRequestAsCompleted = async (req, res, next) => {
   const { id } = req.params;
   const { id: user_id, role } = req.user;
 
-  const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
+  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
   if (!allowedRoles.includes(role)) {
     return next(createHttpError(403, 'Unauthorized to mark request as completed'));
   }
@@ -193,7 +339,7 @@ const updateRequestCost = async (req, res, next) => {
   const { estimated_cost } = req.body;
   const { id: user_id, role } = req.user;
 
-  const allowedRoles = ['SCM', 'ProcurementSupervisor', 'ProcurementSpecialist'];
+  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
   if (!allowedRoles.includes(role)) {
     return next(createHttpError(403, 'Unauthorized to update request cost'));
   }

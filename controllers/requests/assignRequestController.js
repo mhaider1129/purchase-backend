@@ -42,7 +42,7 @@ const assignRequestToUser = async (req, res) => {
 
     const userCheck = await pool.query(
       `SELECT id, name FROM users
-       WHERE id = $1 AND role IN ('ProcurementSupervisor', 'ProcurementSpecialist', 'SCM') AND is_active = true`,
+       WHERE id = $1 AND role IN ('ProcurementSpecialist', 'SCM') AND is_active = true`,
       [user_id]
     );
 

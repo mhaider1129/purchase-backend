@@ -214,17 +214,6 @@ const createRequest = async (req, res, next) => {
     return next(createHttpError(500, "Failed to validate duplicate requests"));
   }
 
-  if (request_type === "Maintenance") {
-    try {
-      await pool.query(
-        "ALTER TABLE requests ADD COLUMN IF NOT EXISTS temporary_requester_name TEXT",
-      );
-    } catch (err) {
-      console.error("❌ Failed ensuring temporary_requester_name column:", err);
-      return next(createHttpError(500, "Failed to prepare maintenance request metadata"));
-    }
-  }
-
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -529,7 +518,7 @@ const createRequest = async (req, res, next) => {
     if (duplicateFound) {
       try {
         const { rows } = await pool.query(
-          `SELECT email FROM users WHERE role IN ('ProcurementSupervisor', 'ProcurementSpecialist', 'SCM') AND is_active = true`,
+          `SELECT email FROM users WHERE role IN ('ProcurementSpecialist', 'SCM') AND is_active = true`,
         );
         for (const row of rows) {
           if (row.email) {

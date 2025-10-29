@@ -12,7 +12,7 @@ const generateRfx = async (req, res, next) => {
     return next(createHttpError(400, 'Invalid document type'));
   }
 
-  const allowedRoles = ['ProcurementSupervisor', 'ProcurementSpecialist', 'SCM'];
+  const allowedRoles = ['ProcurementSpecialist', 'SCM'];
   if (!allowedRoles.includes(req.user.role)) {
     return next(createHttpError(403, 'Unauthorized to generate document'));
   }

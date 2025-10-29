@@ -8,7 +8,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
   const updater_id = req.user.id;
   const role = req.user.role;
 
-  const allowedRoles = ['SCM', 'Procurement Specialist', 'ProcurementSupervisor'];
+  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
   const allowedStatuses = ['pending', 'purchased', 'completed', 'canceled'];
 
   if (!allowedRoles.includes(role)) {

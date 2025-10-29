@@ -2,10 +2,8 @@ const pool = require("../../config/db");
 const { sendEmail } = require("../../utils/emailService");
 const createHttpError = require("../../utils/httpError");
 const {
-  insertAttachment,
-  attachmentsHasItemIdColumn,
-} = require("../../utils/attachmentSchema");
-const { toStoredPath } = require("../../utils/attachmentPaths");
+  persistRequestAttachments,
+} = require("./saveRequestAttachments");
 
 /**
  * Fetch approval routing configuration from the database.
@@ -495,56 +493,13 @@ const createRequest = async (req, res, next) => {
       [request.id, requester_id, justification],
     );
 
-    if (Array.isArray(req.files) && req.files.length > 0) {
-      const requestFiles = [];
-      const itemFiles = {};
-
-      for (const file of req.files) {
-        if (file.fieldname === "attachments") {
-          requestFiles.push(file);
-        } else if (file.fieldname.startsWith("item_")) {
-          const idx = parseInt(file.fieldname.split("_")[1], 10);
-          if (!Number.isNaN(idx)) {
-            itemFiles[idx] = itemFiles[idx] || [];
-            itemFiles[idx].push(file);
-          }
-        }
-      }
-
-      for (const file of requestFiles) {
-        await insertAttachment(client, {
-          requestId: request.id,
-          itemId: null,
-          fileName: file.originalname,
-          filePath: toStoredPath(file.path),
-          uploadedBy: requester_id,
-        });
-      }
-
-      const supportsItemAttachments = await attachmentsHasItemIdColumn(client);
-
-      for (const [idx, files] of Object.entries(itemFiles)) {
-        const itemId = itemIdMap[idx];
-        if (!itemId) continue;
-
-        if (!supportsItemAttachments) {
-          console.warn(
-            `⚠️ Skipping item-level attachments for item index ${idx} because the database schema does not support item bindings.`,
-          );
-          continue;
-        }
-
-        for (const file of files) {
-          await insertAttachment(client, {
-            requestId: request.id,
-            itemId,
-            fileName: file.originalname,
-            filePath: toStoredPath(file.path),
-            uploadedBy: requester_id,
-          });
-        }
-      }
-    }
+    const attachmentsStored = await persistRequestAttachments({
+      client,
+      requestId: request.id,
+      requesterId: requester_id,
+      itemIdMap,
+      files: req.files,
+    });
 
     // Ensure the earliest pending approval is active
     await client.query(
@@ -597,7 +552,7 @@ const createRequest = async (req, res, next) => {
       request_id: request.id,
       request_type,
       estimated_cost: estimatedCost,
-      attachments_uploaded: req.files?.length || 0,
+      attachments_uploaded: attachmentsStored,
       temporary_requester_name: request.temporary_requester_name || null,
       next_approval: nextApproval
         ? {

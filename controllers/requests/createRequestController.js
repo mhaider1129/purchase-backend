@@ -20,7 +20,7 @@ const fetchApprovalRoutes = async (
        FROM approval_routes
       WHERE request_type = $1
         AND department_type = $2
-        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(max_amount, 999999999)
+        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(NULLIF(max_amount, 0), 999999999)
       ORDER BY approval_level`,
     [requestType, departmentType, cost],
   );

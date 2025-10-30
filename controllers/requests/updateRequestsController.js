@@ -185,7 +185,7 @@ const updateApprovalStatus = async (req, res, next) => {
                 WHERE request_type = $1
                   AND department_type = $2
                   AND role = 'CFO'
-                  AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(max_amount, 999999999)
+                  AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(NULLIF(max_amount, 0), 999999999)
                 ORDER BY approval_level
                 LIMIT 1`,
               [request_type, domainForRoutes, effectiveEstimatedCost],
@@ -249,15 +249,20 @@ const updateApprovalStatus = async (req, res, next) => {
           }
         }
 
-        const nextApprovalRes = await client.query(
-          `SELECT id FROM approvals WHERE request_id = $1 AND approval_level = $2`,
-          [request_id, currentApproval.approval_level + 1],
+        const { rows: nextPendingApprovals } = await client.query(
+          `SELECT id
+             FROM approvals
+            WHERE request_id = $1
+              AND status = 'Pending'
+            ORDER BY approval_level ASC
+            LIMIT 1`,
+          [request_id],
         );
 
-        if (nextApprovalRes.rowCount > 0) {
+        if (nextPendingApprovals.length > 0) {
           await client.query(
             `UPDATE approvals SET is_active = true WHERE id = $1`,
-            [nextApprovalRes.rows[0].id],
+            [nextPendingApprovals[0].id],
           );
         } else {
           await client.query(`UPDATE requests SET status = 'Approved' WHERE id = $1`, [request_id]);

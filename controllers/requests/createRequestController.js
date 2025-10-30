@@ -20,7 +20,7 @@ const fetchApprovalRoutes = async (
        FROM approval_routes
       WHERE request_type = $1
         AND department_type = $2
-        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(max_amount, 999999999)
+        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(NULLIF(max_amount, 0), 999999999)
       ORDER BY approval_level`,
     [requestType, departmentType, cost],
   );
@@ -36,7 +36,7 @@ const assignApprover = async (
   level,
   requestDomain = null,
 ) => {
-  const globalRoles = ["CMO", "COO", "SCM", "CEO"];
+  const globalRoles = ["CMO", "COO", "SCM", "CEO", "CFO"];
   let targetDepartmentId = departmentId;
 
   if (role === "WarehouseManager" && requestType === "Non-Stock") {
@@ -212,17 +212,6 @@ const createRequest = async (req, res, next) => {
   } catch (err) {
     console.error("❌ Error checking duplicates:", err);
     return next(createHttpError(500, "Failed to validate duplicate requests"));
-  }
-
-  if (request_type === "Maintenance") {
-    try {
-      await pool.query(
-        "ALTER TABLE requests ADD COLUMN IF NOT EXISTS temporary_requester_name TEXT",
-      );
-    } catch (err) {
-      console.error("❌ Failed ensuring temporary_requester_name column:", err);
-      return next(createHttpError(500, "Failed to prepare maintenance request metadata"));
-    }
   }
 
   const client = await pool.connect();
@@ -529,7 +518,7 @@ const createRequest = async (req, res, next) => {
     if (duplicateFound) {
       try {
         const { rows } = await pool.query(
-          `SELECT email FROM users WHERE role IN ('ProcurementSupervisor', 'ProcurementSpecialist', 'SCM') AND is_active = true`,
+          `SELECT email FROM users WHERE role IN ('ProcurementSpecialist', 'SCM') AND is_active = true`,
         );
         for (const row of rows) {
           if (row.email) {

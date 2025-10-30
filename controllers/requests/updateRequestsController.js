@@ -191,23 +191,28 @@ const updateApprovalStatus = async (req, res, next) => {
               [request_type, domainForRoutes, effectiveEstimatedCost],
             );
 
-            if (cfoRouteRows.length > 0) {
-              insertionLevel = cfoRouteRows[0].approval_level;
-            } else {
-              const { rows: cooRows } = await client.query(
-                `SELECT approval_level
-                   FROM approvals a
-                   JOIN users u ON a.approver_id = u.id
-                  WHERE a.request_id = $1
-                    AND UPPER(u.role) = 'COO'
-                  LIMIT 1`,
-                [request_id],
-              );
+            const { rows: cooRows } = await client.query(
+              `SELECT approval_level
+                 FROM approvals a
+                 JOIN users u ON a.approver_id = u.id
+                WHERE a.request_id = $1
+                  AND UPPER(u.role) = 'COO'
+                LIMIT 1`,
+              [request_id],
+            );
 
-              if (cooRows.length > 0) {
-                insertionLevel = cooRows[0].approval_level;
-              }
+            const cfoRouteLevel = cfoRouteRows[0]?.approval_level ?? null;
+            const cooLevel = cooRows[0]?.approval_level ?? null;
+
+            if (cfoRouteLevel !== null && cooLevel !== null) {
+              insertionLevel = Math.min(cfoRouteLevel, cooLevel);
+            } else if (cfoRouteLevel !== null) {
+              insertionLevel = cfoRouteLevel;
+            } else if (cooLevel !== null) {
+              insertionLevel = cooLevel;
             }
+
+            insertionLevel = Math.max(insertionLevel, currentApproval.approval_level + 1);
 
             const { rows: approvalsToShift } = await client.query(
               `SELECT id, approval_level

@@ -36,7 +36,7 @@ const assignApprover = async (
   level,
   requestDomain = null,
 ) => {
-  const globalRoles = ["CMO", "COO", "SCM", "CEO"];
+  const globalRoles = ["CMO", "COO", "SCM", "CEO", "CFO"];
   let targetDepartmentId = departmentId;
 
   if (role === "WarehouseManager" && requestType === "Non-Stock") {

@@ -12,9 +12,14 @@ const {
 } = require('../utils/attachmentSchema');
 const {
   UPLOADS_DIR,
-  toStoredPath,
   serializeAttachment,
+  isStoredLocally,
 } = require('../utils/attachmentPaths');
+const {
+  uploadBuffer,
+  createSignedUrl,
+  removeObject,
+} = require('../utils/storage');
 const sanitize = require('sanitize-filename');
 
 // 🔧 Local error helper
@@ -22,6 +27,30 @@ function createHttpError(statusCode, message) {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
+}
+
+async function uploadAttachmentToStorage({ file, requestId, itemId }) {
+  const segments = [requestId ? `request-${requestId}` : 'general'];
+  if (itemId) {
+    segments.push(`item-${itemId}`);
+  }
+
+  const { objectKey } = await uploadBuffer({ file, segments });
+  return objectKey;
+}
+
+function respondStorageError(next, err) {
+  console.error('❌ Upload error:', err.message);
+  if (err.code === 'SUPABASE_NOT_CONFIGURED') {
+    return next(
+      createHttpError(
+        500,
+        'Supabase storage is not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+      )
+    );
+  }
+
+  return next(createHttpError(500, 'Failed to upload attachment'));
 }
 
 // 📥 Upload a file to a specific item
@@ -42,11 +71,13 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
       );
     }
 
+    const storedPath = await uploadAttachmentToStorage({ file, requestId: null, itemId });
+
     const saved = await insertAttachment(pool, {
       requestId: null,
       itemId,
       fileName: file.originalname,
-      filePath: toStoredPath(file.path),
+      filePath: storedPath,
       uploadedBy: req.user.id,
     });
 
@@ -55,8 +86,7 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
       attachmentId: saved.rows[0].id
     });
   } catch (err) {
-    console.error('❌ Upload error:', err.message);
-    next(createHttpError(500, 'Failed to upload attachment'));
+    respondStorageError(next, err);
   }
 });
 
@@ -84,7 +114,49 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
   }
 });
 
-// 📤 Download a file (authentication required)
+// 📤 Download attachment by id (supports Supabase-backed files)
+router.get('/:id/download', authenticateUser, async (req, res, next) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT id, file_name, file_path FROM attachments WHERE id = $1`,
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return next(createHttpError(404, 'Attachment not found'));
+    }
+
+    const attachment = result.rows[0];
+    const storedPath = attachment.file_path || '';
+
+    if (!storedPath || isStoredLocally(storedPath)) {
+      const filename = storedPath
+        ? path.basename(storedPath)
+        : sanitize(attachment.file_name || 'attachment');
+      return res.redirect(`/api/attachments/download/${encodeURIComponent(filename)}`);
+    }
+
+    const signedUrl = await createSignedUrl(storedPath, { expiresIn: 120 });
+    return res.redirect(signedUrl);
+  } catch (err) {
+    console.error('❌ Failed to prepare attachment download:', err.message);
+
+    if (err.code === 'SUPABASE_NOT_CONFIGURED') {
+      return next(
+        createHttpError(
+          500,
+          'Supabase storage is not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+        )
+      );
+    }
+
+    next(createHttpError(500, 'Failed to download attachment'));
+  }
+});
+
+// 📤 Download a file from local disk (legacy support)
 router.get('/download/:filename', authenticateUser, (req, res, next) => {
   const sanitizedFilename = sanitize(req.params.filename);
   const filePath = path.join(UPLOADS_DIR, sanitizedFilename);
@@ -94,7 +166,6 @@ router.get('/download/:filename', authenticateUser, (req, res, next) => {
       console.warn('🟥 File not found:', filePath);
       return next(createHttpError(404, 'File not found'));
     }
-
 
     res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
     res.setHeader('Content-Type', 'application/octet-stream');
@@ -110,11 +181,13 @@ router.post('/:requestId', authenticateUser, upload.single('file'), async (req, 
   if (!file) return next(createHttpError(400, 'No file uploaded'));
 
   try {
+    const storedPath = await uploadAttachmentToStorage({ file, requestId, itemId: null });
+
     const saved = await insertAttachment(pool, {
       requestId,
       itemId: null,
       fileName: file.originalname,
-      filePath: toStoredPath(file.path),
+      filePath: storedPath,
       uploadedBy: req.user.id,
     });
 
@@ -123,8 +196,7 @@ router.post('/:requestId', authenticateUser, upload.single('file'), async (req, 
       attachmentId: saved.rows[0].id
     });
   } catch (err) {
-    console.error('❌ Upload error:', err.message);
-    next(createHttpError(500, 'Failed to upload attachment'));
+    respondStorageError(next, err);
   }
 });
 
@@ -165,12 +237,21 @@ router.delete('/:id', authenticateUser, async (req, res, next) => {
 
     await pool.query(`DELETE FROM attachments WHERE id = $1`, [id]);
 
-    const filePath = path.resolve(__dirname, '..', file.file_path);
-    fs.unlink(filePath, err => {
-      if (err && err.code !== 'ENOENT') {
-        console.warn('🟡 Could not delete file from disk:', err.message);
+    const storedPath = file.file_path || '';
+    if (storedPath && isStoredLocally(storedPath)) {
+      const filePath = path.resolve(__dirname, '..', storedPath);
+      fs.unlink(filePath, err => {
+        if (err && err.code !== 'ENOENT') {
+          console.warn('🟡 Could not delete file from disk:', err.message);
+        }
+      });
+    } else if (storedPath) {
+      try {
+        await removeObject(storedPath);
+      } catch (storageErr) {
+        console.warn('🟡 Failed to remove attachment from Supabase storage:', storageErr.message);
       }
-    });
+    }
 
     res.json({ message: '🗑️ File deleted successfully' });
   } catch (err) {

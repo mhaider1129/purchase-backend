@@ -3,6 +3,10 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
+const { pipeline } = require('stream');
+const { URL } = require('url');
 const pool = require('../config/db');
 const upload = require('../middleware/upload');
 const { authenticateUser } = require('../middleware/authMiddleware');
@@ -15,7 +19,7 @@ const {
   serializeAttachment,
   isStoredLocally,
 } = require('../utils/attachmentPaths');
-const { createSignedUrl, removeObject, isStorageConfigured } = require('../utils/storage');
+const { removeObject, isStorageConfigured, buildObjectDownloadRequest } = require('../utils/storage');
 const { storeAttachmentFile } = require('../utils/attachmentStorage');
 const sanitize = require('sanitize-filename');
 
@@ -42,6 +46,108 @@ function respondStorageError(next, err) {
   }
 
   return next(createHttpError(500, 'Failed to upload attachment'));
+}
+
+function streamRemoteAttachment({ objectKey, res, fallbackFilename, next }) {
+  let requestConfig;
+
+  try {
+    requestConfig = buildObjectDownloadRequest(objectKey);
+  } catch (err) {
+    if (err.code === 'SUPABASE_NOT_CONFIGURED') {
+      return next(
+        createHttpError(
+          500,
+          'Supabase storage is not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+        )
+      );
+    }
+
+    console.error('❌ Failed to prepare remote attachment request:', err.message);
+    next(createHttpError(500, 'Failed to download attachment'));
+    return;
+  }
+
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(requestConfig.url);
+  } catch (err) {
+    console.error('❌ Invalid download URL for attachment:', err.message);
+    next(createHttpError(500, 'Failed to download attachment'));
+    return;
+  }
+
+  const client = parsedUrl.protocol === 'http:' ? http : https;
+
+  const request = client.get(
+    requestConfig.url,
+    { headers: requestConfig.headers },
+    storageRes => {
+      const status = storageRes.statusCode || 0;
+
+      if (status >= 400) {
+        storageRes.resume();
+
+      let error;
+      if (status === 404) {
+        error = createHttpError(404, 'Attachment not found');
+      } else if (status === 401 || status === 403) {
+        error = createHttpError(403, 'Attachment download is no longer authorized');
+      } else {
+        error = createHttpError(502, 'Failed to download attachment from remote storage');
+      }
+
+      console.error(
+        `❌ Remote storage returned ${status} when downloading attachment: ${parsedUrl.pathname}`
+      );
+      next(error);
+      return;
+    }
+
+    const contentType = storageRes.headers['content-type'] || 'application/octet-stream';
+    const contentLength = storageRes.headers['content-length'];
+    const disposition = storageRes.headers['content-disposition'];
+
+    res.setHeader('Content-Type', contentType);
+
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength);
+    }
+
+    if (disposition) {
+      res.setHeader('Content-Disposition', disposition);
+    } else if (fallbackFilename) {
+      const sanitized = sanitize(fallbackFilename) || 'attachment';
+      res.setHeader('Content-Disposition', `attachment; filename="${sanitized}"`);
+    }
+
+    pipeline(storageRes, res, err => {
+      if (!err) {
+        return;
+      }
+
+      console.error('❌ Failed to stream attachment from remote storage:', err.message);
+
+      if (res.headersSent) {
+        res.destroy(err);
+      } else {
+        next(createHttpError(500, 'Failed to download attachment'));
+      }
+    });
+    }
+  );
+
+  request.on('error', err => {
+    console.error('❌ Error requesting remote attachment:', err.message);
+    next(createHttpError(502, 'Failed to download attachment from remote storage'));
+  });
+
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      request.destroy();
+    }
+  });
 }
 
 // 📥 Upload a file to a specific item
@@ -145,8 +251,12 @@ router.get('/:id/download', authenticateUser, async (req, res, next) => {
       );
     }
 
-    const signedUrl = await createSignedUrl(storedPath, { expiresIn: 120 });
-    return res.redirect(signedUrl);
+    return streamRemoteAttachment({
+      objectKey: storedPath,
+      res,
+      fallbackFilename: attachment.file_name || path.basename(storedPath) || 'attachment',
+      next,
+    });
   } catch (err) {
     console.error('❌ Failed to prepare attachment download:', err.message);
 

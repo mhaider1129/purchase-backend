@@ -321,6 +321,32 @@ async function removeObject(objectKey, { bucket } = {}) {
   }
 }
 
+function buildObjectDownloadRequest(objectKey, { bucket } = {}) {
+  const config = getStorageConfiguration();
+  ensureConfigured(config);
+
+  if (!objectKey) {
+    throw createStorageError('Missing storage object key', 'SUPABASE_MISSING_OBJECT');
+  }
+
+  const targetBucket = bucket ?? config.bucket;
+  if (!targetBucket) {
+    throw createStorageError(
+      'Supabase storage bucket name is not configured',
+      'SUPABASE_BUCKET_INVALID'
+    );
+  }
+
+  const encodedBucket = encodeURIComponent(targetBucket);
+  const encodedKey = encodeObjectKey(objectKey);
+  const downloadUrl = `${config.url}/storage/v1/object/authenticated/${encodedBucket}/${encodedKey}`;
+
+  return {
+    url: downloadUrl,
+    headers: buildAuthHeaders(config),
+  };
+}
+
 const exportsObject = {
   uploadBuffer,
   createSignedUrl,
@@ -328,6 +354,7 @@ const exportsObject = {
   buildObjectKey,
   isStorageConfigured,
   getStorageConfiguration,
+  buildObjectDownloadRequest,
   getDefaultBucket: () => getStorageConfiguration().bucket,
   getDefaultPrefix: () => getStorageConfiguration().prefix,
 };

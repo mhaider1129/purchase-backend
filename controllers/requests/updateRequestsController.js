@@ -1,24 +1,54 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
+const { sendEmail } = require('../../utils/emailService');
 const { assignApprover } = require('./createRequestController');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
-  if (!['SCM', 'admin'].includes(req.user.role))
+  if (!['SCM', 'admin'].includes(req.user.role)) {
     return next(createHttpError(403, 'Only SCM or Admin can assign requests'));
+  }
 
   try {
     const userCheck = await pool.query(
-      `SELECT id FROM users WHERE id = $1 AND role = 'ProcurementSpecialist'`,
+      `SELECT id, email, name
+         FROM users
+        WHERE id = $1
+          AND role = 'ProcurementSpecialist'
+          AND is_active = true`,
       [user_id],
     );
-    if (userCheck.rowCount === 0)
+    if (userCheck.rowCount === 0) {
       return next(createHttpError(400, 'Invalid procurement staff'));
+    }
+
+    const requestRes = await pool.query(
+      `SELECT id, request_type
+         FROM requests
+        WHERE id = $1`,
+      [request_id],
+    );
+
+    if (requestRes.rowCount === 0) {
+      return next(createHttpError(404, 'Request not found'));
+    }
 
     await pool.query(
       `UPDATE requests SET assigned_to = $1 WHERE id = $2`,
       [user_id, request_id],
     );
+
+    const assigneeEmail = userCheck.rows[0]?.email || null;
+    const assigneeName = userCheck.rows[0]?.name || 'Procurement Specialist';
+    const requestType = requestRes.rows[0]?.request_type || 'purchase';
+
+    if (assigneeEmail) {
+      await sendEmail(
+        assigneeEmail,
+        'New procurement assignment',
+        `Hello ${assigneeName},\n\nYou have been assigned to the ${requestType} request with ID ${request_id}.\nPlease log in to the procurement portal to review and take action.`,
+      );
+    }
 
     res.json({ message: '✅ Request assigned successfully' });
   } catch (err) {
@@ -343,6 +373,29 @@ const markRequestAsCompleted = async (req, res, next) => {
       );
     }
 
+    const requestRes = await client.query(
+      `SELECT
+         r.request_type,
+         r.department_id,
+         r.requester_id,
+         r.initiated_by_technician_id,
+         requester.email AS requester_email,
+         technician.email AS technician_email
+       FROM requests r
+       LEFT JOIN users requester ON requester.id = r.requester_id
+       LEFT JOIN users technician ON technician.id = r.initiated_by_technician_id
+       WHERE r.id = $1
+       FOR UPDATE`,
+      [id],
+    );
+
+    if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const requestRow = requestRes.rows[0];
+
     await client.query(
       `UPDATE requests
        SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
@@ -357,6 +410,34 @@ const markRequestAsCompleted = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+
+    const notifications = [];
+    if (requestRow.requester_email) {
+      notifications.push(
+        sendEmail(
+          requestRow.requester_email,
+          `Request ${id} completed`,
+          `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.\nYou can review the final details in the procurement portal.`,
+        ),
+      );
+    }
+
+    if (
+      requestRow.request_type === 'Maintenance' &&
+      requestRow.technician_email &&
+      requestRow.technician_email !== requestRow.requester_email
+    ) {
+      notifications.push(
+        sendEmail(
+          requestRow.technician_email,
+          `Maintenance request ${id} completed`,
+          `The maintenance request you initiated (ID: ${id}) has been marked as completed.\nPlease review the outcome with the requesting department.`,
+        ),
+      );
+    }
+
+    await Promise.all(notifications);
+
     res.json({ message: '✅ Request marked as completed' });
   } catch (err) {
     await client.query('ROLLBACK');

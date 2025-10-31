@@ -326,14 +326,34 @@ const handleApprovalDecision = async (req, res, next) => {
         INSERT INTO request_logs (request_id, action, actor_id, comments)
         VALUES ($1, $2, $3, NULL)
       `, [approval.request_id, `Request marked ${newStatus}`, approver_id]);
-    
-        if (request.requester_email) {
+
+      if (request.requester_email) {
+        await sendEmail(
+          request.requester_email,
+          `Your purchase request ${approval.request_id} has been ${newStatus}`,
+          `Your ${request.request_type} request (ID: ${approval.request_id}) has been ${newStatus.toLowerCase()}.\nLog in to view the full details.`,
+        );
+      }
+
+      if (newStatus === 'Approved') {
+        const { rows: scmRows } = await client.query(
+          `SELECT email
+             FROM users
+            WHERE role = 'SCM'
+              AND is_active = true
+              AND ($1::INT IS NULL OR department_id = $1)`,
+          [request.department_id || null],
+        );
+
+        const scmEmails = scmRows.map(row => row.email).filter(Boolean);
+        if (scmEmails.length > 0) {
           await sendEmail(
-            request.requester_email,
-            `Your purchase request ${approval.request_id} has been ${newStatus}`,
-            `Your ${request.request_type} request (ID: ${approval.request_id}) has been ${newStatus.toLowerCase()}.\nLog in to view the full details.`,
+            scmEmails,
+            `Request ${approval.request_id} fully approved`,
+            `All approvals for ${request.request_type} request ${approval.request_id} are complete.\nYou can proceed with procurement activities.`,
           );
         }
+      }
     }
 
     await client.query('COMMIT');

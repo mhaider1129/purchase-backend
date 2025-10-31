@@ -54,6 +54,61 @@ const convertTextToHtml = text =>
     })
     .join('\n');
 
+const toArray = value => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value == null) {
+    return [];
+  }
+  return [value];
+};
+
+const normalizeDocumentation = documentation => {
+  const docs = toArray(documentation);
+  const normalized = [];
+  let autoNameCounter = 1;
+
+  for (const doc of docs) {
+    if (!doc) continue;
+
+    if (typeof doc === 'string') {
+      const trimmed = doc.trim();
+      if (trimmed) {
+        normalized.push({ path: trimmed });
+      }
+      continue;
+    }
+
+    if (Buffer.isBuffer(doc)) {
+      normalized.push({ filename: `documentation-${autoNameCounter++}`, content: doc });
+      continue;
+    }
+
+    if (typeof doc === 'object') {
+      const entry = { ...doc };
+
+      Object.keys(entry).forEach(key => {
+        if (entry[key] === undefined) {
+          delete entry[key];
+        }
+      });
+
+      if (Object.keys(entry).length === 0) {
+        continue;
+      }
+
+      if (Buffer.isBuffer(entry.content) && !entry.filename) {
+        entry.filename = `documentation-${autoNameCounter++}`;
+      }
+
+      normalized.push(entry);
+    }
+  }
+
+  return normalized;
+};
+
 const sendEmail = async (to, subject, message, options = {}) => {
   const recipients = normalizeRecipients(to);
 
@@ -68,6 +123,7 @@ const sendEmail = async (to, subject, message, options = {}) => {
     replyTo,
     headers,
     attachments,
+    documentation,
     html,
     text,
     enableHtml = true,
@@ -103,8 +159,16 @@ const sendEmail = async (to, subject, message, options = {}) => {
     payload.html = htmlBody;
   }
 
-  if (Array.isArray(attachments) && attachments.length > 0) {
-    payload.attachments = attachments;
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments.filter(Boolean).map(attachment => ({ ...attachment }))
+    : [];
+
+  const documentationAttachments = normalizeDocumentation(documentation);
+
+  const hasAttachments = normalizedAttachments.length > 0 || documentationAttachments.length > 0;
+
+  if (hasAttachments) {
+    payload.attachments = [...normalizedAttachments, ...documentationAttachments];
   }
 
   Object.keys(payload).forEach(key => {
@@ -137,5 +201,6 @@ module.exports = {
   _private: {
     normalizeRecipients,
     convertTextToHtml,
+    normalizeDocumentation,
   },
 };

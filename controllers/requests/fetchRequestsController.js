@@ -591,6 +591,7 @@ const getPendingApprovals = async (req, res, next) => {
          r.justification,
          r.estimated_cost,
          r.status,
+         r.is_urgent,
          r.project_id,
          p.name AS project_name,
          d.name AS department_name,

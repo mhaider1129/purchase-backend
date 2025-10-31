@@ -15,11 +15,8 @@ const {
   serializeAttachment,
   isStoredLocally,
 } = require('../utils/attachmentPaths');
-const {
-  uploadBuffer,
-  createSignedUrl,
-  removeObject,
-} = require('../utils/storage');
+const { createSignedUrl, removeObject } = require('../utils/storage');
+const { storeAttachmentFile } = require('../utils/attachmentStorage');
 const sanitize = require('sanitize-filename');
 
 // 🔧 Local error helper
@@ -30,13 +27,7 @@ function createHttpError(statusCode, message) {
 }
 
 async function uploadAttachmentToStorage({ file, requestId, itemId }) {
-  const segments = [requestId ? `request-${requestId}` : 'general'];
-  if (itemId) {
-    segments.push(`item-${itemId}`);
-  }
-
-  const { objectKey } = await uploadBuffer({ file, segments });
-  return objectKey;
+  return storeAttachmentFile({ file, requestId, itemId });
 }
 
 function respondStorageError(next, err) {
@@ -71,13 +62,17 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
       );
     }
 
-    const storedPath = await uploadAttachmentToStorage({ file, requestId: null, itemId });
+    const { objectKey } = await uploadAttachmentToStorage({
+      file,
+      requestId: null,
+      itemId,
+    });
 
     const saved = await insertAttachment(pool, {
       requestId: null,
       itemId,
       fileName: file.originalname,
-      filePath: storedPath,
+      filePath: objectKey,
       uploadedBy: req.user.id,
     });
 
@@ -181,13 +176,17 @@ router.post('/:requestId', authenticateUser, upload.single('file'), async (req, 
   if (!file) return next(createHttpError(400, 'No file uploaded'));
 
   try {
-    const storedPath = await uploadAttachmentToStorage({ file, requestId, itemId: null });
+    const { objectKey } = await uploadAttachmentToStorage({
+      file,
+      requestId,
+      itemId: null,
+    });
 
     const saved = await insertAttachment(pool, {
       requestId,
       itemId: null,
       fileName: file.originalname,
-      filePath: storedPath,
+      filePath: objectKey,
       uploadedBy: req.user.id,
     });
 

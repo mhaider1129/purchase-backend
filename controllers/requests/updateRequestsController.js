@@ -76,6 +76,22 @@ const updateApprovalStatus = async (req, res, next) => {
     const currentApproval = approvalRes.rows[0];
     const request_id = currentApproval.request_id;
 
+    const requestInfoRes = await client.query(
+      `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent
+         FROM requests
+        WHERE id = $1
+        FOR UPDATE`,
+      [request_id],
+    );
+
+    if (requestInfoRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const requestRow = requestInfoRes.rows[0];
+    const wasAlreadyUrgent = requestRow.is_urgent === true;
+
     await client.query(
       `UPDATE approvals
        SET status = $1, is_active = false, approved_at = CURRENT_TIMESTAMP, comments = $2, is_urgent = COALESCE($3, is_urgent)
@@ -83,8 +99,22 @@ const updateApprovalStatus = async (req, res, next) => {
       [decision, comments, is_urgent, approval_id],
     );
 
-    if (is_urgent === true) {
-      await client.query(`UPDATE requests SET is_urgent = true WHERE id = $1`, [request_id]);
+    if (is_urgent === true && !wasAlreadyUrgent) {
+      await client.query(
+        `UPDATE requests
+            SET is_urgent = true,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+        [request_id],
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Marked as Urgent', $2, 'Request flagged as urgent by approver')`,
+        [request_id, approver_id],
+      );
+
+      requestRow.is_urgent = true;
     }
 
     await client.query(
@@ -93,13 +123,6 @@ const updateApprovalStatus = async (req, res, next) => {
       [request_id, decision, approver_id, comments],
     );
 
-    const reqRes = await client.query(
-      `SELECT request_type, department_id, request_domain, estimated_cost
-         FROM requests
-        WHERE id = $1`,
-      [request_id],
-    );
-    const requestRow = reqRes.rows[0];
     const { request_type, department_id } = requestRow;
 
     let effectiveEstimatedCost = Number(requestRow.estimated_cost) || 0;

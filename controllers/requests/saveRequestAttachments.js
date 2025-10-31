@@ -2,7 +2,7 @@ const {
   insertAttachment,
   attachmentsHasItemIdColumn,
 } = require("../../utils/attachmentSchema");
-const { uploadBuffer } = require("../../utils/storage");
+const { storeAttachmentFile } = require("../../utils/attachmentStorage");
 
 const ITEM_FIELD_PREFIX = "item_";
 
@@ -33,14 +33,10 @@ function groupUploadedFiles(files = []) {
 }
 
 async function uploadAndStoreAttachment({ client, file, requestId, itemId, requesterId }) {
-  const segments = [requestId ? `request-${requestId}` : "general"];
-  if (itemId) {
-    segments.push(`item-${itemId}`);
-  }
-
-  const { objectKey } = await uploadBuffer({
+  const { objectKey } = await storeAttachmentFile({
     file,
-    segments,
+    requestId,
+    itemId,
   });
 
   await insertAttachment(client, {
@@ -64,6 +60,13 @@ async function persistRequestAttachments({
   }
 
   if (!Array.isArray(files) || files.length === 0) {
+    return 0;
+  }
+
+  if (!isStorageConfigured()) {
+    console.warn(
+      "⚠️ Supabase storage is not configured; skipping attachment uploads while still creating the request.",
+    );
     return 0;
   }
 

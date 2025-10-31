@@ -105,6 +105,41 @@ describe('emailService', () => {
     );
   });
 
+  it('adds documentation attachments in addition to regular attachments', async () => {
+    process.env.EMAIL_HOST = 'smtp.example.com';
+    process.env.EMAIL_USER = 'mailer@example.com';
+
+    const bufferDoc = Buffer.from('buffer-doc');
+    const unnamedBuffer = Buffer.from('unnamed');
+
+    const { sendEmail } = loadService();
+
+    await sendEmail('recipient@example.com', 'Subject', 'Body', {
+      attachments: [{ filename: 'existing.txt', content: 'existing' }],
+      documentation: [
+        ' /tmp/manual.pdf ',
+        bufferDoc,
+        { filename: 'guide.txt', content: Buffer.from('guide') },
+        { content: unnamedBuffer },
+        null,
+      ],
+    });
+
+    expect(sendMailMock).toHaveBeenCalledTimes(1);
+    const payload = sendMailMock.mock.calls[0][0];
+
+    expect(payload.attachments).toHaveLength(5);
+    expect(payload.attachments[0]).toEqual({ filename: 'existing.txt', content: 'existing' });
+    expect(payload.attachments[1]).toEqual({ path: '/tmp/manual.pdf' });
+    expect(payload.attachments[2]).toMatchObject({ filename: 'documentation-1' });
+    expect(payload.attachments[2].content).toBe(bufferDoc);
+    expect(payload.attachments[3]).toMatchObject({ filename: 'guide.txt' });
+    expect(Buffer.isBuffer(payload.attachments[3].content)).toBe(true);
+    expect(payload.attachments[3].content.toString()).toBe('guide');
+    expect(payload.attachments[4]).toMatchObject({ filename: 'documentation-2' });
+    expect(payload.attachments[4].content).toBe(unnamedBuffer);
+  });
+
   it('logs and exits early when no transporter is configured', async () => {
     const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
 
@@ -120,5 +155,32 @@ describe('emailService', () => {
     );
 
     infoSpy.mockRestore();
+  });
+
+  describe('normalizeDocumentation', () => {
+    it('filters out invalid entries and normalizes strings', () => {
+      const { _private } = loadService();
+
+      const docs = _private.normalizeDocumentation(['', '   ', '/tmp/doc.pdf']);
+      expect(docs).toEqual([{ path: '/tmp/doc.pdf' }]);
+    });
+
+    it('assigns default filenames to buffers without one', () => {
+      const { _private } = loadService();
+
+      const bufferA = Buffer.from('a');
+      const bufferB = Buffer.from('b');
+
+      const docs = _private.normalizeDocumentation([
+        bufferA,
+        { content: bufferB },
+      ]);
+
+      expect(docs).toHaveLength(2);
+      expect(docs[0]).toMatchObject({ filename: 'documentation-1' });
+      expect(docs[0].content).toBe(bufferA);
+      expect(docs[1]).toMatchObject({ filename: 'documentation-2' });
+      expect(docs[1].content).toBe(bufferB);
+    });
   });
 });

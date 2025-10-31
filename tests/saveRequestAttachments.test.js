@@ -162,8 +162,13 @@ describe('saveRequestAttachments helper', () => {
     expect(attachmentsHasItemIdColumn).not.toHaveBeenCalled();
   });
 
-  it('skips uploads entirely when storage is not configured', async () => {
+  it('falls back to local storage when Supabase is not configured', async () => {
     isStorageConfigured.mockReturnValue(false);
+    storeAttachmentFile.mockResolvedValueOnce({
+      objectKey: 'uploads/request-22/file.doc.pdf',
+      storage: 'local',
+    });
+
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
     const stored = await persistRequestAttachments({
@@ -174,11 +179,17 @@ describe('saveRequestAttachments helper', () => {
       files: [{ fieldname: 'attachments', originalname: 'doc.pdf', buffer: Buffer.from('1') }],
     });
 
-    expect(stored).toBe(0);
+    expect(stored).toBe(1);
+    expect(storeAttachmentFile).toHaveBeenCalled();
     expect(uploadBuffer).not.toHaveBeenCalled();
-    expect(insertAttachment).not.toHaveBeenCalled();
+    expect(insertAttachment).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        filePath: 'uploads/request-22/file.doc.pdf',
+      })
+    );
     expect(warnSpy).toHaveBeenCalledWith(
-      '⚠️ Supabase storage is not configured; skipping attachment uploads while still creating the request.',
+      '⚠️ Supabase storage is not configured; storing attachments on the local filesystem.',
     );
 
     warnSpy.mockRestore();

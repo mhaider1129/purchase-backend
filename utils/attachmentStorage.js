@@ -1,5 +1,8 @@
+const path = require("path");
+const fs = require("fs/promises");
 const sanitize = require("sanitize-filename");
 
+const { UPLOADS_DIR } = require("./attachmentPaths");
 const { uploadBuffer, isStorageConfigured } = require("./storage");
 
 function buildSegments({ requestId = null, itemId = null } = {}) {
@@ -17,6 +20,26 @@ function sanitizeSegment(segment) {
   return sanitize(normalized) || "segment";
 }
 
+function buildLocalFileName(originalName) {
+  const base = sanitize(originalName || "attachment");
+  const timestamp = Date.now();
+  return `${timestamp}-${base || "attachment"}`;
+}
+
+async function storeLocally({ file, segments }) {
+  const relativeDirSegments = ["uploads", ...segments];
+  const absoluteDirPath = path.join(UPLOADS_DIR, ...segments);
+
+  await fs.mkdir(absoluteDirPath, { recursive: true });
+
+  const fileName = buildLocalFileName(file.originalname);
+  const absoluteFilePath = path.join(absoluteDirPath, fileName);
+  await fs.writeFile(absoluteFilePath, file.buffer);
+
+  const objectKey = path.posix.join(...relativeDirSegments, fileName);
+  return { objectKey, storage: "local" };
+}
+
 async function storeAttachmentFile({ file, requestId = null, itemId = null } = {}) {
   if (!file || !file.buffer || file.buffer.length === 0) {
     const error = new Error("Uploaded file is empty");
@@ -27,11 +50,7 @@ async function storeAttachmentFile({ file, requestId = null, itemId = null } = {
   const segments = buildSegments({ requestId, itemId }).map(sanitizeSegment);
 
   if (!isStorageConfigured()) {
-    const error = new Error(
-      "Supabase storage is not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
-    );
-    error.code = "SUPABASE_NOT_CONFIGURED";
-    throw error;
+    return storeLocally({ file, segments });
   }
 
   const result = await uploadBuffer({ file, segments });
@@ -40,4 +59,7 @@ async function storeAttachmentFile({ file, requestId = null, itemId = null } = {
 
 module.exports = {
   storeAttachmentFile,
+  buildSegments,
+  sanitizeSegment,
+  buildLocalFileName,
 };

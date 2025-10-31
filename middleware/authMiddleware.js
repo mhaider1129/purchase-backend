@@ -9,6 +9,25 @@ function createHttpError(statusCode, message) {
   return err;
 }
 
+function isDatabaseConnectivityError(err) {
+  if (!err) return false;
+
+  const connectionErrorCodes = new Set([
+    'ENOTFOUND',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EHOSTUNREACH',
+    'ETIMEDOUT',
+  ]);
+
+  if (err.code && connectionErrorCodes.has(err.code)) {
+    return true;
+  }
+
+  const message = typeof err.message === 'string' ? err.message : '';
+  return /(getaddrinfo|connect\s+ECONNREFUSED|ECONNRESET|timeout)/i.test(message);
+}
+
 // 🔐 JWT Authentication Middleware
 const authenticateUser = async (req, res, next) => {
   try {
@@ -58,6 +77,11 @@ const authenticateUser = async (req, res, next) => {
     next();
   } catch (err) {
     console.error('❌ Unexpected error in authenticateUser middleware:', err);
+
+    if (isDatabaseConnectivityError(err)) {
+      return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
+    }
+
     next(createHttpError(500, 'Authentication middleware failed'));
   }
 };

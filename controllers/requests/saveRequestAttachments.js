@@ -66,9 +66,8 @@ async function persistRequestAttachments({
 
   if (!isStorageConfigured()) {
     console.warn(
-      "⚠️ Supabase storage is not configured; skipping attachment uploads while still creating the request.",
+      "⚠️ Supabase storage is not configured; storing attachments on the local filesystem.",
     );
-    return 0;
   }
 
   const { requestFiles, itemFiles } = groupUploadedFiles(files);

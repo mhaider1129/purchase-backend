@@ -15,7 +15,7 @@ const {
   serializeAttachment,
   isStoredLocally,
 } = require('../utils/attachmentPaths');
-const { createSignedUrl, removeObject } = require('../utils/storage');
+const { createSignedUrl, removeObject, isStorageConfigured } = require('../utils/storage');
 const { storeAttachmentFile } = require('../utils/attachmentStorage');
 const sanitize = require('sanitize-filename');
 
@@ -131,6 +131,18 @@ router.get('/:id/download', authenticateUser, async (req, res, next) => {
         ? path.basename(storedPath)
         : sanitize(attachment.file_name || 'attachment');
       return res.redirect(`/api/attachments/download/${encodeURIComponent(filename)}`);
+    }
+
+    if (!isStorageConfigured()) {
+      console.warn(
+        '⚠️ Supabase storage is not configured; unable to prepare a download URL for remote attachments.'
+      );
+      return next(
+        createHttpError(
+          503,
+          'Attachment storage is not configured. Please contact the system administrator.'
+        )
+      );
     }
 
     const signedUrl = await createSignedUrl(storedPath, { expiresIn: 120 });

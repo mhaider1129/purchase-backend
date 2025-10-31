@@ -3,6 +3,11 @@ jest.mock('../utils/attachmentSchema', () => ({
   attachmentsHasItemIdColumn: jest.fn(),
 }));
 
+jest.mock('../utils/storage', () => ({
+  uploadBuffer: jest.fn(),
+  isStorageConfigured: jest.fn(() => true),
+}));
+
 jest.mock('../utils/attachmentStorage', () => ({
   storeAttachmentFile: jest.fn(async ({ file }) => ({
     objectKey: `stored:${file.originalname}`,
@@ -15,6 +20,8 @@ const {
   insertAttachment,
   attachmentsHasItemIdColumn,
 } = require('../utils/attachmentSchema');
+
+const { uploadBuffer, isStorageConfigured } = require('../utils/storage');
 
 const {
   persistRequestAttachments,

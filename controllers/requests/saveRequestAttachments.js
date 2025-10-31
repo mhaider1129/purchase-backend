@@ -3,6 +3,7 @@ const {
   attachmentsHasItemIdColumn,
 } = require("../../utils/attachmentSchema");
 const { storeAttachmentFile } = require("../../utils/attachmentStorage");
+const { isStorageConfigured } = require("../../utils/storage");
 
 const ITEM_FIELD_PREFIX = "item_";
 

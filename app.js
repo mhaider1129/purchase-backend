@@ -88,9 +88,19 @@ const envConfiguredOrigins = [
   .filter(Boolean)
   .flatMap(value => parseOrigins(value));
 
+const lanIP = getLANIP();
+const lanOrigins = [];
+
+if (lanIP && lanIP !== '0.0.0.0') {
+  ['3000', '5173'].forEach(port => {
+    lanOrigins.push(`http://${lanIP}:${port}`);
+    lanOrigins.push(`https://${lanIP}:${port}`);
+  });
+}
+
 const allowedOrigins = Array.from(
   new Set(
-    [...defaultAllowedOrigins, ...envConfiguredOrigins]
+    [...defaultAllowedOrigins, ...envConfiguredOrigins, ...lanOrigins]
       .filter(Boolean)
       .map(normalizeOrigin)
   )

@@ -3,49 +3,41 @@ const path = require('path');
 const BACKEND_ROOT = path.join(__dirname, '..');
 const UPLOADS_DIR = path.join(BACKEND_ROOT, 'uploads');
 
-function normalizeRelativeUploadsPath(absolutePath) {
-  const relativeToUploads = path.relative(UPLOADS_DIR, absolutePath);
-  if (relativeToUploads && !relativeToUploads.startsWith('..')) {
-    return relativeToUploads.replace(/\\/g, '/');
-  }
-
-  return path.basename(absolutePath);
-}
-
-function toStoredPath(filePath) {
-  if (!filePath) return '';
-
-  const absolutePath = path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(BACKEND_ROOT, filePath);
-
-  const normalizedRelative = normalizeRelativeUploadsPath(absolutePath);
-  return path.join('uploads', normalizedRelative).replace(/\\/g, '/');
+function isStoredLocally(storedPath = '') {
+  if (!storedPath) return false;
+  const normalized = storedPath.replace(/\\/g, '/');
+  return normalized.startsWith('uploads/');
 }
 
 function serializeAttachment(row) {
   if (!row) return row;
 
-  const storedPath = row.file_path || '';
-  const absolutePath = path.isAbsolute(storedPath)
-    ? storedPath
-    : path.resolve(BACKEND_ROOT, storedPath);
+  const storedPath = (row.file_path || '').replace(/\\/g, '/');
+  const isLocal = isStoredLocally(storedPath);
+  const filename = row.file_name || (storedPath ? path.basename(storedPath) : 'attachment');
 
-  const normalizedRelative = normalizeRelativeUploadsPath(absolutePath);
-  const normalizedPath = path.join('uploads', normalizedRelative).replace(/\\/g, '/');
-  const filename = path.basename(normalizedRelative);
+  let fileUrl = null;
+  let downloadUrl = null;
+
+  if (isLocal && storedPath) {
+    fileUrl = `/${storedPath}`;
+    downloadUrl = `/api/attachments/download/${encodeURIComponent(path.basename(storedPath))}`;
+  } else if (row.id) {
+    downloadUrl = `/api/attachments/${row.id}/download`;
+  }
 
   return {
     ...row,
-    file_path: normalizedPath,
-    file_url: `/${normalizedPath}`,
-    download_url: `/api/attachments/download/${encodeURIComponent(filename)}`,
+    file_path: storedPath,
+    file_url: fileUrl,
+    download_url: downloadUrl,
+    file_name: filename,
   };
 }
 
 module.exports = {
   BACKEND_ROOT,
   UPLOADS_DIR,
-  toStoredPath,
   serializeAttachment,
+  isStoredLocally,
 };

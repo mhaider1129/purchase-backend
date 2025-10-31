@@ -3,8 +3,17 @@ jest.mock('../utils/attachmentSchema', () => ({
   attachmentsHasItemIdColumn: jest.fn(),
 }));
 
-jest.mock('../utils/attachmentPaths', () => ({
-  toStoredPath: jest.fn((input) => `stored:${input}`),
+jest.mock('../utils/storage', () => ({
+  uploadBuffer: jest.fn(),
+  isStorageConfigured: jest.fn(() => true),
+}));
+
+jest.mock('../utils/attachmentStorage', () => ({
+  storeAttachmentFile: jest.fn(async ({ file }) => ({
+    objectKey: `stored:${file.originalname}`,
+    storage: 'supabase',
+    bucket: 'attachments',
+  })),
 }));
 
 const {
@@ -12,14 +21,19 @@ const {
   attachmentsHasItemIdColumn,
 } = require('../utils/attachmentSchema');
 
+const { uploadBuffer, isStorageConfigured } = require('../utils/storage');
+
 const {
   persistRequestAttachments,
   groupUploadedFiles,
 } = require('../controllers/requests/saveRequestAttachments');
 
+const { storeAttachmentFile } = require('../utils/attachmentStorage');
+
 describe('saveRequestAttachments helper', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    isStorageConfigured.mockReturnValue(true);
   });
 
   it('groups uploaded files by request and item fields', () => {
@@ -47,7 +61,7 @@ describe('saveRequestAttachments helper', () => {
 
     const client = { id: 'mock-client' };
     const files = [
-      { fieldname: 'item_0', originalname: 'quote.pdf', path: '/tmp/quote.pdf' },
+      { fieldname: 'item_0', originalname: 'quote.pdf', buffer: Buffer.from('file') },
     ];
 
     const stored = await persistRequestAttachments({
@@ -59,13 +73,20 @@ describe('saveRequestAttachments helper', () => {
     });
 
     expect(stored).toBe(1);
+    expect(storeAttachmentFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: expect.objectContaining({ originalname: 'quote.pdf' }),
+        requestId: 101,
+        itemId: null,
+      })
+    );
     expect(insertAttachment).toHaveBeenCalledWith(
       client,
       expect.objectContaining({
         requestId: 101,
         itemId: null,
         fileName: 'quote.pdf',
-        filePath: 'stored:/tmp/quote.pdf',
+        filePath: 'stored:quote.pdf',
         uploadedBy: 12,
       }),
     );
@@ -76,7 +97,7 @@ describe('saveRequestAttachments helper', () => {
 
     const client = { id: 'mock-client' };
     const files = [
-      { fieldname: 'item_0', originalname: 'image.png', path: '/tmp/image.png' },
+      { fieldname: 'item_0', originalname: 'image.png', buffer: Buffer.from('file') },
     ];
 
     const stored = await persistRequestAttachments({
@@ -88,13 +109,20 @@ describe('saveRequestAttachments helper', () => {
     });
 
     expect(stored).toBe(1);
+    expect(storeAttachmentFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: expect.objectContaining({ originalname: 'image.png' }),
+        requestId: 77,
+        itemId: 9001,
+      })
+    );
     expect(insertAttachment).toHaveBeenCalledWith(
       client,
       expect.objectContaining({
         requestId: 77,
         itemId: 9001,
         fileName: 'image.png',
-        filePath: 'stored:/tmp/image.png',
+        filePath: 'stored:image.png',
         uploadedBy: 3,
       }),
     );
@@ -105,7 +133,7 @@ describe('saveRequestAttachments helper', () => {
 
     const client = { id: 'mock-client' };
     const files = [
-      { fieldname: 'item_5', originalname: 'extra.txt', path: '/tmp/extra.txt' },
+      { fieldname: 'item_5', originalname: 'extra.txt', buffer: Buffer.from('file') },
     ];
 
     const stored = await persistRequestAttachments({
@@ -133,4 +161,38 @@ describe('saveRequestAttachments helper', () => {
     expect(insertAttachment).not.toHaveBeenCalled();
     expect(attachmentsHasItemIdColumn).not.toHaveBeenCalled();
   });
+
+  it('falls back to local storage when Supabase is not configured', async () => {
+    isStorageConfigured.mockReturnValue(false);
+    storeAttachmentFile.mockResolvedValueOnce({
+      objectKey: 'uploads/request-22/file.doc.pdf',
+      storage: 'local',
+    });
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const stored = await persistRequestAttachments({
+      client: {},
+      requestId: 22,
+      requesterId: 5,
+      itemIdMap: {},
+      files: [{ fieldname: 'attachments', originalname: 'doc.pdf', buffer: Buffer.from('1') }],
+    });
+
+    expect(stored).toBe(1);
+    expect(storeAttachmentFile).toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+    expect(insertAttachment).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        filePath: 'uploads/request-22/file.doc.pdf',
+      })
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      '⚠️ Supabase storage is not configured; storing attachments on the local filesystem.',
+    );
+
+    warnSpy.mockRestore();
+  });
+
 });

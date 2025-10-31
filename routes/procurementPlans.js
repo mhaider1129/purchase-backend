@@ -7,6 +7,7 @@ const {
   getPlans,
   getPlanById,
   getPlanForRequest,
+  downloadPlan,
 } = require('../controllers/procurement/plansController');
 
 router.use(authenticateUser);
@@ -14,6 +15,7 @@ router.use(authenticateUser);
 router.post('/', upload.single('plan'), uploadPlan);
 router.get('/', getPlans);
 router.get('/request/:id', getPlanForRequest);
+router.get('/:id/download', downloadPlan);
 router.get('/:id', getPlanById);
 
 module.exports = router;

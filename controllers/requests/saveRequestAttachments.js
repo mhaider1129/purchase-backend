@@ -2,7 +2,8 @@ const {
   insertAttachment,
   attachmentsHasItemIdColumn,
 } = require("../../utils/attachmentSchema");
-const { toStoredPath } = require("../../utils/attachmentPaths");
+const { storeAttachmentFile } = require("../../utils/attachmentStorage");
+const { isStorageConfigured } = require("../../utils/storage");
 
 const ITEM_FIELD_PREFIX = "item_";
 
@@ -32,6 +33,22 @@ function groupUploadedFiles(files = []) {
   return { requestFiles, itemFiles };
 }
 
+async function uploadAndStoreAttachment({ client, file, requestId, itemId, requesterId }) {
+  const { objectKey } = await storeAttachmentFile({
+    file,
+    requestId,
+    itemId,
+  });
+
+  await insertAttachment(client, {
+    requestId,
+    itemId,
+    fileName: file.originalname,
+    filePath: objectKey,
+    uploadedBy: requesterId,
+  });
+}
+
 async function persistRequestAttachments({
   client,
   requestId,
@@ -47,16 +64,22 @@ async function persistRequestAttachments({
     return 0;
   }
 
+  if (!isStorageConfigured()) {
+    console.warn(
+      "⚠️ Supabase storage is not configured; storing attachments on the local filesystem.",
+    );
+  }
+
   const { requestFiles, itemFiles } = groupUploadedFiles(files);
   let storedCount = 0;
 
   for (const file of requestFiles) {
-    await insertAttachment(client, {
+    await uploadAndStoreAttachment({
+      client,
+      file,
       requestId,
       itemId: null,
-      fileName: file.originalname,
-      filePath: toStoredPath(file.path),
-      uploadedBy: requesterId,
+      requesterId,
     });
     storedCount += 1;
   }
@@ -79,12 +102,12 @@ async function persistRequestAttachments({
     }
 
     for (const file of filesForItem) {
-      await insertAttachment(client, {
+      await uploadAndStoreAttachment({
+        client,
+        file,
         requestId,
         itemId: mappedItemId,
-        fileName: file.originalname,
-        filePath: toStoredPath(file.path),
-        uploadedBy: requesterId,
+        requesterId,
       });
       storedCount += 1;
     }

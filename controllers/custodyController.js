@@ -247,6 +247,35 @@ const getPendingCustodyApprovals = async (req, res, next) => {
   }
 };
 
+const listIssuedCustodies = async (req, res, next) => {
+  try {
+    ensureWarehouseRole(req);
+  } catch (err) {
+    return next(err);
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT cr.*,
+              issuer.name AS issued_by_name,
+              custodian.name AS custodian_name,
+              dept.name AS custodian_department_name,
+              hod.name AS hod_name
+         FROM custody_records cr
+         LEFT JOIN users issuer ON issuer.id = cr.issued_by
+         LEFT JOIN users custodian ON custodian.id = cr.custodian_user_id
+         LEFT JOIN departments dept ON dept.id = cr.custodian_department_id
+         LEFT JOIN users hod ON hod.id = cr.hod_user_id
+        ORDER BY cr.created_at DESC`,
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch issued custodies:', err);
+    next(createHttpError(500, 'Failed to load issued custodies'));
+  }
+};
+
 const actOnCustodyRecord = async (req, res, next) => {
   const { id } = req.params;
   const { decision } = req.body || {};
@@ -383,6 +412,7 @@ const searchCustodyRecipients = async (req, res, next) => {
 module.exports = {
   createCustodyRecord,
   getPendingCustodyApprovals,
+  listIssuedCustodies,
   actOnCustodyRecord,
   searchCustodyRecipients,
 };

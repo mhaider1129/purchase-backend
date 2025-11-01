@@ -209,6 +209,7 @@ const projectsRoutes = require('./routes/projects');
 const custodyRoutes = require('./routes/custody');
 const itemRecallsRoutes = require('./routes/itemRecalls');
 const contractsRoutes = require('./routes/contracts');
+const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
 
 const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -243,6 +244,7 @@ app.use('/api/warehouse-supply-templates', authenticateUser, warehouseSupplyTemp
 app.use('/api/projects', authenticateUser, projectsRoutes);
 app.use('/api/custody', authenticateUser, custodyRoutes);
 app.use('/api/contracts', authenticateUser, contractsRoutes);
+app.use('/api/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
 
 // =========================
 // 🛠️ Utility Routes

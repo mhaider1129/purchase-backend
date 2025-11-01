@@ -1,0 +1,19 @@
+const express = require('express');
+
+const {
+  listSupplierEvaluations,
+  getSupplierEvaluationById,
+  createSupplierEvaluation,
+  updateSupplierEvaluation,
+  deleteSupplierEvaluation,
+} = require('../controllers/supplierEvaluationsController');
+
+const router = express.Router();
+
+router.get('/', listSupplierEvaluations);
+router.get('/:id', getSupplierEvaluationById);
+router.post('/', createSupplierEvaluation);
+router.put('/:id', updateSupplierEvaluation);
+router.delete('/:id', deleteSupplierEvaluation);
+
+module.exports = router;

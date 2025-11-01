@@ -207,6 +207,8 @@ const approvalRoutesRoutes = require('./routes/approvalRoutes');
 const warehouseSupplyTemplatesRoutes = require('./routes/warehouseSupplyTemplates');
 const projectsRoutes = require('./routes/projects');
 const custodyRoutes = require('./routes/custody');
+const itemRecallsRoutes = require('./routes/itemRecalls');
+const contractsRoutes = require('./routes/contracts');
 
 const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -234,11 +236,13 @@ app.use('/api/maintenance-stock', authenticateUser, maintenanceStockRoutes);
 app.use('/api/procurement-plans', authenticateUser, procurementPlansRoutes);
 app.use('/api/stock-items', authenticateUser, stockItemsRoutes);
 app.use('/api/stock-item-requests', authenticateUser, stockItemRequestsRoutes);
+app.use('/api/item-recalls', authenticateUser, itemRecallsRoutes);
 app.use('/api/warehouse-supply', authenticateUser, warehouseSupplyRoutes);
 app.use('/api/approval-routes', authenticateUser, approvalRoutesRoutes);
 app.use('/api/warehouse-supply-templates', authenticateUser, warehouseSupplyTemplatesRoutes);
 app.use('/api/projects', authenticateUser, projectsRoutes);
 app.use('/api/custody', authenticateUser, custodyRoutes);
+app.use('/api/contracts', authenticateUser, contractsRoutes);
 
 // =========================
 // 🛠️ Utility Routes

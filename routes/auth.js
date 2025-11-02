@@ -406,6 +406,20 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     });
   } catch (err) {
     await client.query('ROLLBACK');
+
+    if (err && err.code === '23505') {
+      const constraint = err.constraint || '';
+      let message = 'A user with this email or employee ID already exists';
+
+      if (constraint.includes('email')) {
+        message = 'A user with this email already exists';
+      } else if (constraint.includes('employee_id')) {
+        message = 'Employee ID is already assigned to another user';
+      }
+
+      return res.status(409).json({ success: false, message });
+    }
+
     console.error('❌ Approve register request error:', err);
     return res.status(500).json({ success: false, message: 'Failed to approve account request' });
   } finally {

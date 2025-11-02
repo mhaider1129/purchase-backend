@@ -95,7 +95,12 @@ const parseContractValue = (value) => {
 
 const canManageContracts = (req) => {
   const role = (req.user?.role || '').toUpperCase();
-  return role === 'SCM' || role === 'ADMIN' || role === 'PROCUREMENTSPECIALIST';
+  return (
+    role === 'SCM' ||
+    role === 'ADMIN' ||
+    role === 'PROCUREMENTSPECIALIST' ||
+    role === 'COO'
+  );
 };
 
 const toISODateString = (value) => {

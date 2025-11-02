@@ -618,10 +618,20 @@ const getPendingApprovals = async (req, res, next) => {
 const getMyMaintenanceRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT id, justification, maintenance_ref_number, status, created_at, project_id
-       FROM requests
-       WHERE request_type = 'Maintenance' AND initiated_by_technician_id = $1
-       ORDER BY created_at DESC`,
+      `SELECT
+         r.id,
+         r.justification,
+         r.maintenance_ref_number,
+         r.status,
+         r.created_at,
+         r.project_id,
+         r.is_urgent,
+         p.name AS project_name
+       FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
+       WHERE r.request_type = 'Maintenance'
+         AND r.initiated_by_technician_id = $1
+       ORDER BY r.created_at DESC`,
       [req.user.id],
     );
     res.json(result.rows);
@@ -639,6 +649,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          r.id AS request_id,
          r.justification,
          r.maintenance_ref_number,
+         r.is_urgent,
          COALESCE(r.temporary_requester_name, u.name) AS requester_name,
          d.name AS department_name,
          s.name AS section_name,
@@ -647,7 +658,21 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          p.name AS project_name,
          COALESCE(
            JSON_AGG(
-             JSON_BUILD_OBJECT('item_name', ri.item_name, 'quantity', ri.quantity)
+             JSON_BUILD_OBJECT(
+               'id', ri.id,
+               'item_name', ri.item_name,
+               'brand', ri.brand,
+               'quantity', ri.quantity,
+               'available_quantity', ri.available_quantity,
+               'unit_cost', ri.unit_cost,
+               'total_cost', ri.total_cost,
+               'specs', ri.specs,
+               'approval_status', ri.approval_status,
+               'approval_comments', ri.approval_comments,
+               'approved_by', ri.approved_by,
+               'approved_at', ri.approved_at
+             )
+             ORDER BY ri.id
            ) FILTER (WHERE ri.id IS NOT NULL),
            '[]'
          ) AS items

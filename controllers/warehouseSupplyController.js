@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
 
 // Record supplied items for a request
 const recordSuppliedItems = async (req, res, next) => {
@@ -71,7 +72,51 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
        ORDER BY r.created_at DESC`,
       [domain]
     );
-    res.json(result.rows);
+    const requests = result.rows;
+
+    if (requests.length === 0) {
+      return res.json(requests);
+    }
+
+    await ensureRequestedItemApprovalColumns();
+
+    const requestIds = requests.map((request) => request.id);
+    const itemsResult = await pool.query(
+      `SELECT
+         request_id,
+         id,
+         item_name,
+         brand,
+         quantity,
+         available_quantity,
+         purchased_quantity,
+         unit_cost,
+         total_cost,
+         specs,
+         approval_status,
+         approval_comments,
+         approved_by,
+         approved_at
+       FROM public.requested_items
+       WHERE request_id = ANY($1::int[])
+       ORDER BY request_id, id`,
+      [requestIds],
+    );
+
+    const itemsByRequest = itemsResult.rows.reduce((acc, item) => {
+      if (!acc[item.request_id]) {
+        acc[item.request_id] = [];
+      }
+      acc[item.request_id].push(item);
+      return acc;
+    }, {});
+
+    const enrichedRequests = requests.map((request) => ({
+      ...request,
+      items: itemsByRequest[request.id] || [],
+    }));
+
+    res.json(enrichedRequests);
   } catch (err) {
     console.error('❌ Failed to fetch warehouse supply requests:', err);
     next(createHttpError(500, 'Failed to fetch warehouse supply requests'));

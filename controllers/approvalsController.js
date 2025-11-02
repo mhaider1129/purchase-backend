@@ -32,7 +32,7 @@ const handleApprovalDecision = async (req, res, next) => {
     return next(createHttpError(400, 'Invalid approval ID'));
   }
   const approvalId = Number(id);
-  const { status, comments } = req.body;
+  const { status, comments, is_urgent } = req.body;
   // authMiddleware exposes the logged in user's id as `id`
   const approver_id = req.user.id;
   const user_role = req.user.role;
@@ -109,15 +109,48 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     // 6. Update Approval Decision
+    const shouldMarkUrgent = (() => {
+      if (is_urgent === undefined || is_urgent === null) return false;
+      if (typeof is_urgent === 'boolean') return is_urgent;
+      if (typeof is_urgent === 'number') return is_urgent !== 0;
+      if (typeof is_urgent === 'string') {
+        const normalized = is_urgent.trim().toLowerCase();
+        if (normalized === '') return false;
+        return ['true', '1', 'yes', 'y', 'on', 'urgent'].includes(normalized);
+      }
+      return false;
+    })();
+
     await client.query(
       `UPDATE approvals
       SET status = $1,
           comments = $2,
           approved_at = NOW(),
-          is_active = FALSE
+          is_active = FALSE,
+          is_urgent = CASE WHEN $4 THEN TRUE ELSE is_urgent END
           WHERE id = $3`,
-      [status, comments || null, approvalId]
+      [status, comments || null, approvalId, shouldMarkUrgent]
     );
+
+    const wasAlreadyUrgent = request.is_urgent === true;
+
+    if (shouldMarkUrgent && !wasAlreadyUrgent) {
+      await client.query(
+        `UPDATE requests
+            SET is_urgent = TRUE,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [approval.request_id]
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Marked as Urgent', $2, 'Request flagged as urgent by approver')`,
+        [approval.request_id, approver_id]
+      );
+
+      request.is_urgent = true;
+    }
 
     // 7. Insert Audit Logs
     await client.query(`

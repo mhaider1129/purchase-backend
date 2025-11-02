@@ -686,23 +686,43 @@ const updateApprovalItems = async (req, res, next) => {
 const getApprovalDetailsForRequest = async (req, res, next) => {
   const { request_id } = req.params;
 
+  if (!/^\d+$/.test(String(request_id))) {
+    return next(createHttpError(400, 'Invalid request id'));
+  }
+
   try {
-    const result = await pool.query(`
-      SELECT 
+    const result = await pool.query(
+      `
+      SELECT
         a.approval_level,
         a.status,
         a.comments,
         a.approved_at,
-        u.name AS approver_name,
-        u.role
+        COALESCE(
+          u.name,
+          CASE
+            WHEN a.approver_id IS NULL AND a.status = 'Approved' THEN 'Auto-approved'
+            ELSE NULL
+          END
+        ) AS approver_name,
+        COALESCE(
+          u.role,
+          CASE
+            WHEN a.approver_id IS NULL AND a.status = 'Approved' THEN 'System'
+            ELSE NULL
+          END
+        ) AS role
       FROM approvals a
-      JOIN users u ON a.approver_id = u.id
+      LEFT JOIN users u ON a.approver_id = u.id
       WHERE a.request_id = $1
       ORDER BY a.approval_level ASC
-    `, [request_id]);
+    `,
+      [request_id],
+    );
 
     res.json(result.rows);
   } catch (err) {
+    console.error('❌ Failed to retrieve approval summary:', err);
     next(createHttpError(500, 'Failed to retrieve approval summary'));
   }
 };

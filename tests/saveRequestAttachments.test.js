@@ -1,6 +1,7 @@
 jest.mock('../utils/attachmentSchema', () => ({
   insertAttachment: jest.fn(),
   attachmentsHasItemIdColumn: jest.fn(),
+  ensureAttachmentsItemIdColumn: jest.fn(() => Promise.resolve(true)),
 }));
 
 jest.mock('../utils/storage', () => ({
@@ -19,6 +20,7 @@ jest.mock('../utils/attachmentStorage', () => ({
 const {
   insertAttachment,
   attachmentsHasItemIdColumn,
+  ensureAttachmentsItemIdColumn,
 } = require('../utils/attachmentSchema');
 
 const { uploadBuffer, isStorageConfigured } = require('../utils/storage');
@@ -34,6 +36,7 @@ describe('saveRequestAttachments helper', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     isStorageConfigured.mockReturnValue(true);
+    ensureAttachmentsItemIdColumn.mockResolvedValue(true);
   });
 
   it('groups uploaded files by request and item fields', () => {
@@ -73,6 +76,7 @@ describe('saveRequestAttachments helper', () => {
     });
 
     expect(stored).toBe(1);
+    expect(ensureAttachmentsItemIdColumn).toHaveBeenCalledWith(client);
     expect(storeAttachmentFile).toHaveBeenCalledWith(
       expect.objectContaining({
         file: expect.objectContaining({ originalname: 'quote.pdf' }),
@@ -109,6 +113,7 @@ describe('saveRequestAttachments helper', () => {
     });
 
     expect(stored).toBe(1);
+    expect(ensureAttachmentsItemIdColumn).toHaveBeenCalledWith(client);
     expect(storeAttachmentFile).toHaveBeenCalledWith(
       expect.objectContaining({
         file: expect.objectContaining({ originalname: 'image.png' }),
@@ -145,6 +150,7 @@ describe('saveRequestAttachments helper', () => {
     });
 
     expect(stored).toBe(0);
+    expect(ensureAttachmentsItemIdColumn).toHaveBeenCalledWith(client);
     expect(insertAttachment).not.toHaveBeenCalled();
   });
 
@@ -160,6 +166,7 @@ describe('saveRequestAttachments helper', () => {
     expect(stored).toBe(0);
     expect(insertAttachment).not.toHaveBeenCalled();
     expect(attachmentsHasItemIdColumn).not.toHaveBeenCalled();
+    expect(ensureAttachmentsItemIdColumn).not.toHaveBeenCalled();
   });
 
   it('falls back to local storage when Supabase is not configured', async () => {

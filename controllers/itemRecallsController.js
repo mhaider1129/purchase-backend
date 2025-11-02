@@ -41,7 +41,7 @@ const fetchStockItemName = async itemId => {
   );
 
   if (rows.length === 0) {
-    throw createHttpError(404, 'Referenced stock item not found');
+    return null;
   }
 
   return rows[0].name;
@@ -80,7 +80,16 @@ const createDepartmentRecallRequest = async (req, res, next) => {
   let itemName = sanitizeString(rawItemName);
   try {
     if (itemId !== null) {
-      itemName = await fetchStockItemName(itemId);
+      const fetchedName = await fetchStockItemName(itemId);
+      if (fetchedName) {
+        itemName = fetchedName;
+      } else {
+        console.warn(
+          '⚠️ Stock item not found during recall request; falling back to provided name',
+          { itemId },
+        );
+        itemId = null;
+      }
     }
   } catch (err) {
     if (err.statusCode) {
@@ -188,7 +197,16 @@ const createWarehouseRecallRequest = async (req, res, next) => {
   let itemName = sanitizeString(rawItemName);
   try {
     if (itemId !== null) {
-      itemName = await fetchStockItemName(itemId);
+      const fetchedName = await fetchStockItemName(itemId);
+      if (fetchedName) {
+        itemName = fetchedName;
+      } else {
+        console.warn(
+          '⚠️ Stock item not found during warehouse recall; falling back to provided name',
+          { itemId },
+        );
+        itemId = null;
+      }
     }
   } catch (err) {
     if (err.statusCode) {

@@ -1,5 +1,7 @@
 const ATTACHMENTS_TABLE = 'attachments';
 const ATTACHMENTS_SCHEMA = 'public';
+const ITEM_ID_COLUMN = 'item_id';
+const ITEM_ID_INDEX = 'attachments_item_id_idx';
 
 let attachmentItemIdSupported = null;
 
@@ -7,9 +9,17 @@ function resetAttachmentsItemIdSupportCache() {
   attachmentItemIdSupported = null;
 }
 
+function markItemIdSupport(value) {
+  attachmentItemIdSupported = value ? true : false;
+}
+
 async function attachmentsHasItemIdColumn(queryable) {
   if (attachmentItemIdSupported === true) {
     return true;
+  }
+
+  if (attachmentItemIdSupported === false) {
+    return false;
   }
 
   try {
@@ -18,15 +28,13 @@ async function attachmentsHasItemIdColumn(queryable) {
          FROM information_schema.columns
         WHERE table_schema = $1
           AND table_name = $2
-          AND column_name = 'item_id'
+          AND column_name = $3
         LIMIT 1`,
-      [ATTACHMENTS_SCHEMA, ATTACHMENTS_TABLE]
+      [ATTACHMENTS_SCHEMA, ATTACHMENTS_TABLE, ITEM_ID_COLUMN]
     );
     const supported = rows.length > 0;
 
-    if (supported) {
-      attachmentItemIdSupported = true;
-    }
+    markItemIdSupport(supported);
 
     return supported;
   } catch (err) {
@@ -35,6 +43,36 @@ async function attachmentsHasItemIdColumn(queryable) {
   }
 
   return true;
+}
+
+async function ensureAttachmentsItemIdColumn(queryable) {
+  const supported = await attachmentsHasItemIdColumn(queryable);
+
+  if (supported) {
+    return true;
+  }
+
+  try {
+    await queryable.query(
+      `ALTER TABLE ${ATTACHMENTS_SCHEMA}.${ATTACHMENTS_TABLE}
+         ADD COLUMN IF NOT EXISTS ${ITEM_ID_COLUMN} BIGINT
+         REFERENCES public.requested_items(id)
+         ON DELETE SET NULL`
+    );
+
+    await queryable.query(
+      `CREATE INDEX IF NOT EXISTS ${ITEM_ID_INDEX}
+         ON ${ATTACHMENTS_SCHEMA}.${ATTACHMENTS_TABLE} (${ITEM_ID_COLUMN})`
+    );
+
+    resetAttachmentsItemIdSupportCache();
+  } catch (err) {
+    console.error('⚠️ Failed to ensure attachments.item_id column:', err.message);
+    markItemIdSupport(false);
+    return false;
+  }
+
+  return attachmentsHasItemIdColumn(queryable);
 }
 
 async function insertAttachment(queryable, { requestId = null, itemId = null, fileName, filePath, uploadedBy }) {
@@ -69,5 +107,6 @@ async function insertAttachment(queryable, { requestId = null, itemId = null, fi
 module.exports = {
   insertAttachment,
   attachmentsHasItemIdColumn,
+  ensureAttachmentsItemIdColumn,
   resetAttachmentsItemIdSupportCache,
 };

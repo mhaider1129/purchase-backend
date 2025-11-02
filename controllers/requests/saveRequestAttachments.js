@@ -1,6 +1,7 @@
 const {
   insertAttachment,
   attachmentsHasItemIdColumn,
+  ensureAttachmentsItemIdColumn,
 } = require("../../utils/attachmentSchema");
 const { storeAttachmentFile } = require("../../utils/attachmentStorage");
 const { isStorageConfigured } = require("../../utils/storage");
@@ -83,6 +84,8 @@ async function persistRequestAttachments({
     });
     storedCount += 1;
   }
+
+  await ensureAttachmentsItemIdColumn(client);
 
   const supportsItemAttachments = await attachmentsHasItemIdColumn(client);
 

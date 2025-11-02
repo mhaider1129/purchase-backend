@@ -129,6 +129,88 @@ const createRequest = async (req, res, next) => {
 
   if (!Array.isArray(items))
     return next(createHttpError(400, "Items must be an array"));
+
+  const sanitizedItems = [];
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx] || {};
+
+    if (!item?.item_name || typeof item.item_name !== "string") {
+      return next(
+        createHttpError(400, `Item ${idx + 1} is missing a valid name`),
+      );
+    }
+
+    const quantityCandidate = item.quantity;
+    const parsedQuantity = Number(
+      typeof quantityCandidate === "string"
+        ? quantityCandidate.trim()
+        : quantityCandidate,
+    );
+
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+      return next(
+        createHttpError(
+          400,
+          `Item ${idx + 1} has an invalid quantity; provide a positive number`,
+        ),
+      );
+    }
+
+    if (!Number.isInteger(parsedQuantity)) {
+      return next(
+        createHttpError(
+          400,
+          `Item ${idx + 1} quantity must be a whole number without decimals`,
+        ),
+      );
+    }
+
+    const unitCostCandidate = item.unit_cost;
+    let parsedUnitCost = null;
+    const hasUnitCost =
+      unitCostCandidate !== undefined && unitCostCandidate !== null;
+
+    if (hasUnitCost) {
+      const normalizedUnitCost =
+        typeof unitCostCandidate === "string"
+          ? unitCostCandidate.trim()
+          : unitCostCandidate;
+
+      if (normalizedUnitCost !== "" && normalizedUnitCost !== null) {
+        const numericUnitCost = Number(normalizedUnitCost);
+
+        if (!Number.isFinite(numericUnitCost) || numericUnitCost < 0) {
+          return next(
+            createHttpError(
+              400,
+              `Item ${idx + 1} has an invalid unit cost; provide a non-negative number`,
+            ),
+          );
+        }
+
+        if (!Number.isInteger(numericUnitCost)) {
+          return next(
+            createHttpError(
+              400,
+              `Item ${idx + 1} unit cost must be a whole number without decimals`,
+            ),
+          );
+        }
+
+        parsedUnitCost = numericUnitCost;
+      }
+    }
+
+    sanitizedItems.push({
+      ...item,
+      quantity: parsedQuantity,
+      unit_cost: parsedUnitCost,
+      total_cost:
+        parsedUnitCost !== null ? parsedQuantity * parsedUnitCost : null,
+    });
+  }
+
+  items = sanitizedItems;
   if (!req.user?.id || !req.user?.department_id)
     return next(createHttpError(400, "Invalid user context"));
 
@@ -232,9 +314,10 @@ const createRequest = async (req, res, next) => {
     let estimatedCost = 0;
     if (request_type !== "Stock") {
       estimatedCost = items.reduce((sum, item) => {
-        const qty = parseInt(item.quantity) || 0;
-        const unitCost = parseInt(item.unit_cost) || 0;
-        return sum + qty * unitCost;
+        if (item.unit_cost === null || item.unit_cost === undefined) {
+          return sum;
+        }
+        return sum + item.quantity * item.unit_cost;
       }, 0);
     }
 
@@ -292,8 +375,6 @@ const createRequest = async (req, res, next) => {
         intended_use,
         specs,
       } = items[idx];
-      const total_cost = (parseInt(quantity) || 0) * (parseInt(unit_cost) || 0);
-
       let requestedItemId = null;
       if (request_type !== "Warehouse Supply") {
         let insertedReq;
@@ -316,7 +397,7 @@ const createRequest = async (req, res, next) => {
               brand || null,
               quantity,
               unit_cost,
-              total_cost,
+              unit_cost !== null ? quantity * unit_cost : null,
               available_quantity || null,
               intended_use || null,
               specs || null,
@@ -341,7 +422,7 @@ const createRequest = async (req, res, next) => {
               brand || null,
               quantity,
               unit_cost,
-              total_cost,
+              unit_cost !== null ? quantity * unit_cost : null,
               available_quantity || null,
               intended_use || null,
               specs || null,

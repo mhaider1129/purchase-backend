@@ -13,6 +13,7 @@ const { authenticateUser } = require('../middleware/authMiddleware');
 const {
   insertAttachment,
   attachmentsHasItemIdColumn,
+  ensureAttachmentsItemIdColumn,
 } = require('../utils/attachmentSchema');
 const {
   UPLOADS_DIR,
@@ -158,6 +159,8 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
   if (!file) return next(createHttpError(400, 'No file uploaded'));
 
   try {
+    await ensureAttachmentsItemIdColumn(pool);
+
     const supportsItemAttachments = await attachmentsHasItemIdColumn(pool);
     if (!supportsItemAttachments) {
       return next(
@@ -196,6 +199,8 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
   const { itemId } = req.params;
 
   try {
+    await ensureAttachmentsItemIdColumn(pool);
+
     const supportsItemAttachments = await attachmentsHasItemIdColumn(pool);
     if (!supportsItemAttachments) {
       return res.json([]);

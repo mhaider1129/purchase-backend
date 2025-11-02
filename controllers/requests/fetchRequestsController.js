@@ -618,10 +618,20 @@ const getPendingApprovals = async (req, res, next) => {
 const getMyMaintenanceRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT id, justification, maintenance_ref_number, status, created_at, project_id
-       FROM requests
-       WHERE request_type = 'Maintenance' AND initiated_by_technician_id = $1
-       ORDER BY created_at DESC`,
+      `SELECT
+         r.id,
+         r.justification,
+         r.maintenance_ref_number,
+         r.status,
+         r.created_at,
+         r.project_id,
+         r.is_urgent,
+         p.name AS project_name
+       FROM requests r
+       LEFT JOIN projects p ON r.project_id = p.id
+       WHERE r.request_type = 'Maintenance'
+         AND r.initiated_by_technician_id = $1
+       ORDER BY r.created_at DESC`,
       [req.user.id],
     );
     res.json(result.rows);

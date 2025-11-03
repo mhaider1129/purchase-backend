@@ -349,22 +349,46 @@ const markRequestAsCompleted = async (req, res, next) => {
   }
 
   const client = await pool.connect();
+  let transactionActive = false;
   try {
     await client.query('BEGIN');
+    transactionActive = true;
 
-    const itemCheck = await client.query(
-      `SELECT COUNT(*) AS incomplete_count
+    const itemStatusRes = await client.query(
+      `SELECT
+         COALESCE(SUM(
+           CASE
+             WHEN procurement_status IS NULL
+               OR TRIM(procurement_status) = ''
+               OR purchased_quantity IS NULL
+             THEN 1
+             ELSE 0
+           END
+         ), 0) AS missing_required,
+         COALESCE(SUM(
+           CASE
+             WHEN procurement_status IS NULL
+               OR TRIM(procurement_status) = ''
+             THEN 0
+             WHEN LOWER(TRIM(procurement_status)) NOT IN ('purchased', 'completed')
+             THEN 1
+             ELSE 0
+           END
+         ), 0) AS invalid_status
        FROM public.requested_items
-       WHERE request_id = $1
-         AND (
-           procurement_status IS NULL OR procurement_status = '' OR purchased_quantity IS NULL
-         )`,
+       WHERE request_id = $1`,
       [id],
     );
 
-    const incompleteCount = parseInt(itemCheck.rows[0].incomplete_count);
-    if (incompleteCount > 0) {
+    const {
+      missing_required: missingRequiredRaw = 0,
+      invalid_status: invalidStatusRaw = 0,
+    } = itemStatusRes.rows[0] || {};
+
+    const missingRequired = Number(missingRequiredRaw) || 0;
+    if (missingRequired > 0) {
       await client.query('ROLLBACK');
+      transactionActive = false;
       return next(
         createHttpError(
           400,
@@ -373,28 +397,65 @@ const markRequestAsCompleted = async (req, res, next) => {
       );
     }
 
+    const invalidStatus = Number(invalidStatusRaw) || 0;
+    if (invalidStatus > 0) {
+      await client.query('ROLLBACK');
+      transactionActive = false;
+      return next(
+        createHttpError(
+          400,
+          'All items must be purchased or completed before marking the request as completed.'
+        )
+      );
+    }
+
     const requestRes = await client.query(
       `SELECT
-         r.request_type,
-         r.department_id,
-         r.requester_id,
-         r.initiated_by_technician_id,
-         requester.email AS requester_email,
-         technician.email AS technician_email
-       FROM requests r
-       LEFT JOIN users requester ON requester.id = r.requester_id
-       LEFT JOIN users technician ON technician.id = r.initiated_by_technician_id
-       WHERE r.id = $1
+         request_type,
+         department_id,
+         requester_id,
+         initiated_by_technician_id
+       FROM requests
+       WHERE id = $1
        FOR UPDATE`,
       [id],
     );
 
     if (requestRes.rowCount === 0) {
       await client.query('ROLLBACK');
+      transactionActive = false;
       return next(createHttpError(404, 'Request not found'));
     }
 
     const requestRow = requestRes.rows[0];
+
+    let requesterEmail = null;
+    let technicianEmail = null;
+
+    const relatedUserIds = [
+      requestRow.requester_id,
+      requestRow.initiated_by_technician_id,
+    ].filter((value) => value !== null && value !== undefined);
+
+    if (relatedUserIds.length > 0) {
+      const userEmailRes = await client.query(
+        `SELECT id, email
+           FROM users
+          WHERE id = ANY($1::int[])`,
+        [relatedUserIds],
+      );
+
+      for (const { id: relatedId, email } of userEmailRes.rows) {
+        if (email) {
+          if (relatedId === requestRow.requester_id) {
+            requesterEmail = email;
+          }
+          if (relatedId === requestRow.initiated_by_technician_id) {
+            technicianEmail = email;
+          }
+        }
+      }
+    }
 
     await client.query(
       `UPDATE requests
@@ -410,12 +471,13 @@ const markRequestAsCompleted = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+    transactionActive = false;
 
     const notifications = [];
-    if (requestRow.requester_email) {
+    if (requesterEmail) {
       notifications.push(
         sendEmail(
-          requestRow.requester_email,
+          requesterEmail,
           `Request ${id} completed`,
           `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.\nYou can review the final details in the procurement portal.`,
         ),
@@ -424,25 +486,38 @@ const markRequestAsCompleted = async (req, res, next) => {
 
     if (
       requestRow.request_type === 'Maintenance' &&
-      requestRow.technician_email &&
-      requestRow.technician_email !== requestRow.requester_email
+      technicianEmail &&
+      technicianEmail !== requesterEmail
     ) {
       notifications.push(
         sendEmail(
-          requestRow.technician_email,
+          technicianEmail,
           `Maintenance request ${id} completed`,
           `The maintenance request you initiated (ID: ${id}) has been marked as completed.\nPlease review the outcome with the requesting department.`,
         ),
       );
     }
 
-    await Promise.all(notifications);
+    try {
+      await Promise.all(notifications);
+    } catch (notificationErr) {
+      console.error('⚠️ Failed to send one or more completion notifications:', notificationErr);
+    }
 
     res.json({ message: '✅ Request marked as completed' });
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Failed to mark request as completed:', err.message);
-    next(createHttpError(500, 'Failed to complete the request'));
+    if (transactionActive) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('⚠️ Failed to rollback transaction:', rollbackErr);
+      }
+    }
+    console.error('❌ Failed to mark request as completed:', err);
+    if (!err.code && !err.statusCode) {
+      return next(createHttpError(500, 'Failed to complete the request'));
+    }
+    return next(err);
   } finally {
     client.release();
   }

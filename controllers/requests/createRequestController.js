@@ -489,6 +489,26 @@ const createRequest = async (req, res, next) => {
           nextLevel,
           requestDomain,
         );
+        nextLevel += 1;
+        await assignApprover(
+          client,
+          'SCM',
+          department_id,
+          request.id,
+          request_type,
+          nextLevel,
+          requestDomain,
+        );
+        nextLevel += 1;
+        await assignApprover(
+          client,
+          'COO',
+          department_id,
+          request.id,
+          request_type,
+          nextLevel,
+          requestDomain,
+        );
       } else {
         await assignApprover(
           client,

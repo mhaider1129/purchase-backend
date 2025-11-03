@@ -1,4 +1,5 @@
 const {
+  listVisibleRecalls,
   createDepartmentRecallRequest,
   createWarehouseRecallRequest,
   escalateRecallToProcurement,
@@ -110,5 +111,66 @@ describe('itemRecallsController', () => {
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ statusCode: 400 }),
     );
+  });
+
+  it('prevents unauthorized roles from viewing recalls', async () => {
+    const req = {
+      user: { role: 'Requester' },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    await listVisibleRecalls(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 403 }),
+    );
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it('fetches procurement-facing recalls for procurement roles', async () => {
+    const req = {
+      user: { role: 'ProcurementSpecialist' },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    db.query.mockResolvedValueOnce({
+      rows: [
+        { id: 1, recall_type: 'warehouse_to_procurement', item_name: 'Mask' },
+      ],
+    });
+
+    await listVisibleRecalls(req, res, next);
+
+    expect(db.query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM item_recalls'),
+      ['warehouse_to_procurement'],
+    );
+    expect(res.json).toHaveBeenCalledWith({
+      recalls: [
+        { id: 1, recall_type: 'warehouse_to_procurement', item_name: 'Mask' },
+      ],
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('fetches recall queue for warehouse roles', async () => {
+    const req = {
+      user: { role: 'WarehouseManager' },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    db.query.mockResolvedValueOnce({ rows: [] });
+
+    await listVisibleRecalls(req, res, next);
+
+    expect(db.query).toHaveBeenCalledWith(
+      expect.stringContaining('ir.recall_type = ANY($1)'),
+      [['department_to_warehouse', 'warehouse_to_procurement']],
+    );
+    expect(res.json).toHaveBeenCalledWith({ recalls: [] });
+    expect(next).not.toHaveBeenCalled();
   });
 });

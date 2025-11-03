@@ -614,6 +614,47 @@ const createRequest = async (req, res, next) => {
       [request.id],
     );
 
+    let itemStatusPayload = [];
+    if (request_type === "Warehouse Supply") {
+      const { rows } = await client.query(
+        `SELECT id, item_name, quantity
+           FROM warehouse_supply_items
+          WHERE request_id = $1
+          ORDER BY id`,
+        [request.id],
+      );
+
+      itemStatusPayload = rows.map((row) => ({
+        id: row.id,
+        item_name: row.item_name,
+        quantity: Number(row.quantity) || 0,
+        purchased_quantity: 0,
+        status: "Not Purchased",
+      }));
+    } else {
+      const { rows } = await client.query(
+        `SELECT id, item_name, quantity, COALESCE(purchased_quantity, 0) AS purchased_quantity
+           FROM public.requested_items
+          WHERE request_id = $1
+          ORDER BY id`,
+        [request.id],
+      );
+
+      itemStatusPayload = rows.map((row) => {
+        const quantity = Number(row.quantity) || 0;
+        const purchasedQuantity = Number(row.purchased_quantity) || 0;
+        const isPurchased = quantity > 0 && purchasedQuantity >= quantity;
+
+        return {
+          id: row.id,
+          item_name: row.item_name,
+          quantity,
+          purchased_quantity: purchasedQuantity,
+          status: isPurchased ? "Purchased" : "Not Purchased",
+        };
+      });
+    }
+
     await client.query("COMMIT");
 
     if (duplicateFound) {
@@ -644,6 +685,7 @@ const createRequest = async (req, res, next) => {
       estimated_cost: estimatedCost,
       attachments_uploaded: attachmentsStored,
       temporary_requester_name: request.temporary_requester_name || null,
+      items: itemStatusPayload,
       next_approval: nextApproval
         ? {
             level: nextApproval.approval_level,

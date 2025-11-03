@@ -641,9 +641,16 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          COALESCE(
            JSON_AGG(
              JSON_BUILD_OBJECT(
+               'id', ri.id,
                'item_name', ri.item_name,
+               'brand', ri.brand,
                'quantity', ri.quantity,
-               'specs', ri.specs
+               'purchased_quantity', ri.purchased_quantity,
+               'available_quantity', ri.available_quantity,
+               'unit_cost', ri.unit_cost,
+               'total_cost', ri.total_cost,
+               'specs', ri.specs,
+               'procurement_status', ri.procurement_status
              )
              ORDER BY ri.id
            ) FILTER (WHERE ri.id IS NOT NULL),
@@ -656,11 +663,46 @@ const getMyMaintenanceRequests = async (req, res, next) => {
              AND ap.status = 'Pending'
          ) AS current_approval_step,
          (
-           SELECT MAX(ap.approved_at)
+           SELECT u.name
            FROM approvals ap
+           JOIN users u ON ap.approver_id = u.id
            WHERE ap.request_id = r.id
-             AND ap.status = 'Approved'
-         ) AS final_approval_date
+             AND ap.status = 'Pending'
+             AND ap.is_active = true
+           ORDER BY ap.approval_level ASC
+           LIMIT 1
+         ) AS current_pending_approver_name,
+         (
+           SELECT u.role
+           FROM approvals ap
+           JOIN users u ON ap.approver_id = u.id
+           WHERE ap.request_id = r.id
+             AND ap.status = 'Pending'
+             AND ap.is_active = true
+           ORDER BY ap.approval_level ASC
+           LIMIT 1
+         ) AS current_pending_approver_role,
+         CASE
+           WHEN r.status IN ('Approved', 'Completed') THEN (
+             SELECT MAX(ap.approved_at)
+             FROM approvals ap
+             WHERE ap.request_id = r.id
+               AND ap.status = 'Approved'
+           )
+           ELSE NULL
+         END AS final_approval_date,
+         CASE
+           WHEN r.status IN ('Approved', 'Completed') THEN (
+             SELECT u.name
+             FROM approvals ap
+             JOIN users u ON ap.approver_id = u.id
+             WHERE ap.request_id = r.id
+               AND ap.status = 'Approved'
+             ORDER BY ap.approval_level DESC, ap.approved_at DESC NULLS LAST
+             LIMIT 1
+           )
+           ELSE NULL
+         END AS final_approver_name
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN departments d ON r.department_id = d.id

@@ -24,10 +24,42 @@ const warehouseRoles = new Set([
   'warehouse_keeper',
 ]);
 
+const procurementRoles = new Set([
+  'procurementspecialist',
+  'procurement_specialist',
+  'scm',
+]);
+
 const normalizeRole = role =>
   typeof role === 'string' ? role.toLowerCase() : '';
 
 const isWarehouseRole = role => warehouseRoles.has(normalizeRole(role));
+const isProcurementRole = role => procurementRoles.has(normalizeRole(role));
+
+const canViewRecalls = role => isWarehouseRole(role) || isProcurementRole(role);
+
+const selectVisibleRecallsQuery = `
+  SELECT
+    ir.id,
+    ir.item_id,
+    ir.item_name,
+    ir.quantity,
+    ir.reason,
+    ir.notes,
+    ir.recall_type,
+    ir.status,
+    ir.department_id,
+    ir.initiated_by_user_id,
+    ir.escalated_to_procurement,
+    ir.escalated_at,
+    ir.escalated_by_user_id,
+    ir.warehouse_notes,
+    ir.created_at,
+    ir.updated_at,
+    d.name AS department_name
+  FROM item_recalls ir
+  LEFT JOIN departments d ON ir.department_id = d.id
+`;
 
 const procurementNotificationRoles = [
   'ProcurementSpecialist',
@@ -45,6 +77,33 @@ const fetchStockItemName = async itemId => {
   }
 
   return rows[0].name;
+};
+
+const listVisibleRecalls = async (req, res, next) => {
+  const { role } = req.user || {};
+
+  if (!canViewRecalls(role)) {
+    return next(createHttpError(403, 'Not authorized to view recall requests'));
+  }
+
+  let queryText = `${selectVisibleRecallsQuery} ORDER BY ir.id DESC`;
+  let params = [];
+
+  if (isProcurementRole(role)) {
+    params = ['warehouse_to_procurement'];
+    queryText = `${selectVisibleRecallsQuery} WHERE ir.recall_type = $1 OR ir.escalated_to_procurement = TRUE ORDER BY ir.id DESC`;
+  } else {
+    params = [['department_to_warehouse', 'warehouse_to_procurement']];
+    queryText = `${selectVisibleRecallsQuery} WHERE ir.recall_type = ANY($1) ORDER BY ir.id DESC`;
+  }
+
+  try {
+    const { rows } = await pool.query(queryText, params);
+    res.json({ recalls: rows });
+  } catch (err) {
+    console.error('❌ Failed to fetch visible recall requests:', err);
+    next(createHttpError(500, 'Failed to load recall requests'));
+  }
 };
 
 const createDepartmentRecallRequest = async (req, res, next) => {
@@ -416,6 +475,7 @@ const escalateRecallToProcurement = async (req, res, next) => {
 };
 
 module.exports = {
+  listVisibleRecalls,
   createDepartmentRecallRequest,
   createWarehouseRecallRequest,
   escalateRecallToProcurement,

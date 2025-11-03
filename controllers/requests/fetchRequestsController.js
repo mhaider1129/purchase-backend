@@ -421,6 +421,7 @@ const getAllRequests = async (req, res, next) => {
     whereClauses.push(`(
       LOWER(r.justification) LIKE $${params.length}
       OR LOWER(r.request_type) LIKE $${params.length}
+      OR LOWER(COALESCE(r.temporary_requester_name, requester.name)) LIKE $${params.length}
       OR CAST(r.id AS TEXT) LIKE $${params.length}
       OR EXISTS (
         SELECT 1 FROM public.requested_items ri
@@ -465,12 +466,15 @@ const getAllRequests = async (req, res, next) => {
         d.name AS department_name,
         u.name AS assigned_user_name,
         u.role AS assigned_user_role,
+        COALESCE(r.temporary_requester_name, requester.name) AS requester_name,
+        CASE WHEN r.temporary_requester_name IS NOT NULL THEN 'Temporary Requester' ELSE requester.role END AS requester_role,
         ap.approval_level AS current_approval_level,
         au.role AS current_approver_role
       FROM requests r
       JOIN departments d ON r.department_id = d.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN users u ON r.assigned_to = u.id
+      LEFT JOIN users requester ON r.requester_id = requester.id
       LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
       LEFT JOIN users au ON ap.approver_id = au.id
       ${whereSQL}
@@ -482,7 +486,12 @@ const getAllRequests = async (req, res, next) => {
     );
 
     const totalCountRes = await pool.query(
-      `SELECT COUNT(*) FROM requests r ${whereSQL}`,
+      `
+      SELECT COUNT(*)
+      FROM requests r
+      LEFT JOIN users requester ON r.requester_id = requester.id
+      ${whereSQL}
+      `,
       params,
     );
 
@@ -626,11 +635,51 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          r.created_at,
          r.project_id,
          r.is_urgent,
-         p.name AS project_name
+         p.name AS project_name,
+         d.name AS department_name,
+         COALESCE(r.temporary_requester_name, u.name) AS requester_name,
+         COALESCE(
+           JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'item_name', ri.item_name,
+               'quantity', ri.quantity,
+               'specs', ri.specs
+             )
+             ORDER BY ri.id
+           ) FILTER (WHERE ri.id IS NOT NULL),
+           '[]'::json
+         ) AS items,
+         (
+           SELECT MIN(ap.approval_level)
+           FROM approvals ap
+           WHERE ap.request_id = r.id
+             AND ap.status = 'Pending'
+         ) AS current_approval_step,
+         (
+           SELECT MAX(ap.approved_at)
+           FROM approvals ap
+           WHERE ap.request_id = r.id
+             AND ap.status = 'Approved'
+         ) AS final_approval_date
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
+       LEFT JOIN departments d ON r.department_id = d.id
+       LEFT JOIN users u ON r.requester_id = u.id
+       LEFT JOIN public.requested_items ri ON ri.request_id = r.id
        WHERE r.request_type = 'Maintenance'
          AND r.initiated_by_technician_id = $1
+       GROUP BY
+         r.id,
+         r.justification,
+         r.maintenance_ref_number,
+         r.status,
+         r.created_at,
+         r.project_id,
+         r.is_urgent,
+         p.name,
+         d.name,
+         u.name,
+         r.temporary_requester_name
        ORDER BY r.created_at DESC`,
       [req.user.id],
     );

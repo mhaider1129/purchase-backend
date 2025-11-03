@@ -83,8 +83,16 @@ router.get('/incomplete/operational', getOperationalIncomplete); // COO
 // ==========================
 const buildFilteredQuery = (queryParams) => {
   const { request_type, search, from_date, to_date, status, department_id } = queryParams;
-  let sql = `SELECT r.*, u.name AS assigned_user_name, d.name AS department_name FROM requests r`;
+  let sql = `
+    SELECT
+      r.*,
+      u.name AS assigned_user_name,
+      d.name AS department_name,
+      COALESCE(r.temporary_requester_name, requester.name) AS requester_name,
+      CASE WHEN r.temporary_requester_name IS NOT NULL THEN 'Temporary Requester' ELSE requester.role END AS requester_role
+    FROM requests r`;
   sql += ` LEFT JOIN users u ON r.assigned_to = u.id`;
+  sql += ` LEFT JOIN users requester ON r.requester_id = requester.id`;
   sql += ` JOIN departments d ON r.department_id = d.id WHERE 1=1`;
   const values = [];
 
@@ -98,6 +106,7 @@ const buildFilteredQuery = (queryParams) => {
     sql += ` AND (
       r.justification ILIKE $${values.length}
       OR r.request_type ILIKE $${values.length}
+      OR COALESCE(r.temporary_requester_name, requester.name) ILIKE $${values.length}
       OR CAST(r.id AS TEXT) ILIKE $${values.length}
       OR EXISTS (
         SELECT 1 FROM public.requested_items ri

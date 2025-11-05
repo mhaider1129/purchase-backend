@@ -5,10 +5,13 @@ const sanitize = require("sanitize-filename");
 const { UPLOADS_DIR } = require("./attachmentPaths");
 const { uploadBuffer, isStorageConfigured } = require("./storage");
 
-function buildSegments({ requestId = null, itemId = null } = {}) {
+function buildSegments({ requestId = null, itemId = null, contractId = null } = {}) {
   const segments = [requestId != null ? `request-${requestId}` : "general"];
   if (itemId != null) {
     segments.push(`item-${itemId}`);
+  }
+  if (contractId != null) {
+    segments.push(`contract-${contractId}`);
   }
   return segments;
 }
@@ -40,14 +43,14 @@ async function storeLocally({ file, segments }) {
   return { objectKey, storage: "local" };
 }
 
-async function storeAttachmentFile({ file, requestId = null, itemId = null } = {}) {
+async function storeAttachmentFile({ file, requestId = null, itemId = null, contractId = null } = {}) {
   if (!file || !file.buffer || file.buffer.length === 0) {
     const error = new Error("Uploaded file is empty");
     error.code = "ATTACHMENT_EMPTY_FILE";
     throw error;
   }
 
-  const segments = buildSegments({ requestId, itemId }).map(sanitizeSegment);
+  const segments = buildSegments({ requestId, itemId, contractId }).map(sanitizeSegment);
 
   if (!isStorageConfigured()) {
     return storeLocally({ file, segments });

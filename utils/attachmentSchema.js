@@ -75,16 +75,29 @@ async function ensureAttachmentsItemIdColumn(queryable) {
   return attachmentsHasItemIdColumn(queryable);
 }
 
-async function insertAttachment(queryable, { requestId = null, itemId = null, fileName, filePath, uploadedBy }) {
+const {
+  attachmentsHasContractIdColumn,
+  ensureAttachmentsContractIdColumn,
+  resetAttachmentsContractIdSupportCache,
+} = require('./contractsAttachmentSchema');
+
+async function insertAttachment(queryable, { requestId = null, itemId = null, contractId = null, fileName, filePath, uploadedBy }) {
   if (!fileName || !filePath || !uploadedBy) {
     throw new Error('Missing required attachment fields');
   }
 
   const supportsItemId = await attachmentsHasItemIdColumn(queryable);
+  const supportsContractId = await attachmentsHasContractIdColumn(queryable);
 
   if (itemId != null && !supportsItemId) {
     const error = new Error('Item-level attachments are not supported by the current database schema');
     error.code = 'ATTACHMENTS_ITEM_ID_UNSUPPORTED';
+    throw error;
+  }
+
+  if (contractId != null && !supportsContractId) {
+    const error = new Error('Contract-level attachments are not supported by the current database schema');
+    error.code = 'ATTACHMENTS_CONTRACT_ID_UNSUPPORTED';
     throw error;
   }
 
@@ -94,6 +107,11 @@ async function insertAttachment(queryable, { requestId = null, itemId = null, fi
   if (supportsItemId) {
     columns.splice(1, 0, 'item_id');
     values.splice(1, 0, itemId);
+  }
+
+  if (supportsContractId) {
+    columns.splice(1, 0, 'contract_id');
+    values.splice(1, 0, contractId);
   }
 
   const placeholders = columns.map((_, idx) => `$${idx + 1}`).join(', ');
@@ -109,4 +127,7 @@ module.exports = {
   attachmentsHasItemIdColumn,
   ensureAttachmentsItemIdColumn,
   resetAttachmentsItemIdSupportCache,
+  attachmentsHasContractIdColumn,
+  ensureAttachmentsContractIdColumn,
+  resetAttachmentsContractIdSupportCache,
 };

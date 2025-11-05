@@ -37,6 +37,9 @@ const ensureContractsTable = (() => {
             contract_value NUMERIC(14, 2),
             status TEXT NOT NULL DEFAULT 'active',
             description TEXT,
+            delivery_terms TEXT,
+            warranty_terms TEXT,
+            performance_management TEXT,
             created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -99,7 +102,8 @@ const canManageContracts = (req) => {
     role === 'SCM' ||
     role === 'ADMIN' ||
     role === 'PROCUREMENTSPECIALIST' ||
-    role === 'COO'
+    role === 'COO' ||
+    role === 'Medical Devices'
   );
 };
 
@@ -144,6 +148,9 @@ const serializeContract = (row) => {
     contract_value: Number.isNaN(contractValue) ? null : contractValue,
     status: row.status,
     description: row.description,
+    delivery_terms: row.delivery_terms,
+    warranty_terms: row.warranty_terms,
+    performance_management: row.performance_management,
     created_by: row.created_by,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -182,7 +189,7 @@ const listContracts = async (req, res, next) => {
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
       `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-              created_by, created_at, updated_at
+              delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at
          FROM contracts
          ${whereClause}
         ORDER BY updated_at DESC NULLS LAST, title ASC`,
@@ -209,7 +216,7 @@ const getContractById = async (req, res, next) => {
     await ensureContractsTable();
     const { rows } = await pool.query(
       `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-              created_by, created_at, updated_at
+              delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at
          FROM contracts
         WHERE id = $1
         LIMIT 1`,
@@ -236,6 +243,9 @@ const createContract = async (req, res, next) => {
   const vendor = normalizeText(req.body?.vendor);
   const referenceNumber = normalizeText(req.body?.reference_number) || null;
   const description = normalizeText(req.body?.description) || null;
+  const deliveryTerms = normalizeText(req.body?.delivery_terms) || null;
+  const warrantyTerms = normalizeText(req.body?.warranty_terms) || null;
+  const performanceManagement = normalizeText(req.body?.performance_management) || null;
   const rawStatus = req.body?.status || 'active';
 
   if (!title) {
@@ -269,11 +279,13 @@ const createContract = async (req, res, next) => {
     await ensureContractsTable();
     const { rows } = await pool.query(
       `INSERT INTO contracts (
-         title, vendor, reference_number, start_date, end_date, contract_value, status, description, created_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         title, vendor, reference_number, start_date, end_date, contract_value, status, description,
+         delivery_terms, warranty_terms, performance_management, created_by
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-                 created_by, created_at, updated_at`,
-      [title, vendor, referenceNumber, startDate, endDate, contractValue, status, description, req.user?.id || null]
+                 delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at`,
+      [title, vendor, referenceNumber, startDate, endDate, contractValue, status, description,
+       deliveryTerms, warrantyTerms, performanceManagement, req.user?.id || null]
     );
 
     res.status(201).json(serializeContract(rows[0]));
@@ -330,6 +342,12 @@ const updateContract = async (req, res, next) => {
   const referenceNumber =
     req.body?.reference_number !== undefined ? normalizeText(req.body.reference_number) || null : undefined;
   const description = req.body?.description !== undefined ? normalizeText(req.body.description) || null : undefined;
+  const deliveryTerms =
+    req.body?.delivery_terms !== undefined ? normalizeText(req.body.delivery_terms) || null : undefined;
+  const warrantyTerms =
+    req.body?.warranty_terms !== undefined ? normalizeText(req.body.warranty_terms) || null : undefined;
+  const performanceManagement =
+    req.body?.performance_management !== undefined ? normalizeText(req.body.performance_management) || null : undefined;
 
   if (title !== undefined) {
     if (!title) {
@@ -351,6 +369,18 @@ const updateContract = async (req, res, next) => {
 
   if (description !== undefined) {
     pushAssignment('description', description);
+  }
+
+  if (deliveryTerms !== undefined) {
+    pushAssignment('delivery_terms', deliveryTerms);
+  }
+
+  if (warrantyTerms !== undefined) {
+    pushAssignment('warranty_terms', warrantyTerms);
+  }
+
+  if (performanceManagement !== undefined) {
+    pushAssignment('performance_management', performanceManagement);
   }
 
   if (req.body?.status !== undefined) {
@@ -414,7 +444,7 @@ const updateContract = async (req, res, next) => {
           SET ${assignments.join(', ')}
         WHERE id = $${values.length + 1}
         RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-                  created_by, created_at, updated_at`,
+                  delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at`,
       [...values, contractId]
     );
 
@@ -460,6 +490,93 @@ const archiveContract = async (req, res, next) => {
   }
 };
 
+const {
+  ensureAttachmentsContractIdColumn,
+  attachmentsHasContractIdColumn,
+  insertAttachment,
+} = require('../utils/attachmentSchema');
+const { storeAttachmentFile } = require('../utils/attachmentStorage');
+const { serializeAttachment } = require('../utils/attachmentPaths');
+
+const getContractAttachments = async (req, res, next) => {
+  const { contractId } = req.params;
+
+  try {
+    await ensureAttachmentsContractIdColumn(pool);
+
+    const supportsContractAttachments = await attachmentsHasContractIdColumn(pool);
+    if (!supportsContractAttachments) {
+      return res.json([]);
+    }
+
+    const result = await pool.query(
+      `SELECT id, file_name, file_path, uploaded_by, uploaded_at
+       FROM attachments
+       WHERE contract_id = $1`,
+      [contractId]
+    );
+
+    res.json(result.rows.map(serializeAttachment));
+  } catch (err) {
+    console.error('❌ Failed to fetch attachments:', err.message);
+    next(createHttpError(500, 'Failed to fetch attachments'));
+  }
+};
+
+const uploadContractAttachment = async (req, res, next) => {
+  const { contractId } = req.params;
+  const file = req.file;
+
+  if (!file) return next(createHttpError(400, 'No file uploaded'));
+
+  try {
+    await ensureAttachmentsContractIdColumn(pool);
+
+    const supportsContractAttachments = await attachmentsHasContractIdColumn(pool);
+    if (!supportsContractAttachments) {
+      return next(
+        createHttpError(
+          400,
+          'Contract-level attachments are not supported by the current database schema'
+        )
+      );
+    }
+
+    const { objectKey } = await storeAttachmentFile({
+      file,
+      requestId: null,
+      itemId: null,
+      contractId,
+    });
+
+    const saved = await insertAttachment(pool, {
+      requestId: null,
+      itemId: null,
+      contractId,
+      fileName: file.originalname,
+      filePath: objectKey,
+      uploadedBy: req.user.id,
+    });
+
+    res.status(201).json({
+      message: '📎 File uploaded successfully',
+      attachmentId: saved.rows[0].id
+    });
+  } catch (err) {
+    console.error('❌ Upload error:', err.message);
+    if (err.code === 'SUPABASE_NOT_CONFIGURED') {
+      return next(
+        createHttpError(
+          500,
+          'Supabase storage is not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+        )
+      );
+    }
+
+    return next(createHttpError(500, 'Failed to upload attachment'));
+  }
+};
+
 module.exports = {
   listContracts,
   getContractById,
@@ -467,4 +584,6 @@ module.exports = {
   updateContract,
   archiveContract,
   CONTRACT_STATUSES,
+  getContractAttachments,
+  uploadContractAttachment,
 };

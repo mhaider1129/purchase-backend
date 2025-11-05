@@ -109,6 +109,13 @@ const normalizeDocumentation = documentation => {
   return normalized;
 };
 
+const getEmailFooter = () => {
+  const url = 'https://wici-procurement.org';
+  const text = `\n\n--\nFor more details, please visit the Procurement System at ${url}`;
+  const html = `<br><br><hr><p>For more details, please visit the <a href="${url}">Procurement System</a>.</p>`;
+  return { text, html };
+};
+
 const sendEmail = async (to, subject, message, options = {}) => {
   const recipients = normalizeRecipients(to);
 
@@ -143,9 +150,11 @@ const sendEmail = async (to, subject, message, options = {}) => {
     headers,
   };
 
+  const footer = getEmailFooter();
+
   const messageText = typeof text === 'string' ? text : typeof message === 'string' ? message : undefined;
   if (messageText) {
-    payload.text = messageText;
+    payload.text = messageText + footer.text;
   }
 
   let htmlBody;
@@ -156,7 +165,7 @@ const sendEmail = async (to, subject, message, options = {}) => {
   }
 
   if (htmlBody) {
-    payload.html = htmlBody;
+    payload.html = htmlBody + footer.html;
   }
 
   const normalizedAttachments = Array.isArray(attachments)
@@ -202,5 +211,6 @@ module.exports = {
     normalizeRecipients,
     convertTextToHtml,
     normalizeDocumentation,
+    getEmailFooter,
   },
 };

@@ -14,6 +14,8 @@ const {
   insertAttachment,
   attachmentsHasItemIdColumn,
   ensureAttachmentsItemIdColumn,
+  attachmentsHasContractIdColumn,
+  ensureAttachmentsContractIdColumn,
 } = require('../utils/attachmentSchema');
 const {
   UPLOADS_DIR,
@@ -31,8 +33,8 @@ function createHttpError(statusCode, message) {
   return err;
 }
 
-async function uploadAttachmentToStorage({ file, requestId, itemId }) {
-  return storeAttachmentFile({ file, requestId, itemId });
+async function uploadAttachmentToStorage({ file, requestId, itemId, contractId }) {
+  return storeAttachmentFile({ file, requestId, itemId, contractId });
 }
 
 function respondStorageError(next, err) {

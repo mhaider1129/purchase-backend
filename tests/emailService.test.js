@@ -75,11 +75,11 @@ describe('emailService', () => {
       cc: ['cc1@example.com'],
       bcc: ['bcc1@example.com', 'bcc2@example.com'],
       subject: 'Subject Line',
-      text: 'Line one\n\nLine two',
       replyTo: 'reply@example.com',
       attachments: [{ filename: 'test.txt', content: 'hello' }],
     });
 
+    expect(payload.text).toContain('Line one\n\nLine two');
     expect(payload.html).toContain('<p style="margin: 0 0 12px;">Line one</p>');
     expect(payload.html).toContain('<p style="margin: 0 0 12px;">&nbsp;</p>');
     expect(payload.html).toContain('<p style="margin: 0 0 12px;">Line two</p>');
@@ -97,12 +97,9 @@ describe('emailService', () => {
       enableHtml: true,
     });
 
-    expect(sendMailMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        html: '<strong>Custom</strong>',
-        text: 'Plain text',
-      }),
-    );
+    const payload = sendMailMock.mock.calls[0][0];
+    expect(payload.html).toContain('<strong>Custom</strong>');
+    expect(payload.text).toContain('Plain text');
   });
 
   it('adds documentation attachments in addition to regular attachments', async () => {
@@ -155,6 +152,23 @@ describe('emailService', () => {
     );
 
     infoSpy.mockRestore();
+  });
+
+  it('appends the email footer to both text and HTML content', async () => {
+    process.env.EMAIL_HOST = 'smtp.example.com';
+    process.env.EMAIL_USER = 'mailer@example.com';
+
+    const { sendEmail, _private } = loadService();
+    const footer = _private.getEmailFooter();
+
+    await sendEmail('user@example.com', 'Subject', 'Hello world');
+
+    expect(sendMailMock).toHaveBeenCalledTimes(1);
+    const payload = sendMailMock.mock.calls[0][0];
+
+    expect(payload.text).toBe(`Hello world${footer.text}`);
+    expect(payload.html).toContain(`Hello world`);
+    expect(payload.html).toContain(footer.html);
   });
 
   describe('normalizeDocumentation', () => {

@@ -26,6 +26,7 @@ const {
   reassignMaintenanceRequestToRequester,
   getPendingMaintenanceApprovals,
   markRequestAsCompleted,
+  markRequestAsReceived,
   updateRequestCost,
   getClosedRequests,
   getAuditApprovedRejectedRequests
@@ -61,6 +62,7 @@ router.get('/audit/approved-rejected', getAuditApprovedRejectedRequests); // Aud
 router.get('/approval-history', getApprovalHistory); // My approval history
 router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
+router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.put('/:id/cost', authenticateUser, updateRequestCost);
 
 

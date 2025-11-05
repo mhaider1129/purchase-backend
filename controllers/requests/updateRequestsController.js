@@ -763,10 +763,52 @@ const reassignMaintenanceRequestToRequester = async (req, res, next) => {
   }
 };
 
+const markRequestAsReceived = async (req, res, next) => {
+  const { id } = req.params;
+  const { id: user_id } = req.user;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const requestRes = await client.query(
+      'SELECT requester_id, status FROM requests WHERE id = $1',
+      [id]
+    );
+    if (requestRes.rowCount === 0) {
+      return next(createHttpError(404, 'Request not found'));
+    }
+    const { requester_id, status } = requestRes.rows[0];
+    if (status !== 'completed') {
+      return next(
+        createHttpError(400, 'Request must be completed to be marked as received')
+      );
+    }
+    if (requester_id !== user_id) {
+      return next(
+        createHttpError(403, 'Unauthorized to mark request as received')
+      );
+    }
+    await client.query(
+      "UPDATE requests SET status = 'Received', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+      [id]
+    );
+    await client.query(
+      "INSERT INTO request_logs (request_id, action, actor_id, comments) VALUES ($1, 'Marked as Received', $2, 'Items marked as received by requester')",
+      [id, user_id]
+    );
+    await client.query('COMMIT');
+    res.json({ message: '✅ Request marked as received' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(createHttpError(500, 'Failed to mark request as received'));
+  } finally {
+    client.release();
+  }
+};
 module.exports = {
   assignRequestToProcurement,
   updateApprovalStatus,
   markRequestAsCompleted,
+  markRequestAsReceived,
   updateRequestCost,
   approveMaintenanceRequest,
   reassignMaintenanceRequestToRequester,

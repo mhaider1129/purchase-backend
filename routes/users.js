@@ -73,8 +73,8 @@ router.patch('/:id/assign', authenticateUser, assignUser);
 
 // 🔒 GET /api/users — List all users (Admin/SCM only)
 router.get('/', authenticateUser, async (req, res, next) => {
-  const role = req.user.role;
-  if (!['admin', 'SCM'].includes(role)) {
+  const role = (req.user.role || '').toString().toLowerCase();
+  if (!['admin', 'scm', 'contract_manager', 'coo'].includes(role)) {
     return next(createHttpError(403, 'Access denied'));
   }
 

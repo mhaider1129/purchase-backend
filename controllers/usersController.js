@@ -179,4 +179,14 @@ const assignUser = async (req, res, next) => {
   }
 };
 
-module.exports = { deactivateUser, assignUser };
+const getAllByRole = async (role) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM users WHERE role = $1', [role]);
+    return rows;
+  } catch (err) {
+    console.error(`❌ Failed to get users by role ${role}:`, err);
+    throw new Error(`Failed to get users by role ${role}`);
+  }
+};
+
+module.exports = { deactivateUser, assignUser, getAllByRole };

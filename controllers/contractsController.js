@@ -78,6 +78,14 @@ const normalizeIdArray = rawValue => {
   return normalized;
 };
 
+const toJsonbParameter = value => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return JSON.stringify(value);
+};
+
 const parseOptionalInteger = (value, fieldName) => {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -776,7 +784,7 @@ const createContract = async (req, res, next) => {
         req.user?.id || null,
         endUserDepartmentId,
         contractManagerId,
-        technicalDepartmentIds,
+        toJsonbParameter(technicalDepartmentIds),
       ]
     );
 
@@ -936,7 +944,7 @@ const updateContract = async (req, res, next) => {
 
   if (req.body?.technical_department_ids !== undefined) {
     const parsedDepartments = normalizeIdArray(req.body.technical_department_ids);
-    pushAssignment('technical_department_ids', parsedDepartments);
+    pushAssignment('technical_department_ids', toJsonbParameter(parsedDepartments));
   }
 
   if (req.body?.status !== undefined) {

@@ -12,7 +12,7 @@ const canManageContractEvaluations = req => {
     'SCM',
     'COO',
     'ADMIN',
-    'CONTRACT_MANAGER',
+    'CONTRACTMANAGER',
     'PROCUREMENTSPECIALIST',
     'MEDICALDEVICES',
   ]);

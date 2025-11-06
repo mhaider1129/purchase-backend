@@ -133,7 +133,7 @@ const fetchActiveUsersByRoles = async (client, roles = []) => {
   }
 
   const { rows } = await client.query(
-    `SELECT id, role, department_id
+    `SELECT id, name, email, role, department_id
        FROM users
       WHERE is_active = TRUE
         AND UPPER(role) = ANY($1::TEXT[])
@@ -158,7 +158,7 @@ const fetchHodsForDepartments = async (client, departmentIds = []) => {
   }
 
   const { rows } = await client.query(
-    `SELECT id, role, department_id
+    `SELECT id, name, email, role, department_id
        FROM users
       WHERE is_active = TRUE
         AND UPPER(role) = 'HOD'
@@ -198,7 +198,7 @@ const fetchContractManagerEvaluator = async (client, contractManagerId) => {
   }
 
   const { rows } = await client.query(
-    `SELECT id, role, department_id
+    `SELECT id, name, email, role, department_id
        FROM users
       WHERE id = $1
         AND is_active = TRUE
@@ -211,7 +211,7 @@ const fetchContractManagerEvaluator = async (client, contractManagerId) => {
 
 const fetchOhsEvaluators = async client => {
   const { rows } = await client.query(
-    `SELECT u.id, u.role, u.department_id
+    `SELECT u.id, u.name, u.email, u.role, u.department_id
        FROM users u
        JOIN departments d ON d.id = u.department_id
       WHERE u.is_active = TRUE
@@ -316,6 +316,121 @@ const buildEvaluationTemplate = criterion => {
     components,
     overallScore: null,
   };
+};
+
+const normalizeRoleToken = role =>
+  (role || '')
+    .toString()
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+
+const canManageContractEvaluations = req => {
+  const allowedRoleTokens = new Set([
+    'SCM',
+    'COO',
+    'ADMIN',
+    'CONTRACTMANAGER',
+    'PROCUREMENTSPECIALIST',
+    'MEDICALDEVICES',
+  ]);
+
+  const roleToken = normalizeRoleToken(req.user?.role);
+  return allowedRoleTokens.has(roleToken);
+};
+
+const getEvaluationCandidates = async (req, res, next) => {
+  if (!canManageContractEvaluations(req)) {
+    return next(createHttpError(403, 'You are not authorized to view evaluation candidates'));
+  }
+
+  const contractId = Number.parseInt(req.params.contractId, 10);
+  if (!Number.isInteger(contractId) || contractId <= 0) {
+    return next(createHttpError(400, 'Invalid contract id'));
+  }
+
+  const rawCriterionId = req.query.criterionId ?? req.query.criterion_id ?? null;
+  const rawCriterionCode = req.query.criterionCode ?? req.query.criterion_code ?? null;
+
+  if (!rawCriterionId && !rawCriterionCode) {
+    return next(createHttpError(400, 'criterionId or criterionCode is required'));
+  }
+
+  let client;
+  try {
+    await ensureContractsTable();
+    client = await pool.connect();
+
+    const contractResult = await client.query(
+      `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
+              delivery_terms, warranty_terms, performance_management,
+              end_user_department_id, contract_manager_id, technical_department_ids,
+              created_by, created_at, updated_at
+         FROM contracts
+        WHERE id = $1
+        LIMIT 1`,
+      [contractId]
+    );
+
+    if (contractResult.rowCount === 0) {
+      return next(createHttpError(404, 'Contract not found'));
+    }
+
+    const contract = serializeContract(contractResult.rows[0]);
+
+    let criterionResult;
+    if (rawCriterionId) {
+      const parsedCriterionId = Number(rawCriterionId);
+      if (!Number.isInteger(parsedCriterionId) || parsedCriterionId <= 0) {
+        return next(createHttpError(400, 'criterionId must be a positive integer'));
+      }
+
+      criterionResult = await client.query(
+        `SELECT id, name, role, code, components
+           FROM evaluation_criteria
+          WHERE id = $1
+          LIMIT 1`,
+        [parsedCriterionId]
+      );
+    } else {
+      const normalizedCode = normalizeText(rawCriterionCode).toLowerCase();
+      if (!normalizedCode) {
+        return next(createHttpError(400, 'criterionCode must be provided'));
+      }
+
+      criterionResult = await client.query(
+        `SELECT id, name, role, code, components
+           FROM evaluation_criteria
+          WHERE LOWER(code) = $1
+          LIMIT 1`,
+        [normalizedCode]
+      );
+    }
+
+    if (criterionResult.rowCount === 0) {
+      return next(createHttpError(404, 'Evaluation criterion not found'));
+    }
+
+    const criterion = criterionResult.rows[0];
+    const evaluators = await determineEvaluatorsForCriterion({ client, criterion, contract });
+
+    res.json(
+      evaluators.map(evaluator => ({
+        id: evaluator.id,
+        name: evaluator.name || null,
+        email: evaluator.email || null,
+        role: evaluator.role || null,
+        department_id: evaluator.department_id || null,
+      }))
+    );
+  } catch (err) {
+    console.error('❌ Failed to load evaluation candidates:', err);
+    next(createHttpError(500, 'Failed to load evaluation candidates'));
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
 };
 
 const ensureContractsTable = (() => {
@@ -1152,4 +1267,5 @@ module.exports = {
   CONTRACT_STATUSES,
   getContractAttachments,
   uploadContractAttachment,
+  getEvaluationCandidates,
 };

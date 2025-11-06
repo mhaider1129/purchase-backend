@@ -137,10 +137,21 @@ const getMyEvaluations = async (req, res, next) => {
   }
 };
 
+const getEvaluationCriteria = async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM evaluation_criteria');
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to get evaluation criteria:', err);
+    next(createHttpError(500, 'Failed to get evaluation criteria'));
+  }
+};
+
 module.exports = {
   ensureContractEvaluationsTable,
   createContractEvaluation,
   getContractEvaluations,
   updateContractEvaluation,
   getMyEvaluations,
+  getEvaluationCriteria,
 };

@@ -234,6 +234,9 @@ const getContractById = async (req, res, next) => {
   }
 };
 
+const { getAllByRole } = require('./usersController');
+const { createContractEvaluation } = require('./contractEvaluationsController');
+
 const createContract = async (req, res, next) => {
   if (!canManageContracts(req)) {
     return next(createHttpError(403, 'You are not authorized to create contracts'));
@@ -275,9 +278,11 @@ const createContract = async (req, res, next) => {
     return next(createHttpError(400, 'end_date must be after start_date'));
   }
 
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     await ensureContractsTable();
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `INSERT INTO contracts (
          title, vendor, reference_number, start_date, end_date, contract_value, status, description,
          delivery_terms, warranty_terms, performance_management, created_by
@@ -288,13 +293,29 @@ const createContract = async (req, res, next) => {
        deliveryTerms, warrantyTerms, performanceManagement, req.user?.id || null]
     );
 
-    res.status(201).json(serializeContract(rows[0]));
+    const contract = rows[0];
+    const { rows: criteria } = await client.query('SELECT * FROM evaluation_criteria');
+    for (const criterion of criteria) {
+      const users = await getAllByRole(criterion.role);
+      for (const user of users) {
+        await client.query(
+          'INSERT INTO contract_evaluations (contract_id, evaluator_id, evaluation_criteria) VALUES ($1, $2, $3)',
+          [contract.id, user.id, JSON.stringify(criterion.components)]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(serializeContract(contract));
   } catch (err) {
+    await client.query('ROLLBACK');
     if (err?.code === '23505') {
       return next(createHttpError(409, 'A contract with this reference number already exists'));
     }
     console.error('❌ Failed to create contract:', err);
     next(createHttpError(500, 'Failed to create contract'));
+  } finally {
+    client.release();
   }
 };
 

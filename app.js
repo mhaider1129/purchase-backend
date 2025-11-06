@@ -279,10 +279,13 @@ app.use(errorHandler);
 // =========================
 // 🚀 Start Server
 // =========================
+const { ensureEvaluationCriteriaTable } = require('./utils/evaluationCriteriaSeeder');
+
 const startServer = (port = process.env.PORT || 5000, host = process.env.HOST || getLANIP()) => {
   const server = app.listen(port, host, async () => {
     console.log(`🚀 Server started on http://${host}:${port}`);
     try {
+      await ensureEvaluationCriteriaTable();
       await reassignPendingApprovals();
       console.log('🔄 Pending approvals reassigned on startup');
       await remindPendingApprovals();

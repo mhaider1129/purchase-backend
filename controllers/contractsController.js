@@ -12,6 +12,7 @@ const CONTRACT_STATUSES = [
 
 const ensureContractsTable = (() => {
   let tableEnsured = false;
+  let referenceIndexStatus = 'pending'; // 'pending' | 'ensured' | 'skipped';
   let foreignKeyEnsured = false;
   let ensuringPromise = null;
 
@@ -36,16 +37,38 @@ const ensureContractsTable = (() => {
       )
     `);
 
-    await pool.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS contracts_reference_number_idx
-         ON contracts(reference_number)
-         WHERE reference_number IS NOT NULL`
-    );
-
     tableEnsured = true;
   };
 
+  const ensureReferenceNumberIndex = async () => {
+    if (referenceIndexStatus !== 'pending') {
+      return;
+    }
+
+    try {
+      await pool.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS contracts_reference_number_idx
+           ON contracts(reference_number)
+           WHERE reference_number IS NOT NULL`
+      );
+      referenceIndexStatus = 'ensured';
+    } catch (err) {
+      if (err?.code === '23505') {
+        console.warn(
+          '⚠️ Skipping unique index contracts_reference_number_idx because duplicate reference numbers exist.'
+        );
+        referenceIndexStatus = 'skipped';
+      } else {
+        throw err;
+      }
+    }
+  };
+
   const ensureCreatedByForeignKey = async () => {
+    if (foreignKeyEnsured) {
+      return;
+    }
+
     try {
       await pool.query(`
         ALTER TABLE contracts
@@ -62,7 +85,6 @@ const ensureContractsTable = (() => {
         console.warn(
           '⚠️ Skipping contracts.created_by foreign key creation because users table is missing.'
         );
-        foreignKeyEnsured = false;
       } else {
         throw err;
       }
@@ -70,7 +92,8 @@ const ensureContractsTable = (() => {
   };
 
   return async () => {
-    if (tableEnsured && foreignKeyEnsured) {
+    const indexSatisfied = referenceIndexStatus === 'ensured' || referenceIndexStatus === 'skipped';
+    if (tableEnsured && indexSatisfied && foreignKeyEnsured) {
       return;
     }
 
@@ -80,6 +103,8 @@ const ensureContractsTable = (() => {
           if (!tableEnsured) {
             await ensureTableStructure();
           }
+
+          await ensureReferenceNumberIndex();
 
           if (!foreignKeyEnsured) {
             await ensureCreatedByForeignKey();

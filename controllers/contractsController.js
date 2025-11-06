@@ -11,6 +11,15 @@ const CONTRACT_STATUSES = [
   'archived',
 ];
 
+const CRITERION_CODES = {
+  CONTRACT_COMPLIANCE: 'contract_compliance',
+  SUPPLIER_PERFORMANCE: 'supplier_contractor_performance',
+  FINANCIAL_PERFORMANCE: 'financial_performance',
+  RISK_ISSUE_MANAGEMENT: 'risk_issue_management',
+  SUSTAINABILITY_COMPLIANCE: 'sustainability_compliance',
+  STAKEHOLDER_SATISFACTION: 'stakeholder_satisfaction',
+};
+
 const parseJson = value => {
   if (value === null || value === undefined) {
     return null;
@@ -29,6 +38,230 @@ const parseJson = value => {
   }
 
   return null;
+};
+
+const normalizeIdArray = rawValue => {
+  if (rawValue === null || rawValue === undefined) {
+    return [];
+  }
+
+  let source = rawValue;
+  if (typeof rawValue === 'string') {
+    const trimmed = rawValue.trim();
+    if (!trimmed || trimmed.toLowerCase() === 'null') {
+      return [];
+    }
+
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      source = parseJson(trimmed);
+    } else {
+      source = trimmed.split(',').map(part => part.trim()).filter(Boolean);
+    }
+  } else if (!Array.isArray(rawValue)) {
+    source = parseJson(rawValue);
+  }
+
+  if (!Array.isArray(source)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const normalized = [];
+  for (const entry of source) {
+    const numeric = Number(entry);
+    if (Number.isInteger(numeric) && numeric > 0 && !seen.has(numeric)) {
+      seen.add(numeric);
+      normalized.push(numeric);
+    }
+  }
+
+  return normalized;
+};
+
+const parseOptionalInteger = (value, fieldName) => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.toLowerCase() === 'null') {
+      return null;
+    }
+    value = trimmed;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw createHttpError(400, `${fieldName} must be a positive integer`);
+  }
+
+  return numeric;
+};
+
+const dedupeUsersById = users => {
+  const seen = new Set();
+  return (users || []).filter(user => {
+    const id = Number(user?.id);
+    if (!Number.isInteger(id) || seen.has(id)) {
+      return false;
+    }
+    seen.add(id);
+    return true;
+  });
+};
+
+const fetchActiveUsersByRoles = async (client, roles = []) => {
+  const normalizedRoles = Array.from(
+    new Set(
+      (roles || [])
+        .map(role => (typeof role === 'string' ? role.trim().toUpperCase() : ''))
+        .filter(Boolean)
+    )
+  );
+
+  if (normalizedRoles.length === 0) {
+    return [];
+  }
+
+  const { rows } = await client.query(
+    `SELECT id, role, department_id
+       FROM users
+      WHERE is_active = TRUE
+        AND UPPER(role) = ANY($1::TEXT[])
+      ORDER BY ARRAY_POSITION($1::TEXT[], UPPER(role)), id`,
+    [normalizedRoles]
+  );
+
+  return rows;
+};
+
+const fetchHodsForDepartments = async (client, departmentIds = []) => {
+  const normalized = Array.from(
+    new Set(
+      (departmentIds || [])
+        .map(id => Number(id))
+        .filter(id => Number.isInteger(id) && id > 0)
+    )
+  );
+
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const { rows } = await client.query(
+    `SELECT id, role, department_id
+       FROM users
+      WHERE is_active = TRUE
+        AND UPPER(role) = 'HOD'
+        AND department_id = ANY($1::INT[])`,
+    [normalized]
+  );
+
+  return rows;
+};
+
+const fetchEndUserEvaluators = async (client, contract) => {
+  if (contract?.end_user_department_id) {
+    const hods = await fetchHodsForDepartments(client, [contract.end_user_department_id]);
+    if (hods.length > 0) {
+      return hods;
+    }
+  }
+
+  return fetchActiveUsersByRoles(client, ['CMO', 'COO']);
+};
+
+const fetchTechnicalDepartmentEvaluators = async (client, contract) => {
+  const departmentIds = Array.isArray(contract?.technical_department_ids)
+    ? contract.technical_department_ids
+    : [];
+  if (!departmentIds.length) {
+    return [];
+  }
+
+  return fetchHodsForDepartments(client, departmentIds);
+};
+
+const fetchContractManagerEvaluator = async (client, contractManagerId) => {
+  const parsedId = Number(contractManagerId);
+  if (!Number.isInteger(parsedId) || parsedId <= 0) {
+    return [];
+  }
+
+  const { rows } = await client.query(
+    `SELECT id, role, department_id
+       FROM users
+      WHERE id = $1
+        AND is_active = TRUE
+      LIMIT 1`,
+    [parsedId]
+  );
+
+  return rows;
+};
+
+const fetchOhsEvaluators = async client => {
+  const { rows } = await client.query(
+    `SELECT u.id, u.role, u.department_id
+       FROM users u
+       JOIN departments d ON d.id = u.department_id
+      WHERE u.is_active = TRUE
+        AND UPPER(u.role) = 'HOD'
+        AND (
+          LOWER(d.type) = 'ohs' OR
+          LOWER(d.type) LIKE 'ohs %' OR
+          LOWER(d.name) LIKE 'ohs%' OR
+          LOWER(d.name) LIKE '%occupational health%'
+        )`
+  );
+
+  if (rows.length > 0) {
+    return rows;
+  }
+
+  return fetchActiveUsersByRoles(client, ['OHS']);
+};
+
+const determineEvaluatorsForCriterion = async ({ client, criterion, contract }) => {
+  const code = (criterion?.code || '').toLowerCase();
+  let evaluators = [];
+
+  switch (code) {
+    case CRITERION_CODES.CONTRACT_COMPLIANCE:
+    case CRITERION_CODES.FINANCIAL_PERFORMANCE:
+      evaluators = await fetchActiveUsersByRoles(client, ['SCM']);
+      break;
+    case CRITERION_CODES.SUPPLIER_PERFORMANCE:
+      evaluators = [
+        ...(await fetchEndUserEvaluators(client, contract)),
+        ...(await fetchTechnicalDepartmentEvaluators(client, contract)),
+      ];
+      break;
+    case CRITERION_CODES.RISK_ISSUE_MANAGEMENT:
+      evaluators = [
+        ...(await fetchContractManagerEvaluator(client, contract?.contract_manager_id)),
+        ...(await fetchEndUserEvaluators(client, contract)),
+      ];
+      break;
+    case CRITERION_CODES.SUSTAINABILITY_COMPLIANCE:
+      evaluators = await fetchOhsEvaluators(client);
+      break;
+    case CRITERION_CODES.STAKEHOLDER_SATISFACTION:
+      evaluators = await fetchEndUserEvaluators(client, contract);
+      break;
+    default:
+      if (criterion?.role) {
+        evaluators = await fetchActiveUsersByRoles(client, [criterion.role]);
+      }
+      break;
+  }
+
+  if (!evaluators.length && criterion?.role) {
+    evaluators = await fetchActiveUsersByRoles(client, [criterion.role]);
+  }
+
+  return dedupeUsersById(evaluators);
 };
 
 const normalizeCriterionComponents = rawComponents => {
@@ -71,6 +304,7 @@ const buildEvaluationTemplate = criterion => {
     criterionId: criterion.id || null,
     criterionName: criterion.name || null,
     criterionRole: criterion.role || null,
+    criterionCode: criterion.code || null,
     components,
     overallScore: null,
   };
@@ -80,6 +314,9 @@ const ensureContractsTable = (() => {
   let tableEnsured = false;
   let referenceIndexStatus = 'pending'; // 'pending' | 'ensured' | 'skipped';
   let foreignKeyEnsured = false;
+  let assignmentColumnsEnsured = false;
+  let endUserForeignKeyEnsured = false;
+  let contractManagerForeignKeyEnsured = false;
   let ensuringPromise = null;
 
   const ensureTableStructure = async () => {
@@ -97,6 +334,9 @@ const ensureContractsTable = (() => {
         delivery_terms TEXT,
         warranty_terms TEXT,
         performance_management TEXT,
+        end_user_department_id INTEGER,
+        contract_manager_id INTEGER,
+        technical_department_ids JSONB,
         created_by INTEGER,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -104,6 +344,21 @@ const ensureContractsTable = (() => {
     `);
 
     tableEnsured = true;
+  };
+
+  const ensureAssignmentColumns = async () => {
+    if (assignmentColumnsEnsured) {
+      return;
+    }
+
+    await pool.query(`
+      ALTER TABLE contracts
+        ADD COLUMN IF NOT EXISTS end_user_department_id INTEGER,
+        ADD COLUMN IF NOT EXISTS contract_manager_id INTEGER,
+        ADD COLUMN IF NOT EXISTS technical_department_ids JSONB
+    `);
+
+    assignmentColumnsEnsured = true;
   };
 
   const ensureReferenceNumberIndex = async () => {
@@ -157,9 +412,63 @@ const ensureContractsTable = (() => {
     }
   };
 
+  const ensureEndUserForeignKey = async () => {
+    if (endUserForeignKeyEnsured) {
+      return;
+    }
+
+    try {
+      await pool.query(`
+        ALTER TABLE contracts
+          ADD CONSTRAINT contracts_end_user_department_id_fkey
+          FOREIGN KEY (end_user_department_id) REFERENCES departments(id) ON DELETE SET NULL
+      `);
+      endUserForeignKeyEnsured = true;
+    } catch (err) {
+      if (err?.code === '42710') {
+        endUserForeignKeyEnsured = true;
+      } else if (err?.code === '42P01') {
+        console.warn('⚠️ Departments table missing; will retry ensuring end user foreign key later.');
+      } else {
+        throw err;
+      }
+    }
+  };
+
+  const ensureContractManagerForeignKey = async () => {
+    if (contractManagerForeignKeyEnsured) {
+      return;
+    }
+
+    try {
+      await pool.query(`
+        ALTER TABLE contracts
+          ADD CONSTRAINT contracts_contract_manager_id_fkey
+          FOREIGN KEY (contract_manager_id) REFERENCES users(id) ON DELETE SET NULL
+      `);
+      contractManagerForeignKeyEnsured = true;
+    } catch (err) {
+      if (err?.code === '42710') {
+        contractManagerForeignKeyEnsured = true;
+      } else if (err?.code === '42P01') {
+        console.warn('⚠️ Users table missing; will retry ensuring contract manager foreign key later.');
+      } else {
+        throw err;
+      }
+    }
+  };
+
   return async () => {
     const indexSatisfied = referenceIndexStatus === 'ensured' || referenceIndexStatus === 'skipped';
-    if (tableEnsured && indexSatisfied && foreignKeyEnsured) {
+    const constraintsSatisfied =
+      tableEnsured &&
+      indexSatisfied &&
+      foreignKeyEnsured &&
+      assignmentColumnsEnsured &&
+      endUserForeignKeyEnsured &&
+      contractManagerForeignKeyEnsured;
+
+    if (constraintsSatisfied) {
       return;
     }
 
@@ -170,10 +479,22 @@ const ensureContractsTable = (() => {
             await ensureTableStructure();
           }
 
+          if (!assignmentColumnsEnsured) {
+            await ensureAssignmentColumns();
+          }
+
           await ensureReferenceNumberIndex();
 
           if (!foreignKeyEnsured) {
             await ensureCreatedByForeignKey();
+          }
+
+          if (!endUserForeignKeyEnsured) {
+            await ensureEndUserForeignKey();
+          }
+
+          if (!contractManagerForeignKeyEnsured) {
+            await ensureContractManagerForeignKey();
           }
         } catch (err) {
           console.error('❌ Failed to ensure contracts table exists:', err);
@@ -261,6 +582,18 @@ const serializeContract = (row) => {
       ? Math.ceil((endDate.getTime() - now.getTime()) / msInDay)
       : null;
 
+  const technicalDepartmentIds = normalizeIdArray(row.technical_department_ids);
+  const endUserDepartmentIdValue = Number(row.end_user_department_id);
+  const contractManagerIdValue = Number(row.contract_manager_id);
+  const endUserDepartmentId =
+    Number.isInteger(endUserDepartmentIdValue) && endUserDepartmentIdValue > 0
+      ? endUserDepartmentIdValue
+      : null;
+  const contractManagerId =
+    Number.isInteger(contractManagerIdValue) && contractManagerIdValue > 0
+      ? contractManagerIdValue
+      : null;
+
   return {
     id: row.id,
     title: row.title,
@@ -274,6 +607,9 @@ const serializeContract = (row) => {
     delivery_terms: row.delivery_terms,
     warranty_terms: row.warranty_terms,
     performance_management: row.performance_management,
+    end_user_department_id: endUserDepartmentId,
+    contract_manager_id: contractManagerId,
+    technical_department_ids: technicalDepartmentIds,
     created_by: row.created_by,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -315,7 +651,9 @@ const listContracts = async (req, res, next) => {
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
       `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-              delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at
+              delivery_terms, warranty_terms, performance_management,
+              end_user_department_id, contract_manager_id, technical_department_ids,
+              created_by, created_at, updated_at
          FROM contracts
          ${whereClause}
         ORDER BY updated_at DESC NULLS LAST, title ASC`,
@@ -342,7 +680,9 @@ const getContractById = async (req, res, next) => {
     await ensureContractsTable();
     const { rows } = await pool.query(
       `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-              delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at
+              delivery_terms, warranty_terms, performance_management,
+              end_user_department_id, contract_manager_id, technical_department_ids,
+              created_by, created_at, updated_at
          FROM contracts
         WHERE id = $1
         LIMIT 1`,
@@ -359,9 +699,6 @@ const getContractById = async (req, res, next) => {
     next(createHttpError(500, 'Failed to fetch contract'));
   }
 };
-
-const { getAllByRole } = require('./usersController');
-const { createContractEvaluation } = require('./contractEvaluationsController');
 
 const createContract = async (req, res, next) => {
   if (!canManageContracts(req)) {
@@ -392,10 +729,16 @@ const createContract = async (req, res, next) => {
   let startDate;
   let endDate;
   let contractValue;
+  let endUserDepartmentId = null;
+  let contractManagerId = null;
+  let technicalDepartmentIds = [];
   try {
     startDate = parseISODate(req.body?.start_date, 'start_date');
     endDate = parseISODate(req.body?.end_date, 'end_date');
     contractValue = parseContractValue(req.body?.contract_value);
+    endUserDepartmentId = parseOptionalInteger(req.body?.end_user_department_id, 'end_user_department_id');
+    contractManagerId = parseOptionalInteger(req.body?.contract_manager_id, 'contract_manager_id');
+    technicalDepartmentIds = normalizeIdArray(req.body?.technical_department_ids);
   } catch (err) {
     return next(err);
   }
@@ -411,21 +754,43 @@ const createContract = async (req, res, next) => {
     const { rows } = await client.query(
       `INSERT INTO contracts (
          title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-         delivery_terms, warranty_terms, performance_management, created_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         delivery_terms, warranty_terms, performance_management, created_by,
+         end_user_department_id, contract_manager_id, technical_department_ids
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-                 delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at`,
-      [title, vendor, referenceNumber, startDate, endDate, contractValue, status, description,
-       deliveryTerms, warrantyTerms, performanceManagement, req.user?.id || null]
+                 delivery_terms, warranty_terms, performance_management,
+                 end_user_department_id, contract_manager_id, technical_department_ids,
+                 created_by, created_at, updated_at`,
+      [
+        title,
+        vendor,
+        referenceNumber,
+        startDate,
+        endDate,
+        contractValue,
+        status,
+        description,
+        deliveryTerms,
+        warrantyTerms,
+        performanceManagement,
+        req.user?.id || null,
+        endUserDepartmentId,
+        contractManagerId,
+        technicalDepartmentIds,
+      ]
     );
 
-    const contract = rows[0];
+    const contract = serializeContract(rows[0]);
     await ensureContractEvaluationsTable();
     const { rows: criteria } = await client.query('SELECT * FROM evaluation_criteria');
     for (const criterion of criteria) {
-      const users = await getAllByRole(criterion.role);
-      for (const user of users) {
-        const evaluationTemplate = buildEvaluationTemplate(criterion);
+      const evaluators = await determineEvaluatorsForCriterion({ client, criterion, contract });
+      if (!evaluators.length) {
+        continue;
+      }
+
+      const evaluationTemplate = buildEvaluationTemplate(criterion);
+      for (const evaluator of evaluators) {
         await client.query(
           `INSERT INTO contract_evaluations (
              contract_id,
@@ -433,22 +798,24 @@ const createContract = async (req, res, next) => {
              evaluation_criteria,
              criterion_id,
              criterion_name,
-             criterion_role
-           ) VALUES ($1, $2, $3, $4, $5, $6)`,
+             criterion_role,
+             criterion_code
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [
             contract.id,
-            user.id,
+            evaluator.id,
             evaluationTemplate,
             evaluationTemplate.criterionId,
             evaluationTemplate.criterionName,
             evaluationTemplate.criterionRole,
+            evaluationTemplate.criterionCode,
           ]
         );
       }
     }
 
     await client.query('COMMIT');
-    res.status(201).json(serializeContract(contract));
+    res.status(201).json(contract);
   } catch (err) {
     await client.query('ROLLBACK');
     if (err?.code === '23505') {
@@ -546,6 +913,32 @@ const updateContract = async (req, res, next) => {
     pushAssignment('performance_management', performanceManagement);
   }
 
+  if (req.body?.end_user_department_id !== undefined) {
+    try {
+      const parsedDepartment = parseOptionalInteger(
+        req.body.end_user_department_id,
+        'end_user_department_id'
+      );
+      pushAssignment('end_user_department_id', parsedDepartment);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  if (req.body?.contract_manager_id !== undefined) {
+    try {
+      const parsedManager = parseOptionalInteger(req.body.contract_manager_id, 'contract_manager_id');
+      pushAssignment('contract_manager_id', parsedManager);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  if (req.body?.technical_department_ids !== undefined) {
+    const parsedDepartments = normalizeIdArray(req.body.technical_department_ids);
+    pushAssignment('technical_department_ids', parsedDepartments);
+  }
+
   if (req.body?.status !== undefined) {
     const status = normalizeStatus(req.body.status);
     if (!status) {
@@ -607,7 +1000,9 @@ const updateContract = async (req, res, next) => {
           SET ${assignments.join(', ')}
         WHERE id = $${values.length + 1}
         RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-                  delivery_terms, warranty_terms, performance_management, created_by, created_at, updated_at`,
+                  delivery_terms, warranty_terms, performance_management,
+                  end_user_department_id, contract_manager_id, technical_department_ids,
+                  created_by, created_at, updated_at`,
       [...values, contractId]
     );
 

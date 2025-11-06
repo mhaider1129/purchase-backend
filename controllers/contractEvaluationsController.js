@@ -3,7 +3,7 @@ const createHttpError = require('../utils/httpError');
 
 const canManageContractEvaluations = req => {
   const role = (req.user?.role || '').toUpperCase();
-  return role === 'SCM' || role === 'COO' || role === 'ADMIN';
+  return role === 'SCM' || role === 'COO' || role === 'ADMIN' || role === 'Contract_Manager';
 };
 
 const parseJsonValue = value => {
@@ -126,6 +126,13 @@ const normalizeEvaluationCriteriaStructure = (input, criterionMeta = {}) => {
     criterionMeta.role ||
     null;
 
+  const criterionCode =
+    base.criterionCode ||
+    base.code ||
+    base.criterion_code ||
+    criterionMeta.code ||
+    null;
+
   let overallScore = base.overallScore;
   if (overallScore !== null && overallScore !== undefined) {
     const numeric = Number(overallScore);
@@ -141,6 +148,7 @@ const normalizeEvaluationCriteriaStructure = (input, criterionMeta = {}) => {
     criterionId,
     criterionName,
     criterionRole,
+    criterionCode,
     components: normalizedComponents,
     overallScore: overallScore === undefined ? null : overallScore,
   };
@@ -153,6 +161,7 @@ const serializeEvaluationRow = row => {
       id: row.criterion_id,
       name: row.criterion_name,
       role: row.criterion_role,
+      code: row.criterion_code,
     }
   );
 
@@ -189,6 +198,7 @@ const ensureContractEvaluationsTable = (() => {
             criterion_id INTEGER REFERENCES evaluation_criteria(id) ON DELETE SET NULL,
             criterion_name TEXT,
             criterion_role TEXT,
+            criterion_code TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
@@ -198,7 +208,8 @@ const ensureContractEvaluationsTable = (() => {
           ALTER TABLE contract_evaluations
             ADD COLUMN IF NOT EXISTS criterion_id INTEGER REFERENCES evaluation_criteria(id) ON DELETE SET NULL,
             ADD COLUMN IF NOT EXISTS criterion_name TEXT,
-            ADD COLUMN IF NOT EXISTS criterion_role TEXT
+            ADD COLUMN IF NOT EXISTS criterion_role TEXT,
+            ADD COLUMN IF NOT EXISTS criterion_code TEXT
         `);
         initialized = true;
       } catch (err) {
@@ -243,6 +254,7 @@ const createContractEvaluation = async (req, res, next) => {
         id: criterion.id,
         name: criterion.name,
         role: criterion.role,
+        code: criterion.code,
         components: parseJsonValue(criterion.components) || [],
       };
     }
@@ -256,8 +268,8 @@ const createContractEvaluation = async (req, res, next) => {
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO contract_evaluations (contract_id, evaluator_id, evaluation_criteria, criterion_id, criterion_name, criterion_role)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO contract_evaluations (contract_id, evaluator_id, evaluation_criteria, criterion_id, criterion_name, criterion_role, criterion_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
         contract_id,
@@ -266,6 +278,7 @@ const createContractEvaluation = async (req, res, next) => {
         normalizedCriteria.criterionId,
         normalizedCriteria.criterionName,
         normalizedCriteria.criterionRole,
+        normalizedCriteria.criterionCode,
       ]
     );
     res.status(201).json(serializeEvaluationRow(rows[0]));
@@ -306,7 +319,7 @@ const updateContractEvaluation = async (req, res, next) => {
   try {
     await ensureContractEvaluationsTable();
     const { rows: existingRows } = await pool.query(
-      `SELECT evaluator_id, criterion_id, criterion_name, criterion_role, evaluation_criteria
+      `SELECT evaluator_id, criterion_id, criterion_name, criterion_role, criterion_code, evaluation_criteria
          FROM contract_evaluations
         WHERE id = $1`,
       [id]
@@ -328,12 +341,14 @@ const updateContractEvaluation = async (req, res, next) => {
         id: existing.criterion_id,
         name: existing.criterion_name,
         role: existing.criterion_role,
+        code: existing.criterion_code,
         components: normalizeEvaluationCriteriaStructure(
           parseJsonValue(existing.evaluation_criteria),
           {
             id: existing.criterion_id,
             name: existing.criterion_name,
             role: existing.criterion_role,
+            code: existing.criterion_code,
           }
         ).components,
       }
@@ -341,10 +356,10 @@ const updateContractEvaluation = async (req, res, next) => {
 
     const { rows } = await pool.query(
       `UPDATE contract_evaluations
-       SET status = $1, evaluation_notes = $2, evaluation_criteria = $3, updated_at = NOW()
-       WHERE id = $4
+       SET status = $1, evaluation_notes = $2, evaluation_criteria = $3, criterion_code = COALESCE($4, criterion_code), updated_at = NOW()
+       WHERE id = $5
        RETURNING *`,
-      [status, evaluation_notes, normalizedCriteria, id]
+      [status, evaluation_notes, normalizedCriteria, normalizedCriteria.criterionCode, id]
     );
     res.json(serializeEvaluationRow(rows[0]));
   } catch (err) {

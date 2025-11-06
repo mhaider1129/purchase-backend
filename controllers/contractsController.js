@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const { ensureContractEvaluationsTable } = require('./contractEvaluationsController');
 
 const CONTRACT_STATUSES = [
   'draft',
@@ -9,6 +10,71 @@ const CONTRACT_STATUSES = [
   'terminated',
   'archived',
 ];
+
+const parseJson = value => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  return null;
+};
+
+const normalizeCriterionComponents = rawComponents => {
+  const parsed = parseJson(rawComponents);
+  const source = Array.isArray(rawComponents)
+    ? rawComponents
+    : Array.isArray(parsed)
+      ? parsed
+      : [];
+
+  return source
+    .map(component => {
+      if (typeof component === 'string') {
+        const name = component.trim();
+        return name ? { name, score: null } : null;
+      }
+
+      if (component && typeof component === 'object') {
+        const name = (component.name || component.component || component.label || '').trim();
+        if (!name) {
+          return null;
+        }
+        const rawScore = component.score ?? component.value ?? null;
+        const numericScore = Number(rawScore);
+        return Number.isFinite(numericScore)
+          ? { name, score: numericScore }
+          : { name, score: null };
+      }
+
+      const fallback = String(component || '').trim();
+      return fallback ? { name: fallback, score: null } : null;
+    })
+    .filter(Boolean);
+};
+
+const buildEvaluationTemplate = criterion => {
+  const components = normalizeCriterionComponents(criterion.components);
+
+  return {
+    criterionId: criterion.id || null,
+    criterionName: criterion.name || null,
+    criterionRole: criterion.role || null,
+    components,
+    overallScore: null,
+  };
+};
 
 const ensureContractsTable = (() => {
   let tableEnsured = false;
@@ -354,13 +420,29 @@ const createContract = async (req, res, next) => {
     );
 
     const contract = rows[0];
+    await ensureContractEvaluationsTable();
     const { rows: criteria } = await client.query('SELECT * FROM evaluation_criteria');
     for (const criterion of criteria) {
       const users = await getAllByRole(criterion.role);
       for (const user of users) {
+        const evaluationTemplate = buildEvaluationTemplate(criterion);
         await client.query(
-          'INSERT INTO contract_evaluations (contract_id, evaluator_id, evaluation_criteria) VALUES ($1, $2, $3)',
-          [contract.id, user.id, JSON.stringify(criterion.components)]
+          `INSERT INTO contract_evaluations (
+             contract_id,
+             evaluator_id,
+             evaluation_criteria,
+             criterion_id,
+             criterion_name,
+             criterion_role
+           ) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            contract.id,
+            user.id,
+            evaluationTemplate,
+            evaluationTemplate.criterionId,
+            evaluationTemplate.criterionName,
+            evaluationTemplate.criterionRole,
+          ]
         );
       }
     }

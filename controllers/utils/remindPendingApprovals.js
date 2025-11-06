@@ -14,8 +14,7 @@ const remindPendingApprovals = async () => {
       JOIN requests r ON a.request_id = r.id
       WHERE a.status = 'Pending'
         AND a.is_active = true
-        AND r.created_at <= NOW() - INTERVAL '3 days'
-        AND (a.reminder_sent_at IS NULL OR a.reminder_sent_at = to_timestamp(0))
+        AND COALESCE(a.reminder_sent_at, r.created_at) <= NOW() - INTERVAL '72 hours'
         AND u.email IS NOT NULL
     `);
 
@@ -24,7 +23,7 @@ const remindPendingApprovals = async () => {
         await sendEmail(
           row.email,
           'Approval Reminder',
-          `Request ID ${row.request_id} has been pending your approval for more than 3 days.`
+          `Request ID ${row.request_id} has been pending your approval for at least 72 hours. Please review the request.`
         );
 
         await client.query(

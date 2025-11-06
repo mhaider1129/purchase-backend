@@ -1,5 +1,7 @@
 // controllers/requests/assignRequestController.js
 const pool = require('../../config/db');
+const { sendEmail } = require('../../utils/emailService');
+const { createNotifications } = require('../../utils/notificationService');
 const { successResponse, errorResponse } = require('../../utils/responseFormatter');
 
 const assignRequestToUser = async (req, res) => {
@@ -37,13 +39,13 @@ const assignRequestToUser = async (req, res) => {
       return errorResponse(res, 400, '⚠️ Request must be fully approved before assignment');
     }
 
-
-
-
     const userCheck = await pool.query(
-      `SELECT id, name FROM users
-       WHERE id = $1 AND role IN ('ProcurementSpecialist', 'SCM') AND is_active = true`,
-      [user_id]
+      `SELECT id, name, email
+         FROM users
+        WHERE id = $1
+          AND role IN ('ProcurementSpecialist', 'SCM')
+          AND is_active = true`,
+      [user_id],
     );
 
     if (userCheck.rowCount === 0) {
@@ -51,6 +53,7 @@ const assignRequestToUser = async (req, res) => {
     }
 
     const assignedName = userCheck.rows[0].name;
+    const assignedEmail = userCheck.rows[0].email || null;
 
     let logAction = 'assigned_to_procurement';
     let logComment = `Assigned to ${assignedName} (ID: ${user_id})`;
@@ -69,14 +72,46 @@ const assignRequestToUser = async (req, res) => {
 
     const updateRes = await pool.query(
       'UPDATE requests SET assigned_to = $1 WHERE id = $2 RETURNING id, request_type, assigned_to',
-      [user_id, request_id]
+      [user_id, request_id],
     );
 
     await pool.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
        VALUES ($1, $2, $3, $4)`,
-      [request_id, logAction, assignerId, logComment]
+      [request_id, logAction, assignerId, logComment],
     );
+
+    const requestType = updateRes.rows[0]?.request_type || 'purchase';
+
+    if (assignedEmail) {
+      try {
+        await sendEmail(
+          assignedEmail,
+          'New procurement assignment',
+          `Hello ${assignedName},\n\nYou have been assigned to the ${requestType} request with ID ${request_id}.\nPlease log in to the procurement portal to review and take action.`,
+        );
+      } catch (emailErr) {
+        console.error('⚠️ Failed to send procurement assignment email:', emailErr);
+      }
+    }
+
+    try {
+      await createNotifications([
+        {
+          userId: Number(user_id),
+          title: 'New procurement assignment',
+          message: `You have been assigned to the ${requestType} request with ID ${request_id}.`,
+          link: `/requests/${request_id}`,
+          metadata: {
+            requestId: request_id,
+            requestType,
+            action: 'procurement_assignment',
+          },
+        },
+      ]);
+    } catch (notifyErr) {
+      console.error('⚠️ Failed to record procurement assignment notification:', notifyErr);
+    }
 
     // Optional audit log
     // await pool.query(
@@ -87,7 +122,7 @@ const assignRequestToUser = async (req, res) => {
 
     return successResponse(res, '✅ Request assigned successfully', {
       ...updateRes.rows[0],
-      assigned_user: assignedName
+      assigned_user: assignedName,
     });
 
   } catch (err) {

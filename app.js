@@ -168,6 +168,16 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 // =========================
+// 🛣️ URL Normalization
+// =========================
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api/api/')) {
+    req.url = req.url.replace('/api/api/', '/api/');
+  }
+  next();
+});
+
+// =========================
 // 📁 Optional: Serve Uploads (if needed for frontend access)
 // =========================
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

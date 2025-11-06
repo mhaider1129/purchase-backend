@@ -179,10 +179,13 @@ const listContracts = async (req, res, next) => {
     }
 
     if (search) {
-      values.push(`%${search.toLowerCase()}%`);
-      const placeholder = `$${values.length}`;
+     const searchTerm = `%${search.toLowerCase()}%`;
+      const baseIndex = values.length;
+      values.push(searchTerm, searchTerm, searchTerm);
       filters.push(
-        `(LOWER(title) LIKE ${placeholder} OR LOWER(vendor) LIKE ${placeholder} OR LOWER(reference_number) LIKE ${placeholder})`
+        `(LOWER(title) LIKE $${baseIndex + 1} OR LOWER(vendor) LIKE $${
+          baseIndex + 2
+        } OR LOWER(reference_number) LIKE $${baseIndex + 3})`
       );
     }
 

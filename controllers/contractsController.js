@@ -11,57 +11,89 @@ const CONTRACT_STATUSES = [
 ];
 
 const ensureContractsTable = (() => {
-  let initialized = false;
-  let initializingPromise = null;
+  let tableEnsured = false;
+  let foreignKeyEnsured = false;
+  let ensuringPromise = null;
+
+  const ensureTableStructure = async () => {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS contracts (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        vendor TEXT NOT NULL,
+        reference_number TEXT,
+        start_date DATE,
+        end_date DATE,
+        contract_value NUMERIC(14, 2),
+        status TEXT NOT NULL DEFAULT 'active',
+        description TEXT,
+        delivery_terms TEXT,
+        warranty_terms TEXT,
+        performance_management TEXT,
+        created_by INTEGER,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS contracts_reference_number_idx
+         ON contracts(reference_number)
+         WHERE reference_number IS NOT NULL`
+    );
+
+    tableEnsured = true;
+  };
+
+  const ensureCreatedByForeignKey = async () => {
+    try {
+      await pool.query(`
+        ALTER TABLE contracts
+          ADD CONSTRAINT contracts_created_by_fkey
+          FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+      `);
+      foreignKeyEnsured = true;
+    } catch (err) {
+      if (err?.code === '42710') {
+        // Constraint already exists
+        foreignKeyEnsured = true;
+      } else if (err?.code === '42P01') {
+        // users table does not exist yet; try again on the next invocation
+        console.warn(
+          '⚠️ Skipping contracts.created_by foreign key creation because users table is missing.'
+        );
+        foreignKeyEnsured = false;
+      } else {
+        throw err;
+      }
+    }
+  };
 
   return async () => {
-    if (initialized) {
+    if (tableEnsured && foreignKeyEnsured) {
       return;
     }
 
-    if (initializingPromise) {
-      await initializingPromise;
-      return;
+    if (!ensuringPromise) {
+      ensuringPromise = (async () => {
+        try {
+          if (!tableEnsured) {
+            await ensureTableStructure();
+          }
+
+          if (!foreignKeyEnsured) {
+            await ensureCreatedByForeignKey();
+          }
+        } catch (err) {
+          console.error('❌ Failed to ensure contracts table exists:', err);
+          throw err;
+        } finally {
+          ensuringPromise = null;
+        }
+      })();
     }
 
-    initializingPromise = (async () => {
-      try {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contracts (
-            id SERIAL PRIMARY KEY,
-            title TEXT NOT NULL,
-            vendor TEXT NOT NULL,
-            reference_number TEXT,
-            start_date DATE,
-            end_date DATE,
-            contract_value NUMERIC(14, 2),
-            status TEXT NOT NULL DEFAULT 'active',
-            description TEXT,
-            delivery_terms TEXT,
-            warranty_terms TEXT,
-            performance_management TEXT,
-            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-        await pool.query(
-          `CREATE UNIQUE INDEX IF NOT EXISTS contracts_reference_number_idx
-             ON contracts(reference_number)
-             WHERE reference_number IS NOT NULL`
-        );
-
-        initialized = true;
-      } catch (err) {
-        console.error('❌ Failed to ensure contracts table exists:', err);
-        throw err;
-      } finally {
-        initializingPromise = null;
-      }
-    })();
-
-    await initializingPromise;
+    await ensuringPromise;
   };
 })();
 

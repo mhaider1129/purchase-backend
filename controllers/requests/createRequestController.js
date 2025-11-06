@@ -1,5 +1,6 @@
 const pool = require("../../config/db");
 const { sendEmail } = require("../../utils/emailService");
+const { createNotifications } = require("../../utils/notificationService");
 const createHttpError = require("../../utils/httpError");
 const {
   persistRequestAttachments,
@@ -79,8 +80,6 @@ const assignApprover = async (
   const result = await client.query(query, values);
 
   const approverId = result.rows[0]?.id || null;
-  const approverEmail = result.rows[0]?.email || null;
-
   await client.query(
     `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -93,14 +92,6 @@ const assignApprover = async (
       approverId ? null : new Date(),
     ],
   );
-
-  if (approverId && level === 1 && approverEmail) {
-    await sendEmail(
-      approverEmail,
-      'New Purchase Request Awaiting Approval',
-      `You have a new ${requestType} request to review.\nRequest ID: ${requestId}\nPlease log in to the system to take action.`,
-    );
-  }
 };
 
 const createRequest = async (req, res, next) => {
@@ -605,7 +596,11 @@ const createRequest = async (req, res, next) => {
     );
 
     const { rows: pendingApprovals } = await client.query(
-      `SELECT a.approval_level, u.name AS approver_name, u.role AS approver_role
+      `SELECT a.approval_level,
+              a.approver_id,
+              u.name AS approver_name,
+              u.role AS approver_role,
+              u.email AS approver_email
          FROM approvals a
          LEFT JOIN users u ON u.id = a.approver_id
         WHERE a.request_id = $1 AND a.status = 'Pending'
@@ -677,6 +672,39 @@ const createRequest = async (req, res, next) => {
     }
 
     const nextApproval = pendingApprovals[0] || null;
+
+    if (nextApproval?.approver_id) {
+      const message = `The ${request_type} request with ID ${request.id} is ready for your approval.`;
+      try {
+        await createNotifications([
+          {
+            userId: nextApproval.approver_id,
+            title: 'Purchase Request Awaiting Approval',
+            message,
+            link: `/requests/${request.id}`,
+            metadata: {
+              requestId: request.id,
+              requestType: request_type,
+              action: 'approval_required',
+            },
+          },
+        ]);
+      } catch (notifyErr) {
+        console.error('⚠️ Failed to create notification for next approver:', notifyErr);
+      }
+
+      if (nextApproval.approver_email) {
+        try {
+          await sendEmail(
+            nextApproval.approver_email,
+            'New Purchase Request Awaiting Approval',
+            `${message}\nPlease log in to the system to take action.`,
+          );
+        } catch (emailErr) {
+          console.error('⚠️ Failed to email next approver:', emailErr);
+        }
+      }
+    }
 
     res.status(201).json({
       message: "✅ Request created successfully with approval routing",

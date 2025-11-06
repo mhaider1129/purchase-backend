@@ -1,6 +1,7 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const { sendEmail } = require('../../utils/emailService');
+const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
 
 const assignRequestToProcurement = async (req, res, next) => {
@@ -48,6 +49,24 @@ const assignRequestToProcurement = async (req, res, next) => {
         'New procurement assignment',
         `Hello ${assigneeName},\n\nYou have been assigned to the ${requestType} request with ID ${request_id}.\nPlease log in to the procurement portal to review and take action.`,
       );
+    }
+
+    try {
+      await createNotifications([
+        {
+          userId: Number(user_id),
+          title: 'New procurement assignment',
+          message: `You have been assigned to the ${requestType} request with ID ${request_id}.`,
+          link: `/requests/${request_id}`,
+          metadata: {
+            requestId: request_id,
+            requestType,
+            action: 'procurement_assignment',
+          },
+        },
+      ]);
+    } catch (notifyErr) {
+      console.error('⚠️ Failed to record assignment notification:', notifyErr);
     }
 
     res.json({ message: '✅ Request assigned successfully' });
@@ -431,6 +450,7 @@ const markRequestAsCompleted = async (req, res, next) => {
 
     let requesterEmail = null;
     let technicianEmail = null;
+    const notificationEntries = [];
 
     const relatedUserIds = [
       requestRow.requester_id,
@@ -470,12 +490,46 @@ const markRequestAsCompleted = async (req, res, next) => {
       [id, user_id],
     );
 
+    notificationEntries.push({
+      userId: requestRow.requester_id,
+      title: `Request ${id} completed`,
+      message: `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.`,
+      link: `/requests/${id}`,
+      metadata: {
+        requestId: id,
+        requestType: requestRow.request_type,
+        action: 'request_completed',
+      },
+    });
+
+    if (
+      requestRow.request_type === 'Maintenance' &&
+      requestRow.initiated_by_technician_id &&
+      requestRow.initiated_by_technician_id !== requestRow.requester_id
+    ) {
+      notificationEntries.push({
+        userId: requestRow.initiated_by_technician_id,
+        title: `Maintenance request ${id} completed`,
+        message: `The maintenance request you initiated (ID: ${id}) has been marked as completed.`,
+        link: `/requests/${id}`,
+        metadata: {
+          requestId: id,
+          requestType: requestRow.request_type,
+          action: 'maintenance_completed',
+        },
+      });
+    }
+
+    if (notificationEntries.length > 0) {
+      await createNotifications(notificationEntries, client);
+    }
+
     await client.query('COMMIT');
     transactionActive = false;
 
-    const notifications = [];
+    const emailPromises = [];
     if (requesterEmail) {
-      notifications.push(
+      emailPromises.push(
         sendEmail(
           requesterEmail,
           `Request ${id} completed`,
@@ -489,7 +543,7 @@ const markRequestAsCompleted = async (req, res, next) => {
       technicianEmail &&
       technicianEmail !== requesterEmail
     ) {
-      notifications.push(
+      emailPromises.push(
         sendEmail(
           technicianEmail,
           `Maintenance request ${id} completed`,
@@ -499,7 +553,7 @@ const markRequestAsCompleted = async (req, res, next) => {
     }
 
     try {
-      await Promise.all(notifications);
+      await Promise.all(emailPromises);
     } catch (notificationErr) {
       console.error('⚠️ Failed to send one or more completion notifications:', notificationErr);
     }

@@ -1,6 +1,7 @@
 // src/controllers/approvalsController.js
 const pool = require('../config/db');
 const { sendEmail } = require('../utils/emailService');
+const { createNotifications } = require('../utils/notificationService');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
 const getColumnType = require('../utils/getColumnType');
@@ -74,6 +75,53 @@ const handleApprovalDecision = async (req, res, next) => {
     );
     const request = requestRes.rows[0];
     if (!request) return rollbackWithError(client, res, next, 404, 'Request not found');
+
+    const notificationsToCreate = [];
+    const notificationKeySet = new Set();
+    const enqueueNotification = ({ userId, title, message, link, metadata }) => {
+      if (userId == null) {
+        return;
+      }
+      const parsedId = Number(userId);
+      if (!Number.isInteger(parsedId)) {
+        return;
+      }
+
+      const trimmedMessage = typeof message === 'string' ? message.trim() : '';
+      if (!trimmedMessage) {
+        return;
+      }
+
+      const trimmedTitle = typeof title === 'string' ? title.trim() : null;
+      const normalizedLink = typeof link === 'string' ? link.trim() : null;
+      const key = `${parsedId}|${trimmedTitle || ''}|${trimmedMessage}|${normalizedLink || ''}`;
+
+      if (notificationKeySet.has(key)) {
+        return;
+      }
+
+      notificationKeySet.add(key);
+      notificationsToCreate.push({
+        userId: parsedId,
+        title: trimmedTitle,
+        message: trimmedMessage,
+        link: normalizedLink,
+        metadata,
+      });
+    };
+
+    let technicianEmail = null;
+    if (
+      request.request_type === 'Maintenance' &&
+      request.initiated_by_technician_id &&
+      request.initiated_by_technician_id !== request.requester_id
+    ) {
+      const techRes = await client.query(
+        `SELECT email FROM users WHERE id = $1`,
+        [request.initiated_by_technician_id],
+      );
+      technicianEmail = techRes.rows[0]?.email || null;
+    }
 
     // 3. HOD Role Validation
     if (user_role === 'HOD' && req.user.department_id !== request.department_id) {
@@ -302,16 +350,34 @@ const handleApprovalDecision = async (req, res, next) => {
         );
 
         const nextId = nextLevelRes.rows[0].id;
+        const nextApproverId = nextLevelRes.rows[0].approver_id || null;
         const emailRes = await client.query(
           `SELECT u.email FROM approvals a JOIN users u ON a.approver_id = u.id WHERE a.id = $1`,
           [nextId],
         );
         const nextEmail = emailRes.rows[0]?.email;
+        const nextMessage = `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.`;
+
+        if (nextApproverId) {
+          enqueueNotification({
+            userId: nextApproverId,
+            title: 'Purchase Request Needs Your Review',
+            message: nextMessage,
+            link: `/requests/${approval.request_id}`,
+            metadata: {
+              requestId: approval.request_id,
+              requestType: request.request_type,
+              action: 'approval_required',
+              level: approval.approval_level + 1,
+            },
+          });
+        }
+
         if (nextEmail) {
           await sendEmail(
             nextEmail,
             'Purchase Request Needs Your Review',
-            `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.\nPlease log in to review the details.`,
+            `${nextMessage}\nPlease log in to review the details.`,
           );
         }
       }
@@ -360,17 +426,56 @@ const handleApprovalDecision = async (req, res, next) => {
         VALUES ($1, $2, $3, NULL)
       `, [approval.request_id, `Request marked ${newStatus}`, approver_id]);
 
+      const statusLower = newStatus.toLowerCase();
+      const requesterMessage = `Your ${request.request_type} request (ID: ${approval.request_id}) has been ${statusLower}.`;
+
+      enqueueNotification({
+        userId: request.requester_id,
+        title: `Request ${approval.request_id} ${statusLower}`,
+        message: requesterMessage,
+        link: `/requests/${approval.request_id}`,
+        metadata: {
+          requestId: approval.request_id,
+          requestType: request.request_type,
+          action: newStatus === 'Approved' ? 'request_approved' : 'request_rejected',
+        },
+      });
+
       if (request.requester_email) {
         await sendEmail(
           request.requester_email,
           `Your purchase request ${approval.request_id} has been ${newStatus}`,
-          `Your ${request.request_type} request (ID: ${approval.request_id}) has been ${newStatus.toLowerCase()}.\nLog in to view the full details.`,
+          `${requesterMessage}\nLog in to view the full details.`,
         );
       }
 
       if (newStatus === 'Approved') {
+        if (
+          request.request_type === 'Maintenance' &&
+          request.initiated_by_technician_id &&
+          technicianEmail
+        ) {
+          enqueueNotification({
+            userId: request.initiated_by_technician_id,
+            title: `Maintenance request ${approval.request_id} approved`,
+            message: `The maintenance request you initiated (ID: ${approval.request_id}) has been approved.`,
+            link: `/requests/${approval.request_id}`,
+            metadata: {
+              requestId: approval.request_id,
+              requestType: request.request_type,
+              action: 'maintenance_approved',
+            },
+          });
+
+          await sendEmail(
+            technicianEmail,
+            `Maintenance request ${approval.request_id} approved`,
+            `The maintenance request you initiated (ID: ${approval.request_id}) has received final approval.\nYou can follow up with the requesting department for fulfillment.`,
+          );
+        }
+
         const { rows: scmRows } = await client.query(
-          `SELECT email
+          `SELECT id, email
              FROM users
             WHERE role = 'SCM'
               AND is_active = true
@@ -386,7 +491,27 @@ const handleApprovalDecision = async (req, res, next) => {
             `All approvals for ${request.request_type} request ${approval.request_id} are complete.\nYou can proceed with procurement activities.`,
           );
         }
+
+        scmRows
+          .filter(row => Number.isInteger(row.id))
+          .forEach(row => {
+            enqueueNotification({
+              userId: row.id,
+              title: `Request ${approval.request_id} fully approved`,
+              message: `All approvals for ${request.request_type} request ${approval.request_id} are complete and ready for assignment.`,
+              link: `/requests/${approval.request_id}`,
+              metadata: {
+                requestId: approval.request_id,
+                requestType: request.request_type,
+                action: 'request_ready_for_assignment',
+              },
+            });
+          });
       }
+    }
+
+    if (notificationsToCreate.length > 0) {
+      await createNotifications(notificationsToCreate, client);
     }
 
     await client.query('COMMIT');

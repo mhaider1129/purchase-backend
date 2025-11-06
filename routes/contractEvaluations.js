@@ -5,6 +5,7 @@ const {
   updateContractEvaluation,
   getMyEvaluations,
   getEvaluationCriteria,
+  getContractEvaluationById,
 } = require('../controllers/contractEvaluationsController');
 
 const router = express.Router();
@@ -12,6 +13,7 @@ const router = express.Router();
 router.get('/criteria', getEvaluationCriteria);
 router.get('/my-evaluations', getMyEvaluations);
 router.get('/', getContractEvaluations);
+router.get('/:id', getContractEvaluationById);
 router.post('/', createContractEvaluation);
 router.patch('/:id', updateContractEvaluation);
 

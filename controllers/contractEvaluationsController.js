@@ -1,9 +1,24 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const normalizeRoleToken = role =>
+  (role || '')
+    .toString()
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
 
 const canManageContractEvaluations = req => {
-  const role = (req.user?.role || '').toUpperCase();
-  return role === 'SCM' || role === 'COO' || role === 'ADMIN' || role === 'Contract_Manager';
+  const allowedRoleTokens = new Set([
+    'SCM',
+    'COO',
+    'ADMIN',
+    'CONTRACT_MANAGER',
+    'PROCUREMENTSPECIALIST',
+    'MEDICALDEVICES',
+  ]);
+
+  const roleToken = normalizeRoleToken(req.user?.role);
+  return allowedRoleTokens.has(roleToken);
 };
 
 const parseJsonValue = value => {
@@ -241,7 +256,7 @@ const createContractEvaluation = async (req, res, next) => {
 
     if (criterion_id) {
       const { rows: criterionRows } = await pool.query(
-        'SELECT id, name, role, components FROM evaluation_criteria WHERE id = $1',
+        'SELECT id, name, role, code, components FROM evaluation_criteria WHERE id = $1',
         [criterion_id]
       );
 

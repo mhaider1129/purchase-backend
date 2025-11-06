@@ -86,8 +86,7 @@ const ensureEvaluationCriteriaTable = async () => {
 
     await pool.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS evaluation_criteria_code_idx
-         ON evaluation_criteria((LOWER(code)))
-         WHERE code IS NOT NULL`
+         ON evaluation_criteria((LOWER(code)))`
     );
 
     for (const criteria of EVALUATION_CRITERIA) {

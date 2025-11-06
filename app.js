@@ -168,6 +168,11 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 // =========================
+// 🛣️ API Router
+// =========================
+const apiRouter = express.Router();
+
+// =========================
 // 📁 Optional: Serve Uploads (if needed for frontend access)
 // =========================
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -219,34 +224,38 @@ const errorHandler = require('./middleware/errorHandler');
 // 🔓 Public Routes
 // =========================
 app.use('/auth', authRoutes);
-app.use('/api/files', filesRoutes); // Optional: consider protecting this too
+apiRouter.use('/files', filesRoutes); // Optional: consider protecting this too
 
 // =========================
 // 🔒 Protected Routes
 // =========================
-app.use('/api/requests', authenticateUser, requestsRoutes);
-app.use('/api/requested-items', authenticateUser, requestedItemsRoutes);
-app.use('/api/approvals', authenticateUser, approvalsRoutes);
-app.use('/api/audit-log', authenticateUser, auditLogRoutes);
-app.use('/api/attachments', authenticateUser, attachmentsRoutes);
-app.use('/api/admin-tools', authenticateUser, adminToolsRoutes);
-app.use('/api/users', authenticateUser, usersRoutes);
-app.use('/api/dashboard', authenticateUser, dashboardRoutes);
-app.use('/api/departments', authenticateUser, departmentsRoutes);
-app.use('/api/roles', authenticateUser, rolesRoutes);
-app.use('/api/maintenance-stock', authenticateUser, maintenanceStockRoutes);
-app.use('/api/procurement-plans', authenticateUser, procurementPlansRoutes);
-app.use('/api/stock-items', authenticateUser, stockItemsRoutes);
-app.use('/api/stock-item-requests', authenticateUser, stockItemRequestsRoutes);
-app.use('/api/item-recalls', authenticateUser, itemRecallsRoutes);
-app.use('/api/warehouse-supply', authenticateUser, warehouseSupplyRoutes);
-app.use('/api/approval-routes', authenticateUser, approvalRoutesRoutes);
-app.use('/api/warehouse-supply-templates', authenticateUser, warehouseSupplyTemplatesRoutes);
-app.use('/api/projects', authenticateUser, projectsRoutes);
-app.use('/api/custody', authenticateUser, custodyRoutes);
-app.use('/api/contracts', authenticateUser, contractsRoutes);
-app.use('/api/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
-app.use('/api/contract-evaluations', authenticateUser, contractEvaluationsRoutes);
+apiRouter.use('/requests', authenticateUser, requestsRoutes);
+apiRouter.use('/requested-items', authenticateUser, requestedItemsRoutes);
+apiRouter.use('/approvals', authenticateUser, approvalsRoutes);
+apiRouter.use('/audit-log', authenticateUser, auditLogRoutes);
+apiRouter.use('/attachments', authenticateUser, attachmentsRoutes);
+apiRouter.use('/admin-tools', authenticateUser, adminToolsRoutes);
+apiRouter.use('/users', authenticateUser, usersRoutes);
+apiRouter.use('/dashboard', authenticateUser, dashboardRoutes);
+apiRouter.use('/departments', authenticateUser, departmentsRoutes);
+apiRouter.use('/roles', authenticateUser, rolesRoutes);
+apiRouter.use('/maintenance-stock', authenticateUser, maintenanceStockRoutes);
+apiRouter.use('/procurement-plans', authenticateUser, procurementPlansRoutes);
+apiRouter.use('/stock-items', authenticateUser, stockItemsRoutes);
+apiRouter.use('/stock-item-requests', authenticateUser, stockItemRequestsRoutes);
+apiRouter.use('/item-recalls', authenticateUser, itemRecallsRoutes);
+apiRouter.use('/warehouse-supply', authenticateUser, warehouseSupplyRoutes);
+apiRouter.use('/approval-routes', authenticateUser, approvalRoutesRoutes);
+apiRouter.use('/warehouse-supply-templates', authenticateUser, warehouseSupplyTemplatesRoutes);
+apiRouter.use('/projects', authenticateUser, projectsRoutes);
+apiRouter.use('/custody', authenticateUser, custodyRoutes);
+apiRouter.use('/contracts', authenticateUser, contractsRoutes);
+apiRouter.use('/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
+apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRoutes);
+
+// Mount the API router
+app.use('/api', apiRouter);
+app.use('/api/api', apiRouter); // Alias for malformed client requests
 
 // =========================
 // 🛠️ Utility Routes

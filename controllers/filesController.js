@@ -1,51 +1,51 @@
-//controllers/filesController.js
-const fs = require('fs/promises');
-const path = require('path');
 const pool = require('../config/db');
-const createHttpError = require('../utils/httpError');
+const { getSignedUrl, deleteS3File } = require('../utils/storage');
 
-const deleteFile = async (req, res, next) => {
-  const { id } = req.params;
+const getFileById = async (req, res, next) => {
+  const { fileId } = req.params;
 
   try {
-    const { rows } = await pool.query(`SELECT * FROM files WHERE id = $1`, [id]);
-    if (rows.length === 0) {
-      return next(createHttpError(404, 'File not found in database'));
+    const result = await pool.query('SELECT * FROM attachments WHERE id = $1', [fileId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'File not found' });
     }
 
-    const file = rows[0];
+    const file = result.rows[0];
+    const url = await getSignedUrl(file.s3_key);
 
-    // ✅ Authorization Check
-// req.user is populated by authMiddleware with an `id` property
-    // rather than `user_id`, so use `id` for comparison
-    if (req.user.role !== 'Admin' && req.user.id !== file.uploader_id) {      return next(createHttpError(403, 'You are not authorized to delete this file'));
-    }
-
-    const filePath = path.resolve(__dirname, '..', 'uploads', file.filename);
-
-    try {
-      await fs.unlink(filePath);
-      console.log(`🗑️ Deleted file from disk: ${filePath}`);
-    } catch (fsErr) {
-      console.warn(`⚠️ File missing on disk: ${filePath}. Skipping disk deletion.`);
-    }
-
-    await pool.query(`DELETE FROM files WHERE id = $1`, [id]);
-    console.log(`✅ Deleted file record from DB: ${file.filename}`);
-
-    res.status(200).json({
-      message: '✅ File deleted successfully',
-      deleted_file: {
-        id: file.id,
-        filename: file.filename,
-        originalname: file.originalname
-      }
+    res.json({
+      ...file,
+      url,
     });
-
   } catch (err) {
-    console.error('❌ File deletion error:', err);
-    next(createHttpError(500, 'Failed to delete file'));
+    next(err);
   }
 };
 
-module.exports = { deleteFile };
+const deleteFile = async (req, res, next) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query('SELECT * FROM attachments WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'File not found' });
+    }
+
+    const file = result.rows[0];
+    await deleteS3File(file.s3_key);
+    await pool.query('DELETE FROM attachments WHERE id = $1', [id]);
+
+    res.json({
+      success: true,
+      message: 'File deleted successfully',
+      deleted_file: file,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = {
+  getFileById,
+  deleteFile,
+};

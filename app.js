@@ -210,6 +210,7 @@ const custodyRoutes = require('./routes/custody');
 const itemRecallsRoutes = require('./routes/itemRecalls');
 const contractsRoutes = require('./routes/contracts');
 const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
+const contractEvaluationsRoutes = require('./routes/contractEvaluations');
 
 const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -245,6 +246,7 @@ app.use('/api/projects', authenticateUser, projectsRoutes);
 app.use('/api/custody', authenticateUser, custodyRoutes);
 app.use('/api/contracts', authenticateUser, contractsRoutes);
 app.use('/api/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
+app.use('/api/contract-evaluations', authenticateUser, contractEvaluationsRoutes);
 
 // =========================
 // 🛠️ Utility Routes

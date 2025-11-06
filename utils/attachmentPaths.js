@@ -27,11 +27,11 @@ function serializeAttachment(row) {
   }
 
   return {
-    ...row,
-    file_path: storedPath,
-    file_url: fileUrl,
-    download_url: downloadUrl,
-    file_name: filename,
+    id: row.id,
+    fileName: filename,
+    url: downloadUrl,
+    uploaded_by: row.uploaded_by,
+    uploaded_at: row.uploaded_at,
   };
 }
 

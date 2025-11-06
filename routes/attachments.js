@@ -125,17 +125,17 @@ function streamRemoteAttachment({ objectKey, res, fallbackFilename, next }) {
       res.setHeader('Content-Disposition', `attachment; filename="${sanitized}"`);
     }
 
-    pipeline(storageRes, res, err => {
-      if (!err) {
-        return;
-      }
+    if (res.destroyed) {
+      // If client has disconnected, abort consuming the storage stream.
+      storageRes.destroy();
+      return;
+    }
 
-      console.error('❌ Failed to stream attachment from remote storage:', err.message);
-
-      if (res.headersSent) {
-        res.destroy(err);
-      } else {
-        next(createHttpError(500, 'Failed to download attachment'));
+    pipeline(storageRes, res, (err) => {
+      if (err) {
+        // This error is often from the client disconnecting. The 'close' listener on `res`
+        // already handles destroying the upstream `request`. We log for visibility.
+        console.error(`❌ Pipeline failed while streaming attachment: ${err.message}`);
       }
     });
     }

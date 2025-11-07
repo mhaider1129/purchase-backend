@@ -8,6 +8,7 @@ const pool = require('./config/db');
 const reassignPendingApprovals = require('./controllers/utils/reassignPendingApprovals');
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
 const { syncPermissionCatalog } = require('./utils/permissionService');
+const { syncUiAccessResources } = require('./utils/uiAccessService');
 
 // Load environment variables
 dotenv.config();
@@ -18,6 +19,10 @@ const app = express();
 syncPermissionCatalog()
   .then(() => console.log('✅ Permission catalog synchronized'))
   .catch(err => console.error('❌ Failed to synchronize permission catalog:', err));
+
+syncUiAccessResources()
+  .then(() => console.log('✅ UI access resources synchronized'))
+  .catch(err => console.error('❌ Failed to synchronize UI access resources:', err));
 
 function getLANIP() {
   const interfaces = os.networkInterfaces();
@@ -221,7 +226,8 @@ const custodyRoutes = require('./routes/custody');
 const itemRecallsRoutes = require('./routes/itemRecalls');
 const contractsRoutes = require('./routes/contracts');
 const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
-const contractEvaluationsRoutes = require('./routes/contractEvaluations');
+const contractEvaluationsRouter = require('./routes/contractEvaluations');
+const uiAccessRoutes = require('./routes/uiAccess');
 
 const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -258,7 +264,8 @@ apiRouter.use('/projects', authenticateUser, projectsRoutes);
 apiRouter.use('/custody', authenticateUser, custodyRoutes);
 apiRouter.use('/contracts', authenticateUser, contractsRoutes);
 apiRouter.use('/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
-apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRoutes);
+apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRouter);
+apiRouter.use('/ui-access', authenticateUser, uiAccessRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);

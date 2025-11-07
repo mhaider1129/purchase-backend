@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { authenticateUser } = require('../middleware/authMiddleware');
-const { getPermissionsForRole } = require('../utils/permissionService');
+const { getPermissionsForUserId } = require('../utils/permissionService');
 const createHttpError = require('http-errors');
 const checkColumnExists = require('../utils/checkColumnExists');
 
@@ -149,7 +149,7 @@ router.post('/login', async (req, res) => {
       { expiresIn: '8h' }
     );
 
-    const permissions = await getPermissionsForRole(user.role);
+    const { permissions = [] } = await getPermissionsForUserId(user.id);
 
     return res.status(200).json({
       success: true,

@@ -3,7 +3,7 @@ const pool = require('../config/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const createHttpError = require('../utils/httpError');
-const { getPermissionsForRole } = require('../utils/permissionService');
+const { getPermissionsForUserId } = require('../utils/permissionService');
 
 // 🔐 Login Handler
 const login = async (req, res, next) => {
@@ -43,7 +43,7 @@ const login = async (req, res, next) => {
       { expiresIn: '1d' }
     );
 
-    const permissions = await getPermissionsForRole(user.role);
+    const { permissions = [] } = await getPermissionsForUserId(user.id);
 
     // 4. Send structured response
     res.json({

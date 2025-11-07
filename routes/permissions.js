@@ -3,14 +3,14 @@ const router = express.Router();
 const { authenticateUser } = require('../middleware/authMiddleware');
 const {
   listPermissions,
-  getRolePermissions,
-  updateRolePermissions,
+  getUserPermissions,
+  updateUserPermissions,
 } = require('../controllers/permissionsController');
 
 router.use(authenticateUser);
 
 router.get('/', listPermissions);
-router.get('/roles/:roleId', getRolePermissions);
-router.put('/roles/:roleId', updateRolePermissions);
+router.get('/users/:userId', getUserPermissions);
+router.put('/users/:userId', updateUserPermissions);
 
 module.exports = router;

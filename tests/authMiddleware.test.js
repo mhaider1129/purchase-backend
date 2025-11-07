@@ -53,27 +53,35 @@ describe('authenticateUser middleware', () => {
   });
 
   it('passes through when a user is returned', async () => {
-    pool.query.mockResolvedValueOnce({
-      rowCount: 1,
-      rows: [
-        {
-          id: 1,
-          name: 'Test User',
-          role: 'admin',
-          department_id: 2,
-          is_active: true,
-          can_request_medication: false,
-        },
-      ],
-    });
-    pool.query.mockResolvedValueOnce({
-      rowCount: 1,
-      rows: [
-        {
-          permissions: ['recalls.view'],
-        },
-      ],
-    });
+    pool.query
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            id: 1,
+            name: 'Test User',
+            role: 'admin',
+            department_id: 2,
+            is_active: true,
+            can_request_medication: false,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            role: 'admin',
+            permissions: ['recalls.view'],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { code: 'dashboard.view' },
+          { code: 'permissions.manage' },
+        ],
+      });
 
     const req = {
       headers: { authorization: 'Bearer token' },
@@ -88,6 +96,7 @@ describe('authenticateUser middleware', () => {
       expect.objectContaining({
         id: 1,
         role: 'admin',
+        permissions: ['dashboard.view', 'permissions.manage'],
       })
     );
   });

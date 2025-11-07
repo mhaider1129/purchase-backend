@@ -18,9 +18,8 @@ const getDepartmentsWithSections = async (req, res) => {
 };
 
 const createDepartment = async (req, res) => {
-  const { role } = req.user;
-  if (!['admin', 'SCM'].includes(role)) {
-    return res.status(403).json({ message: 'Unauthorized' });
+  if (!req.user.hasPermission('departments.manage')) {
+    return res.status(403).json({ message: 'You do not have permission to manage departments' });
   }
   const { name, type } = req.body;
   if (!name || !type) {
@@ -39,9 +38,8 @@ const createDepartment = async (req, res) => {
 };
 
 const createSection = async (req, res) => {
-  const { role } = req.user;
-  if (!['admin', 'SCM'].includes(role)) {
-    return res.status(403).json({ message: 'Unauthorized' });
+  if (!req.user.hasPermission('departments.manage')) {
+    return res.status(403).json({ message: 'You do not have permission to manage departments' });
   }
   const departmentId = req.params.id;
   const { name } = req.body;

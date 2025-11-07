@@ -1,6 +1,11 @@
 // middleware/authMiddleware.js
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const {
+  getPermissionsForUserId,
+  buildPermissionSet,
+  userHasPermission,
+} = require('../utils/permissionService');
 
 // 🔧 Reusable error generator
 function createHttpError(statusCode, message) {
@@ -66,12 +71,25 @@ const authenticateUser = async (req, res, next) => {
     }
 
     // ✅ Attach user context to request
+    const permissions = await getPermissionsForUserId(user.id);
+
     req.user = {
       id: user.id,
       name: user.name,
       role: user.role,
       department_id: user.department_id,
       can_request_medication: user.can_request_medication,
+      permissions,
+    };
+
+    req.user.permissionSet = buildPermissionSet(permissions);
+    req.user.hasPermission = permissionCode => userHasPermission(req.user, permissionCode);
+    req.user.hasAnyPermission = codes =>
+      Array.isArray(codes) && codes.some(code => userHasPermission(req.user, code));
+    req.user.requirePermission = (code) => {
+      if (!userHasPermission(req.user, code)) {
+        throw createHttpError(403, 'You do not have permission to perform this action');
+      }
     };
 
     next();

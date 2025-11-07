@@ -325,19 +325,8 @@ const normalizeRoleToken = role =>
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
 
-const canManageContractEvaluations = req => {
-  const allowedRoleTokens = new Set([
-    'SCM',
-    'COO',
-    'ADMIN',
-    'CONTRACTMANAGER',
-    'PROCUREMENTSPECIALIST',
-    'MEDICALDEVICES',
-  ]);
-
-  const roleToken = normalizeRoleToken(req.user?.role);
-  return allowedRoleTokens.has(roleToken);
-};
+const canManageContractEvaluations = req =>
+  Boolean(req.user?.hasPermission && req.user.hasPermission('contracts.manage'));
 
 const getEvaluationCandidates = async (req, res, next) => {
   if (!canManageContractEvaluations(req)) {
@@ -663,16 +652,8 @@ const parseContractValue = (value) => {
   return numeric;
 };
 
-const canManageContracts = (req) => {
-  const role = (req.user?.role || '').toUpperCase();
-  return (
-    role === 'SCM' ||
-    role === 'ADMIN' ||
-    role === 'PROCUREMENTSPECIALIST' ||
-    role === 'COO' ||
-    role === 'Medical Devices'
-  );
-};
+const canManageContracts = (req) =>
+  Boolean(req.user?.hasPermission && req.user.hasPermission('contracts.manage'));
 
 const toISODateString = (value) => {
   if (!value) return null;

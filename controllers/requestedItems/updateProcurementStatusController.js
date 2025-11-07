@@ -6,13 +6,10 @@ const updateItemProcurementStatus = async (req, res, next) => {
   const { item_id } = req.params;
   const { status, comment } = req.body;
   const updater_id = req.user.id;
-  const role = req.user.role;
-
-  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
   const allowedStatuses = ['pending', 'purchased', 'completed', 'canceled'];
 
-  if (!allowedRoles.includes(role)) {
-    return next(createHttpError(403, 'Unauthorized to update procurement status'));
+  if (!req.user.hasPermission('procurement.update-status')) {
+    return next(createHttpError(403, 'You do not have permission to update procurement status'));
   }
 
   if (!allowedStatuses.includes(status)) {

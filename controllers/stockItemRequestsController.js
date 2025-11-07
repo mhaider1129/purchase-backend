@@ -4,14 +4,14 @@ const createHttpError = require('../utils/httpError');
 // Create a new stock item request (Warehouse Manager)
 const createStockItemRequest = async (req, res, next) => {
   const { name, description, unit } = req.body;
-  const { id: rawUserId, role } = req.user;
+  const { id: rawUserId } = req.user;
   const userId = parseInt(rawUserId, 10);
 
   if (!Number.isInteger(userId)) {
     return next(createHttpError(400, 'Invalid user ID format'));
   }
-  if (!['WarehouseManager', 'warehouse_manager'].includes(role)) {
-    return next(createHttpError(403, 'Only Warehouse Managers can request new stock items'));
+  if (!req.user.hasPermission('stock-requests.create')) {
+    return next(createHttpError(403, 'You do not have permission to create stock item requests'));
   }
 
   if (!name) {
@@ -33,20 +33,20 @@ const createStockItemRequest = async (req, res, next) => {
 
 // Fetch stock item requests
 const getStockItemRequests = async (req, res, next) => {
-  const { id: userId, role } = req.user;
+  const { id: userId } = req.user;
   try {
     let result;
-    if (['SCM', 'scm'].includes(role)) {
+    if (req.user.hasPermission('stock-requests.review')) {
       result = await pool.query(
         `SELECT * FROM stock_item_requests ORDER BY inserted_at DESC`
       );
-    } else if (['WarehouseManager', 'warehouse_manager'].includes(role)) {
+    } else if (req.user.hasPermission('stock-requests.create')) {
       result = await pool.query(
         `SELECT * FROM stock_item_requests WHERE requested_by = $1 ORDER BY inserted_at DESC`,
         [userId]
       );
     } else {
-      return next(createHttpError(403, 'Not authorized to view stock item requests'));
+      return next(createHttpError(403, 'You do not have permission to view stock item requests'));
     }
     res.json(result.rows);
   } catch (err) {
@@ -59,10 +59,10 @@ const getStockItemRequests = async (req, res, next) => {
 const updateStockItemRequestStatus = async (req, res, next) => {
   const { id } = req.params;
   const { status } = req.body; // expected 'approved' or 'rejected'
-  const { id: userId, role } = req.user;
+  const { id: userId } = req.user;
 
-  if (!['SCM', 'scm'].includes(role)) {
-    return next(createHttpError(403, 'Only SCM can approve stock item requests'));
+  if (!req.user.hasPermission('stock-requests.review')) {
+    return next(createHttpError(403, 'You do not have permission to approve stock item requests'));
   }
 
   if (!['approved', 'rejected'].includes(status)) {

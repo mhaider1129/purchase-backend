@@ -1,8 +1,6 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 
-const ADMIN_ROLES = ['admin', 'SCM'];
-
 const getRoutes = async (req, res, next) => {
   try {
     const { rows } = await pool.query(
@@ -18,9 +16,8 @@ const getRoutes = async (req, res, next) => {
 };
 
 const createRoute = async (req, res, next) => {
-  const { role: actingRole } = req.user;
-  if (!ADMIN_ROLES.includes(actingRole)) {
-    return next(createHttpError(403, 'Only Admin or SCM can modify routes'));
+  if (!req.user.hasPermission('permissions.manage')) {
+    return next(createHttpError(403, 'You do not have permission to modify routes'));
   }
 
   const { request_type, department_type, approval_level, role, min_amount, max_amount } = req.body;
@@ -43,9 +40,8 @@ const createRoute = async (req, res, next) => {
 };
 
 const updateRoute = async (req, res, next) => {
-  const { role: actingRole } = req.user;
-  if (!ADMIN_ROLES.includes(actingRole)) {
-    return next(createHttpError(403, 'Only Admin or SCM can modify routes'));
+  if (!req.user.hasPermission('permissions.manage')) {
+    return next(createHttpError(403, 'You do not have permission to modify routes'));
   }
   const { id } = req.params;
   const { request_type, department_type, approval_level, role, min_amount, max_amount } = req.body;
@@ -73,9 +69,8 @@ const updateRoute = async (req, res, next) => {
 };
 
 const deleteRoute = async (req, res, next) => {
-  const { role: actingRole } = req.user;
-  if (!ADMIN_ROLES.includes(actingRole)) {
-    return next(createHttpError(403, 'Only Admin or SCM can modify routes'));
+  if (!req.user.hasPermission('permissions.manage')) {
+    return next(createHttpError(403, 'You do not have permission to modify routes'));
   }
   const { id } = req.params;
 

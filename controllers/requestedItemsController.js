@@ -144,11 +144,15 @@ const updateItemCost = async (req, res, next) => {
   const { id } = req.params;
   const item_id = id;
   const { unit_cost } = req.body;
-  const { id: user_id, role } = req.user;
+  const { id: user_id } = req.user;
 
   const parsedUnitCost = Number(unit_cost);
   if (Number.isNaN(parsedUnitCost) || parsedUnitCost < 0) {
     return next(createHttpError(400, 'Valid unit cost is required and must be zero or greater'));
+  }
+
+  if (!req.user.hasPermission('procurement.update-cost')) {
+    return next(createHttpError(403, 'You do not have permission to update this cost'));
   }
 
   const client = await pool.connect();
@@ -169,20 +173,6 @@ const updateItemCost = async (req, res, next) => {
     }
 
     const item = itemRes.rows[0];
-    const procurementRoles = ['ProcurementSpecialist'];
-    const isSCM = role === 'SCM';
-    const isAssignedUser = item.assigned_to === user_id;
-    const isProcurementRole = procurementRoles.includes(role);
-
-    if (!isSCM && !isAssignedUser) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(403, 'You are not authorized to update this cost'));
-    }
-
-    if (!isSCM && !isProcurementRole) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(403, 'You are not authorized to update this cost'));
-    }
 
     await client.query(
       `UPDATE public.requested_items
@@ -235,9 +225,7 @@ const updateItemCost = async (req, res, next) => {
 const updateItemProcurementStatus = async (req, res, next) => {
   const { item_id } = req.params;
   const { procurement_status, procurement_comment } = req.body;
-  const { id: user_id, role } = req.user;
-
-  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
+  const { id: user_id } = req.user;
 
   const allowedStatuses = [
     'pending',
@@ -247,8 +235,8 @@ const updateItemProcurementStatus = async (req, res, next) => {
     'canceled',
   ];
 
-  if (!allowedRoles.includes(role)) {
-    return next(createHttpError(403, 'Unauthorized to update procurement status'));
+  if (!req.user.hasPermission('procurement.update-status')) {
+    return next(createHttpError(403, 'You do not have permission to update procurement status'));
   }
 
   if (!procurement_status || !allowedStatuses.includes(procurement_status)) {
@@ -305,12 +293,10 @@ const updateItemProcurementStatus = async (req, res, next) => {
 const updateItemPurchasedQuantity = async (req, res, next) => {
   const { item_id } = req.params;
   let { purchased_quantity } = req.body;
-  const { id: user_id, role } = req.user;
+  const { id: user_id } = req.user;
 
-  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
-
-  if (!allowedRoles.includes(role)) {
-    return next(createHttpError(403, 'Unauthorized to update purchased quantity'));
+  if (!req.user.hasPermission('procurement.update-status')) {
+    return next(createHttpError(403, 'You do not have permission to update purchased quantity'));
   }
 
   purchased_quantity = Number(purchased_quantity);

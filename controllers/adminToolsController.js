@@ -2,18 +2,16 @@
 const pool = require('../config/db');
 const { successResponse, errorResponse } = require('../utils/responseFormatter');
 
-const ALLOWED_ROLES = new Set(['admin', 'SCM']);
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // 🚫 Deactivate a user by email via the Admin Tools page
 const deactivateUserByEmail = async (req, res) => {
   const { email } = req.body || {};
   const actingUser = req.user || {};
-  const actingRole = actingUser.role;
   const actingUserId = actingUser.id;
 
-  if (!ALLOWED_ROLES.has(actingRole)) {
-    return errorResponse(res, 403, 'Only Admin or SCM can deactivate users');
+  if (!req.user?.hasPermission?.('users.manage')) {
+    return errorResponse(res, 403, 'You do not have permission to deactivate users');
   }
 
   if (typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {

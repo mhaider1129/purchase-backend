@@ -130,9 +130,8 @@ const getDashboardSummary = async (req, res) => {
 };
 
 const getDepartmentMonthlySpending = async (req, res) => {
-  const { role } = req.user;
-  if (!['admin', 'SCM'].includes(role)) {
-    return res.status(403).json({ message: 'Unauthorized' });
+  if (!req.user.hasPermission('dashboard.view')) {
+    return res.status(403).json({ message: 'You do not have permission to view this dashboard' });
   }
 
   const year = parseInt(req.query.year, 10) || new Date().getFullYear();
@@ -159,9 +158,8 @@ const getDepartmentMonthlySpending = async (req, res) => {
 };
 
 const getLifecycleAnalytics = async (req, res) => {
-  const { role } = req.user;
-  if (!['admin', 'SCM'].includes(role)) {
-    return res.status(403).json({ message: 'Unauthorized' });
+  if (!req.user.hasPermission('dashboard.view')) {
+    return res.status(403).json({ message: 'You do not have permission to view this dashboard' });
   }
 
   try {

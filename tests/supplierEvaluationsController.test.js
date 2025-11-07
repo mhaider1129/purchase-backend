@@ -15,7 +15,10 @@ describe('supplierEvaluationsController', () => {
 
   it('rejects creation when user lacks permissions', async () => {
     const req = {
-      user: { role: 'Requester' },
+      user: {
+        role: 'Requester',
+        hasPermission: jest.fn().mockReturnValue(false),
+      },
       body: { supplier_name: 'Acme Corp' },
     };
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
@@ -31,7 +34,10 @@ describe('supplierEvaluationsController', () => {
 
   it('validates that supplier_name is provided', async () => {
     const req = {
-      user: { role: 'ADMIN' },
+      user: {
+        role: 'ADMIN',
+        hasPermission: jest.fn().mockImplementation(code => code === 'evaluations.manage'),
+      },
       body: { quality_score: 80 },
     };
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
@@ -47,7 +53,12 @@ describe('supplierEvaluationsController', () => {
 
   it('automatically computes overall score when omitted', async () => {
     const req = {
-      user: { role: 'SCM', id: 5, name: 'Alice Johnson' },
+      user: {
+        role: 'SCM',
+        id: 5,
+        name: 'Alice Johnson',
+        hasPermission: jest.fn().mockImplementation(code => code === 'evaluations.manage'),
+      },
       body: {
         supplier_name: 'Globex',
         evaluation_date: '2024-01-01',

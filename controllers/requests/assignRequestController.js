@@ -7,11 +7,9 @@ const { successResponse, errorResponse } = require('../../utils/responseFormatte
 const assignRequestToUser = async (req, res) => {
   const { request_id, user_id } = req.body;
   const assignerId = req.user.id;
-  const assignerRole = req.user.role;
-
-  // 🔐 Only SCM or Admin can assign
-  if (!['SCM', 'admin'].includes(assignerRole)) {
-    return errorResponse(res, 403, '⛔ Only SCM or Admin can assign requests');
+  // 🔐 Only authorized users can assign
+  if (!req.user.hasPermission('requests.manage')) {
+    return errorResponse(res, 403, '⛔ You do not have permission to assign requests');
   }
 
   // ✅ Validate input

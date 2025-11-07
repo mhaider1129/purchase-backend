@@ -11,9 +11,9 @@ const { successResponse, errorResponse } = require('../utils/responseFormatter')
 router.post('/reassign-approvals', authenticateUser, async (req, res, next) => {
   const { role, name, id } = req.user;
 
-  if (!['admin', 'SCM'].includes(role)) {
+  if (!req.user.hasPermission('approvals.reassign')) {
     console.warn(`🚫 Unauthorized reassignment attempt by ${name} (${role})`);
-    return errorResponse(res, 403, 'Only Admin or SCM can trigger this action');
+    return errorResponse(res, 403, 'You do not have permission to trigger this action');
   }
 
   try {

@@ -7,12 +7,22 @@ const os = require('os');
 const pool = require('./config/db');
 const reassignPendingApprovals = require('./controllers/utils/reassignPendingApprovals');
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
+const { syncPermissionCatalog } = require('./utils/permissionService');
+const { syncUiAccessResources } = require('./utils/uiAccessService');
 
 // Load environment variables
 dotenv.config();
 
 // Initialize Express app
 const app = express();
+
+syncPermissionCatalog()
+  .then(() => console.log('✅ Permission catalog synchronized'))
+  .catch(err => console.error('❌ Failed to synchronize permission catalog:', err));
+
+syncUiAccessResources()
+  .then(() => console.log('✅ UI access resources synchronized'))
+  .catch(err => console.error('❌ Failed to synchronize UI access resources:', err));
 
 function getLANIP() {
   const interfaces = os.networkInterfaces();
@@ -198,6 +208,7 @@ const approvalsRoutes = require('./routes/approvals');
 const auditLogRoutes = require('./routes/auditLog');
 const attachmentsRoutes = require('./routes/attachments');
 const filesRoutes = require('./routes/files');
+const permissionsRouter = require('./routes/permissions');
 const adminToolsRoutes = require('./routes/adminTools');
 const usersRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
@@ -215,7 +226,8 @@ const custodyRoutes = require('./routes/custody');
 const itemRecallsRoutes = require('./routes/itemRecalls');
 const contractsRoutes = require('./routes/contracts');
 const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
-const contractEvaluationsRoutes = require('./routes/contractEvaluations');
+const contractEvaluationsRouter = require('./routes/contractEvaluations');
+const uiAccessRoutes = require('./routes/uiAccess');
 
 const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -239,6 +251,7 @@ apiRouter.use('/users', authenticateUser, usersRoutes);
 apiRouter.use('/dashboard', authenticateUser, dashboardRoutes);
 apiRouter.use('/departments', authenticateUser, departmentsRoutes);
 apiRouter.use('/roles', authenticateUser, rolesRoutes);
+apiRouter.use('/permissions', authenticateUser, permissionsRouter);
 apiRouter.use('/maintenance-stock', authenticateUser, maintenanceStockRoutes);
 apiRouter.use('/procurement-plans', authenticateUser, procurementPlansRoutes);
 apiRouter.use('/stock-items', authenticateUser, stockItemsRoutes);
@@ -251,7 +264,8 @@ apiRouter.use('/projects', authenticateUser, projectsRoutes);
 apiRouter.use('/custody', authenticateUser, custodyRoutes);
 apiRouter.use('/contracts', authenticateUser, contractsRoutes);
 apiRouter.use('/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
-apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRoutes);
+apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRouter);
+apiRouter.use('/ui-access', authenticateUser, uiAccessRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);

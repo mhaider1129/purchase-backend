@@ -4,8 +4,8 @@ const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedI
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
-  const { id: userId, role } = req.user;
-  const isPrivilegedViewer = ['admin', 'SCM', 'audit'].includes(role);
+  const { id: userId } = req.user;
+  const isPrivilegedViewer = req.user.hasPermission('requests.view-all');
 
   try {
     let accessCheck;
@@ -114,8 +114,8 @@ const getRequestDetails = async (req, res, next) => {
 
 const getRequestItemsOnly = async (req, res, next) => {
   const { id } = req.params;
-  const { id: userId, role } = req.user;
-  const isPrivilegedViewer = ['admin', 'SCM', 'audit'].includes(role);
+  const { id: userId } = req.user;
+  const isPrivilegedViewer = req.user.hasPermission('requests.view-all');
   
   try {
     let accessCheck;

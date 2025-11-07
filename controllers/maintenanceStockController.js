@@ -18,12 +18,9 @@ const getStockItems = async (req, res, next) => {
 const upsertStockItem = async (req, res, next) => {
   const { id } = req.params;
   const { item_name, quantity } = req.body;
-  const userRole = req.user.role;
-  
-  const allowedRoles = ['WarehouseManager', 'warehouse_manager'];
 
-  if (!allowedRoles.includes(userRole)) {
-    return next(createHttpError(403, 'Only Warehouse Managers can update stock'));
+  if (!req.user.hasPermission('warehouse.manage-supply')) {
+    return next(createHttpError(403, 'You do not have permission to update maintenance stock'));
   }
 
   if (!item_name || quantity === undefined || quantity < 0) {

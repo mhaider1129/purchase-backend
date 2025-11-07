@@ -7,8 +7,8 @@ const deactivateUser = async (req, res, next) => {
   const { id } = req.params;
   const { role, id: actingUserId } = req.user;
 
-  if (!['admin', 'SCM'].includes(role)) {
-    return next(createHttpError(403, 'Only Admin or SCM can deactivate users'));
+  if (!req.user.hasPermission('users.manage')) {
+    return next(createHttpError(403, 'You do not have permission to deactivate users'));
   }
 
   try {
@@ -54,8 +54,8 @@ const assignUser = async (req, res, next) => {
   const { role: actingRole } = req.user;
   const { role, role_id, department_id, section_id, can_request_medication } = req.body;
 
-  if (!['admin', 'SCM'].includes(actingRole)) {
-    return next(createHttpError(403, 'Only Admin or SCM can assign users'));
+  if (!req.user.hasPermission('users.manage')) {
+    return next(createHttpError(403, 'You do not have permission to manage users'));
   }
 
   const userId = parseInt(id, 10);

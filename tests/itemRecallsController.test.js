@@ -16,6 +16,20 @@ jest.mock('../utils/emailService', () => ({
 
 const db = require('../config/db');
 
+const createPermissionHelpers = (grantedPermissions = []) => {
+  const normalized = new Set(grantedPermissions.map(code => code.toLowerCase()));
+
+  const hasPermission = jest.fn(code => normalized.has(String(code).toLowerCase()));
+  const hasAnyPermission = jest.fn(codes =>
+    Array.isArray(codes) && codes.some(code => normalized.has(String(code).toLowerCase()))
+  );
+
+  return {
+    hasPermission,
+    hasAnyPermission,
+  };
+};
+
 describe('itemRecallsController', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -115,7 +129,10 @@ describe('itemRecallsController', () => {
 
   it('prevents unauthorized roles from viewing recalls', async () => {
     const req = {
-      user: { role: 'Requester' },
+      user: {
+        role: 'Requester',
+        ...createPermissionHelpers([]),
+      },
     };
     const res = { json: jest.fn() };
     const next = jest.fn();
@@ -130,7 +147,10 @@ describe('itemRecallsController', () => {
 
   it('fetches procurement-facing recalls for procurement roles', async () => {
     const req = {
-      user: { role: 'ProcurementSpecialist' },
+      user: {
+        role: 'ProcurementSpecialist',
+        ...createPermissionHelpers(['recalls.view', 'requests.manage']),
+      },
     };
     const res = { json: jest.fn() };
     const next = jest.fn();
@@ -157,7 +177,10 @@ describe('itemRecallsController', () => {
 
   it('fetches recall queue for warehouse roles', async () => {
     const req = {
-      user: { role: 'WarehouseManager' },
+      user: {
+        role: 'WarehouseManager',
+        ...createPermissionHelpers(['recalls.view', 'warehouse.manage-supply']),
+      },
     };
     const res = { json: jest.fn() };
     const next = jest.fn();

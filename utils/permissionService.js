@@ -1,7 +1,4 @@
 const pool = require('../config/db');
-const { PERMISSION_DEFINITIONS, DEFAULT_ROLE_PERMISSIONS } = require('./permissionDefinitions');
-
-const canonicalizeRoleName = (role = '') => role.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 const ensurePermissionTables = async () => {
   await pool.query(`
@@ -23,59 +20,9 @@ const ensurePermissionTables = async () => {
 };
 
 const syncPermissionCatalog = async () => {
+  // Permissions are now managed directly in the database (Supabase).
+  // We only need to ensure the required tables exist; seeding happens externally.
   await ensurePermissionTables();
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    for (const permission of PERMISSION_DEFINITIONS) {
-      await client.query(
-        `INSERT INTO permissions (code, name, description)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (code)
-         DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description`,
-        [permission.code, permission.name, permission.description]
-      );
-    }
-
-    const { rows: permissions } = await client.query('SELECT id, code FROM permissions');
-    const codeToId = new Map(permissions.map(row => [row.code, row.id]));
-
-    const { rows: roles } = await client.query('SELECT id, name FROM roles');
-    for (const role of roles) {
-      const canonicalName = canonicalizeRoleName(role.name);
-      const defaultPermissions = DEFAULT_ROLE_PERMISSIONS[canonicalName];
-      if (!defaultPermissions || defaultPermissions.length === 0) {
-        continue;
-      }
-
-      let permissionIds = [];
-      if (defaultPermissions.includes('*')) {
-        permissionIds = permissions.map(row => row.id);
-      } else {
-        permissionIds = defaultPermissions
-          .map(code => codeToId.get(code))
-          .filter(Boolean);
-      }
-
-      for (const permissionId of permissionIds) {
-        await client.query(
-          `INSERT INTO role_permissions (role_id, permission_id)
-           VALUES ($1, $2)
-           ON CONFLICT DO NOTHING`,
-          [role.id, permissionId]
-        );
-      }
-    }
-
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
 };
 
 const getPermissionsForRole = async (roleName) => {

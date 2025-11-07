@@ -66,6 +66,14 @@ describe('authenticateUser middleware', () => {
         },
       ],
     });
+    pool.query.mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [
+        {
+          permissions: ['recalls.view'],
+        },
+      ],
+    });
 
     const req = {
       headers: { authorization: 'Bearer token' },

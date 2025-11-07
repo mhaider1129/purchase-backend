@@ -11,6 +11,14 @@ const ensurePermissionTables = async () => {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_permissions (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+      PRIMARY KEY (user_id, permission_id)
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS role_permissions (
       role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
       permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
@@ -25,17 +33,11 @@ const syncPermissionCatalog = async () => {
   await ensurePermissionTables();
 };
 
-const getPermissionsForRole = async (roleName) => {
-  if (!roleName) return [];
-
+const getAllPermissionCodes = async () => {
   const { rows } = await pool.query(
-    `SELECT p.code
-       FROM roles r
-       JOIN role_permissions rp ON rp.role_id = r.id
-       JOIN permissions p ON p.id = rp.permission_id
-      WHERE LOWER(r.name) = LOWER($1)
-      ORDER BY p.code`,
-    [roleName]
+    `SELECT code
+       FROM permissions
+      ORDER BY code`
   );
 
   return rows.map(row => row.code);
@@ -43,21 +45,29 @@ const getPermissionsForRole = async (roleName) => {
 
 const getPermissionsForUserId = async (userId) => {
   const { rows } = await pool.query(
-    `SELECT COALESCE(ARRAY_AGG(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
+    `SELECT u.role,
+            COALESCE(ARRAY_AGG(DISTINCT p.code ORDER BY p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
        FROM users u
-       LEFT JOIN roles r ON LOWER(r.name) = LOWER(u.role)
-       LEFT JOIN role_permissions rp ON rp.role_id = r.id
-       LEFT JOIN permissions p ON p.id = rp.permission_id
+       LEFT JOIN user_permissions up ON up.user_id = u.id
+       LEFT JOIN permissions p ON p.id = up.permission_id
       WHERE u.id = $1
-      GROUP BY u.id`,
+      GROUP BY u.id, u.role`,
     [userId]
   );
 
   if (rows.length === 0) {
-    return [];
+    return { permissions: [], found: false };
   }
 
-  return rows[0].permissions || [];
+  const { role, permissions } = rows[0];
+  const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
+
+  if (normalizedRole === 'admin') {
+    const allPermissions = await getAllPermissionCodes();
+    return { permissions: allPermissions, role, found: true };
+  }
+
+  return { permissions: permissions || [], role, found: true };
 };
 
 const buildPermissionSet = (permissions) => {
@@ -85,7 +95,7 @@ const userHasPermission = (user, permissionCode) => {
 
 module.exports = {
   syncPermissionCatalog,
-  getPermissionsForRole,
+  getAllPermissionCodes,
   getPermissionsForUserId,
   userHasPermission,
   buildPermissionSet,

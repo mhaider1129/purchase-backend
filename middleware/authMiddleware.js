@@ -71,7 +71,7 @@ const authenticateUser = async (req, res, next) => {
     }
 
     // ✅ Attach user context to request
-    const permissions = await getPermissionsForUserId(user.id);
+    const { permissions = [] } = await getPermissionsForUserId(user.id);
 
     req.user = {
       id: user.id,

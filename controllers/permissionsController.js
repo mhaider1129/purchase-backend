@@ -1,10 +1,10 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
-const { buildPermissionSet } = require('../utils/permissionService');
+const { buildPermissionSet, getPermissionsForUserId } = require('../utils/permissionService');
 
 const ensureCanManagePermissions = (req) => {
   if (!req.user?.hasPermission?.('permissions.manage')) {
-    throw createHttpError(403, 'You do not have permission to manage role permissions');
+    throw createHttpError(403, 'You do not have permission to manage user permissions');
   }
 };
 
@@ -28,10 +28,10 @@ const listPermissions = async (req, res, next) => {
   }
 };
 
-const getRolePermissions = async (req, res, next) => {
-  const roleId = Number.parseInt(req.params.roleId, 10);
-  if (!Number.isInteger(roleId) || roleId <= 0) {
-    return next(createHttpError(400, 'Invalid role identifier'));
+const getUserPermissions = async (req, res, next) => {
+  const userId = Number.parseInt(req.params.userId, 10);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return next(createHttpError(400, 'Invalid user identifier'));
   }
 
   try {
@@ -41,29 +41,26 @@ const getRolePermissions = async (req, res, next) => {
   }
 
   try {
-    const { rows } = await pool.query(
-      `SELECT p.code
-         FROM role_permissions rp
-         JOIN permissions p ON p.id = rp.permission_id
-        WHERE rp.role_id = $1
-        ORDER BY p.code`,
-      [roleId]
-    );
+    const { permissions, found } = await getPermissionsForUserId(userId);
+
+    if (!found) {
+      return next(createHttpError(404, 'User not found'));
+    }
 
     res.json({
-      role_id: roleId,
-      permissions: rows.map(row => row.code),
+      user_id: userId,
+      permissions,
     });
   } catch (err) {
-    console.error(`❌ Failed to load permissions for role ${roleId}:`, err);
-    next(createHttpError(500, 'Failed to load role permissions'));
+    console.error(`❌ Failed to load permissions for user ${userId}:`, err);
+    next(createHttpError(500, 'Failed to load user permissions'));
   }
 };
 
-const updateRolePermissions = async (req, res, next) => {
-  const roleId = Number.parseInt(req.params.roleId, 10);
-  if (!Number.isInteger(roleId) || roleId <= 0) {
-    return next(createHttpError(400, 'Invalid role identifier'));
+const updateUserPermissions = async (req, res, next) => {
+  const userId = Number.parseInt(req.params.userId, 10);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return next(createHttpError(400, 'Invalid user identifier'));
   }
 
   let permissionCodes = req.body?.permissions || req.body?.permissionCodes;
@@ -85,6 +82,16 @@ const updateRolePermissions = async (req, res, next) => {
   try {
     await client.query('BEGIN');
 
+    const { rowCount: userExists } = await client.query(
+      'SELECT 1 FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (userExists === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'User not found'));
+    }
+
     const { rows: allPermissions } = await client.query(
       'SELECT id, code FROM permissions'
     );
@@ -100,14 +107,14 @@ const updateRolePermissions = async (req, res, next) => {
       validPermissionIds.push(codeToId.get(code));
     }
 
-    await client.query('DELETE FROM role_permissions WHERE role_id = $1', [roleId]);
+    await client.query('DELETE FROM user_permissions WHERE user_id = $1', [userId]);
 
     for (const permissionId of validPermissionIds) {
       await client.query(
-        `INSERT INTO role_permissions (role_id, permission_id)
+        `INSERT INTO user_permissions (user_id, permission_id)
          VALUES ($1, $2)
          ON CONFLICT DO NOTHING`,
-        [roleId, permissionId]
+        [userId, permissionId]
       );
     }
 
@@ -115,14 +122,14 @@ const updateRolePermissions = async (req, res, next) => {
 
     const updatedPermissions = permissionCodes.sort();
     res.json({
-      role_id: roleId,
+      user_id: userId,
       permissions: updatedPermissions,
       permission_set: Array.from(buildPermissionSet(updatedPermissions)),
     });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(`❌ Failed to update permissions for role ${roleId}:`, err);
-    next(createHttpError(500, 'Failed to update role permissions'));
+    console.error(`❌ Failed to update permissions for user ${userId}:`, err);
+    next(createHttpError(500, 'Failed to update user permissions'));
   } finally {
     client.release();
   }
@@ -130,6 +137,6 @@ const updateRolePermissions = async (req, res, next) => {
 
 module.exports = {
   listPermissions,
-  getRolePermissions,
-  updateRolePermissions,
+  getUserPermissions,
+  updateUserPermissions,
 };

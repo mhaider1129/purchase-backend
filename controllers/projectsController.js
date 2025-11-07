@@ -3,10 +3,8 @@ const createHttpError = require('../utils/httpError');
 
 const normalizeName = (name = '') => name.trim();
 
-const canManageProjects = (req) => {
-  const role = (req.user?.role || '').toUpperCase();
-  return role === 'SCM' || role === 'ADMIN';
-};
+const canManageProjects = (req) =>
+  Boolean(req.user?.hasPermission && req.user.hasPermission('projects.manage'));
 
 const getProjects = async (req, res, next) => {
   try {

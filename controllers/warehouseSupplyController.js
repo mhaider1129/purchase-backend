@@ -6,10 +6,10 @@ const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItem
 const recordSuppliedItems = async (req, res, next) => {
   const { requestId } = req.params;
   const { items } = req.body;
-  const { role, id: userId } = req.user;
+  const { id: userId } = req.user;
 
-  if (!['warehouse_keeper', 'WarehouseKeeper'].includes(role)) {
-    return next(createHttpError(403, 'Only warehouse keepers can record supplied items'));
+  if (!req.user.hasPermission('warehouse.manage-supply')) {
+    return next(createHttpError(403, 'You do not have permission to record supplied items'));
   }
 
   if (!Array.isArray(items) || items.length === 0) {
@@ -41,14 +41,8 @@ const recordSuppliedItems = async (req, res, next) => {
 
 // Fetch approved warehouse supply requests
 const getWarehouseSupplyRequests = async (req, res, next) => {
-  const allowed = [
-    'WarehouseManager',
-    'warehouse_manager',
-    'WarehouseKeeper',
-    'warehouse_keeper',
-  ];
-  if (!allowed.includes(req.user.role)) {
-    return next(createHttpError(403, 'Forbidden'));
+  if (!req.user.hasPermission('warehouse.view-supply')) {
+    return next(createHttpError(403, 'You do not have permission to view warehouse supply requests'));
   }
 
   try {

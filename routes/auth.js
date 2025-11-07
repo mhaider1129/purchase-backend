@@ -5,13 +5,14 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { authenticateUser } = require('../middleware/authMiddleware');
+const { getPermissionsForRole } = require('../utils/permissionService');
 const createHttpError = require('http-errors');
 const checkColumnExists = require('../utils/checkColumnExists');
 
 const normalizeEmail = (email = '') => email.trim().toLowerCase();
 const ensureScmOrAdmin = (user) => {
-  if (!user || !['admin', 'SCM'].includes(user.role)) {
-    throw createHttpError(403, 'Only admin or SCM can perform this action');
+  if (!user?.hasPermission || !user.hasPermission('users.manage')) {
+    throw createHttpError(403, 'You do not have permission to perform this action');
   }
 };
 
@@ -148,6 +149,8 @@ router.post('/login', async (req, res) => {
       { expiresIn: '8h' }
     );
 
+    const permissions = await getPermissionsForRole(user.role);
+
     return res.status(200).json({
       success: true,
       message: '✅ Login successful',
@@ -157,7 +160,8 @@ router.post('/login', async (req, res) => {
         name: user.name,
         role: user.role,
         department_id: user.department_id,
-        section_id: user.section_id
+        section_id: user.section_id,
+        permissions,
       }
     });
   } catch (err) {

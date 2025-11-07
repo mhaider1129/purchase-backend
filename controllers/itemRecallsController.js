@@ -17,26 +17,20 @@ const parsePositiveInteger = value => {
   return Math.floor(parsed);
 };
 
-const warehouseRoles = new Set([
-  'warehousemanager',
-  'warehouse_manager',
-  'warehousekeeper',
-  'warehouse_keeper',
-]);
+const canViewRecalls = user =>
+  Boolean(user?.hasPermission && user.hasPermission('recalls.view'));
 
-const procurementRoles = new Set([
-  'procurementspecialist',
-  'procurement_specialist',
-  'scm',
-]);
+const isProcurementUser = user =>
+  Boolean(
+    user?.hasAnyPermission &&
+      user.hasAnyPermission(['procurement.update-status', 'requests.manage', 'recalls.manage'])
+  );
 
-const normalizeRole = role =>
-  typeof role === 'string' ? role.toLowerCase() : '';
-
-const isWarehouseRole = role => warehouseRoles.has(normalizeRole(role));
-const isProcurementRole = role => procurementRoles.has(normalizeRole(role));
-
-const canViewRecalls = role => isWarehouseRole(role) || isProcurementRole(role);
+const isWarehouseUser = user =>
+  Boolean(
+    user?.hasAnyPermission &&
+      user.hasAnyPermission(['warehouse.manage-supply', 'stock-requests.create', 'recalls.manage'])
+  );
 
 const selectVisibleRecallsQuery = `
   SELECT
@@ -80,16 +74,14 @@ const fetchStockItemName = async itemId => {
 };
 
 const listVisibleRecalls = async (req, res, next) => {
-  const { role } = req.user || {};
-
-  if (!canViewRecalls(role)) {
+  if (!canViewRecalls(req.user)) {
     return next(createHttpError(403, 'Not authorized to view recall requests'));
   }
 
   let queryText = `${selectVisibleRecallsQuery} ORDER BY ir.id DESC`;
   let params = [];
 
-  if (isProcurementRole(role)) {
+  if (isProcurementUser(req.user)) {
     params = ['warehouse_to_procurement'];
     queryText = `${selectVisibleRecallsQuery} WHERE ir.recall_type = $1 OR ir.escalated_to_procurement = TRUE ORDER BY ir.id DESC`;
   } else {
@@ -214,10 +206,14 @@ const createDepartmentRecallRequest = async (req, res, next) => {
 };
 
 const createWarehouseRecallRequest = async (req, res, next) => {
-  const { id: userId, department_id: departmentId, role } = req.user || {};
+  const { id: userId, department_id: departmentId } = req.user || {};
 
-  if (!isWarehouseRole(role)) {
+  if (!isWarehouseUser(req.user)) {
     return next(createHttpError(403, 'Only warehouse staff can initiate procurement recalls'));
+  }
+
+  if (!req.user.hasPermission('recalls.manage')) {
+    return next(createHttpError(403, 'You do not have permission to initiate warehouse recalls'));
   }
 
   if (!departmentId) {
@@ -392,9 +388,13 @@ const escalateRecallToProcurement = async (req, res, next) => {
     return next(createHttpError(400, 'Invalid recall identifier'));
   }
 
-  const { role, id: userId } = req.user || {};
-  if (!isWarehouseRole(role)) {
+  const { id: userId } = req.user || {};
+  if (!isWarehouseUser(req.user)) {
     return next(createHttpError(403, 'Only warehouse staff can escalate recalls'));
+  }
+
+  if (!req.user.hasPermission('recalls.manage')) {
+    return next(createHttpError(403, 'You do not have permission to escalate recalls'));
   }
 
   const warehouseNotes = sanitizeString(req.body?.warehouse_notes ?? req.body?.notes);

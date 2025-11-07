@@ -3,6 +3,7 @@ const pool = require('../config/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const createHttpError = require('../utils/httpError');
+const { getPermissionsForRole } = require('../utils/permissionService');
 
 // 🔐 Login Handler
 const login = async (req, res, next) => {
@@ -42,6 +43,8 @@ const login = async (req, res, next) => {
       { expiresIn: '1d' }
     );
 
+    const permissions = await getPermissionsForRole(user.role);
+
     // 4. Send structured response
     res.json({
       message: '✅ Login successful',
@@ -52,7 +55,8 @@ const login = async (req, res, next) => {
         name: user.name,
         role: user.role,
         department_id: user.department_id,
-        section_id: user.section_id || null // Optional field
+        section_id: user.section_id || null, // Optional field
+        permissions,
       }
     });
 

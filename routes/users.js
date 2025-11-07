@@ -62,7 +62,10 @@ router.get('/me', authenticateUser, async (req, res, next) => {
       return next(createHttpError(404, 'User not found'));
     }
 
-    res.json(result.rows[0]);
+    res.json({
+      ...result.rows[0],
+      permissions: req.user.permissions || [],
+    });
   } catch (err) {
     next(createHttpError(500, 'Failed to fetch user'));
   }
@@ -73,9 +76,8 @@ router.patch('/:id/assign', authenticateUser, assignUser);
 
 // 🔒 GET /api/users — List all users (Admin/SCM only)
 router.get('/', authenticateUser, async (req, res, next) => {
-  const role = (req.user.role || '').toString().toLowerCase();
-  if (!['admin', 'scm', 'contract_manager', 'coo'].includes(role)) {
-    return next(createHttpError(403, 'Access denied'));
+  if (!req.user.hasAnyPermission(['users.view', 'users.manage'])) {
+    return next(createHttpError(403, 'You do not have permission to view users'));
   }
 
   try {

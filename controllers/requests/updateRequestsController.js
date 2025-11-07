@@ -6,8 +6,8 @@ const { assignApprover } = require('./createRequestController');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
-  if (!['SCM', 'admin'].includes(req.user.role)) {
-    return next(createHttpError(403, 'Only SCM or Admin can assign requests'));
+  if (!req.user.hasPermission('requests.manage')) {
+    return next(createHttpError(403, 'You do not have permission to assign requests'));
   }
 
   try {
@@ -102,8 +102,8 @@ const updateApprovalStatus = async (req, res, next) => {
       return next(createHttpError(400, 'estimated_cost must be a positive number'));
     }
 
-    if (req.user.role !== 'SCM') {
-      return next(createHttpError(403, 'Only SCM can update estimated cost during approval'));
+    if (!req.user.hasPermission('procurement.update-cost')) {
+      return next(createHttpError(403, 'You do not have permission to update estimated cost during approval'));
     }
   }
 
@@ -225,7 +225,7 @@ const updateApprovalStatus = async (req, res, next) => {
       if (decision === 'Rejected') {
         await client.query(`UPDATE requests SET status = 'Rejected' WHERE id = $1`, [request_id]);
       } else {
-        if (req.user.role === 'SCM' && effectiveEstimatedCost > 5000) {
+        if (req.user.role === 'SCM' && effectiveEstimatedCost > 7500000) {
           const { rowCount: cfoExists } = await client.query(
             `SELECT 1
                FROM approvals a
@@ -360,11 +360,10 @@ const updateApprovalStatus = async (req, res, next) => {
 
 const markRequestAsCompleted = async (req, res, next) => {
   const { id } = req.params;
-  const { id: user_id, role } = req.user;
+  const { id: user_id } = req.user;
 
-  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
-  if (!allowedRoles.includes(role)) {
-    return next(createHttpError(403, 'Unauthorized to mark request as completed'));
+  if (!req.user.hasPermission('requests.manage')) {
+    return next(createHttpError(403, 'You do not have permission to mark requests as completed'));
   }
 
   const client = await pool.connect();
@@ -580,11 +579,10 @@ const markRequestAsCompleted = async (req, res, next) => {
 const updateRequestCost = async (req, res, next) => {
   const { id } = req.params;
   const { estimated_cost } = req.body;
-  const { id: user_id, role } = req.user;
+  const { id: user_id } = req.user;
 
-  const allowedRoles = ['SCM', 'ProcurementSpecialist'];
-  if (!allowedRoles.includes(role)) {
-    return next(createHttpError(403, 'Unauthorized to update request cost'));
+  if (!req.user.hasPermission('procurement.update-cost')) {
+    return next(createHttpError(403, 'You do not have permission to update request costs'));
   }
 
   if (!estimated_cost || isNaN(estimated_cost) || Number(estimated_cost) <= 0) {

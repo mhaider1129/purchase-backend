@@ -1,17 +1,8 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 
-const MANAGEMENT_ROLES = new Set([
-  'ADMIN',
-  'SCM',
-  'PROCUREMENTSPECIALIST',
-  'PROCUREMENTMANAGER',
-]);
-
-const canManageSupplierEvaluations = (req) => {
-  const role = (req.user?.role || '').toUpperCase();
-  return MANAGEMENT_ROLES.has(role);
-};
+const canManageSupplierEvaluations = (req) =>
+  Boolean(req.user?.hasPermission && req.user.hasPermission('evaluations.manage'));
 
 const ensureSupplierEvaluationsTable = (() => {
   let initialized = false;

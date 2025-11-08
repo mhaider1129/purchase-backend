@@ -5,7 +5,10 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { authenticateUser } = require('../middleware/authMiddleware');
-const { getPermissionsForUserId } = require('../utils/permissionService');
+const {
+  getPermissionsForUserId,
+  applyDefaultRolePermissions,
+} = require('../utils/permissionService');
 const createHttpError = require('http-errors');
 const checkColumnExists = require('../utils/checkColumnExists');
 
@@ -68,23 +71,30 @@ router.post('/register', authenticateUser, async (req, res) => {
     return res.status(400).json({ success: false, message: 'Section is invalid' });
   }
 
+  let client;
   try {
-    const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
     if (existingUser.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'User already exists' });
     }
 
-    const employeeIdInUse = await pool.query('SELECT id FROM users WHERE employee_id = $1', [employeeId]);
+    const employeeIdInUse = await client.query('SELECT id FROM users WHERE employee_id = $1', [employeeId]);
     if (employeeIdInUse.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Employee ID is already assigned to another user' });
     }
 
-    const pendingEmployeeId = await pool.query(
+    const pendingEmployeeId = await client.query(
       `SELECT id FROM user_registration_requests WHERE employee_id = $1 AND status = 'pending'`,
       [employeeId]
     );
 
     if (pendingEmployeeId.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Employee ID has a pending registration request' });
     }
 
@@ -93,12 +103,23 @@ router.post('/register', authenticateUser, async (req, res) => {
 
     const sectionIdValue = sectionId === null ? null : sectionId;
 
-    const newUser = await pool.query(
+    const newUser = await client.query(
       `INSERT INTO users (name, email, password, role, department_id, section_id, employee_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, name, email, role, department_id, section_id, employee_id`,
       [trimmedName, normalizedEmail, hashedPassword, normalizedRole, departmentId, sectionIdValue, employeeId]
     );
+
+    const newUserId = newUser.rows[0]?.id;
+    if (Number.isInteger(newUserId)) {
+      await applyDefaultRolePermissions(newUserId, normalizedRole, {
+        client,
+        replaceExisting: true,
+        skipIfExists: false,
+      });
+    }
+
+    await client.query('COMMIT');
 
     return res.status(201).json({
       success: true,
@@ -106,8 +127,19 @@ router.post('/register', authenticateUser, async (req, res) => {
       user: newUser.rows[0]
     });
   } catch (err) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('❌ Failed to rollback user registration transaction:', rollbackErr);
+      }
+    }
     console.error('❌ Registration error:', err);
     return res.status(500).json({ success: false, message: 'Server error during registration' });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
@@ -390,6 +422,15 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
         employeeId,
       ]
     );
+
+    const createdUserId = newUser.rows[0]?.id;
+    if (Number.isInteger(createdUserId)) {
+      await applyDefaultRolePermissions(createdUserId, request.requested_role, {
+        client,
+        replaceExisting: true,
+        skipIfExists: false,
+      });
+    }
 
     await client.query(
       `UPDATE user_registration_requests

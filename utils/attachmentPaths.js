@@ -16,23 +16,35 @@ function serializeAttachment(row) {
   const isLocal = isStoredLocally(storedPath);
   const filename = row.file_name || (storedPath ? path.basename(storedPath) : 'attachment');
 
-  let fileUrl = null;
   let downloadUrl = null;
 
   if (isLocal && storedPath) {
-    fileUrl = `/${storedPath}`;
     downloadUrl = `/api/attachments/download/${encodeURIComponent(path.basename(storedPath))}`;
   } else if (row.id) {
     downloadUrl = `/api/attachments/${row.id}/download`;
   }
 
-  return {
+  const result = {
     id: row.id,
+    file_name: filename,
     fileName: filename,
+    download_url: downloadUrl,
     url: downloadUrl,
     uploaded_by: row.uploaded_by,
     uploaded_at: row.uploaded_at,
   };
+
+  if (storedPath) {
+    result.file_path = storedPath;
+    result.filePath = storedPath;
+  }
+
+  if (isLocal && storedPath) {
+    result.file_url = `/${storedPath}`;
+    result.fileUrl = `/${storedPath}`;
+  }
+
+  return result;
 }
 
 module.exports = {

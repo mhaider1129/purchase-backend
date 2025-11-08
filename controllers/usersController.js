@@ -1,6 +1,7 @@
 // controllers/usersController.js
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const { applyDefaultRolePermissions } = require('../utils/permissionService');
 
 // 🚫 Deactivate user by ID
 const deactivateUser = async (req, res, next) => {
@@ -145,6 +146,8 @@ const assignUser = async (req, res, next) => {
       targetRoleName = normalizedRole;
     }
 
+    const roleChanged = roleProvided && targetRoleName !== existingUser.role;
+
     if (roleProvided) {
       const privilegedRoles = ['admin'];
       if (privilegedRoles.includes(targetRoleName) && actingRole !== 'admin') {
@@ -170,6 +173,12 @@ const assignUser = async (req, res, next) => {
 
     if (result.rowCount === 0) {
       return next(createHttpError(404, 'User not found'));
+    }
+
+    if (roleChanged) {
+      await applyDefaultRolePermissions(userId, targetRoleName, {
+        replaceExisting: true,
+      });
     }
 
     res.json({ success: true });

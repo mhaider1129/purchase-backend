@@ -9,6 +9,21 @@ function isStoredLocally(storedPath = '') {
   return normalized.startsWith('uploads/');
 }
 
+function resolveStoredLocalPath(storedPath = '') {
+  if (!storedPath) return null;
+
+  const normalized = storedPath.replace(/\\/g, '/');
+  if (!isStoredLocally(normalized)) {
+    return null;
+  }
+
+  const relativePath = normalized.startsWith('uploads/')
+    ? normalized.slice('uploads/'.length)
+    : normalized;
+
+  return path.join(UPLOADS_DIR, relativePath);
+}
+
 function serializeAttachment(row) {
   if (!row) return row;
 
@@ -52,4 +67,5 @@ module.exports = {
   UPLOADS_DIR,
   serializeAttachment,
   isStoredLocally,
+  resolveStoredLocalPath,
 };

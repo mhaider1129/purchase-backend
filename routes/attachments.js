@@ -21,6 +21,7 @@ const {
   UPLOADS_DIR,
   serializeAttachment,
   isStoredLocally,
+  resolveStoredLocalPath,
 } = require('../utils/attachmentPaths');
 const { removeObject, isStorageConfigured, buildObjectDownloadRequest } = require('../utils/storage');
 const { storeAttachmentFile } = require('../utils/attachmentStorage');
@@ -240,10 +241,34 @@ router.get('/:id/download', authenticateUser, async (req, res, next) => {
     const storedPath = attachment.file_path || '';
 
     if (!storedPath || isStoredLocally(storedPath)) {
-      const filename = storedPath
-        ? path.basename(storedPath)
-        : sanitize(attachment.file_name || 'attachment');
-      return res.redirect(`/api/attachments/download/${encodeURIComponent(filename)}`);
+      const localPath = resolveStoredLocalPath(storedPath);
+      const fallbackFilename = sanitize(attachment.file_name || 'attachment');
+
+      const filePath = localPath || path.join(UPLOADS_DIR, fallbackFilename);
+
+      fs.access(filePath, fs.constants.F_OK, err => {
+        if (err) {
+          console.warn('🟥 Local attachment not found:', filePath);
+          return next(createHttpError(404, 'Attachment not found'));
+        }
+
+        const filename = sanitize(
+          attachment.file_name || (localPath ? path.basename(localPath) : fallbackFilename) || 'attachment'
+        );
+
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Type', 'application/octet-stream');
+
+        const stream = fs.createReadStream(filePath);
+        stream.on('error', streamErr => {
+          console.error('❌ Failed to stream local attachment:', streamErr.message);
+          next(createHttpError(500, 'Failed to download attachment'));
+        });
+
+        stream.pipe(res);
+      });
+
+      return;
     }
 
     if (!isStorageConfigured()) {

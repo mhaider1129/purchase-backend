@@ -4,6 +4,27 @@ const createHttpError = require('../utils/httpError');
 const canManageSupplierEvaluations = (req) =>
   Boolean(req.user?.hasPermission && req.user.hasPermission('evaluations.manage'));
 
+const KPI_CONFIG = [
+  {
+    key: 'otif',
+    scoreField: 'otif_score',
+    weightField: 'otif_weight',
+    defaultWeight: 0.4,
+  },
+  {
+    key: 'corrective_actions',
+    scoreField: 'corrective_actions_score',
+    weightField: 'corrective_actions_weight',
+    defaultWeight: 0.35,
+  },
+  {
+    key: 'esg_compliance',
+    scoreField: 'esg_compliance_score',
+    weightField: 'esg_compliance_weight',
+    defaultWeight: 0.25,
+  },
+];
+
 const ensureSupplierEvaluationsTable = (() => {
   let initialized = false;
   let initializingPromise = null;
@@ -29,7 +50,12 @@ const ensureSupplierEvaluationsTable = (() => {
             delivery_score NUMERIC(5, 2),
             cost_score NUMERIC(5, 2),
             compliance_score NUMERIC(5, 2),
+            otif_score NUMERIC(5, 2),
+            corrective_actions_score NUMERIC(5, 2),
+            esg_compliance_score NUMERIC(5, 2),
             overall_score NUMERIC(5, 2) NOT NULL,
+            weighted_overall_score NUMERIC(5, 2),
+            kpi_weights JSONB,
             strengths TEXT,
             weaknesses TEXT,
             action_items TEXT,
@@ -43,6 +69,15 @@ const ensureSupplierEvaluationsTable = (() => {
         await pool.query(`
           CREATE INDEX IF NOT EXISTS supplier_evaluations_supplier_name_idx
             ON supplier_evaluations (LOWER(supplier_name));
+        `);
+
+        await pool.query(`
+          ALTER TABLE supplier_evaluations
+            ADD COLUMN IF NOT EXISTS otif_score NUMERIC(5, 2),
+            ADD COLUMN IF NOT EXISTS corrective_actions_score NUMERIC(5, 2),
+            ADD COLUMN IF NOT EXISTS esg_compliance_score NUMERIC(5, 2),
+            ADD COLUMN IF NOT EXISTS weighted_overall_score NUMERIC(5, 2),
+            ADD COLUMN IF NOT EXISTS kpi_weights JSONB
         `);
 
         initialized = true;
@@ -83,6 +118,23 @@ const parseScoreValue = (value, fieldName) => {
   return Math.round(numeric * 100) / 100;
 };
 
+const parseWeightPercentage = (value, fieldName) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) {
+    throw createHttpError(
+      400,
+      `${fieldName} must be a positive number no greater than 100`
+    );
+  }
+
+  const decimal = numeric > 1 ? numeric / 100 : numeric;
+  return Math.round(decimal * 1000) / 1000;
+};
+
 const parseDateStrict = (value, fieldName) => {
   if (!value) {
     throw createHttpError(400, `${fieldName} is required`);
@@ -98,6 +150,23 @@ const parseDateStrict = (value, fieldName) => {
 
 const getTodayISODate = () => new Date().toISOString().slice(0, 10);
 
+const formatDateOnly = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString().slice(0, 10);
+};
+
 const serializeEvaluation = (row) => {
   if (!row) {
     return null;
@@ -105,6 +174,23 @@ const serializeEvaluation = (row) => {
 
   const toNumber = (value) =>
     value === null || value === undefined ? null : Number(value);
+
+  const parseWeights = (value) => {
+    if (!value) {
+      return null;
+    }
+
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch (err) {
+        console.warn('⚠️ Failed to parse kpi_weights JSON payload', err);
+        return null;
+      }
+    }
+
+    return value;
+  };
 
   return {
     id: row.id,
@@ -114,7 +200,12 @@ const serializeEvaluation = (row) => {
     delivery_score: toNumber(row.delivery_score),
     cost_score: toNumber(row.cost_score),
     compliance_score: toNumber(row.compliance_score),
+    otif_score: toNumber(row.otif_score),
+    corrective_actions_score: toNumber(row.corrective_actions_score),
+    esg_compliance_score: toNumber(row.esg_compliance_score),
     overall_score: toNumber(row.overall_score),
+    weighted_overall_score: toNumber(row.weighted_overall_score),
+    kpi_weights: parseWeights(row.kpi_weights),
     strengths: row.strengths,
     weaknesses: row.weaknesses,
     action_items: row.action_items,
@@ -125,24 +216,97 @@ const serializeEvaluation = (row) => {
   };
 };
 
-const computeOverallScore = (explicitOverall, componentScores) => {
-  if (explicitOverall !== null && explicitOverall !== undefined) {
-    return explicitOverall;
+const computeWeightedKpiSummary = (scores, weightOverrides) => {
+  const metrics = [];
+
+  KPI_CONFIG.forEach(({ key, scoreField, weightField, defaultWeight }) => {
+    const score = scores[scoreField];
+    if (score === null || score === undefined) {
+      return;
+    }
+
+    let weight = defaultWeight;
+    if (Object.prototype.hasOwnProperty.call(weightOverrides, weightField)) {
+      const overrideValue = weightOverrides[weightField];
+      if (overrideValue !== null && overrideValue !== undefined) {
+        weight = overrideValue;
+      }
+    }
+
+    metrics.push({ key, score, weight });
+  });
+
+  if (!metrics.length) {
+    return { weightedScore: null, normalizedWeights: null };
   }
 
-  const scores = componentScores.filter(
-    (score) => score !== null && score !== undefined
-  );
-
-  if (!scores.length) {
+  const totalWeight = metrics.reduce((acc, metric) => acc + metric.weight, 0);
+  if (totalWeight <= 0) {
     throw createHttpError(
       400,
-      'overall_score is required when no component scores are provided'
+      'At least one KPI weight must be greater than zero to compute a weighted score'
     );
   }
 
-  const sum = scores.reduce((acc, score) => acc + score, 0);
-  return Math.round((sum / scores.length) * 100) / 100;
+  const normalizedWeights = {};
+  let weightedSum = 0;
+
+  metrics.forEach((metric) => {
+    const normalizedWeight = metric.weight / totalWeight;
+    normalizedWeights[metric.key] = Math.round(normalizedWeight * 1000) / 1000;
+    weightedSum += metric.score * normalizedWeight;
+  });
+
+  return {
+    weightedScore: Math.round(weightedSum * 100) / 100,
+    normalizedWeights,
+  };
+};
+
+const resolveOverallScores = (
+  explicitOverall,
+  componentScores,
+  kpiScores,
+  weightOverrides
+) => {
+  const { weightedScore, normalizedWeights } =
+    computeWeightedKpiSummary(kpiScores, weightOverrides);
+
+  if (explicitOverall !== null && explicitOverall !== undefined) {
+    return {
+      overallScore: explicitOverall,
+      weightedOverallScore: weightedScore,
+      normalizedWeights,
+    };
+  }
+
+  if (weightedScore !== null && weightedScore !== undefined) {
+    return {
+      overallScore: weightedScore,
+      weightedOverallScore: weightedScore,
+      normalizedWeights,
+    };
+  }
+
+  const fallbackScores = componentScores.filter(
+    (score) => score !== null && score !== undefined
+  );
+
+  if (!fallbackScores.length) {
+    throw createHttpError(
+      400,
+      'Provide either an overall score, at least one KPI score, or component scores to evaluate the supplier'
+    );
+  }
+
+  const sum = fallbackScores.reduce((acc, score) => acc + score, 0);
+  const average = Math.round((sum / fallbackScores.length) * 100) / 100;
+
+  return {
+    overallScore: average,
+    weightedOverallScore: null,
+    normalizedWeights: null,
+  };
 };
 
 const listSupplierEvaluations = async (req, res, next) => {
@@ -179,8 +343,10 @@ const listSupplierEvaluations = async (req, res, next) => {
 
     const { rows } = await pool.query(
       `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
-              cost_score, compliance_score, overall_score, strengths, weaknesses,
-              action_items, evaluator_id, evaluator_name, created_at, updated_at
+              cost_score, compliance_score, otif_score, corrective_actions_score,
+              esg_compliance_score, overall_score, weighted_overall_score,
+              kpi_weights, strengths, weaknesses, action_items, evaluator_id,
+              evaluator_name, created_at, updated_at
          FROM supplier_evaluations
          ${whereClause}
         ORDER BY evaluation_date DESC, created_at DESC`,
@@ -197,6 +363,91 @@ const listSupplierEvaluations = async (req, res, next) => {
   }
 };
 
+const getSupplierEvaluationBenchmarks = async (req, res, next) => {
+  try {
+    await ensureSupplierEvaluationsTable();
+
+    const filters = [];
+    const values = [];
+
+    const supplierName = sanitizeText(req.query?.supplier_name);
+    if (supplierName) {
+      values.push(supplierName.toLowerCase());
+      filters.push(`LOWER(supplier_name) = $${values.length}`);
+    }
+
+    const startDate = req.query?.start_date
+      ? parseDateStrict(req.query.start_date, 'start_date')
+      : null;
+    if (startDate) {
+      values.push(startDate);
+      filters.push(`evaluation_date >= $${values.length}`);
+    }
+
+    const endDate = req.query?.end_date
+      ? parseDateStrict(req.query.end_date, 'end_date')
+      : null;
+    if (endDate) {
+      values.push(endDate);
+      filters.push(`evaluation_date <= $${values.length}`);
+    }
+
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
+    const intervalInput = sanitizeText(req.query?.interval)?.toLowerCase();
+    const interval = ['month', 'quarter', 'year'].includes(intervalInput)
+      ? intervalInput
+      : 'month';
+
+    const limit = Number.parseInt(req.query?.limit, 10);
+    const limitClause = Number.isInteger(limit) && limit > 0 ? `LIMIT ${limit}` : '';
+
+    const bucketExpression = `date_trunc('${interval}', evaluation_date)`;
+
+    const { rows } = await pool.query(
+      `SELECT supplier_name,
+              ${bucketExpression} AS period_start,
+              COUNT(*) AS evaluation_count,
+              AVG(otif_score) AS avg_otif_score,
+              AVG(corrective_actions_score) AS avg_corrective_actions_score,
+              AVG(esg_compliance_score) AS avg_esg_compliance_score,
+              AVG(overall_score) AS avg_overall_score,
+              AVG(weighted_overall_score) AS avg_weighted_overall_score
+         FROM supplier_evaluations
+         ${whereClause}
+        GROUP BY supplier_name, period_start
+        ORDER BY supplier_name ASC, period_start ASC
+        ${limitClause}`,
+      values
+    );
+
+    const toNumber = (value) =>
+      value === null || value === undefined ? null : Number(value);
+
+    res.json(
+      rows.map((row) => ({
+        supplier_name: row.supplier_name,
+        period_start: formatDateOnly(row.period_start),
+        interval,
+        evaluation_count: Number(row.evaluation_count) || 0,
+        avg_otif_score: toNumber(row.avg_otif_score),
+        avg_corrective_actions_score: toNumber(
+          row.avg_corrective_actions_score
+        ),
+        avg_esg_compliance_score: toNumber(row.avg_esg_compliance_score),
+        avg_overall_score: toNumber(row.avg_overall_score),
+        avg_weighted_overall_score: toNumber(row.avg_weighted_overall_score),
+      }))
+    );
+  } catch (err) {
+    console.error('❌ Failed to compute supplier benchmark trends:', err);
+    if (err.statusCode) {
+      return next(err);
+    }
+    next(createHttpError(500, 'Failed to compute supplier benchmark data'));
+  }
+};
+
 const getSupplierEvaluationById = async (req, res, next) => {
   const evaluationId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(evaluationId)) {
@@ -208,8 +459,10 @@ const getSupplierEvaluationById = async (req, res, next) => {
 
     const { rows } = await pool.query(
       `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
-              cost_score, compliance_score, overall_score, strengths, weaknesses,
-              action_items, evaluator_id, evaluator_name, created_at, updated_at
+              cost_score, compliance_score, otif_score, corrective_actions_score,
+              esg_compliance_score, overall_score, weighted_overall_score,
+              kpi_weights, strengths, weaknesses, action_items, evaluator_id,
+              evaluator_name, created_at, updated_at
          FROM supplier_evaluations
         WHERE id = $1`,
       [evaluationId]
@@ -254,17 +507,47 @@ const createSupplierEvaluation = async (req, res, next) => {
       req.body?.compliance_score,
       'compliance_score'
     );
+    const otifScore = parseScoreValue(req.body?.otif_score, 'otif_score');
+    const correctiveActionsScore = parseScoreValue(
+      req.body?.corrective_actions_score,
+      'corrective_actions_score'
+    );
+    const esgComplianceScore = parseScoreValue(
+      req.body?.esg_compliance_score,
+      'esg_compliance_score'
+    );
+
+    const weightOverrides = {
+      otif_weight: parseWeightPercentage(req.body?.otif_weight, 'otif_weight'),
+      corrective_actions_weight: parseWeightPercentage(
+        req.body?.corrective_actions_weight,
+        'corrective_actions_weight'
+      ),
+      esg_compliance_weight: parseWeightPercentage(
+        req.body?.esg_compliance_weight,
+        'esg_compliance_weight'
+      ),
+    };
+
     const explicitOverall = parseScoreValue(
       req.body?.overall_score,
       'overall_score'
     );
 
-    const overallScore = computeOverallScore(explicitOverall, [
-      qualityScore,
-      deliveryScore,
-      costScore,
-      complianceScore,
-    ]);
+    const {
+      overallScore,
+      weightedOverallScore,
+      normalizedWeights,
+    } = resolveOverallScores(
+      explicitOverall,
+      [qualityScore, deliveryScore, costScore, complianceScore],
+      {
+        otif_score: otifScore,
+        corrective_actions_score: correctiveActionsScore,
+        esg_compliance_score: esgComplianceScore,
+      },
+      weightOverrides
+    );
 
     const strengths = sanitizeText(req.body?.strengths);
     const weaknesses = sanitizeText(req.body?.weaknesses);
@@ -275,13 +558,18 @@ const createSupplierEvaluation = async (req, res, next) => {
     const { rows } = await pool.query(
       `INSERT INTO supplier_evaluations (
          supplier_name, evaluation_date, quality_score, delivery_score, cost_score,
-         compliance_score, overall_score, strengths, weaknesses, action_items,
-         evaluator_id, evaluator_name
+         compliance_score, otif_score, corrective_actions_score, esg_compliance_score,
+         overall_score, weighted_overall_score, kpi_weights, strengths, weaknesses,
+         action_items, evaluator_id, evaluator_name
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+       )
        RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
-                 cost_score, compliance_score, overall_score, strengths, weaknesses,
-                 action_items, evaluator_id, evaluator_name, created_at, updated_at`,
+                 cost_score, compliance_score, otif_score, corrective_actions_score,
+                 esg_compliance_score, overall_score, weighted_overall_score,
+                 kpi_weights, strengths, weaknesses, action_items, evaluator_id,
+                 evaluator_name, created_at, updated_at`,
       [
         supplierName,
         evaluationDate,
@@ -289,7 +577,12 @@ const createSupplierEvaluation = async (req, res, next) => {
         deliveryScore,
         costScore,
         complianceScore,
+        otifScore,
+        correctiveActionsScore,
+        esgComplianceScore,
         overallScore,
+        weightedOverallScore,
+        normalizedWeights ? JSON.stringify(normalizedWeights) : null,
         strengths,
         weaknesses,
         actionItems,
@@ -323,8 +616,9 @@ const updateSupplierEvaluation = async (req, res, next) => {
 
     const existingResult = await pool.query(
       `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
-              cost_score, compliance_score, overall_score, strengths, weaknesses,
-              action_items
+              cost_score, compliance_score, otif_score, corrective_actions_score,
+              esg_compliance_score, overall_score, weighted_overall_score,
+              kpi_weights, strengths, weaknesses, action_items
          FROM supplier_evaluations
         WHERE id = $1`,
       [evaluationId]
@@ -335,6 +629,20 @@ const updateSupplierEvaluation = async (req, res, next) => {
     }
 
     const existing = existingResult.rows[0];
+    const existingWeightsRaw = existing.kpi_weights;
+    let existingWeights = null;
+    if (existingWeightsRaw) {
+      if (typeof existingWeightsRaw === 'string') {
+        try {
+          existingWeights = JSON.parse(existingWeightsRaw);
+        } catch (err) {
+          console.warn('⚠️ Unable to parse stored KPI weights, discarding value', err);
+          existingWeights = null;
+        }
+      } else {
+        existingWeights = existingWeightsRaw;
+      }
+    }
 
     let supplierName = existing.supplier_name;
     if (Object.prototype.hasOwnProperty.call(req.body, 'supplier_name')) {
@@ -357,6 +665,7 @@ const updateSupplierEvaluation = async (req, res, next) => {
       if (Object.prototype.hasOwnProperty.call(req.body, field)) {
         return parseScoreValue(req.body[field], field);
       }
+
       const current = existing[field];
       return current === null || current === undefined ? null : Number(current);
     };
@@ -365,24 +674,64 @@ const updateSupplierEvaluation = async (req, res, next) => {
     const deliveryScore = getUpdatedScore('delivery_score');
     const costScore = getUpdatedScore('cost_score');
     const complianceScore = getUpdatedScore('compliance_score');
+    const otifScore = getUpdatedScore('otif_score');
+    const correctiveActionsScore = getUpdatedScore('corrective_actions_score');
+    const esgComplianceScore = getUpdatedScore('esg_compliance_score');
 
-    let overallScore;
-    if (Object.prototype.hasOwnProperty.call(req.body, 'overall_score')) {
-      overallScore = parseScoreValue(req.body.overall_score, 'overall_score');
-    } else {
-      const hasComponentUpdate = ['quality_score', 'delivery_score', 'cost_score', 'compliance_score'].some((field) =>
-        Object.prototype.hasOwnProperty.call(req.body, field)
+    const weightOverrides = {};
+    KPI_CONFIG.forEach(({ key, weightField }) => {
+      if (Object.prototype.hasOwnProperty.call(req.body, weightField)) {
+        weightOverrides[weightField] = parseWeightPercentage(
+          req.body[weightField],
+          weightField
+        );
+      } else if (existingWeights && existingWeights[key] !== undefined) {
+        weightOverrides[weightField] = Number(existingWeights[key]);
+      } else {
+        weightOverrides[weightField] = null;
+      }
+    });
+
+    const hasScoreUpdate =
+      ['quality_score', 'delivery_score', 'cost_score', 'compliance_score'].some(
+        (field) => Object.prototype.hasOwnProperty.call(req.body, field)
+      ) ||
+      KPI_CONFIG.some(({ scoreField }) =>
+        Object.prototype.hasOwnProperty.call(req.body, scoreField)
       );
+    const hasWeightUpdate = KPI_CONFIG.some(({ weightField }) =>
+      Object.prototype.hasOwnProperty.call(req.body, weightField)
+    );
 
-      overallScore = hasComponentUpdate
-        ? computeOverallScore(null, [
-            qualityScore,
-            deliveryScore,
-            costScore,
-            complianceScore,
-          ])
-        : Number(existing.overall_score);
-    }
+    const explicitOverall = Object.prototype.hasOwnProperty.call(
+      req.body,
+      'overall_score'
+    )
+      ? parseScoreValue(req.body.overall_score, 'overall_score')
+      : hasScoreUpdate || hasWeightUpdate
+      ? null
+      : Number(existing.overall_score);
+
+    const {
+      overallScore,
+      weightedOverallScore,
+      normalizedWeights,
+    } = resolveOverallScores(
+      explicitOverall,
+      [qualityScore, deliveryScore, costScore, complianceScore],
+      {
+        otif_score: otifScore,
+        corrective_actions_score: correctiveActionsScore,
+        esg_compliance_score: esgComplianceScore,
+      },
+      weightOverrides
+    );
+
+    const weightsToPersist = normalizedWeights
+      ? normalizedWeights
+      : hasScoreUpdate || hasWeightUpdate
+      ? null
+      : existingWeights;
 
     const strengths = Object.prototype.hasOwnProperty.call(req.body, 'strengths')
       ? sanitizeText(req.body.strengths)
@@ -408,17 +757,24 @@ const updateSupplierEvaluation = async (req, res, next) => {
               delivery_score = $4,
               cost_score = $5,
               compliance_score = $6,
-              overall_score = $7,
-              strengths = $8,
-              weaknesses = $9,
-              action_items = $10,
-              evaluator_id = $11,
-              evaluator_name = $12,
+              otif_score = $7,
+              corrective_actions_score = $8,
+              esg_compliance_score = $9,
+              overall_score = $10,
+              weighted_overall_score = $11,
+              kpi_weights = $12,
+              strengths = $13,
+              weaknesses = $14,
+              action_items = $15,
+              evaluator_id = $16,
+              evaluator_name = $17,
               updated_at = NOW()
-        WHERE id = $13
+        WHERE id = $18
       RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
-                cost_score, compliance_score, overall_score, strengths, weaknesses,
-                action_items, evaluator_id, evaluator_name, created_at, updated_at`,
+                cost_score, compliance_score, otif_score, corrective_actions_score,
+                esg_compliance_score, overall_score, weighted_overall_score,
+                kpi_weights, strengths, weaknesses, action_items, evaluator_id,
+                evaluator_name, created_at, updated_at`,
       [
         supplierName,
         evaluationDate,
@@ -426,7 +782,12 @@ const updateSupplierEvaluation = async (req, res, next) => {
         deliveryScore,
         costScore,
         complianceScore,
+        otifScore,
+        correctiveActionsScore,
+        esgComplianceScore,
         overallScore,
+        weightedOverallScore,
+        weightsToPersist ? JSON.stringify(weightsToPersist) : null,
         strengths,
         weaknesses,
         actionItems,
@@ -456,6 +817,7 @@ const deleteSupplierEvaluation = async (req, res, next) => {
     return next(createHttpError(400, 'Invalid supplier evaluation id'));
   }
 
+
   try {
     await ensureSupplierEvaluationsTable();
 
@@ -480,6 +842,7 @@ const deleteSupplierEvaluation = async (req, res, next) => {
 
 module.exports = {
   listSupplierEvaluations,
+  getSupplierEvaluationBenchmarks,
   getSupplierEvaluationById,
   createSupplierEvaluation,
   updateSupplierEvaluation,
@@ -487,7 +850,9 @@ module.exports = {
   // Exported for testing purposes
   _internal: {
     parseScoreValue,
-    computeOverallScore,
+    resolveOverallScores,
+    computeWeightedKpiSummary,
     sanitizeText,
+    parseWeightPercentage,
   },
 };

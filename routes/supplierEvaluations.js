@@ -2,6 +2,7 @@ const express = require('express');
 
 const {
   listSupplierEvaluations,
+  getSupplierEvaluationBenchmarks,
   getSupplierEvaluationById,
   createSupplierEvaluation,
   updateSupplierEvaluation,
@@ -11,6 +12,7 @@ const {
 const router = express.Router();
 
 router.get('/', listSupplierEvaluations);
+router.get('/benchmarks', getSupplierEvaluationBenchmarks);
 router.get('/:id', getSupplierEvaluationById);
 router.post('/', createSupplierEvaluation);
 router.put('/:id', updateSupplierEvaluation);

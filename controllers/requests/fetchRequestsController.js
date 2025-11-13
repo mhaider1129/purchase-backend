@@ -396,6 +396,7 @@ const getAllRequests = async (req, res, next) => {
     to_date,
     status,
     department_id,
+    request_id,
     page = 1,
     limit = 10,
   } = req.query;
@@ -414,6 +415,12 @@ const getAllRequests = async (req, res, next) => {
   if (request_type) {
     params.push(request_type);
     whereClauses.push(`r.request_type = $${params.length}`);
+  }
+
+  const trimmedRequestId = typeof request_id === 'string' ? request_id.trim() : '';
+  if (trimmedRequestId) {
+    params.push(trimmedRequestId);
+    whereClauses.push(`CAST(r.id AS TEXT) = $${params.length}`);
   }
 
   if (search) {
@@ -441,9 +448,14 @@ const getAllRequests = async (req, res, next) => {
     whereClauses.push(`r.created_at <= $${params.length}`);
   }
 
-    if (status) {
-    params.push(status);
-    whereClauses.push(`r.status = $${params.length}`);
+  if (status) {
+    if (typeof status === 'string' && status.toLowerCase() === 'pending') {
+      params.push('pending%');
+      whereClauses.push(`LOWER(r.status) LIKE $${params.length}`);
+    } else {
+      params.push(status);
+      whereClauses.push(`r.status = $${params.length}`);
+    }
   }
 
   if (department_id) {
@@ -507,13 +519,15 @@ const getAllRequests = async (req, res, next) => {
   }
 };
 
-const buildItemSummary = (rows = []) => {
+const buildItemSummary = (rows = [], fallbackCost = null) => {
   const summary = {
     total_items: 0,
     purchased_count: 0,
     pending_count: 0,
     not_procured_count: 0,
     calculated_total_cost: 0,
+    items_total_cost: 0,
+    recorded_total_cost: null,
   };
 
   rows.forEach((item) => {
@@ -531,11 +545,23 @@ const buildItemSummary = (rows = []) => {
     const quantity = Number(item.purchased_quantity ?? item.quantity ?? 0);
     const unitCost = Number(item.unit_cost ?? 0);
     if (!Number.isNaN(quantity) && !Number.isNaN(unitCost)) {
-      summary.calculated_total_cost += quantity * unitCost;
+      summary.items_total_cost += quantity * unitCost;
     }
   });
 
-  summary.calculated_total_cost = Number(summary.calculated_total_cost.toFixed(2));
+  summary.items_total_cost = Number(summary.items_total_cost.toFixed(2));
+
+  const fallbackNumber = Number(fallbackCost);
+  const hasFallback = Number.isFinite(fallbackNumber) && fallbackNumber >= 0;
+  summary.recorded_total_cost = hasFallback
+    ? Number(fallbackNumber.toFixed(2))
+    : null;
+
+  summary.calculated_total_cost =
+    summary.items_total_cost > 0
+      ? summary.items_total_cost
+      : summary.recorded_total_cost ?? summary.items_total_cost;
+
   return summary;
 };
 
@@ -580,7 +606,10 @@ const getAssignedRequests = async (req, res) => {
 
     const enriched = requests.map((row) => ({
       ...row,
-      status_summary: buildItemSummary(groupedByRequest[row.id] || []),
+      status_summary: buildItemSummary(
+        groupedByRequest[row.id] || [],
+        row.estimated_cost,
+      ),
     }));
 
     return successResponse(res, 'Assigned requests fetched', enriched);

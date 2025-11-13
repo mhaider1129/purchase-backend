@@ -84,7 +84,15 @@ router.get('/incomplete/operational', getOperationalIncomplete); // COO
 // 📤 Export to CSV / PDF
 // ==========================
 const buildFilteredQuery = (queryParams) => {
-  const { request_type, search, from_date, to_date, status, department_id } = queryParams;
+  const {
+    request_type,
+    search,
+    from_date,
+    to_date,
+    status,
+    department_id,
+    request_id,
+  } = queryParams;
   let sql = `
     SELECT
       r.*,
@@ -101,6 +109,12 @@ const buildFilteredQuery = (queryParams) => {
   if (request_type) {
     values.push(request_type);
     sql += ` AND r.request_type = $${values.length}`;
+  }
+
+  const trimmedRequestId = typeof request_id === 'string' ? request_id.trim() : '';
+  if (trimmedRequestId) {
+    values.push(trimmedRequestId);
+    sql += ` AND CAST(r.id AS TEXT) = $${values.length}`;
   }
 
   if (search) {

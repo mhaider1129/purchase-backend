@@ -131,9 +131,138 @@ const createNotification = async (notification, client = null) => {
   return row || null;
 };
 
+const mapNotificationRow = row => {
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title,
+    message: row.message,
+    link: row.link,
+    metadata: row.metadata,
+    isRead: row.is_read,
+    createdAt: row.created_at,
+  };
+};
+
+const getUserNotifications = async (userId, options = {}, client = null) => {
+  const parsedUserId = Number(userId);
+  if (!Number.isInteger(parsedUserId)) {
+    throw new TypeError('userId must be a valid integer');
+  }
+
+  await ensureNotificationsTable();
+
+  const {
+    includeRead = false,
+    limit: requestedLimit = 50,
+    offset: requestedOffset = 0,
+    unreadOnly,
+  } = options || {};
+
+  let limit = Number(requestedLimit);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    limit = 50;
+  }
+  limit = Math.min(Math.max(limit, 1), 100);
+
+  let offset = Number(requestedOffset);
+  if (!Number.isInteger(offset) || offset < 0) {
+    offset = 0;
+  }
+
+  const showUnreadOnly = unreadOnly === undefined ? !includeRead : Boolean(unreadOnly);
+
+  const queryable = client || pool;
+  const values = [parsedUserId];
+  const conditions = ['user_id = $1'];
+
+  if (showUnreadOnly) {
+    conditions.push('is_read = false');
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const notificationsQuery = `
+    SELECT id, user_id, title, message, link, metadata, is_read, created_at
+      FROM notifications
+      ${whereClause}
+      ORDER BY created_at DESC, id DESC
+      LIMIT $${values.length + 1}
+      OFFSET $${values.length + 2}
+  `;
+
+  values.push(limit, offset);
+
+  const [notificationsResult, unreadCountResult] = await Promise.all([
+    queryable.query(notificationsQuery, values),
+    queryable.query(
+      `SELECT COUNT(*)::int AS unread_count FROM notifications WHERE user_id = $1 AND is_read = false`,
+      [parsedUserId],
+    ),
+  ]);
+
+  const rows = Array.isArray(notificationsResult.rows) ? notificationsResult.rows : [];
+  const unreadCountRow = unreadCountResult.rows?.[0];
+
+  return {
+    notifications: rows.map(mapNotificationRow).filter(Boolean),
+    unreadCount: unreadCountRow ? Number(unreadCountRow.unread_count) || 0 : 0,
+  };
+};
+
+const markNotificationRead = async (notificationId, userId, client = null) => {
+  const parsedId = Number(notificationId);
+  const parsedUserId = Number(userId);
+
+  if (!Number.isInteger(parsedId) || parsedId <= 0) {
+    throw new TypeError('notificationId must be a positive integer');
+  }
+
+  if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+    throw new TypeError('userId must be a positive integer');
+  }
+
+  await ensureNotificationsTable();
+
+  const queryable = client || pool;
+  const { rows } = await queryable.query(
+    `
+      UPDATE notifications
+         SET is_read = true
+       WHERE id = $1 AND user_id = $2
+       RETURNING id, user_id, title, message, link, metadata, is_read, created_at
+    `,
+    [parsedId, parsedUserId],
+  );
+
+  return mapNotificationRow(rows?.[0] || null);
+};
+
+const markAllNotificationsRead = async (userId, client = null) => {
+  const parsedUserId = Number(userId);
+
+  if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+    throw new TypeError('userId must be a positive integer');
+  }
+
+  await ensureNotificationsTable();
+
+  const queryable = client || pool;
+  const result = await queryable.query(
+    `UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false`,
+    [parsedUserId],
+  );
+
+  return result.rowCount || 0;
+};
+
 module.exports = {
   createNotification,
   createNotifications,
+  getUserNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
   _private: {
     ensureNotificationsTable,
     normalizeNotifications,

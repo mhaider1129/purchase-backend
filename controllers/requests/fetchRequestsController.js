@@ -449,18 +449,20 @@ const getAllRequests = async (req, res, next) => {
   }
 
   if (status) {
-    if (typeof status === 'string') {
-      const normalizedStatus = status.trim().toLowerCase();
-      if (normalizedStatus.startsWith('pending')) {
-        params.push('pending%');
-        whereClauses.push(`LOWER(TRIM(r.status)) LIKE $${params.length}`);
+    const statusValue = Array.isArray(status) ? status[0] : status;
+    if (typeof statusValue === 'string') {
+      const normalizedStatus = statusValue.trim().toLowerCase();
+      if (normalizedStatus === 'pending') {
+        whereClauses.push(
+          "COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received', 'approved')"
+        );
       } else {
-        params.push(status.trim());
-        whereClauses.push(`r.status = $${params.length}`);
+        params.push(normalizedStatus);
+        whereClauses.push(`LOWER(TRIM(r.status)) = $${params.length}`);
       }
     } else {
-      params.push(status);
-      whereClauses.push(`r.status = $${params.length}`);
+      params.push(String(statusValue).trim().toLowerCase());
+      whereClauses.push(`LOWER(TRIM(r.status)) = $${params.length}`);
     }
   }
 
@@ -740,7 +742,12 @@ const getMyMaintenanceRequests = async (req, res, next) => {
              LIMIT 1
            )
            ELSE NULL
-         END AS final_approver_name
+         END AS final_approver_name,
+         (
+           SELECT COUNT(*)
+           FROM attachments att
+           WHERE att.request_id = r.id
+         ) AS attachments_count
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN departments d ON r.department_id = d.id

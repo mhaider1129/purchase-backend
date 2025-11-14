@@ -68,7 +68,8 @@ const getDashboardSummary = async (req, res) => {
             ) AS items_cost
           FROM requests r
           LEFT JOIN requested_items ri ON ri.request_id = r.id
-          WHERE LOWER(r.status) = 'approved' AND r.request_type <> 'Warehouse Supply'
+          WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
+            AND r.request_type <> 'Warehouse Supply'
           GROUP BY r.id, r.created_at
         )
         SELECT
@@ -180,7 +181,7 @@ const getDepartmentMonthlySpending = async (req, res) => {
            ) AS items_cost
          FROM requests r
          LEFT JOIN requested_items ri ON ri.request_id = r.id
-         WHERE LOWER(r.status) = 'approved'
+         WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
            AND r.request_type <> 'Warehouse Supply'
            AND EXTRACT(YEAR FROM r.created_at) = $1
          GROUP BY r.id, r.department_id, r.created_at
@@ -242,7 +243,7 @@ const getLifecycleAnalytics = async (req, res) => {
       SELECT COALESCE(ri.item_name, 'Uncategorized') AS category, SUM(ri.total_cost) AS total_cost
       FROM public.requested_items ri
       JOIN requests r ON ri.request_id = r.id
-      WHERE r.status = 'Approved'
+      WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
       GROUP BY 1
       ORDER BY total_cost DESC
     `);

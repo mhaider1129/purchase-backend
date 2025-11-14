@@ -404,7 +404,7 @@ const getAllRequests = async (req, res, next) => {
   const offset = (page - 1) * limit;
   const params = [];
   let whereClauses = [];
-  let orderBy = 'r.created_at DESC';
+  let orderBy = 'r.is_urgent DESC, r.created_at DESC';
 
   if (filter === 'unassigned') {
     whereClauses.push('r.assigned_to IS NULL');
@@ -449,9 +449,15 @@ const getAllRequests = async (req, res, next) => {
   }
 
   if (status) {
-    if (typeof status === 'string' && status.toLowerCase() === 'pending') {
-      params.push('pending%');
-      whereClauses.push(`LOWER(r.status) LIKE $${params.length}`);
+    if (typeof status === 'string') {
+      const normalizedStatus = status.trim().toLowerCase();
+      if (normalizedStatus.startsWith('pending')) {
+        params.push('pending%');
+        whereClauses.push(`LOWER(TRIM(r.status)) LIKE $${params.length}`);
+      } else {
+        params.push(status.trim());
+        whereClauses.push(`r.status = $${params.length}`);
+      }
     } else {
       params.push(status);
       whereClauses.push(`r.status = $${params.length}`);
@@ -464,7 +470,7 @@ const getAllRequests = async (req, res, next) => {
   }
 
   if (sort === 'assigned') {
-    orderBy = 'r.assigned_to NULLS LAST, r.created_at DESC';
+    orderBy = 'r.is_urgent DESC, r.assigned_to NULLS LAST, r.created_at DESC';
   }
 
   const whereSQL = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -557,10 +563,13 @@ const buildItemSummary = (rows = [], fallbackCost = null) => {
     ? Number(fallbackNumber.toFixed(2))
     : null;
 
-  summary.calculated_total_cost =
-    summary.items_total_cost > 0
-      ? summary.items_total_cost
-      : summary.recorded_total_cost ?? summary.items_total_cost;
+  if (summary.recorded_total_cost !== null) {
+    summary.calculated_total_cost = summary.recorded_total_cost;
+  } else if (summary.items_total_cost > 0) {
+    summary.calculated_total_cost = summary.items_total_cost;
+  } else {
+    summary.calculated_total_cost = 0;
+  }
 
   return summary;
 };

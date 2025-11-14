@@ -151,7 +151,7 @@ const buildFilteredQuery = (queryParams) => {
     sql += ` AND r.department_id = $${values.length}`;
   }
 
-  sql += ' ORDER BY r.created_at DESC';
+  sql += ' ORDER BY r.is_urgent DESC, r.created_at DESC';
   return { sql, values };
 };
 

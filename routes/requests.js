@@ -141,9 +141,15 @@ const buildFilteredQuery = (queryParams) => {
     sql += ` AND r.created_at <= $${values.length}`;
   }
 
-    if (status) {
-    values.push(status);
-    sql += ` AND r.status = $${values.length}`;
+  const normalizedStatus = typeof status === 'string' ? status.trim() : '';
+  if (normalizedStatus) {
+    if (normalizedStatus.toLowerCase() === 'pending') {
+      values.push('Pending%');
+      sql += ` AND r.status ILIKE $${values.length}`;
+    } else {
+      values.push(normalizedStatus);
+      sql += ` AND LOWER(r.status) = LOWER($${values.length})`;
+    }
   }
 
   if (department_id) {

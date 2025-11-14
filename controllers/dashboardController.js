@@ -50,11 +50,31 @@ const getDashboardSummary = async (req, res) => {
         ORDER BY month
       `),
       pool.query(`
+        WITH request_costs AS (
+          SELECT
+            r.id,
+            r.created_at,
+            CASE
+              WHEN r.estimated_cost IS NOT NULL AND r.estimated_cost > 0 THEN r.estimated_cost
+              ELSE NULL
+            END AS recorded_cost,
+            SUM(
+              CASE
+                WHEN ri.id IS NULL THEN 0
+                WHEN ri.purchased_quantity IS NOT NULL AND ri.purchased_quantity > 0 THEN ri.purchased_quantity * COALESCE(ri.unit_cost, 0)
+                WHEN ri.quantity IS NOT NULL AND ri.quantity > 0 THEN ri.quantity * COALESCE(ri.unit_cost, 0)
+                ELSE 0
+              END
+            ) AS items_cost
+          FROM requests r
+          LEFT JOIN requested_items ri ON ri.request_id = r.id
+          WHERE LOWER(r.status) = 'approved' AND r.request_type <> 'Warehouse Supply'
+          GROUP BY r.id, r.created_at
+        )
         SELECT
           TO_CHAR(created_at, 'YYYY-MM') AS month,
-          SUM(estimated_cost) AS total_cost
-        FROM requests
-        WHERE LOWER(status) = 'approved' AND request_type <> 'Warehouse Supply'
+          SUM(COALESCE(recorded_cost, items_cost, 0)) AS total_cost
+        FROM request_costs
         GROUP BY month
         ORDER BY month
       `),
@@ -106,7 +126,10 @@ const getDashboardSummary = async (req, res) => {
       pending_requests: pendingRequests,
       completed_requests: completedRequests,
       completion_rate: completionRate,
-      spending_by_month: spendingByMonth.rows,
+      spending_by_month: spendingByMonth.rows.map((row) => ({
+        month: row.month,
+        total_cost: parseFloat(row.total_cost) || 0,
+      })),
       top_departments: topDepartments.rows,
       avg_approval_time_days: parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
       avg_pending_age_days: parseFloat(avgPendingAgeRes.rows[0].avg_days) || 0,
@@ -138,19 +161,46 @@ const getDepartmentMonthlySpending = async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT d.name AS department,
-              TO_CHAR(r.created_at, 'YYYY-MM') AS month,
-              SUM(r.estimated_cost) AS total_cost
-       FROM requests r
-       JOIN departments d ON r.department_id = d.id
-       WHERE r.status = 'Approved'
-         AND r.request_type <> 'Warehouse Supply'
-         AND EXTRACT(YEAR FROM r.created_at) = $1
-       GROUP BY d.name, month
-       ORDER BY d.name, month`,
+      `WITH request_costs AS (
+         SELECT
+           r.id,
+           r.department_id,
+           r.created_at,
+           CASE
+             WHEN r.estimated_cost IS NOT NULL AND r.estimated_cost > 0 THEN r.estimated_cost
+             ELSE NULL
+           END AS recorded_cost,
+           SUM(
+             CASE
+               WHEN ri.id IS NULL THEN 0
+               WHEN ri.purchased_quantity IS NOT NULL AND ri.purchased_quantity > 0 THEN ri.purchased_quantity * COALESCE(ri.unit_cost, 0)
+               WHEN ri.quantity IS NOT NULL AND ri.quantity > 0 THEN ri.quantity * COALESCE(ri.unit_cost, 0)
+               ELSE 0
+             END
+           ) AS items_cost
+         FROM requests r
+         LEFT JOIN requested_items ri ON ri.request_id = r.id
+         WHERE LOWER(r.status) = 'approved'
+           AND r.request_type <> 'Warehouse Supply'
+           AND EXTRACT(YEAR FROM r.created_at) = $1
+         GROUP BY r.id, r.department_id, r.created_at
+       )
+       SELECT COALESCE(d.name, 'Unassigned') AS department,
+              TO_CHAR(rc.created_at, 'YYYY-MM') AS month,
+              SUM(COALESCE(rc.recorded_cost, rc.items_cost, 0)) AS total_cost
+       FROM request_costs rc
+       LEFT JOIN departments d ON rc.department_id = d.id
+       GROUP BY department, month
+       ORDER BY department, month`,
       [year]
     );
-    res.json(rows);
+    res.json(
+      rows.map((row) => ({
+        department: row.department,
+        month: row.month,
+        total_cost: parseFloat(row.total_cost) || 0,
+      }))
+    );
   } catch (err) {
     console.error('❌ Failed to fetch department spending:', err);
     res.status(500).json({ error: 'Failed to fetch department spending' });

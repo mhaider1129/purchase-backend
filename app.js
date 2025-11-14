@@ -228,6 +228,7 @@ const contractsRoutes = require('./routes/contracts');
 const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
 const contractEvaluationsRouter = require('./routes/contractEvaluations');
 const uiAccessRoutes = require('./routes/uiAccess');
+const notificationsRoutes = require('./routes/notifications');
 
 const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -266,6 +267,7 @@ apiRouter.use('/contracts', authenticateUser, contractsRoutes);
 apiRouter.use('/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
 apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRouter);
 apiRouter.use('/ui-access', authenticateUser, uiAccessRoutes);
+apiRouter.use('/notifications', authenticateUser, notificationsRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);

@@ -143,12 +143,13 @@ const buildFilteredQuery = (queryParams) => {
 
   const normalizedStatus = typeof status === 'string' ? status.trim() : '';
   if (normalizedStatus) {
-    if (normalizedStatus.toLowerCase() === 'pending') {
-      values.push('Pending%');
-      sql += ` AND r.status ILIKE $${values.length}`;
+    const loweredStatus = normalizedStatus.toLowerCase();
+    if (loweredStatus === 'pending') {
+      sql +=
+        " AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received', 'approved', 'rejected')";
     } else {
-      values.push(normalizedStatus);
-      sql += ` AND LOWER(r.status) = LOWER($${values.length})`;
+      values.push(loweredStatus);
+      sql += ` AND LOWER(TRIM(r.status)) = $${values.length}`;
     }
   }
 

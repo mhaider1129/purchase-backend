@@ -454,7 +454,7 @@ const getAllRequests = async (req, res, next) => {
       const normalizedStatus = statusValue.trim().toLowerCase();
       if (normalizedStatus === 'pending') {
         whereClauses.push(
-          "COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received', 'approved')"
+          "COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received', 'approved', 'rejected')"
         );
       } else {
         params.push(normalizedStatus);

@@ -5,9 +5,9 @@ CREATE TABLE IF NOT EXISTS public.stock_item_requests (
   name TEXT NOT NULL,
   description TEXT,
   unit TEXT,
-  requested_by UUID REFERENCES users(id),
+  requested_by INTEGER REFERENCES users(id),
   status TEXT CHECK (status IN ('pending','approved','rejected')) DEFAULT 'pending',
-  approved_by UUID REFERENCES users(id),
+  approved_by INTEGER REFERENCES users(id),
   inserted_at TIMESTAMPTZ DEFAULT now()
 );
 

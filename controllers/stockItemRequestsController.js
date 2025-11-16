@@ -6,19 +6,13 @@ const createStockItemRequest = async (req, res, next) => {
   const { name, description, unit } = req.body;
   const { id: rawUserId, user_id: fallbackUserId } = req.user || {};
 
-  // Ensure the authenticated user id matches the UUID columns in the database
+  // Accept integer-based user identifiers (consistent with authentication middleware)
   const userIdCandidate = rawUserId ?? fallbackUserId;
-  if (!userIdCandidate) {
-    return next(createHttpError(401, 'Unauthorized: Missing user context'));
+  if (!Number.isInteger(userIdCandidate)) {
+    return next(createHttpError(401, 'Unauthorized: Missing or invalid user context'));
   }
 
-  const userId = String(userIdCandidate).trim();
-  const isValidUUID =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId);
-
-  if (!isValidUUID) {
-    return next(createHttpError(400, 'Invalid user ID format'));
-  }
+  const userId = userIdCandidate;
   if (!req.user.hasPermission('stock-requests.create')) {
     return next(createHttpError(403, 'You do not have permission to create stock item requests'));
   }

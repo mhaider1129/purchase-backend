@@ -4,15 +4,10 @@ const createHttpError = require('../utils/httpError');
 // Create a new stock item request (Warehouse Manager)
 const createStockItemRequest = async (req, res, next) => {
   const { name, description, unit } = req.body;
-  const { id: rawUserId, user_id: fallbackUserId } = req.user || {};
-
-  // Accept integer-based user identifiers (consistent with authentication middleware)
-  const userIdCandidate = rawUserId ?? fallbackUserId;
-  if (!Number.isInteger(userIdCandidate)) {
-    return next(createHttpError(401, 'Unauthorized: Missing or invalid user context'));
+  const userId = req.user?.id ?? req.user?.user_id;
+  if (userId === undefined || userId === null || String(userId).trim() === '') {
+    return next(createHttpError(401, 'Unauthorized: Missing user context'));
   }
-
-  const userId = userIdCandidate;
   if (!req.user.hasPermission('stock-requests.create')) {
     return next(createHttpError(403, 'You do not have permission to create stock item requests'));
   }

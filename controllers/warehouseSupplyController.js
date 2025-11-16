@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
+const ensureWarehouseSupplyTables = require('../utils/ensureWarehouseSupplyTables');
 
 // Record supplied items for a request
 const recordSuppliedItems = async (req, res, next) => {
@@ -15,6 +16,8 @@ const recordSuppliedItems = async (req, res, next) => {
   if (!Array.isArray(items) || items.length === 0) {
     return next(createHttpError(400, 'Items array is required'));
   }
+
+  await ensureWarehouseSupplyTables();
 
   const client = await pool.connect();
   try {
@@ -167,6 +170,8 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
   }
 
   try {
+    await ensureWarehouseSupplyTables();
+
     const deptRes = await pool.query(
       'SELECT type FROM departments WHERE id = $1',
       [req.user.department_id],

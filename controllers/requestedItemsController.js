@@ -1,6 +1,7 @@
 //controllers/requestedItemsController.js
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const ensureWarehouseSupplyTables = require('../utils/ensureWarehouseSupplyTables');
 
 // 📦 Add multiple items to a request
 const addRequestedItems = async (req, res, next) => {
@@ -21,6 +22,10 @@ const addRequestedItems = async (req, res, next) => {
     if (!reqType) {
       await client.query('ROLLBACK');
       return next(createHttpError(404, 'Request not found'));
+    }
+
+    if (reqType === 'Warehouse Supply') {
+      await ensureWarehouseSupplyTables(client);
     }
 
     for (const item of items) {

@@ -75,6 +75,7 @@ const authenticateUser = async (req, res, next) => {
 
     req.user = {
       id: user.id,
+      user_id: decoded.user_id,
       name: user.name,
       role: user.role,
       department_id: user.department_id,

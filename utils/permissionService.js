@@ -25,6 +25,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'recalls.view',
     'requests.manage',
     'requests.view-all',
+    'requests.view-incomplete',
     'stock-requests.review',
     'users.manage',
     'warehouse.manage-supply',
@@ -38,21 +39,13 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'procurement.update-status',
     'requests.manage',
     'requests.view-all',
-  ],
-  procurementmanager: [
-    'contracts.manage',
-    'evaluations.manage',
-    'procurement.update-cost',
-    'procurement.update-status',
-    'requests.manage',
-    'requests.view-all',
+    'requests.view-incomplete',
   ],
   contractmanager: ['contracts.manage', 'evaluations.manage'],
   medicaldevices: ['contracts.manage'],
-  audit: ['requests.view-all'],
-  coo: ['requests.view-all'],
-  cmo: ['requests.view-all'],
-  hod: ['requests.view-all'],
+  audit: ['requests.view-incomplete'],
+  coo: ['requests.view-incomplete'],
+  cmo: ['requests.view-incomplete'],
 };
 
 const getDefaultPermissionsForRole = (role) => {

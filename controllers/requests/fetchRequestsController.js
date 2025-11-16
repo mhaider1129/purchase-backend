@@ -39,26 +39,21 @@ const getRequestDetails = async (req, res, next) => {
     let itemsRes;
     if (request.request_type === 'Warehouse Supply') {
       itemsRes = await pool.query(
-        `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
-        [id]
-      );
-      await ensureRequestedItemApprovalColumns();
-      itemsRes = await pool.query(
         `SELECT
            id,
            item_name,
-           brand,
+           NULL::text AS brand,
            quantity,
-           available_quantity,
-           purchased_quantity,
-           unit_cost,
-           total_cost,
-           specs,
-           approval_status,
-           approval_comments,
-           approved_by,
-           approved_at
-         FROM public.requested_items
+           NULL::numeric AS available_quantity,
+           NULL::numeric AS purchased_quantity,
+           NULL::numeric AS unit_cost,
+           NULL::numeric AS total_cost,
+           NULL::text AS specs,
+           NULL::text AS approval_status,
+           NULL::text AS approval_comments,
+           NULL::integer AS approved_by,
+           NULL::timestamp AS approved_at
+         FROM warehouse_supply_items
          WHERE request_id = $1`,
         [id]
       );
@@ -155,29 +150,24 @@ const getRequestItemsOnly = async (req, res, next) => {
     const reqType = requestMeta?.request_type;
     if (reqType === 'Warehouse Supply') {
       itemsRes = await pool.query(
-        `SELECT id, item_name, quantity FROM warehouse_supply_items WHERE request_id = $1`,
-        [id]
-      );
-      await ensureRequestedItemApprovalColumns();
-      itemsRes = await pool.query(
         `
       SELECT
         id,
         item_name,
-        brand,
+        NULL::text AS brand,
         quantity,
-        available_quantity,
-        purchased_quantity,
-        unit_cost,
-        total_cost,
-        procurement_status,
-        procurement_comment,
-        specs,
-        approval_status,
-        approval_comments,
-        approved_by,
-        approved_at
-      FROM public.requested_items
+        NULL::numeric AS available_quantity,
+        NULL::numeric AS purchased_quantity,
+        NULL::numeric AS unit_cost,
+        NULL::numeric AS total_cost,
+        NULL::text AS procurement_status,
+        NULL::text AS procurement_comment,
+        NULL::text AS specs,
+        NULL::text AS approval_status,
+        NULL::text AS approval_comments,
+        NULL::integer AS approved_by,
+        NULL::timestamp AS approved_at
+      FROM warehouse_supply_items
       WHERE request_id = $1
       `,
         [id]

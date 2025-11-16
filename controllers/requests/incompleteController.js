@@ -4,6 +4,10 @@ const createHttpError = require('../../utils/httpError');
 // ✅ Admin / SCM – All incomplete requests
 const getAllIncomplete = async (req, res, next) => {
   try {
+    if (!req.user?.hasPermission?.('requests.view-incomplete')) {
+      return next(createHttpError(403, 'You do not have permission to view incomplete requests'));
+    }
+
     const result = await pool.query(`
       SELECT DISTINCT r.*,
                       p.name AS project_name,
@@ -32,10 +36,15 @@ const getAllIncomplete = async (req, res, next) => {
   }
 };
 
-// ✅ CMO – Medical Requests
+// ✅ CMO – Medical Requests approved by the CMO
 const getMedicalIncomplete = async (req, res, next) => {
   try {
-    const result = await pool.query(`
+    if (!req.user?.hasPermission?.('requests.view-incomplete')) {
+      return next(createHttpError(403, 'You do not have permission to view medical incomplete requests'));
+    }
+
+    const result = await pool.query(
+      `
       SELECT DISTINCT r.*,
                       p.name AS project_name,
                       d.name AS department_name,
@@ -46,6 +55,7 @@ const getMedicalIncomplete = async (req, res, next) => {
       JOIN departments d ON r.department_id = d.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
+      JOIN approvals a ON a.request_id = r.id AND a.approver_id = $1 AND a.status = 'Approved'
       WHERE r.status = 'Approved'
         AND r.assigned_to IS NOT NULL
         AND r.request_domain = 'medical'
@@ -55,7 +65,9 @@ const getMedicalIncomplete = async (req, res, next) => {
             AND (ri.procurement_status IS NULL OR ri.procurement_status NOT IN ('purchased', 'completed'))
         )
       ORDER BY r.created_at DESC
-    `);
+    `,
+      [req.user.id],
+    );
 
     res.json(result.rows);
   } catch (err) {
@@ -64,10 +76,15 @@ const getMedicalIncomplete = async (req, res, next) => {
   }
 };
 
-// ✅ COO – Operational Requests
+// ✅ COO – Operational Requests approved by the COO
 const getOperationalIncomplete = async (req, res, next) => {
   try {
-    const result = await pool.query(`
+    if (!req.user?.hasPermission?.('requests.view-incomplete')) {
+      return next(createHttpError(403, 'You do not have permission to view operational incomplete requests'));
+    }
+
+    const result = await pool.query(
+      `
       SELECT DISTINCT r.*,
                       p.name AS project_name,
                       d.name AS department_name,
@@ -78,6 +95,7 @@ const getOperationalIncomplete = async (req, res, next) => {
       JOIN departments d ON r.department_id = d.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
+      JOIN approvals a ON a.request_id = r.id AND a.approver_id = $1 AND a.status = 'Approved'
       WHERE r.status = 'Approved'
         AND r.assigned_to IS NOT NULL
         AND r.request_domain = 'operational'
@@ -87,7 +105,9 @@ const getOperationalIncomplete = async (req, res, next) => {
             AND (ri.procurement_status IS NULL OR ri.procurement_status NOT IN ('purchased', 'completed'))
         )
       ORDER BY r.created_at DESC
-    `);
+    `,
+      [req.user.id],
+    );
 
     res.json(result.rows);
   } catch (err) {

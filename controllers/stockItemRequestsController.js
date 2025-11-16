@@ -4,10 +4,19 @@ const createHttpError = require('../utils/httpError');
 // Create a new stock item request (Warehouse Manager)
 const createStockItemRequest = async (req, res, next) => {
   const { name, description, unit } = req.body;
-  const { id: rawUserId } = req.user;
-  const userId = parseInt(rawUserId, 10);
+  const { id: rawUserId, user_id: fallbackUserId } = req.user || {};
 
-  if (!Number.isInteger(userId)) {
+  // Ensure the authenticated user id matches the UUID columns in the database
+  const userIdCandidate = rawUserId ?? fallbackUserId;
+  if (!userIdCandidate) {
+    return next(createHttpError(401, 'Unauthorized: Missing user context'));
+  }
+
+  const userId = String(userIdCandidate).trim();
+  const isValidUUID =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId);
+
+  if (!isValidUUID) {
     return next(createHttpError(400, 'Invalid user ID format'));
   }
   if (!req.user.hasPermission('stock-requests.create')) {

@@ -19,17 +19,138 @@ const recordSuppliedItems = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const requestRes = await client.query(
+      `SELECT id, request_type, status FROM requests WHERE id = $1 FOR UPDATE`,
+      [requestId]
+    );
+
+    if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const request = requestRes.rows[0];
+    if (request.request_type !== 'Warehouse Supply') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Supplies can only be recorded for warehouse supply requests'));
+    }
+
+    if (request.status !== 'Approved' && request.status !== 'Completed') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Request must be approved before supplying items'));
+    }
+
+    const itemsRes = await client.query(
+      `SELECT id, item_name, quantity
+       FROM warehouse_supply_items
+       WHERE request_id = $1`,
+      [requestId],
+    );
+
+    if (itemsRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'No warehouse supply items found for this request'));
+    }
+
+    const supplyItemsById = itemsRes.rows.reduce((acc, row) => {
+      acc[row.id] = row;
+      return acc;
+    }, {});
+
+    const existingSupply = await client.query(
+      `SELECT item_id, COALESCE(SUM(supplied_quantity), 0) AS total_supplied
+       FROM warehouse_supplied_items
+       WHERE request_id = $1
+       GROUP BY item_id`,
+      [requestId],
+    );
+
+    const suppliedMap = existingSupply.rows.reduce((acc, row) => {
+      acc[row.item_id] = Number(row.total_supplied) || 0;
+      return acc;
+    }, {});
+
     for (const item of items) {
-      const { item_id, supplied_quantity } = item;
-      if (!item_id || supplied_quantity === undefined) continue;
+      const { item_id: itemId, supplied_quantity: suppliedQuantity } = item;
+
+      if (!itemId || suppliedQuantity === undefined) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'Each item must include item_id and supplied_quantity'));
+      }
+
+      const requestedItem = supplyItemsById[itemId];
+      if (!requestedItem) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(404, `Item with id ${itemId} is not part of this request`));
+      }
+
+      const parsedQuantity = Number(suppliedQuantity);
+      if (Number.isNaN(parsedQuantity) || parsedQuantity <= 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'Supplied quantity must be a positive number'));
+      }
+
+      const alreadySupplied = suppliedMap[itemId] || 0;
+      const newTotal = alreadySupplied + parsedQuantity;
+      if (newTotal > Number(requestedItem.quantity)) {
+        await client.query('ROLLBACK');
+        return next(
+          createHttpError(
+            400,
+            `Cannot supply more than requested for ${requestedItem.item_name}. Requested: ${requestedItem.quantity}, already supplied: ${alreadySupplied}`,
+          ),
+        );
+      }
+
       await client.query(
         `INSERT INTO warehouse_supplied_items (request_id, item_id, supplied_quantity, supplied_by)
          VALUES ($1,$2,$3,$4)`,
-        [requestId, item_id, supplied_quantity, userId]
+        [requestId, itemId, parsedQuantity, userId]
       );
+
+      suppliedMap[itemId] = newTotal;
     }
+
+    const fulfillmentRes = await client.query(
+      `SELECT wsi.id, wsi.quantity, COALESCE(SUM(wsup.supplied_quantity), 0) AS supplied
+       FROM warehouse_supply_items wsi
+       LEFT JOIN warehouse_supplied_items wsup
+         ON wsup.item_id = wsi.id AND wsup.request_id = wsi.request_id
+       WHERE wsi.request_id = $1
+       GROUP BY wsi.id, wsi.quantity`,
+      [requestId],
+    );
+
+    const allFulfilled = fulfillmentRes.rows.every(
+      (row) => Number(row.supplied) >= Number(row.quantity),
+    );
+
+    let newStatus = request.status;
+    if (allFulfilled && request.status !== 'Completed') {
+      await client.query(
+        `UPDATE requests SET status = 'Completed', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [requestId],
+      );
+      newStatus = 'Completed';
+    }
+
+    const suppliedSummary = items
+      .map(({ item_id: itemId, supplied_quantity: qty }) => {
+        const itemName = supplyItemsById[itemId]?.item_name || 'Unknown item';
+        return `${itemName}: ${qty}`;
+      })
+      .join('; ');
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, 'Warehouse items supplied', $2, $3)`,
+      [requestId, userId, `Supplied items -> ${suppliedSummary}`],
+    );
+
     await client.query('COMMIT');
-    res.status(201).json({ message: 'Supplied items recorded' });
+
+    res.status(201).json({ message: 'Supplied items recorded', status: newStatus });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to record supplied items:', err);
@@ -77,23 +198,17 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
     const requestIds = requests.map((request) => request.id);
     const itemsResult = await pool.query(
       `SELECT
-         request_id,
-         id,
-         item_name,
-         brand,
-         quantity,
-         available_quantity,
-         purchased_quantity,
-         unit_cost,
-         total_cost,
-         specs,
-         approval_status,
-         approval_comments,
-         approved_by,
-         approved_at
-       FROM public.requested_items
-       WHERE request_id = ANY($1::int[])
-       ORDER BY request_id, id`,
+         wsi.request_id,
+         wsi.id,
+         wsi.item_name,
+         wsi.quantity,
+         COALESCE(SUM(wsup.supplied_quantity), 0) AS supplied_quantity
+       FROM warehouse_supply_items wsi
+       LEFT JOIN warehouse_supplied_items wsup
+         ON wsup.item_id = wsi.id AND wsup.request_id = wsi.request_id
+       WHERE wsi.request_id = ANY($1::int[])
+       GROUP BY wsi.request_id, wsi.id, wsi.item_name, wsi.quantity
+       ORDER BY wsi.request_id, wsi.id`,
       [requestIds],
     );
 

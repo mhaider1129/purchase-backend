@@ -66,17 +66,22 @@ const createStockItemRequest = async (req, res, next) => {
 
   try {
     const duplicateStockItem = await pool.query(
-      `SELECT id
+      `SELECT id, unit
          FROM stock_items
         WHERE LOWER(name) = LOWER($1)
-          AND COALESCE(unit, '') = COALESCE($2, '')
         LIMIT 1`,
-      [normalizedName, normalizedUnit]
+      [normalizedName]
     );
 
     if (duplicateStockItem.rowCount > 0) {
       return next(
-        createHttpError(409, 'A stock item with this name and unit already exists in inventory')
+        createHttpError(
+          409,
+          'A stock item with this name already exists in inventory' +
+            (duplicateStockItem.rows[0].unit
+              ? ` (unit: ${duplicateStockItem.rows[0].unit})`
+              : '')
+        )
       );
     }
 
@@ -84,10 +89,9 @@ const createStockItemRequest = async (req, res, next) => {
       `SELECT id, status
          FROM stock_item_requests
         WHERE LOWER(name) = LOWER($1)
-          AND COALESCE(unit, '') = COALESCE($2, '')
           AND status = 'pending'
         LIMIT 1`,
-      [normalizedName, normalizedUnit]
+      [normalizedName]
     );
 
     if (duplicateRequest.rowCount > 0) {
@@ -172,6 +176,16 @@ const updateStockItemRequestStatus = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const triggerExistsRes = await client.query(
+      `SELECT EXISTS (
+        SELECT 1
+          FROM pg_trigger
+         WHERE tgname = 'trg_approve_stock_item_request'
+           AND NOT tgisinternal
+      ) AS exists`
+    );
+
+    const hasApprovalTrigger = triggerExistsRes.rows[0]?.exists === true;
     const existingRes = await client.query(
       `SELECT * FROM stock_item_requests WHERE id = $1 FOR UPDATE`,
       [parsedId]
@@ -193,32 +207,62 @@ const updateStockItemRequestStatus = async (req, res, next) => {
 
     if (status === 'approved') {
       const duplicateItemCheck = await client.query(
-        `SELECT id FROM stock_items
+        `SELECT id, unit FROM stock_items
           WHERE LOWER(name) = LOWER($1)
-            AND COALESCE(unit, '') = COALESCE($2, '')
           LIMIT 1`,
-        [existingRequest.name, existingRequest.unit]
+        [existingRequest.name]
       );
 
       if (duplicateItemCheck.rowCount > 0) {
         await client.query('ROLLBACK');
         return next(
-          createHttpError(409, 'A stock item with this name and unit already exists')
+          createHttpError(
+            409,
+            'A stock item with this name already exists in inventory' +
+              (duplicateItemCheck.rows[0].unit
+                ? ` (unit: ${duplicateItemCheck.rows[0].unit})`
+                : '')
+          )
         );
       }
 
-      const stockRes = await client.query(
-        `INSERT INTO stock_items (name, description, unit, created_by)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, name`,
-        [
-          existingRequest.name,
-          existingRequest.description,
-          existingRequest.unit,
-          existingRequest.requested_by,
-        ]
-      );
-      createdStockItem = stockRes.rows[0] || null;
+      if (!hasApprovalTrigger) {
+        const stockRes = await client.query(
+          `INSERT INTO stock_items (name, description, unit, created_by)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (name) DO NOTHING
+           RETURNING id, name`,
+          [
+            existingRequest.name,
+            existingRequest.description,
+            existingRequest.unit,
+            existingRequest.requested_by,
+          ]
+        );
+
+        if (stockRes.rowCount === 0) {
+          const conflictItem = await client.query(
+            `SELECT id, unit
+               FROM stock_items
+              WHERE LOWER(name) = LOWER($1)
+              LIMIT 1`,
+            [existingRequest.name]
+          );
+
+          await client.query('ROLLBACK');
+          return next(
+            createHttpError(
+              409,
+              'A stock item with this name already exists in inventory' +
+                (conflictItem.rows?.[0]?.unit
+                  ? ` (unit: ${conflictItem.rows[0].unit})`
+                  : '')
+            )
+          );
+        }
+
+        createdStockItem = stockRes.rows[0] || null;
+      }
     }
 
     const updateRes = await client.query(
@@ -230,6 +274,19 @@ const updateStockItemRequestStatus = async (req, res, next) => {
     );
 
     const updatedRequest = updateRes.rows[0];
+
+    if (status === 'approved' && hasApprovalTrigger && !createdStockItem) {
+      const createdItemLookup = await client.query(
+        `SELECT id, name, unit
+           FROM stock_items
+          WHERE LOWER(name) = LOWER($1)
+          ORDER BY id DESC
+          LIMIT 1`,
+        [existingRequest.name]
+      );
+
+      createdStockItem = createdItemLookup.rows[0] || null;
+    }
 
     const auditDescription =
       status === 'approved'

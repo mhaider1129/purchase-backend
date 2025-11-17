@@ -845,7 +845,7 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
          LEFT JOIN projects p ON r.project_id = p.id
          JOIN approvals a ON r.id = a.request_id
         WHERE r.request_type IN ('IT Item', 'Stock', 'Non-Stock')
-          AND r.status IN ('Approved', 'Rejected')
+          AND LOWER(TRIM(r.status)) IN ('approved', 'rejected')
         GROUP BY r.id, r.request_type, r.justification, r.status, p.name
         ORDER BY approval_timestamp DESC`
     );

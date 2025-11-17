@@ -38,7 +38,8 @@ const createStockItemRequest = async (req, res, next) => {
     return next(createHttpError(403, 'You do not have permission to create stock item requests'));
   }
 
-  if (!name) {
+  const normalizedName = normalizeText(name);
+  if (!normalizedName) {
     return next(createHttpError(400, 'Item name is required'));
   }
 

@@ -52,8 +52,13 @@ describe('permissionService defaults', () => {
     it('applies defaults when requested with replaceExisting', async () => {
       const client = { query: jest.fn() };
       const deleteResult = Promise.resolve({ rowCount: 1 });
-      const selectResult = Promise.resolve({ rows: [{ id: 11, code: 'requests.view-all' }] });
-      const insertResult = Promise.resolve({ rowCount: 1 });
+      const selectResult = Promise.resolve({
+        rows: [
+          { id: 11, code: 'requests.view-incomplete' },
+          { id: 12, code: 'requests.view-audit' },
+        ],
+      });
+      const insertResult = Promise.resolve({ rowCount: 2 });
 
       client.query
         .mockReturnValueOnce(deleteResult)
@@ -71,12 +76,12 @@ describe('permissionService defaults', () => {
       expect(client.query).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('SELECT id, LOWER(code) AS code FROM permissions WHERE LOWER(code) = ANY($1::TEXT[])'),
-        [['requests.view-all']]
+        [['requests.view-incomplete', 'requests.view-audit']]
       );
       expect(client.query).toHaveBeenNthCalledWith(
         3,
         expect.stringContaining('INSERT INTO user_permissions (user_id, permission_id)'),
-        [9, [11]]
+        [9, [11, 12]]
       );
 
       expect(result).toEqual({ applied: true, reason: 'applied', missing: [] });

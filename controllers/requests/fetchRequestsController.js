@@ -826,8 +826,13 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
 };
 
 const getAuditApprovedRejectedRequests = async (req, res, next) => {
-  const { role } = req.user;
-  if (role !== 'audit') {
+  const normalizedRole = (req.user.role || '').toString().trim().toLowerCase();
+  const hasAuditPermission =
+    typeof req.user.hasPermission === 'function' &&
+    (req.user.hasPermission('requests.view-audit') ||
+      req.user.hasPermission('requests.view-incomplete'));
+
+  if (!hasAuditPermission && normalizedRole !== 'audit') {
     return next(createHttpError(403, 'Access denied'));
   }
 

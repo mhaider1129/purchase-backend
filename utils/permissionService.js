@@ -43,9 +43,9 @@ const DEFAULT_ROLE_PERMISSIONS = {
   ],
   contractmanager: ['contracts.manage', 'evaluations.manage'],
   medicaldevices: ['contracts.manage'],
-  audit: ['requests.view-incomplete'],
-  coo: ['requests.view-incomplete'],
-  cmo: ['requests.view-incomplete'],
+  audit: ['requests.view-incomplete', 'requests.view-audit'],
+  coo: ['requests.view-incomplete', 'requests.view-audit'],
+  cmo: ['requests.view-incomplete', 'requests.view-audit'],
 };
 
 const getDefaultPermissionsForRole = (role) => {

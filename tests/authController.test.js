@@ -1,4 +1,4 @@
-const { login } = require('../controllers/authController');
+const { login, TOKEN_TTL } = require('../controllers/authController');
 const pool = require('../config/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -37,6 +37,18 @@ describe('authController.login', () => {
 
     await login(req, res, next);
 
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ token: 'mocktoken', user: expect.objectContaining({ id: 1 }) }));
+    expect(jwt.sign).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: user.id }),
+      process.env.JWT_SECRET,
+      expect.objectContaining({ expiresIn: TOKEN_TTL })
+    );
+
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: 'mocktoken',
+        expires_in: TOKEN_TTL,
+        user: expect.objectContaining({ id: 1 })
+      })
+    );
   });
 });

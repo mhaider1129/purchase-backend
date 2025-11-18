@@ -837,17 +837,22 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
   }
 
   try {
+    const statusFilter = ['approved', 'rejected', 'completed', 'received'];
     const { rows } = await pool.query(
-      `SELECT r.id, r.request_type, r.justification, r.status,
-              r.project_id, p.name AS project_name,
-              MAX(a.approved_at) AS approval_timestamp
+      `SELECT r.id,
+              r.request_type,
+              r.justification,
+              r.status,
+              r.project_id,
+              p.name AS project_name,
+              COALESCE(MAX(a.approved_at), r.updated_at, r.created_at) AS approval_timestamp
          FROM requests r
          LEFT JOIN projects p ON r.project_id = p.id
-         JOIN approvals a ON r.id = a.request_id
-        WHERE r.request_type IN ('IT Item', 'Stock', 'Non-Stock')
-          AND LOWER(TRIM(r.status)) IN ('approved', 'rejected')
+         LEFT JOIN approvals a ON r.id = a.request_id
+        WHERE LOWER(TRIM(r.status)) = ANY($1::text[])
         GROUP BY r.id, r.request_type, r.justification, r.status, p.name
-        ORDER BY approval_timestamp DESC`
+        ORDER BY approval_timestamp DESC`,
+      [statusFilter]
     );
 
     res.json(rows);

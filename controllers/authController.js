@@ -5,6 +5,8 @@ const jwt = require('jsonwebtoken');
 const createHttpError = require('../utils/httpError');
 const { getPermissionsForUserId } = require('../utils/permissionService');
 
+const TOKEN_TTL = '8h';
+
 // 🔐 Login Handler
 const login = async (req, res, next) => {
   const { email, password } = req.body;
@@ -40,7 +42,7 @@ const login = async (req, res, next) => {
         section_id: user.section_id || null // Optional field
       },
       process.env.JWT_SECRET,
-      { expiresIn: '1d' }
+      { expiresIn: TOKEN_TTL }
     );
 
     const { permissions = [] } = await getPermissionsForUserId(user.id);
@@ -49,7 +51,7 @@ const login = async (req, res, next) => {
     res.json({
       message: '✅ Login successful',
       token,
-      expires_in: '8h',
+      expires_in: TOKEN_TTL,
       user: {
         id: user.id,
         name: user.name,
@@ -66,4 +68,4 @@ const login = async (req, res, next) => {
   }
 };
 
-module.exports = { login };
+module.exports = { login, TOKEN_TTL };

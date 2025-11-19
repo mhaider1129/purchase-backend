@@ -20,7 +20,6 @@ const getAllIncomplete = async (req, res, next) => {
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
       WHERE r.status = 'Approved'
-        AND r.assigned_to IS NOT NULL
         AND EXISTS (
           SELECT 1 FROM public.requested_items ri
           WHERE ri.request_id = r.id
@@ -57,7 +56,6 @@ const getMedicalIncomplete = async (req, res, next) => {
       LEFT JOIN sections s ON r.section_id = s.id
       JOIN approvals a ON a.request_id = r.id AND a.approver_id = $1 AND a.status = 'Approved'
       WHERE r.status = 'Approved'
-        AND r.assigned_to IS NOT NULL
         AND r.request_domain = 'medical'
         AND EXISTS (
           SELECT 1 FROM public.requested_items ri
@@ -97,7 +95,6 @@ const getOperationalIncomplete = async (req, res, next) => {
       LEFT JOIN sections s ON r.section_id = s.id
       JOIN approvals a ON a.request_id = r.id AND a.approver_id = $1 AND a.status = 'Approved'
       WHERE r.status = 'Approved'
-        AND r.assigned_to IS NOT NULL
         AND r.request_domain = 'operational'
         AND EXISTS (
           SELECT 1 FROM public.requested_items ri

@@ -25,6 +25,25 @@ const KPI_CONFIG = [
   },
 ];
 
+const DEFAULT_CRITERIA_RESPONSES = {
+  scheduled_annually: true,
+  travel_required: false,
+  event_based_review: true,
+  total_employees: null,
+  covers_full_workforce: true,
+  sample_size: null,
+  evaluation_criteria_notes: null,
+  qualified_auditor: true,
+  third_party_auditor: false,
+  quality_compliance: true,
+  service_delivery: true,
+  service_delivery_quality: true,
+  manufacturing_adherence: true,
+  regulatory_compliance: true,
+  operations_effectiveness: true,
+  payment_terms_alignment: true,
+};
+
 const ensureSupplierEvaluationsTable = (() => {
   let initialized = false;
   let initializingPromise = null;
@@ -59,6 +78,7 @@ const ensureSupplierEvaluationsTable = (() => {
             strengths TEXT,
             weaknesses TEXT,
             action_items TEXT,
+            criteria_responses JSONB,
             evaluator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             evaluator_name TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -77,7 +97,8 @@ const ensureSupplierEvaluationsTable = (() => {
             ADD COLUMN IF NOT EXISTS corrective_actions_score NUMERIC(5, 2),
             ADD COLUMN IF NOT EXISTS esg_compliance_score NUMERIC(5, 2),
             ADD COLUMN IF NOT EXISTS weighted_overall_score NUMERIC(5, 2),
-            ADD COLUMN IF NOT EXISTS kpi_weights JSONB
+            ADD COLUMN IF NOT EXISTS kpi_weights JSONB,
+            ADD COLUMN IF NOT EXISTS criteria_responses JSONB
         `);
 
         initialized = true;
@@ -150,6 +171,156 @@ const parseDateStrict = (value, fieldName) => {
 
 const getTodayISODate = () => new Date().toISOString().slice(0, 10);
 
+const parseBoolean = (value, fieldName, { required = false } = {}) => {
+  if (value === undefined || value === null || value === '') {
+    if (required) {
+      throw createHttpError(400, `${fieldName} is required`);
+    }
+    return null;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['yes', 'true', '1', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['no', 'false', '0', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  throw createHttpError(400, `${fieldName} must be a yes/no value`);
+};
+
+const parseInteger = (value, fieldName, { min = 0 } = {}) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isInteger(numeric) || numeric < min) {
+    throw createHttpError(400, `${fieldName} must be an integer greater than or equal to ${min}`);
+  }
+
+  return numeric;
+};
+
+const parseCriteriaResponses = (payload) => {
+  const data = {
+    ...DEFAULT_CRITERIA_RESPONSES,
+    ...(payload?.criteria_responses || payload || {}),
+  };
+
+  const scheduledAnnually = parseBoolean(data.scheduled_annually, 'scheduled_annually', {
+    required: true,
+  });
+
+  if (!scheduledAnnually) {
+    throw createHttpError(
+      400,
+      'Suppliers must be scheduled for at least one evaluation every year'
+    );
+  }
+
+  const coversFullWorkforce = parseBoolean(
+    data.covers_full_workforce,
+    'covers_full_workforce',
+    { required: true }
+  );
+
+  const sampleSize = coversFullWorkforce
+    ? null
+    : parseInteger(data.sample_size, 'sample_size', { min: 1 });
+
+  return {
+    scheduled_annually: scheduledAnnually,
+    travel_required: parseBoolean(data.travel_required, 'travel_required'),
+    event_based_review: parseBoolean(
+      data.event_based_review,
+      'event_based_review',
+      { required: true }
+    ),
+    total_employees: parseInteger(data.total_employees, 'total_employees', { min: 0 }),
+    covers_full_workforce: coversFullWorkforce,
+    sample_size: sampleSize,
+    evaluation_criteria_notes: sanitizeText(data.evaluation_criteria_notes),
+    qualified_auditor: parseBoolean(data.qualified_auditor, 'qualified_auditor', {
+      required: true,
+    }),
+    third_party_auditor: parseBoolean(data.third_party_auditor, 'third_party_auditor'),
+    quality_compliance: parseBoolean(data.quality_compliance, 'quality_compliance', {
+      required: true,
+    }),
+    service_delivery: parseBoolean(data.service_delivery, 'service_delivery', {
+      required: true,
+    }),
+    service_delivery_quality: parseBoolean(
+      data.service_delivery_quality,
+      'service_delivery_quality',
+      { required: true }
+    ),
+    manufacturing_adherence: parseBoolean(
+      data.manufacturing_adherence,
+      'manufacturing_adherence',
+      { required: true }
+    ),
+    regulatory_compliance: parseBoolean(
+      data.regulatory_compliance,
+      'regulatory_compliance',
+      { required: true }
+    ),
+    operations_effectiveness: parseBoolean(
+      data.operations_effectiveness,
+      'operations_effectiveness',
+      { required: true }
+    ),
+    payment_terms_alignment: parseBoolean(
+      data.payment_terms_alignment,
+      'payment_terms_alignment',
+      { required: true }
+    ),
+  };
+};
+
+const assertAnnualCadence = async (supplierName, evaluationDate, excludeId = null) => {
+  const values = [supplierName.toLowerCase()];
+  let filter = 'LOWER(supplier_name) = $1';
+
+  if (excludeId !== null && excludeId !== undefined) {
+    values.push(excludeId);
+    filter += ` AND id <> $${values.length}`;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT MAX(evaluation_date) AS latest_date
+       FROM supplier_evaluations
+      WHERE ${filter}`,
+    values
+  );
+
+  const latestDate = rows[0]?.latest_date;
+  if (!latestDate) {
+    return;
+  }
+
+  const latest = new Date(latestDate);
+  const current = new Date(evaluationDate);
+  const diffMs = current.getTime() - latest.getTime();
+  const days = diffMs / (1000 * 60 * 60 * 24);
+
+  if (days > 366) {
+    throw createHttpError(
+      400,
+      `Each supplier must be evaluated at least annually. The last evaluation for ${supplierName} was on ${formatDateOnly(
+        latest
+      )}.`
+    );
+  }
+};
+
 const formatDateOnly = (value) => {
   if (!value) {
     return null;
@@ -174,7 +345,6 @@ const serializeEvaluation = (row) => {
 
   const toNumber = (value) =>
     value === null || value === undefined ? null : Number(value);
-
   const parseWeights = (value) => {
     if (!value) {
       return null;
@@ -209,6 +379,7 @@ const serializeEvaluation = (row) => {
     strengths: row.strengths,
     weaknesses: row.weaknesses,
     action_items: row.action_items,
+    criteria_responses: parseWeights(row.criteria_responses),
     evaluator_id: row.evaluator_id,
     evaluator_name: row.evaluator_name,
     created_at: row.created_at,
@@ -345,8 +516,8 @@ const listSupplierEvaluations = async (req, res, next) => {
       `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
-              kpi_weights, strengths, weaknesses, action_items, evaluator_id,
-              evaluator_name, created_at, updated_at
+              kpi_weights, strengths, weaknesses, action_items, criteria_responses,
+              evaluator_id, evaluator_name, created_at, updated_at
          FROM supplier_evaluations
          ${whereClause}
         ORDER BY evaluation_date DESC, created_at DESC`,
@@ -461,8 +632,8 @@ const getSupplierEvaluationById = async (req, res, next) => {
       `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
-              kpi_weights, strengths, weaknesses, action_items, evaluator_id,
-              evaluator_name, created_at, updated_at
+              kpi_weights, strengths, weaknesses, action_items, criteria_responses,
+              evaluator_id, created_at, updated_at, evaluator_name
          FROM supplier_evaluations
         WHERE id = $1`,
       [evaluationId]
@@ -534,6 +705,8 @@ const createSupplierEvaluation = async (req, res, next) => {
       'overall_score'
     );
 
+    const criteriaResponses = parseCriteriaResponses(req.body);
+
     const {
       overallScore,
       weightedOverallScore,
@@ -555,21 +728,24 @@ const createSupplierEvaluation = async (req, res, next) => {
 
     await ensureSupplierEvaluationsTable();
 
+    await assertAnnualCadence(supplierName, evaluationDate);
+
     const { rows } = await pool.query(
       `INSERT INTO supplier_evaluations (
          supplier_name, evaluation_date, quality_score, delivery_score, cost_score,
          compliance_score, otif_score, corrective_actions_score, esg_compliance_score,
          overall_score, weighted_overall_score, kpi_weights, strengths, weaknesses,
-         action_items, evaluator_id, evaluator_name
+         action_items, criteria_responses, evaluator_id, evaluator_name
        )
        VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+         $18
        )
        RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
                  cost_score, compliance_score, otif_score, corrective_actions_score,
                  esg_compliance_score, overall_score, weighted_overall_score,
-                 kpi_weights, strengths, weaknesses, action_items, evaluator_id,
-                 evaluator_name, created_at, updated_at`,
+                 kpi_weights, strengths, weaknesses, action_items, criteria_responses,
+                 evaluator_id, evaluator_name, created_at, updated_at`,
       [
         supplierName,
         evaluationDate,
@@ -586,6 +762,7 @@ const createSupplierEvaluation = async (req, res, next) => {
         strengths,
         weaknesses,
         actionItems,
+        criteriaResponses ? JSON.stringify(criteriaResponses) : null,
         req.user?.id ?? null,
         sanitizeText(req.user?.name),
       ]
@@ -618,7 +795,7 @@ const updateSupplierEvaluation = async (req, res, next) => {
       `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
-              kpi_weights, strengths, weaknesses, action_items
+              kpi_weights, strengths, weaknesses, action_items, criteria_responses
          FROM supplier_evaluations
         WHERE id = $1`,
       [evaluationId]
@@ -641,6 +818,21 @@ const updateSupplierEvaluation = async (req, res, next) => {
         }
       } else {
         existingWeights = existingWeightsRaw;
+      }
+    }
+
+    const existingCriteriaRaw = existing.criteria_responses;
+    let existingCriteria = null;
+    if (existingCriteriaRaw) {
+      if (typeof existingCriteriaRaw === 'string') {
+        try {
+          existingCriteria = JSON.parse(existingCriteriaRaw);
+        } catch (err) {
+          console.warn('⚠️ Unable to parse stored criteria responses, discarding value', err);
+          existingCriteria = null;
+        }
+      } else {
+        existingCriteria = existingCriteriaRaw;
       }
     }
 
@@ -749,6 +941,13 @@ const updateSupplierEvaluation = async (req, res, next) => {
       ? sanitizeText(req.body.action_items)
       : existing.action_items;
 
+    const criteriaResponses = parseCriteriaResponses({
+      ...existingCriteria,
+      ...(req.body?.criteria_responses || {}),
+    });
+
+    await assertAnnualCadence(supplierName, evaluationDate, evaluationId);
+
     const { rows } = await pool.query(
       `UPDATE supplier_evaluations
           SET supplier_name = $1,
@@ -766,15 +965,16 @@ const updateSupplierEvaluation = async (req, res, next) => {
               strengths = $13,
               weaknesses = $14,
               action_items = $15,
-              evaluator_id = $16,
-              evaluator_name = $17,
+              criteria_responses = $16,
+              evaluator_id = $17,
+              evaluator_name = $18,
               updated_at = NOW()
-        WHERE id = $18
+        WHERE id = $19
       RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
                 cost_score, compliance_score, otif_score, corrective_actions_score,
                 esg_compliance_score, overall_score, weighted_overall_score,
-                kpi_weights, strengths, weaknesses, action_items, evaluator_id,
-                evaluator_name, created_at, updated_at`,
+                kpi_weights, strengths, weaknesses, action_items, criteria_responses,
+                evaluator_id, evaluator_name, created_at, updated_at`,
       [
         supplierName,
         evaluationDate,
@@ -791,12 +991,12 @@ const updateSupplierEvaluation = async (req, res, next) => {
         strengths,
         weaknesses,
         actionItems,
+        criteriaResponses ? JSON.stringify(criteriaResponses) : null,
         req.user?.id ?? null,
         sanitizeText(req.user?.name),
         evaluationId,
       ]
     );
-
     res.json(serializeEvaluation(rows[0]));
   } catch (err) {
     console.error('❌ Failed to update supplier evaluation:', err);
@@ -854,5 +1054,6 @@ module.exports = {
     computeWeightedKpiSummary,
     sanitizeText,
     parseWeightPercentage,
+    parseCriteriaResponses,
   },
 };

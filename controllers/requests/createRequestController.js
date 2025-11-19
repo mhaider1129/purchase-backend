@@ -2,31 +2,10 @@ const pool = require("../../config/db");
 const { sendEmail } = require("../../utils/emailService");
 const { createNotifications } = require("../../utils/notificationService");
 const createHttpError = require("../../utils/httpError");
+const { fetchApprovalRoutes } = require("../utils/approvalRoutes");
 const {
   persistRequestAttachments,
 } = require("./saveRequestAttachments");
-
-/**
- * Fetch approval routing configuration from the database.
- * Returns an array of objects: { approval_level, role }
- */
-const fetchApprovalRoutes = async (
-  client,
-  requestType,
-  departmentType,
-  cost,
-) => {
-  const { rows } = await client.query(
-    `SELECT approval_level, role
-       FROM approval_routes
-      WHERE request_type = $1
-        AND department_type = $2
-        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(NULLIF(max_amount, 0), 999999999)
-      ORDER BY approval_level`,
-    [requestType, departmentType, cost],
-  );
-  return rows;
-};
 
 const assignApprover = async (
   client,
@@ -38,45 +17,36 @@ const assignApprover = async (
   requestDomain = null,
 ) => {
   const globalRoles = ["CMO", "COO", "SCM", "CEO", "CFO"];
+  const normalizedRole = role?.toLowerCase();
   let targetDepartmentId = departmentId;
 
-  if (role === "WarehouseManager" && requestType === "Non-Stock") {
-    const opRes = await client.query(
-      `SELECT d.id
-       FROM departments d
-       JOIN users u ON u.department_id = d.id
-       WHERE LOWER(d.type) = 'operational'
-         AND u.role = 'WarehouseManager'
-         AND u.is_active = true
-       ORDER BY d.id LIMIT 1`,
-    );
-    targetDepartmentId = opRes.rows[0]?.id || departmentId;
+  if (normalizedRole === "warehousemanager") {
+    const normalizedDomain = requestDomain?.toLowerCase();
+    const fallbackDomain = requestType === "Non-Stock" ? "operational" : null;
+    const domainForManager = normalizedDomain || fallbackDomain;
+
+    if (domainForManager) {
+      const managerRes = await client.query(
+        `SELECT d.id
+           FROM departments d
+           JOIN users u ON u.department_id = d.id
+          WHERE LOWER(d.type) = $1
+            AND LOWER(u.role) = 'warehousemanager'
+            AND u.is_active = TRUE
+          ORDER BY d.id
+          LIMIT 1`,
+        [domainForManager],
+      );
+      targetDepartmentId = managerRes.rows[0]?.id || departmentId;
+    }
   }
 
-  if (
-    role === "WarehouseManager" &&
-    requestType === "Warehouse Supply" &&
-    requestDomain
-  ) {
-    const wsRes = await client.query(
-      `SELECT d.id
-         FROM departments d
-         JOIN users u ON u.department_id = d.id
-        WHERE LOWER(d.type) = $1
-          AND u.role = 'WarehouseManager'
-          AND u.is_active = TRUE
-        LIMIT 1`,
-      [requestDomain.toLowerCase()],
-    );
-    targetDepartmentId = wsRes.rows[0]?.id || targetDepartmentId;
-  }
-
-  const query = globalRoles.includes(role.toUpperCase())
+  const normalizedRoleUpper = role?.toUpperCase() || "";
+  const isGlobalRole = globalRoles.includes(normalizedRoleUpper);
+  const query = isGlobalRole
     ? `SELECT id, email FROM users WHERE role = $1 AND is_active = true LIMIT 1`
     : `SELECT id, email FROM users WHERE role = $1 AND department_id = $2 AND is_active = true LIMIT 1`;
-  const values = globalRoles.includes(role.toUpperCase())
-    ? [role]
-    : [role, targetDepartmentId];
+  const values = isGlobalRole ? [role] : [role, targetDepartmentId];
   const result = await client.query(query, values);
 
   const approverId = result.rows[0]?.id || null;
@@ -434,137 +404,69 @@ const createRequest = async (req, res, next) => {
       }
     }
 
-    if (request_type === "Maintenance") {
-      const autoSteps = [
-        {
-          level: 0,
-          comment: `Temporary requester confirmed: ${temporaryRequesterName}`,
-        },
-        {
-          level: 1,
-          comment: 'HOD step auto-approved for maintenance pilot',
-        },
-        {
-          level: 2,
-          comment: 'Warehouse step auto-approved for maintenance pilot',
-        },
-      ];
+    const domainForChain =
+      (request_type === "Warehouse Supply" ? requestDomain : deptType) ||
+      requestDomain ||
+      "operational";
 
-      for (const step of autoSteps) {
-        await client.query(
-          `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at, comments)
-           VALUES ($1, NULL, $2, FALSE, 'Approved', NOW(), $3)`,
-          [request.id, step.level, step.comment],
-        );
+    const routes = await fetchApprovalRoutes({
+      client,
+      requestType: request_type,
+      departmentType: domainForChain,
+      amount: estimatedCost,
+    });
 
-        await client.query(
-          `INSERT INTO request_logs (request_id, action, actor_id, comments)
-           VALUES ($1, $2, $3, $4)`,
-          [
-            request.id,
-            `Level ${step.level} auto-approved`,
-            requester_id,
-            step.comment,
-          ],
-        );
-      }
-
-      let nextLevel = 3;
-      if (deptType === 'medical') {
-        await assignApprover(
-          client,
-          'CMO',
-          department_id,
-          request.id,
-          request_type,
-          nextLevel,
-          requestDomain,
-        );
-        nextLevel += 1;
-        await assignApprover(
-          client,
-          'SCM',
-          department_id,
-          request.id,
-          request_type,
-          nextLevel,
-          requestDomain,
-        );
-        nextLevel += 1;
-        await assignApprover(
-          client,
-          'COO',
-          department_id,
-          request.id,
-          request_type,
-          nextLevel,
-          requestDomain,
-        );
-      } else {
-        await assignApprover(
-          client,
-          'SCM',
-          department_id,
-          request.id,
-          request_type,
-          nextLevel,
-          requestDomain,
-        );
-        nextLevel += 1;
-        await assignApprover(
-          client,
-          'COO',
-          department_id,
-          request.id,
-          request_type,
-          nextLevel,
-          requestDomain,
-        );
-      }
-    } else {
-      const domainForChain =
-        request_type === "Warehouse Supply" ? requestDomain : deptType;
-
-      const routes = await fetchApprovalRoutes(
-        client,
-        request_type,
-        domainForChain,
-        estimatedCost,
+    if (!routes.length) {
+      console.warn(
+        `⚠️ No approval routes configured for ${request_type} - ${domainForChain}. Falling back to SCM approval.`,
       );
+      await assignApprover(
+        client,
+        "SCM",
+        department_id,
+        request.id,
+        request_type,
+        1,
+        requestDomain,
+      );
+    } else {
+      const requesterRole = req.user.role
+        ? req.user.role.trim().toLowerCase()
+        : "";
 
-      if (!routes.length) {
-        console.warn(
-          `⚠️ No approval routes configured for ${request_type} - ${domainForChain}. Falling back to SCM approval.`,
-        );
+      for (const { role, approval_level } of routes) {
+        const normalizedRouteRole = role?.trim().toLowerCase() || "";
+
+        if (normalizedRouteRole === "requester") {
+          await client.query(
+            `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
+               VALUES ($1, $2, $3, FALSE, 'Approved', CURRENT_TIMESTAMP)`,
+            [request.id, requester_id, approval_level],
+          );
+          continue;
+        }
+
+        if (
+          normalizedRouteRole === requesterRole &&
+          approval_level === 1
+        ) {
+          await client.query(
+            `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
+               VALUES ($1, $2, $3, FALSE, 'Approved', CURRENT_TIMESTAMP)`,
+            [request.id, requester_id, approval_level],
+          );
+          continue;
+        }
+
         await assignApprover(
           client,
-          "SCM",
+          role,
           department_id,
           request.id,
           request_type,
-          1,
+          approval_level,
           requestDomain,
         );
-      } else {
-        for (const { role, approval_level } of routes) {
-          if (role === req.user.role && approval_level === 1) {
-            await client.query(
-              `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
-                 VALUES ($1, $2, $3, false, 'Approved', CURRENT_TIMESTAMP)`,
-              [request.id, requester_id, approval_level],
-            );
-          } else {
-            await assignApprover(
-              client,
-              role,
-              department_id,
-              request.id,
-              request_type,
-              approval_level,
-              requestDomain,
-            );
-          }
-        }
       }
     }
 

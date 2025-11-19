@@ -6,19 +6,7 @@ const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
 const getColumnType = require('../utils/getColumnType');
 const { assignApprover } = require('./requests/createRequestController');
-
-const fetchApprovalRoutes = async (client, requestType, departmentType, cost) => {
-  const { rows } = await client.query(
-    `SELECT approval_level, role
-       FROM approval_routes
-      WHERE request_type = $1
-        AND department_type = $2
-        AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(NULLIF(max_amount, 0), 999999999)
-      ORDER BY approval_level`,
-    [requestType, departmentType, cost],
-  );
-  return rows;
-};
+const { fetchApprovalRoutes, resolveRouteDomain } = require('./utils/approvalRoutes');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -76,6 +64,20 @@ const handleApprovalDecision = async (req, res, next) => {
     const request = requestRes.rows[0];
     if (!request) return rollbackWithError(client, res, next, 404, 'Request not found');
 
+    const routeDomain = await resolveRouteDomain({
+      client,
+      departmentId: request.department_id,
+      explicitDomain: request.request_domain,
+      requestType: request.request_type,
+    });
+
+    const routeDefinitions = await fetchApprovalRoutes({
+      client,
+      requestType: request.request_type,
+      departmentType: routeDomain,
+      amount: request.estimated_cost || 0,
+    });
+
     const notificationsToCreate = [];
     const notificationKeySet = new Set();
     const enqueueNotification = ({ userId, title, message, link, metadata }) => {
@@ -129,19 +131,14 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     // 4. Validate Role Against Approval Route
-    const routeRes = await client.query(`
-      SELECT ar.role
-      FROM approval_routes ar
-      JOIN departments d ON d.id = $1
-      WHERE ar.request_type = $2
-        AND ar.department_type = d.type
-        AND ar.approval_level = $3
-        AND $4 BETWEEN ar.min_amount AND ar.max_amount
-      LIMIT 1
-    `, [request.department_id, request.request_type, approval.approval_level, request.estimated_cost]);
-
-    const expectedRole = routeRes.rows[0]?.role;
-    if (expectedRole && expectedRole !== user_role) {
+    const routeForLevel = routeDefinitions.find(
+      route => route.approval_level === approval.approval_level,
+    );
+    const expectedRole = routeForLevel?.role || null;
+    if (
+      expectedRole &&
+      expectedRole.trim().toUpperCase() !== (user_role || '').toUpperCase()
+    ) {
       return rollbackWithError(client, res, next, 403, `Only users with role '${expectedRole}' can approve at this level.`);
     }
 
@@ -256,17 +253,7 @@ const handleApprovalDecision = async (req, res, next) => {
             request.requester_email = newRequesterEmailRows[0].email;
           }
 
-          let departmentType = request.request_domain;
-          if (!departmentType) {
-            const deptTypeRes = await client.query(
-              `SELECT type FROM departments WHERE id = $1`,
-              [request.department_id],
-            );
-            departmentType = deptTypeRes.rows[0]?.type || null;
-          }
-          departmentType = departmentType ? departmentType.toLowerCase() : null;
-
-          if (!departmentType) {
+          if (!routeDefinitions.length) {
             const existing = await client.query(
               `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
               [approval.request_id, approval.approval_level + 1],
@@ -279,57 +266,32 @@ const handleApprovalDecision = async (req, res, next) => {
                 approval.request_id,
                 request.request_type,
                 approval.approval_level + 1,
-                request.request_domain,
+                routeDomain,
               );
             }
           } else {
-            const routes = await fetchApprovalRoutes(
-              client,
-              request.request_type,
-              departmentType,
-              request.estimated_cost || 0,
-            );
+            for (const { role, approval_level } of routeDefinitions) {
+              if (approval_level <= approval.approval_level) {
+                continue;
+              }
 
-            if (!routes.length) {
               const existing = await client.query(
                 `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-                [approval.request_id, approval.approval_level + 1],
+                [approval.request_id, approval_level],
               );
-              if (existing.rowCount === 0) {
-                await assignApprover(
-                  client,
-                  'SCM',
-                  request.department_id,
-                  approval.request_id,
-                  request.request_type,
-                  approval.approval_level + 1,
-                  request.request_domain,
-                );
+              if (existing.rowCount > 0) {
+                continue;
               }
-            } else {
-              for (const { role, approval_level } of routes) {
-                if (approval_level <= approval.approval_level) {
-                  continue;
-                }
 
-                const existing = await client.query(
-                  `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-                  [approval.request_id, approval_level],
-                );
-                if (existing.rowCount > 0) {
-                  continue;
-                }
-
-                await assignApprover(
-                  client,
-                  role,
-                  request.department_id,
-                  approval.request_id,
-                  request.request_type,
-                  approval_level,
-                  request.request_domain,
-                );
-              }
+              await assignApprover(
+                client,
+                role,
+                request.department_id,
+                approval.request_id,
+                request.request_type,
+                approval_level,
+                routeDomain,
+              );
             }
           }
         }

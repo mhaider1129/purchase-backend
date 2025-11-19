@@ -25,24 +25,56 @@ const KPI_CONFIG = [
   },
 ];
 
-const DEFAULT_CRITERIA_RESPONSES = {
-  scheduled_annually: true,
-  travel_required: false,
-  event_based_review: true,
-  total_employees: null,
-  covers_full_workforce: true,
-  sample_size: null,
-  evaluation_criteria_notes: null,
-  qualified_auditor: true,
-  third_party_auditor: false,
-  quality_compliance: true,
-  service_delivery: true,
-  service_delivery_quality: true,
-  manufacturing_adherence: true,
-  regulatory_compliance: true,
-  operations_effectiveness: true,
-  payment_terms_alignment: true,
-};
+const CRITERIA_SCALE_FIELDS = [
+  {
+    key: 'overall_supplier_happiness',
+    label: 'Overall, how happy are you with the supplier?',
+  },
+  {
+    key: 'price_satisfaction',
+    label: 'How satisfied are you with the price of the goods/services?',
+  },
+  {
+    key: 'delivery_as_scheduled',
+    label: 'Does the supplier deliver the goods/services as scheduled?',
+  },
+  {
+    key: 'delivery_in_good_condition',
+    label: 'Does the supplier deliver the goods/services in good condition?',
+  },
+  {
+    key: 'delivery_meets_quality_expectations',
+    label: 'Does the supplier deliver the goods/services within acceptable quality?',
+  },
+  {
+    key: 'communication_effectiveness',
+    label: 'How effective is the supplier communication?',
+  },
+  {
+    key: 'compliance_alignment',
+    label: 'Does the supplier comply with requirements and regulations?',
+  },
+  {
+    key: 'operations_effectiveness_rating',
+    label: 'How effective are the supplier operations?',
+  },
+  {
+    key: 'payment_terms_comfort',
+    label: 'How comfortable are you with the payment terms?',
+  },
+];
+
+const DEFAULT_CRITERIA_RESPONSES = CRITERIA_SCALE_FIELDS.reduce(
+  (acc, field) => ({
+    ...acc,
+    [field.key]: null,
+  }),
+  {
+    scheduled_annually: true,
+    travel_required: false,
+    evaluation_criteria_notes: null,
+  }
+);
 
 const ensureSupplierEvaluationsTable = (() => {
   let initialized = false;
@@ -195,17 +227,17 @@ const parseBoolean = (value, fieldName, { required = false } = {}) => {
   throw createHttpError(400, `${fieldName} must be a yes/no value`);
 };
 
-const parseInteger = (value, fieldName, { min = 0 } = {}) => {
+const parseSatisfactionRating = (value, fieldName) => {
   if (value === undefined || value === null || value === '') {
-    return null;
+    throw createHttpError(400, `${fieldName} is required`);
   }
 
-  const numeric = Number.parseInt(value, 10);
-  if (!Number.isInteger(numeric) || numeric < min) {
-    throw createHttpError(400, `${fieldName} must be an integer greater than or equal to ${min}`);
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 1 || numeric > 5) {
+    throw createHttpError(400, `${fieldName} must be a number between 1 and 5`);
   }
 
-  return numeric;
+  return Math.round(numeric * 10) / 10;
 };
 
 const parseCriteriaResponses = (payload) => {
@@ -225,63 +257,16 @@ const parseCriteriaResponses = (payload) => {
     );
   }
 
-  const coversFullWorkforce = parseBoolean(
-    data.covers_full_workforce,
-    'covers_full_workforce',
-    { required: true }
-  );
-
-  const sampleSize = coversFullWorkforce
-    ? null
-    : parseInteger(data.sample_size, 'sample_size', { min: 1 });
+  const ratings = CRITERIA_SCALE_FIELDS.reduce((acc, field) => {
+    acc[field.key] = parseSatisfactionRating(data[field.key], field.label);
+    return acc;
+  }, {});
 
   return {
     scheduled_annually: scheduledAnnually,
-    travel_required: parseBoolean(data.travel_required, 'travel_required'),
-    event_based_review: parseBoolean(
-      data.event_based_review,
-      'event_based_review',
-      { required: true }
-    ),
-    total_employees: parseInteger(data.total_employees, 'total_employees', { min: 0 }),
-    covers_full_workforce: coversFullWorkforce,
-    sample_size: sampleSize,
+    travel_required: parseBoolean(data.travel_required, 'travel_required') ?? false,
     evaluation_criteria_notes: sanitizeText(data.evaluation_criteria_notes),
-    qualified_auditor: parseBoolean(data.qualified_auditor, 'qualified_auditor', {
-      required: true,
-    }),
-    third_party_auditor: parseBoolean(data.third_party_auditor, 'third_party_auditor'),
-    quality_compliance: parseBoolean(data.quality_compliance, 'quality_compliance', {
-      required: true,
-    }),
-    service_delivery: parseBoolean(data.service_delivery, 'service_delivery', {
-      required: true,
-    }),
-    service_delivery_quality: parseBoolean(
-      data.service_delivery_quality,
-      'service_delivery_quality',
-      { required: true }
-    ),
-    manufacturing_adherence: parseBoolean(
-      data.manufacturing_adherence,
-      'manufacturing_adherence',
-      { required: true }
-    ),
-    regulatory_compliance: parseBoolean(
-      data.regulatory_compliance,
-      'regulatory_compliance',
-      { required: true }
-    ),
-    operations_effectiveness: parseBoolean(
-      data.operations_effectiveness,
-      'operations_effectiveness',
-      { required: true }
-    ),
-    payment_terms_alignment: parseBoolean(
-      data.payment_terms_alignment,
-      'payment_terms_alignment',
-      { required: true }
-    ),
+    ...ratings,
   };
 };
 
@@ -345,6 +330,7 @@ const serializeEvaluation = (row) => {
 
   const toNumber = (value) =>
     value === null || value === undefined ? null : Number(value);
+
   const parseWeights = (value) => {
     if (!value) {
       return null;
@@ -361,6 +347,8 @@ const serializeEvaluation = (row) => {
 
     return value;
   };
+
+  const parsedCriteria = parseWeights(row.criteria_responses);
 
   return {
     id: row.id,
@@ -379,7 +367,10 @@ const serializeEvaluation = (row) => {
     strengths: row.strengths,
     weaknesses: row.weaknesses,
     action_items: row.action_items,
-    criteria_responses: parseWeights(row.criteria_responses),
+    criteria_responses: {
+      ...DEFAULT_CRITERIA_RESPONSES,
+      ...(parsedCriteria || {}),
+    },
     evaluator_id: row.evaluator_id,
     evaluator_name: row.evaluator_name,
     created_at: row.created_at,
@@ -997,6 +988,7 @@ const updateSupplierEvaluation = async (req, res, next) => {
         evaluationId,
       ]
     );
+    
     res.json(serializeEvaluation(rows[0]));
   } catch (err) {
     console.error('❌ Failed to update supplier evaluation:', err);

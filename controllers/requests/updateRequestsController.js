@@ -3,6 +3,7 @@ const createHttpError = require('../../utils/httpError');
 const { sendEmail } = require('../../utils/emailService');
 const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
+const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRoutes');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -126,7 +127,7 @@ const updateApprovalStatus = async (req, res, next) => {
     const request_id = currentApproval.request_id;
 
     const requestInfoRes = await client.query(
-      `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent
+      `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent, requester_id
          FROM requests
         WHERE id = $1
         FOR UPDATE`,
@@ -200,150 +201,120 @@ const updateApprovalStatus = async (req, res, next) => {
 
     if (request_type === 'Maintenance' && currentApproval.approval_level === 1) {
       await client.query(`UPDATE requests SET requester_id = $1 WHERE id = $2`, [approver_id, request_id]);
+      requestRow.requester_id = approver_id;
+    }
 
-      const deptRes = await client.query(`SELECT type FROM departments WHERE id = $1`, [department_id]);
-      const deptType = deptRes.rows[0]?.type.toLowerCase();
+    if (decision === 'Rejected') {
+      await client.query(`UPDATE requests SET status = 'Rejected' WHERE id = $1`, [request_id]);
+    } else {
+      const routeDomain = await resolveRouteDomain({
+        client,
+        departmentId: department_id,
+        explicitDomain: requestRow.request_domain,
+        requestType: request_type,
+      });
 
-      let nextRoles = ['HOD', 'SCM', 'COO'];
-      if (deptType === 'medical') nextRoles.splice(2, 0, 'CMO');
+      const routeDefinitions = await fetchApprovalRoutes({
+        client,
+        requestType: request_type,
+        departmentType: routeDomain,
+        amount: effectiveEstimatedCost,
+      });
 
-      for (let i = 0; i < nextRoles.length; i++) {
-        const nextUserRes = await client.query(
-          `SELECT id FROM users WHERE role = $1 AND department_id = $2 AND is_active = true LIMIT 1`,
-          [nextRoles[i], department_id],
+      if (!routeDefinitions.length) {
+        const fallbackLevel = currentApproval.approval_level + 1;
+        const existing = await client.query(
+          `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+          [request_id, fallbackLevel],
         );
+        if (existing.rowCount === 0) {
+          await assignApprover(
+            client,
+            'SCM',
+            department_id,
+            request_id,
+            request_type,
+            fallbackLevel,
+            routeDomain,
+          );
+        }
+      } else {
+        let requesterRole = '';
+        if (requestRow.requester_id) {
+          const requesterRoleRes = await client.query(
+            `SELECT role FROM users WHERE id = $1`,
+            [requestRow.requester_id],
+          );
+          requesterRole = requesterRoleRes.rows[0]?.role?.trim().toLowerCase() || '';
+        }
 
-        if (nextUserRes.rowCount > 0) {
-          await client.query(
-            `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status)
-             VALUES ($1, $2, $3, $4, 'Pending')`,
-            [request_id, nextUserRes.rows[0].id, currentApproval.approval_level + 1 + i, i === 0],
+        for (const route of routeDefinitions) {
+          if (route.approval_level <= currentApproval.approval_level) {
+            continue;
+          }
+
+          const existing = await client.query(
+            `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+            [request_id, route.approval_level],
+          );
+          if (existing.rowCount > 0) {
+            continue;
+          }
+
+          const normalizedRouteRole = (route.role || '').trim().toLowerCase();
+
+          if (normalizedRouteRole === 'requester' && requestRow.requester_id) {
+            await client.query(
+              `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
+               VALUES ($1, $2, $3, FALSE, 'Approved', CURRENT_TIMESTAMP)`,
+              [request_id, requestRow.requester_id, route.approval_level],
+            );
+            continue;
+          }
+
+          if (
+            normalizedRouteRole &&
+            normalizedRouteRole === requesterRole &&
+            requestRow.requester_id &&
+            route.approval_level === 1
+          ) {
+            await client.query(
+              `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
+               VALUES ($1, $2, $3, FALSE, 'Approved', CURRENT_TIMESTAMP)`,
+              [request_id, requestRow.requester_id, route.approval_level],
+            );
+            continue;
+          }
+
+          await assignApprover(
+            client,
+            route.role,
+            department_id,
+            request_id,
+            request_type,
+            route.approval_level,
+            routeDomain,
           );
         }
       }
-    } else {
-      if (decision === 'Rejected') {
-        await client.query(`UPDATE requests SET status = 'Rejected' WHERE id = $1`, [request_id]);
-      } else {
-        if (req.user.role === 'SCM' && effectiveEstimatedCost > 7500000) {
-          const { rowCount: cfoExists } = await client.query(
-            `SELECT 1
-               FROM approvals a
-               JOIN users u ON a.approver_id = u.id
-              WHERE a.request_id = $1
-                AND UPPER(u.role) = 'CFO'
-              LIMIT 1`,
-            [request_id],
-          );
 
-          if (cfoExists === 0) {
-            const deptRes = await client.query(
-              `SELECT type
-                 FROM departments
-                WHERE id = $1`,
-              [department_id],
-            );
-            const deptType = deptRes.rows[0]?.type?.toLowerCase() || null;
-            const domainForRoutes =
-              request_type === 'Warehouse Supply'
-                ? requestRow.request_domain || deptType || 'operational'
-                : deptType || requestRow.request_domain || 'operational';
+      const { rows: nextPendingApprovals } = await client.query(
+        `SELECT id
+           FROM approvals
+          WHERE request_id = $1
+            AND status = 'Pending'
+          ORDER BY approval_level ASC
+          LIMIT 1`,
+        [request_id],
+      );
 
-            let insertionLevel = currentApproval.approval_level + 1;
-
-            const { rows: cfoRouteRows } = await client.query(
-              `SELECT approval_level
-                 FROM approval_routes
-                WHERE request_type = $1
-                  AND department_type = $2
-                  AND role = 'CFO'
-                  AND $3 BETWEEN COALESCE(min_amount, 0) AND COALESCE(NULLIF(max_amount, 0), 999999999)
-                ORDER BY approval_level
-                LIMIT 1`,
-              [request_type, domainForRoutes, effectiveEstimatedCost],
-            );
-
-            const { rows: cooRows } = await client.query(
-              `SELECT approval_level
-                 FROM approvals a
-                 JOIN users u ON a.approver_id = u.id
-                WHERE a.request_id = $1
-                  AND UPPER(u.role) = 'COO'
-                LIMIT 1`,
-              [request_id],
-            );
-
-            const cfoRouteLevel = cfoRouteRows[0]?.approval_level ?? null;
-            const cooLevel = cooRows[0]?.approval_level ?? null;
-
-            if (cfoRouteLevel !== null && cooLevel !== null) {
-              insertionLevel = Math.min(cfoRouteLevel, cooLevel);
-            } else if (cfoRouteLevel !== null) {
-              insertionLevel = cfoRouteLevel;
-            } else if (cooLevel !== null) {
-              insertionLevel = cooLevel;
-            }
-
-            insertionLevel = Math.max(insertionLevel, currentApproval.approval_level + 1);
-
-            const { rows: approvalsToShift } = await client.query(
-              `SELECT id, approval_level
-                 FROM approvals
-                WHERE request_id = $1
-                  AND approval_level >= $2
-                ORDER BY approval_level DESC`,
-              [request_id, insertionLevel],
-            );
-
-            for (const row of approvalsToShift) {
-              await client.query(
-                `UPDATE approvals
-                    SET approval_level = $1
-                  WHERE id = $2`,
-                [row.approval_level + 1, row.id],
-              );
-            }
-
-            await assignApprover(
-              client,
-              'CFO',
-              department_id,
-              request_id,
-              request_type,
-              insertionLevel,
-              requestRow.request_domain,
-            );
-
-            await client.query(
-              `INSERT INTO request_logs (request_id, action, actor_id, comments)
-               VALUES ($1, 'Approval Route Updated', $2, $3)`,
-              [
-                request_id,
-                approver_id,
-                `Inserted CFO approval at level ${insertionLevel} after estimated cost ${effectiveEstimatedCost}`,
-              ],
-            );
-          }
-        }
-
-        const { rows: nextPendingApprovals } = await client.query(
-          `SELECT id
-             FROM approvals
-            WHERE request_id = $1
-              AND status = 'Pending'
-            ORDER BY approval_level ASC
-            LIMIT 1`,
-          [request_id],
+      if (nextPendingApprovals.length > 0) {
+        await client.query(
+          `UPDATE approvals SET is_active = true WHERE id = $1`,
+          [nextPendingApprovals[0].id],
         );
-
-        if (nextPendingApprovals.length > 0) {
-          await client.query(
-            `UPDATE approvals SET is_active = true WHERE id = $1`,
-            [nextPendingApprovals[0].id],
-          );
-        } else {
-          await client.query(`UPDATE requests SET status = 'Approved' WHERE id = $1`, [request_id]);
-        }
+      } else {
+        await client.query(`UPDATE requests SET status = 'Approved' WHERE id = $1`, [request_id]);
       }
     }
 

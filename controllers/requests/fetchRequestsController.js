@@ -1,6 +1,7 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
+const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -50,15 +51,19 @@ const getRequestDetails = async (req, res, next) => {
            NULL::numeric AS total_cost,
            NULL::text AS specs,
            NULL::text AS approval_status,
-           NULL::text AS approval_comments,
-           NULL::integer AS approved_by,
-           NULL::timestamp AS approved_at
-         FROM warehouse_supply_items
-         WHERE request_id = $1`,
+         NULL::text AS approval_comments,
+         NULL::integer AS approved_by,
+         NULL::timestamp AS approved_at,
+         NULL::boolean AS is_received,
+         NULL::integer AS received_by,
+         NULL::timestamp AS received_at
+       FROM warehouse_supply_items
+       WHERE request_id = $1`,
         [id]
       );
     } else {
       await ensureRequestedItemApprovalColumns();
+      await ensureRequestedItemReceivedColumns();
       itemsRes = await pool.query(
         `SELECT
            id,
@@ -73,7 +78,10 @@ const getRequestDetails = async (req, res, next) => {
            approval_status,
            approval_comments,
            approved_by,
-           approved_at
+           approved_at,
+           is_received,
+           received_by,
+           received_at
          FROM public.requested_items
          WHERE request_id = $1`,
         [id]
@@ -166,7 +174,10 @@ const getRequestItemsOnly = async (req, res, next) => {
         NULL::text AS approval_status,
         NULL::text AS approval_comments,
         NULL::integer AS approved_by,
-        NULL::timestamp AS approved_at
+        NULL::timestamp AS approved_at,
+        NULL::boolean AS is_received,
+        NULL::integer AS received_by,
+        NULL::timestamp AS received_at
       FROM warehouse_supply_items
       WHERE request_id = $1
       `,
@@ -174,6 +185,7 @@ const getRequestItemsOnly = async (req, res, next) => {
       );
     } else {
       await ensureRequestedItemApprovalColumns();
+      await ensureRequestedItemReceivedColumns();
       itemsRes = await pool.query(
         `
       SELECT
@@ -191,7 +203,10 @@ const getRequestItemsOnly = async (req, res, next) => {
         approval_status,
         approval_comments,
         approved_by,
-        approved_at
+        approved_at,
+        is_received,
+        received_by,
+        received_at
       FROM public.requested_items
       WHERE request_id = $1
       `,

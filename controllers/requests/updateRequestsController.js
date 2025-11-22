@@ -4,6 +4,7 @@ const { sendEmail } = require('../../utils/emailService');
 const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRoutes');
+const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -825,38 +826,109 @@ const reassignMaintenanceRequestToRequester = async (req, res, next) => {
 
 const markRequestAsReceived = async (req, res, next) => {
   const { id } = req.params;
+  const { item_id } = req.body;
   const { id: user_id } = req.user;
+
+  if (!item_id || Number.isNaN(Number(item_id))) {
+    return next(createHttpError(400, 'Valid item_id is required'));
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await ensureRequestedItemReceivedColumns(client);
+
     const requestRes = await client.query(
-      'SELECT requester_id, status FROM requests WHERE id = $1',
+      'SELECT requester_id, status FROM requests WHERE id = $1 FOR UPDATE',
       [id]
     );
+
     if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
       return next(createHttpError(404, 'Request not found'));
     }
+
     const { requester_id, status } = requestRes.rows[0];
-    if (status !== 'completed') {
+    const normalizedStatus = (status || '').trim().toLowerCase();
+
+    if (!['completed', 'received'].includes(normalizedStatus)) {
+      await client.query('ROLLBACK');
       return next(
-        createHttpError(400, 'Request must be completed to be marked as received')
+        createHttpError(400, 'Request must be completed before items can be marked as received')
       );
     }
+
     if (requester_id !== user_id) {
+      await client.query('ROLLBACK');
       return next(
         createHttpError(403, 'Unauthorized to mark request as received')
       );
     }
-    await client.query(
-      "UPDATE requests SET status = 'Received', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+
+    const itemRes = await client.query(
+      `SELECT id, item_name, is_received
+         FROM public.requested_items
+        WHERE id = $1 AND request_id = $2
+        FOR UPDATE`,
+      [item_id, id]
+    );
+
+    if (itemRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Requested item not found for this request'));
+    }
+
+    const item = itemRes.rows[0];
+
+    if (!item.is_received) {
+      await client.query(
+        `UPDATE public.requested_items
+         SET is_received = TRUE,
+             received_by = $1,
+             received_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [user_id, item_id]
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Item Marked as Received', $2, $3)`,
+        [id, user_id, `Item '${item.item_name}' marked as received by requester`]
+      );
+    }
+
+    const remainingRes = await client.query(
+      `SELECT COUNT(*) AS remaining
+         FROM public.requested_items
+        WHERE request_id = $1 AND (is_received IS DISTINCT FROM TRUE)`,
       [id]
     );
-    await client.query(
-      "INSERT INTO request_logs (request_id, action, actor_id, comments) VALUES ($1, 'Marked as Received', $2, 'Items marked as received by requester')",
-      [id, user_id]
-    );
+
+    const remaining = Number(remainingRes.rows[0]?.remaining || 0);
+
+    let requestStatus = status;
+    if (remaining === 0 && normalizedStatus !== 'received') {
+      await client.query(
+        "UPDATE requests SET status = 'Received', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [id]
+      );
+
+      requestStatus = 'Received';
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Marked as Received', $2, 'All items marked as received by requester')`,
+        [id, user_id]
+      );
+    }
+
     await client.query('COMMIT');
-    res.json({ message: '✅ Request marked as received' });
+
+    res.json({
+      message: '✅ Item marked as received',
+      request_status: requestStatus,
+      remaining_items: remaining,
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     next(createHttpError(500, 'Failed to mark request as received'));

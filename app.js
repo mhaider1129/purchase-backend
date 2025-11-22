@@ -9,6 +9,7 @@ const reassignPendingApprovals = require('./controllers/utils/reassignPendingApp
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
 const { syncPermissionCatalog } = require('./utils/permissionService');
 const { syncUiAccessResources } = require('./utils/uiAccessService');
+const ensureWarehouseAssignments = require('./utils/ensureWarehouseAssignments');
 
 // Load environment variables
 dotenv.config();
@@ -23,6 +24,10 @@ syncPermissionCatalog()
 syncUiAccessResources()
   .then(() => console.log('✅ UI access resources synchronized'))
   .catch(err => console.error('❌ Failed to synchronize UI access resources:', err));
+
+ensureWarehouseAssignments()
+  .then(() => console.log('✅ Warehouse assignment columns ensured'))
+  .catch(err => console.error('❌ Failed to ensure warehouse assignment columns:', err));
 
 function getLANIP() {
   const interfaces = os.networkInterfaces();

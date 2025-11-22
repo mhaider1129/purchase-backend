@@ -3,6 +3,7 @@ const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
 const ensureWarehouseSupplyTables = require('../utils/ensureWarehouseSupplyTables');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
+const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 
 const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
   if (Number.isInteger(stockItemId)) {
@@ -92,7 +93,10 @@ const recordSuppliedItems = async (req, res, next) => {
   const { requestId } = req.params;
   const { items } = req.body;
   const { id: userId } = req.user;
-  const warehouseId = req.user?.department_id;
+
+  await ensureWarehouseAssignments();
+
+  const warehouseId = req.user?.warehouse_id || req.user?.department_id;
 
   if (!req.user.hasPermission('warehouse.manage-supply')) {
     return next(createHttpError(403, 'You do not have permission to record supplied items'));
@@ -115,7 +119,8 @@ const recordSuppliedItems = async (req, res, next) => {
     await ensureWarehouseInventoryTables(client);
 
     const requestRes = await client.query(
-      `SELECT id, request_type, status, department_id FROM requests WHERE id = $1 FOR UPDATE`,
+      `SELECT id, request_type, status, department_id, supply_warehouse_id
+         FROM requests WHERE id = $1 FOR UPDATE`,
       [requestId]
     );
 
@@ -133,6 +138,16 @@ const recordSuppliedItems = async (req, res, next) => {
     if (request.status !== 'Approved' && request.status !== 'Completed') {
       await client.query('ROLLBACK');
       return next(createHttpError(400, 'Request must be approved before supplying items'));
+    }
+
+    if (!request.supply_warehouse_id) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Warehouse supply requests must specify a warehouse'));
+    }
+
+    if (warehouseId !== request.supply_warehouse_id) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'You cannot supply items for a different warehouse'));
     }
 
     const itemsRes = await client.query(
@@ -217,7 +232,7 @@ const recordSuppliedItems = async (req, res, next) => {
 
       if (stockItem) {
         const movement = await decrementWarehouseStock(client, {
-          warehouseId,
+          warehouseId: request.supply_warehouse_id,
           stockItem,
           quantity: parsedQuantity,
           requestId: request.id,
@@ -293,27 +308,29 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
   }
 
   try {
+    await ensureWarehouseAssignments();
     await ensureWarehouseSupplyTables();
 
-    const deptRes = await pool.query(
-      'SELECT type FROM departments WHERE id = $1',
-      [req.user.department_id],
-    );
-    const deptType = deptRes.rows[0]?.type?.toLowerCase();
-    const domain = deptType === 'medical' ? 'medical' : 'operational';
+    const warehouseId = req.user?.warehouse_id || req.user?.department_id;
+    if (!Number.isInteger(warehouseId)) {
+      return next(createHttpError(400, 'You must be associated with a warehouse to view supply requests'));
+    }
 
     const result = await pool.query(
       `SELECT r.id, r.justification, r.status, r.created_at,
               d.name AS department_name,
-              s.name AS section_name
+              s.name AS section_name,
+              w.name AS warehouse_name,
+              r.supply_warehouse_id
        FROM requests r
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN sections s ON r.section_id = s.id
+       LEFT JOIN departments w ON r.supply_warehouse_id = w.id
        WHERE r.request_type = 'Warehouse Supply'
          AND r.status = 'Approved'
-         AND r.request_domain = $1
+         AND r.supply_warehouse_id = $1
        ORDER BY r.created_at DESC`,
-      [domain]
+      [warehouseId]
     );
     const requests = result.rows;
 

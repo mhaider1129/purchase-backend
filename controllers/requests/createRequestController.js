@@ -6,6 +6,7 @@ const { fetchApprovalRoutes } = require("../utils/approvalRoutes");
 const {
   persistRequestAttachments,
 } = require("./saveRequestAttachments");
+const ensureWarehouseAssignments = require("../../utils/ensureWarehouseAssignments");
 
 const assignApprover = async (
   client,
@@ -66,6 +67,7 @@ const assignApprover = async (
 
 const createRequest = async (req, res, next) => {
   let { request_type, justification, items } = req.body;
+  await ensureWarehouseAssignments();
 
   const rawProjectId = req.body?.project_id;
   let projectId = null;
@@ -90,6 +92,21 @@ const createRequest = async (req, res, next) => {
 
   if (!Array.isArray(items))
     return next(createHttpError(400, "Items must be an array"));
+
+  let supplyWarehouseId = null;
+  if (request_type === "Warehouse Supply") {
+    const candidateWarehouseId =
+      req.body?.supply_warehouse_id ?? req.body?.warehouse_id ?? null;
+
+    if (candidateWarehouseId === null || candidateWarehouseId === '') {
+      return next(createHttpError(400, "Select the warehouse fulfilling this supply request"));
+    }
+
+    supplyWarehouseId = Number(candidateWarehouseId);
+    if (!Number.isInteger(supplyWarehouseId)) {
+      return next(createHttpError(400, "Supply warehouse must be a valid warehouse ID"));
+    }
+  }
 
   const sanitizedItems = [];
   for (let idx = 0; idx < items.length; idx++) {
@@ -247,8 +264,9 @@ const createRequest = async (req, res, next) => {
          AND r.request_type = $3
          AND DATE_TRUNC('month', r.created_at) = DATE_TRUNC('month', CURRENT_DATE)
          AND LOWER(ri.item_name) = ANY($2::text[])
+         AND ($4::INT IS NULL OR r.supply_warehouse_id = $4)
        LIMIT 1`,
-      [department_id, itemNames, request_type],
+      [department_id, itemNames, request_type, supplyWarehouseId],
     );
     duplicateFound = dupRes.rowCount > 0;
 
@@ -301,8 +319,8 @@ const createRequest = async (req, res, next) => {
         request_type, requester_id, department_id, section_id, justification,
         estimated_cost, request_domain,
         maintenance_ref_number, initiated_by_technician_id,
-        project_id, temporary_requester_name
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        project_id, temporary_requester_name, supply_warehouse_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         request_type,
         requester_id,
@@ -315,6 +333,7 @@ const createRequest = async (req, res, next) => {
         initiated_by_technician_id,
         projectId,
         request_type === "Maintenance" ? temporaryRequesterName : null,
+        supplyWarehouseId,
       ],
     );
 

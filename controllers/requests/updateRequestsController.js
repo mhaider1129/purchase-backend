@@ -1016,10 +1016,6 @@ const markRequestAsReceived = async (req, res, next) => {
   const { item_id } = req.body || {};
   const { id: user_id } = req.user;
 
-  if (!item_id || Number.isNaN(Number(item_id))) {
-    return next(createHttpError(400, 'Valid item_id is required'));
-  }
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1052,20 +1048,38 @@ const markRequestAsReceived = async (req, res, next) => {
       );
     }
 
-    const itemRes = await client.query(
+    const itemsRes = await client.query(
       `SELECT id, item_name, is_received
          FROM public.requested_items
-        WHERE id = $1 AND request_id = $2
+        WHERE request_id = $1
         FOR UPDATE`,
-      [item_id, id]
+      [id]
     );
 
-    if (itemRes.rowCount === 0) {
+    if (itemsRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'No requested items found for this request'));
+    }
+
+    const parsedItemId = Number(item_id);
+    const hasValidItemId = !Number.isNaN(parsedItemId);
+
+    let targetItemId = hasValidItemId ? parsedItemId : null;
+    if (!hasValidItemId) {
+      if (itemsRes.rowCount === 1) {
+        targetItemId = itemsRes.rows[0].id;
+      } else {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'Valid item_id is required when multiple items exist'));
+      }
+    }
+
+    const item = itemsRes.rows.find((row) => row.id === targetItemId);
+
+    if (!item) {
       await client.query('ROLLBACK');
       return next(createHttpError(404, 'Requested item not found for this request'));
     }
-
-    const item = itemRes.rows[0];
 
     if (!item.is_received) {
       await client.query(
@@ -1074,7 +1088,7 @@ const markRequestAsReceived = async (req, res, next) => {
              received_by = $1,
              received_at = CURRENT_TIMESTAMP
          WHERE id = $2`,
-        [user_id, item_id]
+        [user_id, targetItemId]
       );
 
       await client.query(

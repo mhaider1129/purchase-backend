@@ -42,8 +42,7 @@ const getMedicalIncomplete = async (req, res, next) => {
       return next(createHttpError(403, 'You do not have permission to view medical incomplete requests'));
     }
 
-    const result = await pool.query(
-      `
+    const result = await pool.query(`
       SELECT DISTINCT r.*,
                       p.name AS project_name,
                       d.name AS department_name,
@@ -54,18 +53,15 @@ const getMedicalIncomplete = async (req, res, next) => {
       JOIN departments d ON r.department_id = d.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
-      JOIN approvals a ON a.request_id = r.id AND a.approver_id = $1 AND a.status = 'Approved'
-      WHERE r.status = 'Approved'
-        AND r.request_domain = 'medical'
+      WHERE r.request_domain = 'medical'
+        AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received')
         AND EXISTS (
           SELECT 1 FROM public.requested_items ri
           WHERE ri.request_id = r.id
             AND (ri.procurement_status IS NULL OR ri.procurement_status NOT IN ('purchased', 'completed'))
         )
       ORDER BY r.created_at DESC
-    `,
-      [req.user.id],
-    );
+    `);
 
     res.json(result.rows);
   } catch (err) {
@@ -74,7 +70,7 @@ const getMedicalIncomplete = async (req, res, next) => {
   }
 };
 
-// ✅ COO – Operational Requests approved by the COO
+// ✅ COO – All operational domain requests that are not completed/received
 const getOperationalIncomplete = async (req, res, next) => {
   try {
     if (!req.user?.hasPermission?.('requests.view-incomplete')) {
@@ -93,18 +89,15 @@ const getOperationalIncomplete = async (req, res, next) => {
       JOIN departments d ON r.department_id = d.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
-      JOIN approvals a ON a.request_id = r.id AND a.approver_id = $1 AND a.status = 'Approved'
-      WHERE r.status = 'Approved'
-        AND r.request_domain = 'operational'
+      WHERE r.request_domain = 'operational'
+        AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received')
         AND EXISTS (
           SELECT 1 FROM public.requested_items ri
           WHERE ri.request_id = r.id
             AND (ri.procurement_status IS NULL OR ri.procurement_status NOT IN ('purchased', 'completed'))
         )
       ORDER BY r.created_at DESC
-    `,
-      [req.user.id],
-    );
+    `);
 
     res.json(result.rows);
   } catch (err) {

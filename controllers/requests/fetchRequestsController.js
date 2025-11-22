@@ -910,12 +910,59 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
 const getClosedRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT r.*, p.name AS project_name, u.name AS assigned_user_name
+      `SELECT
+         r.id,
+         r.request_type,
+         r.justification,
+         r.status,
+         r.project_id,
+         r.created_at,
+         r.updated_at,
+         r.requester_id,
+         r.assigned_to,
+         r.is_urgent,
+         p.name AS project_name,
+         u.name AS assigned_user_name,
+         COALESCE(
+           JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'id', ri.id,
+               'item_name', ri.item_name,
+               'brand', ri.brand,
+               'quantity', ri.quantity,
+               'purchased_quantity', ri.purchased_quantity,
+               'available_quantity', ri.available_quantity,
+               'unit_cost', ri.unit_cost,
+               'total_cost', ri.total_cost,
+               'specs', ri.specs,
+               'procurement_status', ri.procurement_status,
+               'is_received', ri.is_received,
+               'received_at', ri.received_at,
+               'received_by', ri.received_by
+             )
+             ORDER BY ri.id
+           ) FILTER (WHERE ri.id IS NOT NULL),
+           '[]'::json
+         ) AS items
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN users u ON r.assigned_to = u.id
-       WHERE r.status IN ('completed', 'Rejected')
+       LEFT JOIN public.requested_items ri ON ri.request_id = r.id
+       WHERE r.status IN ('completed', 'Rejected', 'Received')
          AND r.requester_id = $1
+       GROUP BY
+         r.id,
+         r.request_type,
+         r.justification,
+         r.status,
+         r.project_id,
+         r.created_at,
+         r.updated_at,
+         r.requester_id,
+         r.assigned_to,
+         r.is_urgent,
+         p.name,
+         u.name
        ORDER BY r.updated_at DESC`,
       [req.user.id]
     );

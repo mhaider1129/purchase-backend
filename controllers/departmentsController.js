@@ -17,20 +17,59 @@ const getDepartmentsWithSections = async (req, res) => {
   }
 };
 
+const ALLOWED_DEPARTMENT_TYPES = ['medical', 'operational'];
+
+const normalizeDepartmentType = rawType => {
+  if (typeof rawType !== 'string') {
+    return null;
+  }
+
+  const cleaned = rawType.trim().toLowerCase();
+  if (!cleaned) {
+    return null;
+  }
+
+  if (cleaned === 'warehouse') {
+    // Warehouses are tracked as operational departments and assigned to warehouse managers
+    return { normalized: 'operational', isWarehouseAlias: true };
+  }
+
+  if (ALLOWED_DEPARTMENT_TYPES.includes(cleaned)) {
+    return { normalized: cleaned, isWarehouseAlias: false };
+  }
+
+  return null;
+};
+
 const createDepartment = async (req, res) => {
   if (!req.user.hasPermission('departments.manage')) {
     return res.status(403).json({ message: 'You do not have permission to manage departments' });
   }
+
   const { name, type } = req.body;
-  if (!name || !type) {
-    return res.status(400).json({ message: 'Name and type are required' });
+  const normalizedType = normalizeDepartmentType(type);
+
+  if (!name || !normalizedType) {
+    return res.status(400).json({
+      message:
+        'Name and type are required. Allowed types are medical and operational; warehouses should be created as operational departments.',
+    });
   }
+
   try {
     const { rows } = await pool.query(
       'INSERT INTO departments (name, type) VALUES ($1, $2) RETURNING *',
-      [name, type]
+      [name, normalizedType.normalized]
     );
-    res.status(201).json(rows[0]);
+
+    const createdDepartment = rows[0];
+    if (normalizedType.isWarehouseAlias) {
+      createdDepartment.type = 'operational';
+      createdDepartment.notes =
+        'Warehouse names are stored as operational departments and can be assigned to warehouse managers.';
+    }
+
+    res.status(201).json(createdDepartment);
   } catch (err) {
     console.error('❌ Failed to create department:', err);
     res.status(500).json({ message: 'Failed to create department' });

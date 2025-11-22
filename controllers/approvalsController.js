@@ -256,136 +256,151 @@ const handleApprovalDecision = async (req, res, next) => {
 
     // 8. Activate Next Approval Step (only when approved)
     if (status === 'Approved') {
-      if (
-        request.request_type === 'Maintenance' &&
-        request.initiated_by_technician_id &&
-        approval.approval_level === 0
-      ) {
-        const { rows: higherLevels } = await client.query(
-          `SELECT 1
-             FROM approvals
-            WHERE request_id = $1 AND approval_level > 0
-            LIMIT 1`,
-          [approval.request_id],
-        );
-
-        if (higherLevels.length === 0) {
-          await client.query(
-            `UPDATE requests
-                SET requester_id = $1,
-                    updated_at = NOW()
-              WHERE id = $2`,
-            [approver_id, approval.request_id],
-          );
-          request.requester_id = approver_id;
-
-          await client.query(
-            `INSERT INTO request_logs (request_id, action, actor_id, comments)
-             VALUES ($1, $2, $3, $4)`,
-            [
-              approval.request_id,
-              'Requester confirmation recorded',
-              approver_id,
-              'Maintenance request ownership transferred to department requester',
-            ],
-          );
-
-          const { rows: newRequesterEmailRows } = await client.query(
-            `SELECT email FROM users WHERE id = $1`,
-            [approver_id],
-          );
-          if (newRequesterEmailRows[0]?.email) {
-            request.requester_email = newRequesterEmailRows[0].email;
-          }
-
-          if (!routeDefinitions.length) {
-            const existing = await client.query(
-              `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-              [approval.request_id, approval.approval_level + 1],
-            );
-            if (existing.rowCount === 0) {
-              await assignApprover(
-                client,
-                'SCM',
-                request.department_id,
-                approval.request_id,
-                request.request_type,
-                approval.approval_level + 1,
-                routeDomain,
-              );
-            }
-          } else {
-            for (const { role, approval_level } of routeDefinitions) {
-              if (approval_level <= approval.approval_level) {
-                continue;
-              }
-
-              const existing = await client.query(
-                `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-                [approval.request_id, approval_level],
-              );
-              if (existing.rowCount > 0) {
-                continue;
-              }
-
-              await assignApprover(
-                client,
-                role,
-                request.department_id,
-                approval.request_id,
-                request.request_type,
-                approval_level,
-                routeDomain,
-              );
-            }
-          }
-        }
-      }
-
-      const nextLevelRes = await client.query(
-        `UPDATE approvals SET is_active = TRUE
-         WHERE request_id = $1 AND approval_level = $2 AND is_active = FALSE
-         RETURNING id, approver_id`,
-        [approval.request_id, approval.approval_level + 1],
+      const sameLevelPendingRes = await client.query(
+        `SELECT COUNT(*) AS pending_count
+           FROM approvals
+          WHERE request_id = $1
+            AND approval_level = $2
+            AND status = 'Pending'`,
+        [approval.request_id, approval.approval_level],
       );
 
-      if (nextLevelRes.rowCount > 0) {
-        await client.query(
-          `INSERT INTO request_logs (request_id, action, actor_id, comments)
-           VALUES ($1, $2, $3, NULL)`,
-          [approval.request_id, `Level ${approval.approval_level + 1} activated`, approver_id],
-        );
+      const pendingAtCurrentLevel = Number(
+        sameLevelPendingRes.rows?.[0]?.pending_count || 0,
+      );
 
-        const nextId = nextLevelRes.rows[0].id;
-        const nextApproverId = nextLevelRes.rows[0].approver_id || null;
-        const emailRes = await client.query(
-          `SELECT u.email FROM approvals a JOIN users u ON a.approver_id = u.id WHERE a.id = $1`,
-          [nextId],
-        );
-        const nextEmail = emailRes.rows[0]?.email;
-        const nextMessage = `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.`;
+      if (pendingAtCurrentLevel === 0) {
+        if (
+          request.request_type === 'Maintenance' &&
+          request.initiated_by_technician_id &&
+          approval.approval_level === 0
+        ) {
+          const { rows: higherLevels } = await client.query(
+            `SELECT 1
+               FROM approvals
+              WHERE request_id = $1 AND approval_level > 0
+              LIMIT 1`,
+            [approval.request_id],
+          );
 
-        if (nextApproverId) {
-          enqueueNotification({
-            userId: nextApproverId,
-            title: 'Purchase Request Needs Your Review',
-            message: nextMessage,
-            link: `/requests/${approval.request_id}`,
-            metadata: {
-              requestId: approval.request_id,
-              requestType: request.request_type,
-              action: 'approval_required',
-              level: approval.approval_level + 1,
-            },
-          });
+          if (higherLevels.length === 0) {
+            await client.query(
+              `UPDATE requests
+                  SET requester_id = $1,
+                      updated_at = NOW()
+                WHERE id = $2`,
+              [approver_id, approval.request_id],
+            );
+            request.requester_id = approver_id;
+
+            await client.query(
+              `INSERT INTO request_logs (request_id, action, actor_id, comments)
+               VALUES ($1, $2, $3, $4)`,
+              [
+                approval.request_id,
+                'Requester confirmation recorded',
+                approver_id,
+                'Maintenance request ownership transferred to department requester',
+              ],
+            );
+
+            const { rows: newRequesterEmailRows } = await client.query(
+              `SELECT email FROM users WHERE id = $1`,
+              [approver_id],
+            );
+            if (newRequesterEmailRows[0]?.email) {
+              request.requester_email = newRequesterEmailRows[0].email;
+            }
+
+            if (!routeDefinitions.length) {
+              const existing = await client.query(
+                `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+                [approval.request_id, approval.approval_level + 1],
+              );
+              if (existing.rowCount === 0) {
+                await assignApprover(
+                  client,
+                  'SCM',
+                  request.department_id,
+                  approval.request_id,
+                  request.request_type,
+                  approval.approval_level + 1,
+                  routeDomain,
+                );
+              }
+            } else {
+              for (const { role, approval_level } of routeDefinitions) {
+                if (approval_level <= approval.approval_level) {
+                  continue;
+                }
+
+                const existing = await client.query(
+                  `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+                  [approval.request_id, approval_level],
+                );
+                if (existing.rowCount > 0) {
+                  continue;
+                }
+
+                await assignApprover(
+                  client,
+                  role,
+                  request.department_id,
+                  approval.request_id,
+                  request.request_type,
+                  approval_level,
+                  routeDomain,
+                );
+              }
+            }
+          }
         }
 
-        if (nextEmail) {
-          await sendEmail(
-            nextEmail,
-            'Purchase Request Needs Your Review',
-            `${nextMessage}\nPlease log in to review the details.`,
+        const nextLevelRes = await client.query(
+          `UPDATE approvals SET is_active = TRUE
+           WHERE request_id = $1 AND approval_level = $2 AND is_active = FALSE
+           RETURNING id, approver_id`,
+          [approval.request_id, approval.approval_level + 1],
+        );
+
+        if (nextLevelRes.rowCount > 0) {
+          await client.query(
+            `INSERT INTO request_logs (request_id, action, actor_id, comments)
+             VALUES ($1, $2, $3, NULL)`,
+            [approval.request_id, `Level ${approval.approval_level + 1} activated`, approver_id],
           );
+
+          const nextId = nextLevelRes.rows[0].id;
+          const nextApproverId = nextLevelRes.rows[0].approver_id || null;
+          const emailRes = await client.query(
+            `SELECT u.email FROM approvals a JOIN users u ON a.approver_id = u.id WHERE a.id = $1`,
+            [nextId],
+          );
+          const nextEmail = emailRes.rows[0]?.email;
+          const nextMessage = `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.`;
+
+          if (nextApproverId) {
+            enqueueNotification({
+              userId: nextApproverId,
+              title: 'Purchase Request Needs Your Review',
+              message: nextMessage,
+              link: `/requests/${approval.request_id}`,
+              metadata: {
+                requestId: approval.request_id,
+                requestType: request.request_type,
+                action: 'approval_required',
+                level: approval.approval_level + 1,
+              },
+            });
+          }
+
+          if (nextEmail) {
+            await sendEmail(
+              nextEmail,
+              'Purchase Request Needs Your Review',
+              `${nextMessage}\nPlease log in to review the details.`,
+            );
+          }
         }
       }
     }

@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "A backend system for tracking purchase requisitions, approvals, and procurement workflows.",
   "main": "app.js",
+  "engines": {
+  "node": ">=20.0.0",
+  "npm": ">=10.0.0"
+},
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",

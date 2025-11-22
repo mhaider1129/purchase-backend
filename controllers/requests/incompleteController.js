@@ -19,7 +19,7 @@ const getAllIncomplete = async (req, res, next) => {
       JOIN departments d ON r.department_id = d.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN sections s ON r.section_id = s.id
-      WHERE r.status = 'Approved'
+      WHERE COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received')
         AND EXISTS (
           SELECT 1 FROM public.requested_items ri
           WHERE ri.request_id = r.id

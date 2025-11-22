@@ -308,6 +308,8 @@ const updateApprovalStatus = async (req, res, next) => {
         [request_id],
       );
 
+      let autoApprovedItems = 0;
+
       if (nextPendingApprovals.length > 0) {
         await client.query(
           `UPDATE approvals SET is_active = true WHERE id = $1`,
@@ -315,6 +317,41 @@ const updateApprovalStatus = async (req, res, next) => {
         );
       } else {
         await client.query(`UPDATE requests SET status = 'Approved' WHERE id = $1`, [request_id]);
+
+        const { rowCount } = await client.query(
+          `UPDATE public.requested_items
+              SET approval_status = 'Approved',
+                  approved_at = COALESCE(approved_at, NOW()),
+                  approved_by = COALESCE(approved_by, $2)
+            WHERE request_id = $1
+              AND (approval_status IS NULL OR approval_status = 'Pending')`,
+          [request_id, approver_id],
+        );
+
+        autoApprovedItems = rowCount;
+
+        if (autoApprovedItems > 0) {
+          await client.query(
+            `INSERT INTO request_logs (request_id, action, actor_id, comments)
+             VALUES ($1, 'Items Auto-Approved', $2, $3)`,
+            [
+              request_id,
+              approver_id,
+              `${autoApprovedItems} pending item(s) auto-approved upon final request approval`,
+            ],
+          );
+
+          await client.query(
+            `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+             VALUES ($1, $2, $3, 'Items Auto-Approved', $4)`,
+            [
+              approval_id,
+              request_id,
+              approver_id,
+              `${autoApprovedItems} pending item(s) auto-approved upon final request approval`,
+            ],
+          );
+        }
       }
     }
 

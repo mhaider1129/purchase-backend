@@ -6,6 +6,7 @@ const {
   buildPermissionSet,
   userHasPermission,
 } = require('../utils/permissionService');
+const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 
 // 🔧 Reusable error generator
 function createHttpError(statusCode, message) {
@@ -52,6 +53,9 @@ const authenticateUser = async (req, res, next) => {
       console.error('❌ JWT verification failed:', err.message);
       return next(createHttpError(401, 'Unauthorized: Invalid or expired token'));
     }
+
+    // Ensure required warehouse-related columns exist before querying
+    await ensureWarehouseAssignments();
 
     // 🔎 Fetch user from DB
     const userRes = await pool.query(

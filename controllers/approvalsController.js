@@ -21,13 +21,32 @@ const handleApprovalDecision = async (req, res, next) => {
     return next(createHttpError(400, 'Invalid approval ID'));
   }
   const approvalId = Number(id);
-  const { status, comments, is_urgent } = req.body;
+  const { status, comments, is_urgent, estimated_cost: estimatedCostInput } = req.body;
   // authMiddleware exposes the logged in user's id as `id`
   const approver_id = req.user.id;
   const user_role = req.user.role;
 
   if (!['Approved', 'Rejected'].includes(status)) {
     return next(createHttpError(400, 'Invalid status value'));
+  }
+
+  const sanitizedEstimatedCost =
+    estimatedCostInput !== undefined &&
+    estimatedCostInput !== null &&
+    String(estimatedCostInput).trim() !== ''
+      ? Number(String(estimatedCostInput).replace(/,/g, ''))
+      : null;
+
+  if (sanitizedEstimatedCost !== null) {
+    if (Number.isNaN(sanitizedEstimatedCost) || sanitizedEstimatedCost <= 0) {
+      return next(createHttpError(400, 'estimated_cost must be a positive number'));
+    }
+
+    if (!req.user?.hasPermission || !req.user.hasPermission('procurement.update-cost')) {
+      return next(
+        createHttpError(403, 'You do not have permission to update estimated cost during approval'),
+      );
+    }
   }
 
   await ensureRequestedItemApprovalColumns();
@@ -71,11 +90,37 @@ const handleApprovalDecision = async (req, res, next) => {
       requestType: request.request_type,
     });
 
+    let effectiveEstimatedCost = Number(request.estimated_cost) || 0;
+
+    if (sanitizedEstimatedCost !== null) {
+      effectiveEstimatedCost = sanitizedEstimatedCost;
+
+      await client.query(
+        `UPDATE requests
+            SET estimated_cost = $1,
+                updated_at = NOW()
+          WHERE id = $2`,
+        [sanitizedEstimatedCost, approval.request_id],
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Estimated Cost Updated', $2, $3)`,
+        [
+          approval.request_id,
+          approver_id,
+          `SCM set estimated cost to ${sanitizedEstimatedCost}`,
+        ],
+      );
+
+      request.estimated_cost = sanitizedEstimatedCost;
+    }
+
     const routeDefinitions = await fetchApprovalRoutes({
       client,
       requestType: request.request_type,
       departmentType: routeDomain,
-      amount: request.estimated_cost || 0,
+      amount: effectiveEstimatedCost,
     });
 
     const notificationsToCreate = [];

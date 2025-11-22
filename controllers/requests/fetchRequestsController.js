@@ -669,6 +669,35 @@ const getPendingApprovals = async (req, res, next) => {
   }
 };
 
+const getHodApprovers = async (req, res, next) => {
+  const normalizedRole = (req.user?.role || '').toUpperCase();
+
+  if (normalizedRole !== 'SCM') {
+    return next(createHttpError(403, 'Only SCM users can fetch department HOD approvers'));
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         u.id,
+         u.name,
+         u.email,
+         u.department_id,
+         d.name AS department_name
+       FROM users u
+       LEFT JOIN departments d ON d.id = u.department_id
+       WHERE LOWER(u.role) = 'hod'
+         AND u.is_active = true
+       ORDER BY d.name NULLS LAST, u.name`,
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to load HOD approvers:', err);
+    next(createHttpError(500, 'Failed to load HOD approvers'));
+  }
+};
+
 const getMyMaintenanceRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
@@ -791,6 +820,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          r.justification,
          r.maintenance_ref_number,
          r.is_urgent,
+         r.estimated_cost,
          COALESCE(r.temporary_requester_name, u.name) AS requester_name,
          d.name AS department_name,
          s.name AS section_name,
@@ -923,6 +953,7 @@ module.exports = {
   getMyRequests,
   getAllRequests,
   getPendingApprovals,
+  getHodApprovers,
   getAssignedRequests,
   getApprovalHistory,
   getProcurementUsers,

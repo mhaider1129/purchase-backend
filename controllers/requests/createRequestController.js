@@ -23,8 +23,14 @@ const assignApprover = async (
 
   if (normalizedRole === "warehousemanager") {
     const normalizedDomain = requestDomain?.toLowerCase();
-    const fallbackDomain = requestType === "Non-Stock" ? "operational" : null;
-    const domainForManager = normalizedDomain || fallbackDomain;
+    const normalizedRequestType = requestType?.toLowerCase();
+    const requiresOperationalWarehouseManager =
+      normalizedRequestType === "non-stock" || normalizedRequestType === "maintenance";
+
+    const fallbackDomain = requiresOperationalWarehouseManager ? "operational" : null;
+    const domainForManager = requiresOperationalWarehouseManager
+      ? "operational"
+      : normalizedDomain || fallbackDomain;
 
     if (domainForManager) {
       const managerRes = await client.query(

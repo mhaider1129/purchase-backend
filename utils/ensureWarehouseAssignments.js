@@ -19,9 +19,9 @@ const ensureWarehouseAssignments = async (client = pool) => {
   const runner = client.query ? client : pool;
 
   const statements = [
-    `ALTER TABLE IF NOT EXISTS public.users
+    `ALTER TABLE IF EXISTS public.users
        ADD COLUMN IF NOT EXISTS warehouse_id INTEGER REFERENCES departments(id)`,
-    `ALTER TABLE IF NOT EXISTS public.requests
+    `ALTER TABLE IF EXISTS public.requests
        ADD COLUMN IF NOT EXISTS supply_warehouse_id INTEGER REFERENCES departments(id)`,
     `CREATE INDEX IF NOT EXISTS idx_users_warehouse_id ON public.users(warehouse_id)`,
     `CREATE INDEX IF NOT EXISTS idx_requests_supply_warehouse ON public.requests(supply_warehouse_id)`

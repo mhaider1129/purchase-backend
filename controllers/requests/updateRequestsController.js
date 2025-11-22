@@ -483,19 +483,11 @@ const requestHodApproval = async (req, res, next) => {
       );
     }
 
-    const insertionLevel = Number(currentApproval.approval_level) + 1;
-
-    await client.query(
-      `UPDATE approvals
-          SET approval_level = approval_level + 1
-        WHERE request_id = $1
-          AND approval_level >= $2`,
-      [requestId, insertionLevel],
-    );
+    const insertionLevel = Number(currentApproval.approval_level);
 
     const insertedApproval = await client.query(
       `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
-       VALUES ($1, $2, $3, FALSE, 'Pending', NULL)
+       VALUES ($1, $2, $3, TRUE, 'Pending', NULL)
        RETURNING id`,
       [requestId, hodUserId, insertionLevel],
     );

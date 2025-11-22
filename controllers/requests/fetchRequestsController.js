@@ -1,6 +1,7 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
+const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -50,15 +51,19 @@ const getRequestDetails = async (req, res, next) => {
            NULL::numeric AS total_cost,
            NULL::text AS specs,
            NULL::text AS approval_status,
-           NULL::text AS approval_comments,
-           NULL::integer AS approved_by,
-           NULL::timestamp AS approved_at
-         FROM warehouse_supply_items
-         WHERE request_id = $1`,
+         NULL::text AS approval_comments,
+         NULL::integer AS approved_by,
+         NULL::timestamp AS approved_at,
+         NULL::boolean AS is_received,
+         NULL::integer AS received_by,
+         NULL::timestamp AS received_at
+       FROM warehouse_supply_items
+       WHERE request_id = $1`,
         [id]
       );
     } else {
       await ensureRequestedItemApprovalColumns();
+      await ensureRequestedItemReceivedColumns();
       itemsRes = await pool.query(
         `SELECT
            id,
@@ -73,7 +78,10 @@ const getRequestDetails = async (req, res, next) => {
            approval_status,
            approval_comments,
            approved_by,
-           approved_at
+           approved_at,
+           is_received,
+           received_by,
+           received_at
          FROM public.requested_items
          WHERE request_id = $1`,
         [id]
@@ -166,7 +174,10 @@ const getRequestItemsOnly = async (req, res, next) => {
         NULL::text AS approval_status,
         NULL::text AS approval_comments,
         NULL::integer AS approved_by,
-        NULL::timestamp AS approved_at
+        NULL::timestamp AS approved_at,
+        NULL::boolean AS is_received,
+        NULL::integer AS received_by,
+        NULL::timestamp AS received_at
       FROM warehouse_supply_items
       WHERE request_id = $1
       `,
@@ -174,6 +185,7 @@ const getRequestItemsOnly = async (req, res, next) => {
       );
     } else {
       await ensureRequestedItemApprovalColumns();
+      await ensureRequestedItemReceivedColumns();
       itemsRes = await pool.query(
         `
       SELECT
@@ -191,7 +203,10 @@ const getRequestItemsOnly = async (req, res, next) => {
         approval_status,
         approval_comments,
         approved_by,
-        approved_at
+        approved_at,
+        is_received,
+        received_by,
+        received_at
       FROM public.requested_items
       WHERE request_id = $1
       `,
@@ -654,6 +669,35 @@ const getPendingApprovals = async (req, res, next) => {
   }
 };
 
+const getHodApprovers = async (req, res, next) => {
+  const normalizedRole = (req.user?.role || '').toUpperCase();
+
+  if (normalizedRole !== 'SCM') {
+    return next(createHttpError(403, 'Only SCM users can fetch department HOD approvers'));
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         u.id,
+         u.name,
+         u.email,
+         u.department_id,
+         d.name AS department_name
+       FROM users u
+       LEFT JOIN departments d ON d.id = u.department_id
+       WHERE LOWER(u.role) = 'hod'
+         AND u.is_active = true
+       ORDER BY d.name NULLS LAST, u.name`,
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to load HOD approvers:', err);
+    next(createHttpError(500, 'Failed to load HOD approvers'));
+  }
+};
+
 const getMyMaintenanceRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
@@ -776,6 +820,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          r.justification,
          r.maintenance_ref_number,
          r.is_urgent,
+         r.estimated_cost,
          COALESCE(r.temporary_requester_name, u.name) AS requester_name,
          d.name AS department_name,
          s.name AS section_name,
@@ -865,12 +910,59 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
 const getClosedRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT r.*, p.name AS project_name, u.name AS assigned_user_name
+      `SELECT
+         r.id,
+         r.request_type,
+         r.justification,
+         r.status,
+         r.project_id,
+         r.created_at,
+         r.updated_at,
+         r.requester_id,
+         r.assigned_to,
+         r.is_urgent,
+         p.name AS project_name,
+         u.name AS assigned_user_name,
+         COALESCE(
+           JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'id', ri.id,
+               'item_name', ri.item_name,
+               'brand', ri.brand,
+               'quantity', ri.quantity,
+               'purchased_quantity', ri.purchased_quantity,
+               'available_quantity', ri.available_quantity,
+               'unit_cost', ri.unit_cost,
+               'total_cost', ri.total_cost,
+               'specs', ri.specs,
+               'procurement_status', ri.procurement_status,
+               'is_received', ri.is_received,
+               'received_at', ri.received_at,
+               'received_by', ri.received_by
+             )
+             ORDER BY ri.id
+           ) FILTER (WHERE ri.id IS NOT NULL),
+           '[]'::json
+         ) AS items
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN users u ON r.assigned_to = u.id
-       WHERE r.status IN ('completed', 'Rejected')
+       LEFT JOIN public.requested_items ri ON ri.request_id = r.id
+       WHERE r.status IN ('completed', 'Rejected', 'Received')
          AND r.requester_id = $1
+       GROUP BY
+         r.id,
+         r.request_type,
+         r.justification,
+         r.status,
+         r.project_id,
+         r.created_at,
+         r.updated_at,
+         r.requester_id,
+         r.assigned_to,
+         r.is_urgent,
+         p.name,
+         u.name
        ORDER BY r.updated_at DESC`,
       [req.user.id]
     );
@@ -908,6 +1000,7 @@ module.exports = {
   getMyRequests,
   getAllRequests,
   getPendingApprovals,
+  getHodApprovers,
   getAssignedRequests,
   getApprovalHistory,
   getProcurementUsers,

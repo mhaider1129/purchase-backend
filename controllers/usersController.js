@@ -53,7 +53,7 @@ const deactivateUser = async (req, res, next) => {
 const assignUser = async (req, res, next) => {
   const { id } = req.params;
   const { role: actingRole } = req.user;
-  const { role, role_id, department_id, section_id, can_request_medication } = req.body;
+  const { role, role_id, department_id, section_id, warehouse_id, can_request_medication } = req.body;
 
   if (!req.user.hasPermission('users.manage')) {
     return next(createHttpError(403, 'You do not have permission to manage users'));
@@ -77,6 +77,14 @@ const assignUser = async (req, res, next) => {
     sectionId = parseInt(section_id, 10);
     if (Number.isNaN(sectionId)) {
       return next(createHttpError(400, 'Invalid section ID'));
+    }
+  }
+
+  let warehouseId = null;
+  if (typeof warehouse_id !== 'undefined' && warehouse_id !== null && warehouse_id !== '') {
+    warehouseId = parseInt(warehouse_id, 10);
+    if (Number.isNaN(warehouseId)) {
+      return next(createHttpError(400, 'Invalid warehouse ID'));
     }
   }
 
@@ -160,12 +168,14 @@ const assignUser = async (req, res, next) => {
          SET role = $1,
              department_id = $2,
              section_id = $3,
-             can_request_medication = COALESCE($4::BOOLEAN, can_request_medication)
-       WHERE id = $5 RETURNING id`,
+             warehouse_id = $4,
+             can_request_medication = COALESCE($5::BOOLEAN, can_request_medication)
+       WHERE id = $6 RETURNING id`,
       [
         targetRoleName,
         departmentId,
         sectionId,
+        warehouseId,
         shouldUpdateMedication ? parsedMedicationValue : null,
         userId,
       ]

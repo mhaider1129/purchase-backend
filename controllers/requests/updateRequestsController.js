@@ -4,6 +4,7 @@ const { sendEmail } = require('../../utils/emailService');
 const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRoutes');
+const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -361,6 +362,193 @@ const updateApprovalStatus = async (req, res, next) => {
     await client.query('ROLLBACK');
     console.error('❌ Error in approval workflow:', err);
     next(createHttpError(500, 'Failed to update approval status'));
+  } finally {
+    client.release();
+  }
+};
+
+const requestHodApproval = async (req, res, next) => {
+  const normalizedRole = (req.user?.role || '').toUpperCase();
+  if (normalizedRole !== 'SCM') {
+    return next(
+      createHttpError(403, 'Only SCM users can request additional HOD approvals'),
+    );
+  }
+
+  const requestId = Number(req.params.id);
+  const hodUserId = Number(req.body?.hod_user_id);
+
+  if (!Number.isInteger(requestId)) {
+    return next(createHttpError(400, 'Invalid request ID'));
+  }
+
+  if (!Number.isInteger(hodUserId)) {
+    return next(createHttpError(400, 'Select a valid HOD user to continue'));
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const requestRes = await client.query(
+      `SELECT id, status, request_type
+         FROM requests
+        WHERE id = $1
+        FOR UPDATE`,
+      [requestId],
+    );
+
+    if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const normalizedStatus = (requestRes.rows[0]?.status || '').trim().toLowerCase();
+    if (['approved', 'completed', 'received', 'rejected'].includes(normalizedStatus)) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'This request is no longer pending approval'));
+    }
+
+    const currentApprovalRes = await client.query(
+      `SELECT id, approval_level, is_active
+         FROM approvals
+        WHERE request_id = $1
+          AND approver_id = $2
+          AND status = 'Pending'
+        ORDER BY approval_level ASC
+        LIMIT 1`,
+      [requestId, req.user.id],
+    );
+
+    if (currentApprovalRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(
+        createHttpError(
+          403,
+          'You must be the active SCM approver for this request to send it to a HOD',
+        ),
+      );
+    }
+
+    const currentApproval = currentApprovalRes.rows[0];
+    if (!currentApproval.is_active) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'Only the active SCM approver can reroute this request'));
+    }
+
+    const hodRes = await client.query(
+      `SELECT
+         u.id,
+         u.department_id,
+         u.email,
+         u.name,
+         u.is_active,
+         d.name AS department_name
+       FROM users u
+       LEFT JOIN departments d ON d.id = u.department_id
+       WHERE u.id = $1
+         AND LOWER(u.role) = 'hod'`,
+      [hodUserId],
+    );
+
+    const hodUser = hodRes.rows[0];
+    if (!hodUser) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Selected HOD was not found'));
+    }
+
+    if (!hodUser.is_active) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Selected HOD is inactive'));
+    }
+
+    const duplicateCheck = await client.query(
+      `SELECT 1
+         FROM approvals
+        WHERE request_id = $1
+          AND approver_id = $2
+          AND status = 'Pending'
+        LIMIT 1`,
+      [requestId, hodUserId],
+    );
+
+    if (duplicateCheck.rowCount > 0) {
+      await client.query('ROLLBACK');
+      return next(
+        createHttpError(
+          400,
+          'This request already has a pending approval step for the selected HOD',
+        ),
+      );
+    }
+
+    const insertionLevel = Number(currentApproval.approval_level) + 1;
+
+    await client.query(
+      `UPDATE approvals
+          SET approval_level = approval_level + 1
+        WHERE request_id = $1
+          AND approval_level >= $2`,
+      [requestId, insertionLevel],
+    );
+
+    const insertedApproval = await client.query(
+      `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
+       VALUES ($1, $2, $3, FALSE, 'Pending', NULL)
+       RETURNING id`,
+      [requestId, hodUserId, insertionLevel],
+    );
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, 'Additional HOD approval requested', $2, $3)`,
+      [
+        requestId,
+        req.user.id,
+        hodUser.department_name
+          ? `Forwarded to ${hodUser.department_name} HOD`
+          : 'Forwarded to selected HOD',
+      ],
+    );
+
+    const notificationMessage = `Request ${requestId} requires your approval as the department HOD before it can proceed.`;
+
+    await createNotifications(
+      [
+        {
+          userId: hodUser.id,
+          title: 'Request pending your approval',
+          message: notificationMessage,
+          link: `/requests/${requestId}`,
+          metadata: {
+            requestId,
+            requestType: requestRes.rows[0]?.request_type,
+            action: 'hod_additional_approval',
+          },
+        },
+      ],
+      client,
+    );
+
+    if (hodUser.email) {
+      await sendEmail(
+        hodUser.email,
+        'Purchase request forwarded for your approval',
+        `Hello ${hodUser.name || 'HOD'},\n\nRequest ${requestId} has been forwarded to you for approval before the workflow can continue.\nPlease log in to review the details.`,
+      );
+    }
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Request forwarded to the selected HOD for approval',
+      newApprovalId: insertedApproval.rows[0]?.id || null,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to request HOD approval:', err);
+    next(createHttpError(500, 'Failed to forward request to HOD'));
   } finally {
     client.release();
   }
@@ -825,38 +1013,123 @@ const reassignMaintenanceRequestToRequester = async (req, res, next) => {
 
 const markRequestAsReceived = async (req, res, next) => {
   const { id } = req.params;
+  const { item_id } = req.body || {};
   const { id: user_id } = req.user;
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await ensureRequestedItemReceivedColumns(client);
+
     const requestRes = await client.query(
-      'SELECT requester_id, status FROM requests WHERE id = $1',
+      'SELECT requester_id, status FROM requests WHERE id = $1 FOR UPDATE',
       [id]
     );
+
     if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
       return next(createHttpError(404, 'Request not found'));
     }
+
     const { requester_id, status } = requestRes.rows[0];
-    if (status !== 'completed') {
+    const normalizedStatus = (status || '').trim().toLowerCase();
+
+    if (!['completed', 'received'].includes(normalizedStatus)) {
+      await client.query('ROLLBACK');
       return next(
-        createHttpError(400, 'Request must be completed to be marked as received')
+        createHttpError(400, 'Request must be completed before items can be marked as received')
       );
     }
+
     if (requester_id !== user_id) {
+      await client.query('ROLLBACK');
       return next(
         createHttpError(403, 'Unauthorized to mark request as received')
       );
     }
-    await client.query(
-      "UPDATE requests SET status = 'Received', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+
+    const itemsRes = await client.query(
+      `SELECT id, item_name, is_received
+         FROM public.requested_items
+        WHERE request_id = $1
+        FOR UPDATE`,
       [id]
     );
-    await client.query(
-      "INSERT INTO request_logs (request_id, action, actor_id, comments) VALUES ($1, 'Marked as Received', $2, 'Items marked as received by requester')",
-      [id, user_id]
+
+    if (itemsRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'No requested items found for this request'));
+    }
+
+    const parsedItemId = Number(item_id);
+    const hasValidItemId = !Number.isNaN(parsedItemId);
+
+    let targetItemId = hasValidItemId ? parsedItemId : null;
+    if (!hasValidItemId) {
+      if (itemsRes.rowCount === 1) {
+        targetItemId = itemsRes.rows[0].id;
+      } else {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'Valid item_id is required when multiple items exist'));
+      }
+    }
+
+    const item = itemsRes.rows.find((row) => row.id === targetItemId);
+
+    if (!item) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Requested item not found for this request'));
+    }
+
+    if (!item.is_received) {
+      await client.query(
+        `UPDATE public.requested_items
+         SET is_received = TRUE,
+             received_by = $1,
+             received_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [user_id, targetItemId]
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Item Marked as Received', $2, $3)`,
+        [id, user_id, `Item '${item.item_name}' marked as received by requester`]
+      );
+    }
+
+    const remainingRes = await client.query(
+      `SELECT COUNT(*) AS remaining
+         FROM public.requested_items
+        WHERE request_id = $1 AND (is_received IS DISTINCT FROM TRUE)`,
+      [id]
     );
+
+    const remaining = Number(remainingRes.rows[0]?.remaining || 0);
+
+    let requestStatus = status;
+    if (remaining === 0 && normalizedStatus !== 'received') {
+      await client.query(
+        "UPDATE requests SET status = 'Received', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [id]
+      );
+
+      requestStatus = 'Received';
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Marked as Received', $2, 'All items marked as received by requester')`,
+        [id, user_id]
+      );
+    }
+
     await client.query('COMMIT');
-    res.json({ message: '✅ Request marked as received' });
+
+    res.json({
+      message: '✅ Item marked as received',
+      request_status: requestStatus,
+      remaining_items: remaining,
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     next(createHttpError(500, 'Failed to mark request as received'));
@@ -867,6 +1140,7 @@ const markRequestAsReceived = async (req, res, next) => {
 module.exports = {
   assignRequestToProcurement,
   updateApprovalStatus,
+  requestHodApproval,
   markRequestAsCompleted,
   markRequestAsReceived,
   updateRequestCost,

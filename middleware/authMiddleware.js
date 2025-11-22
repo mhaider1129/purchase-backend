@@ -6,6 +6,7 @@ const {
   buildPermissionSet,
   userHasPermission,
 } = require('../utils/permissionService');
+const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 
 // 🔧 Reusable error generator
 function createHttpError(statusCode, message) {
@@ -53,9 +54,12 @@ const authenticateUser = async (req, res, next) => {
       return next(createHttpError(401, 'Unauthorized: Invalid or expired token'));
     }
 
+    // Ensure required warehouse-related columns exist before querying
+    await ensureWarehouseAssignments();
+
     // 🔎 Fetch user from DB
     const userRes = await pool.query(
-      `SELECT id, name, role, department_id, is_active, can_request_medication
+      `SELECT id, name, role, department_id, warehouse_id, is_active, can_request_medication
          FROM users WHERE id = $1`,
       [decoded.user_id]
     );
@@ -79,6 +83,7 @@ const authenticateUser = async (req, res, next) => {
       name: user.name,
       role: user.role,
       department_id: user.department_id,
+      warehouse_id: user.warehouse_id,
       can_request_medication: user.can_request_medication,
       permissions,
     };

@@ -13,6 +13,7 @@ const {
   getMyRequests,
   getMyMaintenanceRequests,
   getPendingApprovals,
+  getHodApprovers,
   getAssignedRequests,
   getApprovalHistory,
   getProcurementUsers,
@@ -21,6 +22,7 @@ const {
   getRequestLogs,
   printRequest,
   updateApprovalStatus,
+  requestHodApproval,
   assignRequestToProcurement,
   approveMaintenanceRequest,
   reassignMaintenanceRequestToRequester,
@@ -55,12 +57,14 @@ router.get('/', getAllRequests); // Admin/SCM view all
 router.get('/my', getMyRequests); // My submitted requests
 router.get('/my-maintenance', getMyMaintenanceRequests); // Maintenance only
 router.get('/pending-approvals', getPendingApprovals); // My approvals
+router.get('/hod-approvers', getHodApprovers); // SCM selectable HOD list
 router.get('/assigned', getAssignedRequests); // Assigned to me (procurement)
 router.get('/completed-assigned', getCompletedAssignedRequests); // Procurement completed history
 router.get('/closed', getClosedRequests); // Completed or rejected requests
 router.get('/audit/approved-rejected', getAuditApprovedRejectedRequests); // Audit view
 router.get('/approval-history', getApprovalHistory); // My approval history
 router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
+router.post('/:id/request-hod-approval', requestHodApproval); // Insert additional HOD approval step
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.put('/:id/cost', authenticateUser, updateRequestCost);

@@ -21,13 +21,32 @@ const handleApprovalDecision = async (req, res, next) => {
     return next(createHttpError(400, 'Invalid approval ID'));
   }
   const approvalId = Number(id);
-  const { status, comments, is_urgent } = req.body;
+  const { status, comments, is_urgent, estimated_cost: estimatedCostInput } = req.body;
   // authMiddleware exposes the logged in user's id as `id`
   const approver_id = req.user.id;
   const user_role = req.user.role;
 
   if (!['Approved', 'Rejected'].includes(status)) {
     return next(createHttpError(400, 'Invalid status value'));
+  }
+
+  const sanitizedEstimatedCost =
+    estimatedCostInput !== undefined &&
+    estimatedCostInput !== null &&
+    String(estimatedCostInput).trim() !== ''
+      ? Number(String(estimatedCostInput).replace(/,/g, ''))
+      : null;
+
+  if (sanitizedEstimatedCost !== null) {
+    if (Number.isNaN(sanitizedEstimatedCost) || sanitizedEstimatedCost <= 0) {
+      return next(createHttpError(400, 'estimated_cost must be a positive number'));
+    }
+
+    if (!req.user?.hasPermission || !req.user.hasPermission('procurement.update-cost')) {
+      return next(
+        createHttpError(403, 'You do not have permission to update estimated cost during approval'),
+      );
+    }
   }
 
   await ensureRequestedItemApprovalColumns();
@@ -71,11 +90,37 @@ const handleApprovalDecision = async (req, res, next) => {
       requestType: request.request_type,
     });
 
+    let effectiveEstimatedCost = Number(request.estimated_cost) || 0;
+
+    if (sanitizedEstimatedCost !== null) {
+      effectiveEstimatedCost = sanitizedEstimatedCost;
+
+      await client.query(
+        `UPDATE requests
+            SET estimated_cost = $1,
+                updated_at = NOW()
+          WHERE id = $2`,
+        [sanitizedEstimatedCost, approval.request_id],
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Estimated Cost Updated', $2, $3)`,
+        [
+          approval.request_id,
+          approver_id,
+          `SCM set estimated cost to ${sanitizedEstimatedCost}`,
+        ],
+      );
+
+      request.estimated_cost = sanitizedEstimatedCost;
+    }
+
     const routeDefinitions = await fetchApprovalRoutes({
       client,
       requestType: request.request_type,
       departmentType: routeDomain,
-      amount: request.estimated_cost || 0,
+      amount: effectiveEstimatedCost,
     });
 
     const notificationsToCreate = [];
@@ -571,6 +616,7 @@ const updateApprovalItems = async (req, res, next) => {
     };
 
     const updatedItems = [];
+    const quantityChanges = [];
     const summaryAdjustments = { Approved: 0, Rejected: 0, Pending: 0 };
     const lockedItems = [];
     const seenItemIds = new Set();
@@ -642,7 +688,7 @@ const updateApprovalItems = async (req, res, next) => {
       }
 
       const itemRes = await client.query(
-        `SELECT id, approval_status, approved_by
+        `SELECT id, item_name, quantity, unit_cost, total_cost, approval_status, approved_by
            FROM public.requested_items
           WHERE id = $1 AND request_id = $2`,
         [itemId, approval.request_id]
@@ -673,7 +719,54 @@ const updateApprovalItems = async (req, res, next) => {
         continue;
       }
 
+      const rawQuantity = itemDecision.quantity;
+      let parsedQuantity = null;
+      let quantityChanged = false;
+      const previousQuantity = Number(existingItem.quantity);
+      const existingStatus = existingItem.approval_status || 'Pending';
+
+      if (rawQuantity !== undefined && rawQuantity !== null && rawQuantity !== '') {
+        const numericQuantity = Number(rawQuantity);
+        if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
+          await client.query('ROLLBACK');
+          return next(createHttpError(400, 'Quantity must be a positive number'));
+        }
+
+        if (!Number.isInteger(numericQuantity)) {
+          await client.query('ROLLBACK');
+          return next(createHttpError(400, 'Quantity must be a whole number'));
+        }
+
+        parsedQuantity = numericQuantity;
+        quantityChanged = parsedQuantity !== Number(existingItem.quantity);
+      }
+
       const isFinalDecision = finalStatus === 'Approved' || finalStatus === 'Rejected';
+      const statusChanged = finalStatus !== existingStatus;
+
+      if (quantityChanged) {
+        const quantityUpdateRes = await client.query(
+          `UPDATE public.requested_items
+             SET quantity = $1,
+                 total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1 ELSE NULL END,
+                 updated_at = NOW()
+           WHERE id = $2 AND request_id = $3
+           RETURNING quantity, unit_cost, total_cost`,
+          [parsedQuantity, itemId, approval.request_id],
+        );
+
+        const updatedRow = quantityUpdateRes.rows[0];
+        existingItem.quantity = updatedRow?.quantity ?? parsedQuantity;
+        existingItem.unit_cost = updatedRow?.unit_cost ?? existingItem.unit_cost;
+        existingItem.total_cost = updatedRow?.total_cost ?? existingItem.total_cost;
+
+        quantityChanges.push({
+          id: existingItem.id,
+          item_name: existingItem.item_name,
+          previous_quantity: previousQuantity,
+          updated_quantity: parsedQuantity,
+        });
+      }
 
       const updateRes = await client.query(
         `UPDATE public.requested_items
@@ -682,7 +775,7 @@ const updateApprovalItems = async (req, res, next) => {
                approved_by = CASE WHEN $6 THEN $3${approvedByCastFragment} ELSE NULL END,
                approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
          WHERE id = $4 AND request_id = $5
-         RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by`,
+         RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, total_cost, unit_cost`,
         [
           finalStatus,
           itemDecision.comments ?? null,
@@ -701,9 +794,14 @@ const updateApprovalItems = async (req, res, next) => {
         approval_comments: updated.approval_comments,
         approved_at: updated.approved_at,
         approved_by: updated.approved_by,
+        quantity: updated.quantity,
+        total_cost: updated.total_cost,
+        unit_cost: updated.unit_cost,
       });
 
-      summaryAdjustments[finalStatus] += 1;
+      if (statusChanged) {
+        summaryAdjustments[finalStatus] += 1;
+      }
     }
 
     const summaryRes = await client.query(
@@ -736,6 +834,12 @@ const updateApprovalItems = async (req, res, next) => {
       commentFragments.push(`${summaryAdjustments.Pending} item(s) set to pending`);
     }
 
+    if (quantityChanges.length > 0) {
+      commentFragments.push(
+        `${quantityChanges.length} item(s) quantity adjusted`,
+      );
+    }
+
     const commentText = commentFragments.join(', ');
 
     if (commentText) {
@@ -752,6 +856,23 @@ const updateApprovalItems = async (req, res, next) => {
       );
     }
 
+    const estimatedCostRes = await client.query(
+      `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total
+         FROM public.requested_items
+        WHERE request_id = $1`,
+      [approval.request_id],
+    );
+
+    const updatedEstimatedCost = Number(estimatedCostRes.rows[0]?.total || 0);
+
+    await client.query(
+      `UPDATE requests
+          SET estimated_cost = $1,
+              updated_at = NOW()
+        WHERE id = $2`,
+      [updatedEstimatedCost, approval.request_id],
+    );
+
     await client.query('COMMIT');
 
     res.json({
@@ -759,6 +880,7 @@ const updateApprovalItems = async (req, res, next) => {
       updatedItems,
       summary,
       lockedItems,
+      updatedEstimatedCost,
     });
   } catch (err) {
     await client.query('ROLLBACK');

@@ -9,7 +9,7 @@ const parseQuantity = (value) => {
 };
 
 const addWarehouseStock = async (req, res, next) => {
-  const { stock_item_id: rawStockItemId, quantity: rawQuantity, notes } = req.body || {};
+  const { stock_item_id: rawStockItemId, quantity: rawQuantity, notes, warehouse_id } = req.body || {};
 
   if (!req.user?.hasPermission('warehouse.manage-supply')) {
     return next(createHttpError(403, 'You do not have permission to manage warehouse stock'));
@@ -25,9 +25,17 @@ const addWarehouseStock = async (req, res, next) => {
     return next(createHttpError(400, 'Quantity must be a positive number'));
   }
 
-  const warehouseId = req.user?.department_id;
+  await ensureWarehouseAssignments();
+
+  const fallbackWarehouseId = req.user?.warehouse_id || req.user?.department_id;
+  const providedWarehouseId =
+    warehouse_id === undefined || warehouse_id === null || warehouse_id === ''
+      ? null
+      : Number(warehouse_id);
+  const warehouseId = providedWarehouseId ?? fallbackWarehouseId;
+
   if (!Number.isInteger(warehouseId)) {
-    return next(createHttpError(400, 'Unable to determine your warehouse/department'));
+    return next(createHttpError(400, 'A valid warehouse must be specified'));
   }
 
   await ensureWarehouseInventoryTables();

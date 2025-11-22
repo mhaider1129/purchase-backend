@@ -2,12 +2,97 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
 const ensureWarehouseSupplyTables = require('../utils/ensureWarehouseSupplyTables');
+const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
+
+const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
+  if (Number.isInteger(stockItemId)) {
+    const { rows } = await client.query(
+      `SELECT id, name FROM stock_items WHERE id = $1`,
+      [stockItemId],
+    );
+    if (rows[0]) return rows[0];
+  }
+
+  if (!itemName) return null;
+
+  const { rows } = await client.query(
+    `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+    [itemName],
+  );
+
+  return rows[0] || null;
+};
+
+const decrementWarehouseStock = async (
+  client,
+  { warehouseId, stockItem, quantity, requestId, departmentId, userId },
+) => {
+  const { id: stockItemId, name: itemName } = stockItem;
+  const balanceRes = await client.query(
+    `SELECT quantity
+       FROM warehouse_stock_levels
+      WHERE warehouse_id = $1 AND stock_item_id = $2
+      FOR UPDATE`,
+    [warehouseId, stockItemId],
+  );
+
+  if (balanceRes.rowCount === 0) {
+    throw createHttpError(
+      400,
+      `Warehouse inventory for ${itemName} is not initialized. Please add stock before supplying items.`,
+    );
+  }
+
+  const currentQty = Number(balanceRes.rows[0].quantity) || 0;
+  if (currentQty < quantity) {
+    throw createHttpError(
+      400,
+      `Insufficient stock for ${itemName}. Available: ${currentQty}, requested: ${quantity}`,
+    );
+  }
+
+  await client.query(
+    `UPDATE warehouse_stock_levels
+        SET quantity = quantity - $3,
+            updated_at = CURRENT_TIMESTAMP,
+            updated_by = $4
+      WHERE warehouse_id = $1 AND stock_item_id = $2`,
+    [warehouseId, stockItemId, quantity, userId],
+  );
+
+  await client.query(
+    `INSERT INTO warehouse_stock_movements (
+        warehouse_id,
+        stock_item_id,
+        item_name,
+        direction,
+        quantity,
+        reference_request_id,
+        to_department_id,
+        created_by,
+        notes
+      ) VALUES ($1, $2, $3, 'out', $4, $5, $6, $7, $8)`,
+    [
+      warehouseId,
+      stockItemId,
+      itemName,
+      quantity,
+      requestId,
+      departmentId,
+      userId,
+      'Warehouse supply request fulfillment',
+    ],
+  );
+
+  return { stock_item_id: stockItemId, item_name: itemName };
+};
 
 // Record supplied items for a request
 const recordSuppliedItems = async (req, res, next) => {
   const { requestId } = req.params;
   const { items } = req.body;
   const { id: userId } = req.user;
+  const warehouseId = req.user?.department_id;
 
   if (!req.user.hasPermission('warehouse.manage-supply')) {
     return next(createHttpError(403, 'You do not have permission to record supplied items'));
@@ -17,14 +102,20 @@ const recordSuppliedItems = async (req, res, next) => {
     return next(createHttpError(400, 'Items array is required'));
   }
 
+  if (!Number.isInteger(warehouseId)) {
+    return next(createHttpError(400, 'You must belong to a warehouse department to supply items'));
+  }
+
   await ensureWarehouseSupplyTables();
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
+    await ensureWarehouseInventoryTables(client);
+
     const requestRes = await client.query(
-      `SELECT id, request_type, status FROM requests WHERE id = $1 FOR UPDATE`,
+      `SELECT id, request_type, status, department_id FROM requests WHERE id = $1 FOR UPDATE`,
       [requestId]
     );
 
@@ -74,6 +165,8 @@ const recordSuppliedItems = async (req, res, next) => {
       return acc;
     }, {});
 
+    const inventoryMovements = [];
+
     for (const item of items) {
       const { item_id: itemId, supplied_quantity: suppliedQuantity } = item;
 
@@ -113,6 +206,32 @@ const recordSuppliedItems = async (req, res, next) => {
       );
 
       suppliedMap[itemId] = newTotal;
+
+      const stockItemId = Number.isInteger(item.stock_item_id)
+        ? Number(item.stock_item_id)
+        : null;
+      const stockItem = await findStockItemForSupply(client, {
+        stockItemId,
+        itemName: requestedItem.item_name,
+      });
+
+      if (stockItem) {
+        const movement = await decrementWarehouseStock(client, {
+          warehouseId,
+          stockItem,
+          quantity: parsedQuantity,
+          requestId: request.id,
+          departmentId: request.department_id,
+          userId,
+        });
+        inventoryMovements.push({ ...movement, quantity: parsedQuantity, item_id: itemId });
+      } else {
+        inventoryMovements.push({
+          item_id: itemId,
+          item_name: requestedItem.item_name,
+          warning: 'No matching stock item found for warehouse inventory; stock was not decremented.',
+        });
+      }
     }
 
     const fulfillmentRes = await client.query(
@@ -153,7 +272,11 @@ const recordSuppliedItems = async (req, res, next) => {
 
     await client.query('COMMIT');
 
-    res.status(201).json({ message: 'Supplied items recorded', status: newStatus });
+    res.status(201).json({
+      message: 'Supplied items recorded',
+      status: newStatus,
+      inventory_movements: inventoryMovements,
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to record supplied items:', err);

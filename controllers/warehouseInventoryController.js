@@ -27,7 +27,7 @@ const addWarehouseStock = async (req, res, next) => {
 
   await ensureWarehouseAssignments();
 
-  const fallbackWarehouseId = req.user?.warehouse_id || req.user?.department_id;
+  const fallbackWarehouseId = req.user?.warehouse_id;
   const providedWarehouseId =
     warehouse_id === undefined || warehouse_id === null || warehouse_id === ''
       ? null

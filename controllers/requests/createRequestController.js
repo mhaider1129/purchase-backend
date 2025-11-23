@@ -112,6 +112,15 @@ const createRequest = async (req, res, next) => {
     if (!Number.isInteger(supplyWarehouseId)) {
       return next(createHttpError(400, "Supply warehouse must be a valid warehouse ID"));
     }
+
+    const warehouseCheck = await pool.query(
+      `SELECT id FROM warehouses WHERE id = $1`,
+      [supplyWarehouseId]
+    );
+
+    if (warehouseCheck.rowCount === 0) {
+      return next(createHttpError(400, "Selected warehouse does not exist"));
+    }
   }
 
   const sanitizedItems = [];

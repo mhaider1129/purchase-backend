@@ -17,7 +17,7 @@ const getDepartmentsWithSections = async (req, res) => {
   }
 };
 
-const ALLOWED_DEPARTMENT_TYPES = ['medical', 'operational'];
+const ALLOWED_DEPARTMENT_TYPES = ['Medical', 'Operational'];
 
 const normalizeDepartmentType = rawType => {
   if (typeof rawType !== 'string') {
@@ -29,13 +29,12 @@ const normalizeDepartmentType = rawType => {
     return null;
   }
 
-  if (cleaned === 'warehouse') {
-    // Warehouses are tracked as operational departments and assigned to warehouse managers
-    return { normalized: 'operational', isWarehouseAlias: true };
+  if (cleaned === 'medical') {
+    return 'Medical';
   }
 
-  if (ALLOWED_DEPARTMENT_TYPES.includes(cleaned)) {
-    return { normalized: cleaned, isWarehouseAlias: false };
+  if (cleaned === 'operational') {
+    return 'Operational';
   }
 
   return null;
@@ -52,24 +51,17 @@ const createDepartment = async (req, res) => {
   if (!name || !normalizedType) {
     return res.status(400).json({
       message:
-        'Name and type are required. Allowed types are medical and operational; warehouses should be created as operational departments.',
+        'Name and type are required. Allowed types are Medical and Operational. Warehouses must be created using the dedicated warehouse management screen.',
     });
   }
 
   try {
     const { rows } = await pool.query(
       'INSERT INTO departments (name, type) VALUES ($1, $2) RETURNING *',
-      [name, normalizedType.normalized]
+      [name, normalizedType]
     );
 
-    const createdDepartment = rows[0];
-    if (normalizedType.isWarehouseAlias) {
-      createdDepartment.type = 'operational';
-      createdDepartment.notes =
-        'Warehouse names are stored as operational departments and can be assigned to warehouse managers.';
-    }
-
-    res.status(201).json(createdDepartment);
+    res.status(201).json(rows[0]);
   } catch (err) {
     console.error('❌ Failed to create department:', err);
     res.status(500).json({ message: 'Failed to create department' });

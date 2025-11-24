@@ -40,34 +40,6 @@ const ensureWarehouseAssignments = async (client = pool) => {
     `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS supply_warehouse_id INTEGER`
   );
 
-  // Seed warehouse records for any legacy department-based assignments
-  await runner.query(`
-    INSERT INTO public.warehouses (name, department_id, description)
-    SELECT d.name, d.id, 'Migrated from departments table'
-      FROM public.departments d
-     WHERE d.id IN (
-       SELECT warehouse_id FROM public.users WHERE warehouse_id IS NOT NULL
-       UNION
-       SELECT supply_warehouse_id FROM public.requests WHERE supply_warehouse_id IS NOT NULL
-     )
-    ON CONFLICT (department_id) DO NOTHING;
-  `);
-
-  // Repoint assignments to warehouse IDs using the migrated mapping
-  await runner.query(`
-    UPDATE public.users u
-       SET warehouse_id = w.id
-      FROM public.warehouses w
-     WHERE u.warehouse_id = w.department_id;
-  `);
-
-  await runner.query(`
-    UPDATE public.requests r
-       SET supply_warehouse_id = w.id
-      FROM public.warehouses w
-     WHERE r.supply_warehouse_id = w.department_id;
-  `);
-
   // Refresh foreign keys to point at the warehouses table
   await runner.query(
     `ALTER TABLE IF EXISTS public.users DROP CONSTRAINT IF EXISTS users_warehouse_id_fkey`

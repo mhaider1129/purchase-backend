@@ -5,6 +5,8 @@ const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRoutes');
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
+const ensureWarehouseAssignments = require('../../utils/ensureWarehouseAssignments');
+const ensureWarehouseInventoryTables = require('../../utils/ensureWarehouseInventoryTables');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -76,6 +78,69 @@ const assignRequestToProcurement = async (req, res, next) => {
     console.error('❌ Assignment error:', err);
     next(createHttpError(500, 'Failed to assign request'));
   }
+};
+
+const addReceivedStockToWarehouse = async (client, { warehouseId, requestId, itemName, quantity, userId }) => {
+  if (!Number.isInteger(warehouseId)) {
+    throw createHttpError(400, 'You must be assigned to a warehouse to receive stock items');
+  }
+
+  const parsedQuantity = Number(quantity);
+  if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+    throw createHttpError(400, `Cannot add a non-positive quantity for ${itemName || 'the stock item'}`);
+  }
+
+  await ensureWarehouseAssignments(client);
+  await ensureWarehouseInventoryTables(client);
+
+  const stockItemRes = await client.query(
+    `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+    [itemName],
+  );
+
+  if (stockItemRes.rowCount === 0) {
+    throw createHttpError(400, `Stock item '${itemName}' does not exist in the catalogue`);
+  }
+
+  const stockItemId = stockItemRes.rows[0].id;
+  const normalizedName = stockItemRes.rows[0].name;
+
+  await client.query(
+    `INSERT INTO warehouse_stock_levels (warehouse_id, stock_item_id, item_name, quantity, updated_by)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (warehouse_id, stock_item_id)
+     DO UPDATE SET
+       quantity = warehouse_stock_levels.quantity + EXCLUDED.quantity,
+       updated_at = CURRENT_TIMESTAMP,
+       updated_by = EXCLUDED.updated_by,
+       item_name = EXCLUDED.item_name`,
+    [warehouseId, stockItemId, normalizedName, parsedQuantity, userId],
+  );
+
+  await client.query(
+    `INSERT INTO warehouse_stock_movements (
+        warehouse_id, stock_item_id, item_name, direction, quantity, reference_request_id, created_by, notes
+      ) VALUES ($1, $2, $3, 'in', $4, $5, $6, $7)`,
+    [
+      warehouseId,
+      stockItemId,
+      normalizedName,
+      parsedQuantity,
+      requestId,
+      userId,
+      'Stock purchase received into warehouse inventory',
+    ],
+  );
+
+  await client.query(
+    `UPDATE stock_items
+        SET available_quantity = COALESCE(available_quantity, 0) + $2,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [stockItemId, parsedQuantity],
+  );
+
+  return { stock_item_id: stockItemId, item_name: normalizedName, quantity: parsedQuantity };
 };
 
 const updateApprovalStatus = async (req, res, next) => {
@@ -1014,7 +1079,7 @@ const markRequestAsReceived = async (req, res, next) => {
     await ensureRequestedItemReceivedColumns(client);
 
     const requestRes = await client.query(
-      'SELECT requester_id, status FROM requests WHERE id = $1 FOR UPDATE',
+      'SELECT requester_id, status, request_type FROM requests WHERE id = $1 FOR UPDATE',
       [id]
     );
 
@@ -1023,8 +1088,9 @@ const markRequestAsReceived = async (req, res, next) => {
       return next(createHttpError(404, 'Request not found'));
     }
 
-    const { requester_id, status } = requestRes.rows[0];
+    const { requester_id, status, request_type: requestType } = requestRes.rows[0];
     const normalizedStatus = (status || '').trim().toLowerCase();
+    const normalizedRequestType = (requestType || '').trim().toLowerCase();
 
     if (!['completed', 'received'].includes(normalizedStatus)) {
       await client.query('ROLLBACK');
@@ -1041,7 +1107,7 @@ const markRequestAsReceived = async (req, res, next) => {
     }
 
     const itemsRes = await client.query(
-      `SELECT id, item_name, is_received
+      `SELECT id, item_name, is_received, purchased_quantity, quantity
          FROM public.requested_items
         WHERE request_id = $1
         FOR UPDATE`,
@@ -1073,6 +1139,8 @@ const markRequestAsReceived = async (req, res, next) => {
       return next(createHttpError(404, 'Requested item not found for this request'));
     }
 
+    let inventoryUpdate = null;
+
     if (!item.is_received) {
       await client.query(
         `UPDATE public.requested_items
@@ -1088,6 +1156,18 @@ const markRequestAsReceived = async (req, res, next) => {
          VALUES ($1, 'Item Marked as Received', $2, $3)`,
         [id, user_id, `Item '${item.item_name}' marked as received by requester`]
       );
+
+      if (normalizedRequestType === 'stock') {
+        const warehouseId = req.user?.warehouse_id;
+        const receivedQuantity = item.purchased_quantity ?? item.quantity;
+        inventoryUpdate = await addReceivedStockToWarehouse(client, {
+          warehouseId,
+          requestId: id,
+          itemName: item.item_name,
+          quantity: receivedQuantity,
+          userId: user_id,
+        });
+      }
     }
 
     const remainingRes = await client.query(
@@ -1110,8 +1190,20 @@ const markRequestAsReceived = async (req, res, next) => {
 
       await client.query(
         `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, 'Marked as Received', $2, 'All items marked as received by requester')`,
+        VALUES ($1, 'Marked as Received', $2, 'All items marked as received by requester')`,
         [id, user_id]
+      );
+    }
+
+    if (inventoryUpdate) {
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Warehouse inventory updated', $2, $3)`,
+        [
+          id,
+          user_id,
+          `Added ${inventoryUpdate.quantity} of '${inventoryUpdate.item_name}' to warehouse stock`,
+        ],
       );
     }
 
@@ -1124,6 +1216,9 @@ const markRequestAsReceived = async (req, res, next) => {
     });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.statusCode || err.expose) {
+      return next(err);
+    }
     next(createHttpError(500, 'Failed to mark request as received'));
   } finally {
     client.release();

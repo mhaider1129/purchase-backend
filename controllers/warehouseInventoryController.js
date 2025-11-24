@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
+const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 
 const parseQuantity = (value) => {
   const parsed = Number(value);
@@ -70,6 +71,14 @@ const addWarehouseStock = async (req, res, next) => {
     );
 
     await client.query(
+      `UPDATE stock_items
+          SET available_quantity = COALESCE(available_quantity, 0) + $2,
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1`,
+      [stockItemId, quantity],
+    );
+
+    await client.query(
       `INSERT INTO warehouse_stock_movements (
         warehouse_id, stock_item_id, item_name, direction, quantity, notes, created_by
       ) VALUES ($1, $2, $3, 'in', $4, $5, $6)`,
@@ -88,6 +97,32 @@ const addWarehouseStock = async (req, res, next) => {
     next(createHttpError(500, 'Failed to add warehouse stock'));
   } finally {
     client.release();
+  }
+};
+
+const getWarehouseItems = async (req, res, next) => {
+  const warehouseId = Number(req.params.warehouseId);
+
+  if (!Number.isInteger(warehouseId)) {
+    return next(createHttpError(400, 'A valid warehouse ID is required'));
+  }
+
+  await ensureWarehouseAssignments();
+  await ensureWarehouseInventoryTables();
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT stock_item_id, item_name, quantity
+         FROM warehouse_stock_levels
+        WHERE warehouse_id = $1
+        ORDER BY item_name`,
+      [warehouseId],
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch warehouse items:', err.message);
+    next(createHttpError(500, 'Failed to fetch warehouse items'));
   }
 };
 
@@ -149,4 +184,5 @@ const getWeeklyDepartmentStockingReport = async (req, res, next) => {
 module.exports = {
   addWarehouseStock,
   getWeeklyDepartmentStockingReport,
+  getWarehouseItems,
 };

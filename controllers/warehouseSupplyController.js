@@ -62,6 +62,14 @@ const decrementWarehouseStock = async (
   );
 
   await client.query(
+    `UPDATE stock_items
+        SET available_quantity = GREATEST(0, COALESCE(available_quantity, 0) - $2),
+            updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [stockItemId, quantity],
+  );
+
+  await client.query(
     `INSERT INTO warehouse_stock_movements (
         warehouse_id,
         stock_item_id,

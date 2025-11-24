@@ -7,6 +7,7 @@ const {
   persistRequestAttachments,
 } = require("./saveRequestAttachments");
 const ensureWarehouseAssignments = require("../../utils/ensureWarehouseAssignments");
+const ensureWarehouseInventoryTables = require("../../utils/ensureWarehouseInventoryTables");
 
 const assignApprover = async (
   client,

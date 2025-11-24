@@ -100,6 +100,7 @@ const createRequest = async (req, res, next) => {
     return next(createHttpError(400, "Items must be an array"));
 
   let supplyWarehouseId = null;
+  let supplyWarehouseType = null;
   if (request_type === "Warehouse Supply") {
     const candidateWarehouseId =
       req.body?.supply_warehouse_id ?? req.body?.warehouse_id ?? null;
@@ -114,13 +115,15 @@ const createRequest = async (req, res, next) => {
     }
 
     const warehouseCheck = await pool.query(
-      `SELECT id FROM warehouses WHERE id = $1`,
+      `SELECT id, type FROM warehouses WHERE id = $1`,
       [supplyWarehouseId]
     );
 
     if (warehouseCheck.rowCount === 0) {
       return next(createHttpError(400, "Selected warehouse does not exist"));
     }
+
+    supplyWarehouseType = warehouseCheck.rows[0]?.type?.toLowerCase?.();
   }
 
   const sanitizedItems = [];
@@ -322,11 +325,11 @@ const createRequest = async (req, res, next) => {
     const deptType = deptRes.rows[0]?.type?.toLowerCase();
     let requestDomain = deptType === "medical" ? "medical" : "operational";
 
-    if (request_type === "Warehouse Supply") {
-      const supplied = req.body.supply_domain?.toLowerCase();
-      if (["medical", "operational"].includes(supplied)) {
-        requestDomain = supplied;
-      }
+    if (
+      request_type === "Warehouse Supply" &&
+      ["medical", "operational"].includes(supplyWarehouseType)
+    ) {
+      requestDomain = supplyWarehouseType;
     }
 
     const requestRes = await client.query(

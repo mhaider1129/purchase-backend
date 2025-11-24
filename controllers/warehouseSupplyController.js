@@ -279,10 +279,29 @@ const recordSuppliedItems = async (req, res, next) => {
       })
       .join('; ');
 
+    const supplyTimestamp = new Date().toISOString();
+    const [departmentInfo, warehouseInfo] = await Promise.all([
+      client.query('SELECT name FROM departments WHERE id = $1', [
+        request.department_id,
+      ]),
+      client.query('SELECT name FROM warehouses WHERE id = $1', [
+        request.supply_warehouse_id,
+      ]),
+    ]);
+
+    const departmentName =
+      departmentInfo.rows[0]?.name || `Department ID ${request.department_id}`;
+    const warehouseName =
+      warehouseInfo.rows[0]?.name || `Warehouse ID ${request.supply_warehouse_id}`;
+
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
        VALUES ($1, 'Warehouse items supplied', $2, $3)`,
-      [requestId, userId, `Supplied items -> ${suppliedSummary}`],
+      [
+        requestId,
+        userId,
+        `Supplied on ${supplyTimestamp} from ${warehouseName} to ${departmentName} -> ${suppliedSummary}`,
+      ],
     );
 
     await client.query('COMMIT');

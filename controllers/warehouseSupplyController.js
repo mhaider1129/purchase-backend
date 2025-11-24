@@ -96,7 +96,7 @@ const recordSuppliedItems = async (req, res, next) => {
 
   await ensureWarehouseAssignments();
 
-  const warehouseId = req.user?.warehouse_id || req.user?.department_id;
+  const warehouseId = req.user?.warehouse_id;
 
   if (!req.user.hasPermission('warehouse.manage-supply')) {
     return next(createHttpError(403, 'You do not have permission to record supplied items'));
@@ -107,7 +107,7 @@ const recordSuppliedItems = async (req, res, next) => {
   }
 
   if (!Number.isInteger(warehouseId)) {
-    return next(createHttpError(400, 'You must belong to a warehouse department to supply items'));
+    return next(createHttpError(400, 'You must belong to a warehouse to supply items'));
   }
 
   await ensureWarehouseSupplyTables();
@@ -311,7 +311,7 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
     await ensureWarehouseAssignments();
     await ensureWarehouseSupplyTables();
 
-    const warehouseId = req.user?.warehouse_id || req.user?.department_id;
+    const warehouseId = req.user?.warehouse_id;
     if (!Number.isInteger(warehouseId)) {
       return next(createHttpError(400, 'You must be associated with a warehouse to view supply requests'));
     }
@@ -325,7 +325,7 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
        FROM requests r
        JOIN departments d ON r.department_id = d.id
        LEFT JOIN sections s ON r.section_id = s.id
-       LEFT JOIN departments w ON r.supply_warehouse_id = w.id
+       LEFT JOIN warehouses w ON r.supply_warehouse_id = w.id
        WHERE r.request_type = 'Warehouse Supply'
          AND r.status = 'Approved'
          AND r.supply_warehouse_id = $1

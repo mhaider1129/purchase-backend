@@ -5,6 +5,7 @@ const pool = require('../config/db');
 const createHttpError = require('http-errors');
 const { authenticateUser } = require('../middleware/authMiddleware');
 const { deactivateUser, assignUser } = require('../controllers/usersController');
+const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 
 let employeeIdColumnChecked = false;
 let employeeIdColumnAvailable = false;
@@ -45,15 +46,18 @@ router.get('/me', authenticateUser, async (req, res, next) => {
   try {
     const userId = req.user.id;
     const employeeIdSelect = await buildEmployeeIdSelect('u');
+    await ensureWarehouseAssignments();
     const result = await pool.query(
       `SELECT u.id, u.name, u.email, u.role,
               ${employeeIdSelect},
               u.department_id, d.name AS department_name,
               u.section_id, s.name AS section_name,
+              u.warehouse_id, w.name AS warehouse_name,
               u.can_request_medication
         FROM users u
         LEFT JOIN departments d ON u.department_id = d.id
         LEFT JOIN sections s ON u.section_id = s.id
+        LEFT JOIN warehouses w ON u.warehouse_id = w.id
         WHERE u.id = $1`,
       [userId]
     );
@@ -82,10 +86,14 @@ router.get('/', authenticateUser, async (req, res, next) => {
 
   try {
     const employeeIdSelect = await buildEmployeeIdSelect();
+    await ensureWarehouseAssignments();
     const result = await pool.query(
-      `SELECT id, name, email, role, ${employeeIdSelect}, department_id, section_id, is_active, can_request_medication
-         FROM users
-        ORDER BY role, name`
+      `SELECT u.id, u.name, u.email, u.role, ${employeeIdSelect},
+              u.department_id, u.section_id, u.is_active, u.can_request_medication,
+              u.warehouse_id, w.name AS warehouse_name
+         FROM users u
+         LEFT JOIN warehouses w ON u.warehouse_id = w.id
+        ORDER BY u.role, u.name`
     );
     res.json(result.rows);
   } catch (err) {

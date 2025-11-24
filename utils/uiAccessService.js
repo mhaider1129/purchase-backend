@@ -37,6 +37,13 @@ const defaultResources = [
     requireAll: false,
   },
   {
+    resourceKey: 'feature.technicalInspections',
+    label: 'Technical Inspections',
+    description: 'Controls access to the technical inspection log and form.',
+    permissions: ['warehouse.manage-supply'],
+    requireAll: false,
+  },
+  {
     resourceKey: 'feature.warehouseTemplates',
     label: 'Warehouse Supply Templates',
     description: 'Allows users to manage warehouse supply templates.',

@@ -7,6 +7,7 @@ const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRo
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 const ensureWarehouseAssignments = require('../../utils/ensureWarehouseAssignments');
 const ensureWarehouseInventoryTables = require('../../utils/ensureWarehouseInventoryTables');
+const { getInspectionSummaryForRequest } = require('../../utils/technicalInspectionStatus');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -729,28 +730,54 @@ const markRequestAsCompleted = async (req, res, next) => {
       }
     }
 
+    const inspectionSummary = await getInspectionSummaryForRequest(client, id);
+    const hasInspections = inspectionSummary.totalCount > 0;
+    const hasPendingInspections =
+      hasInspections && inspectionSummary.pendingCount > 0;
+
+    const nextStatus = hasPendingInspections ? 'technical_inspection_pending' : 'completed';
+
     await client.query(
       `UPDATE requests
-       SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
-      [id],
+       SET status = $1,
+           completed_at = CASE
+             WHEN $1 = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
+             ELSE completed_at
+           END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [nextStatus, id],
     );
+
+    const logAction = hasPendingInspections
+      ? 'Technical Inspection Pending'
+      : 'Marked as Completed';
+    const logComment = hasPendingInspections
+      ? 'Procurement finalized items; waiting for technical inspection acceptance.'
+      : 'All items finalized by procurement';
 
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, 'Marked as Completed', $2, 'All items finalized by procurement')`,
-      [id, user_id],
+       VALUES ($1, $2, $3, $4)`,
+      [id, logAction, user_id, logComment],
     );
+
+    const requesterTitle = hasPendingInspections
+      ? `Request ${id} awaiting technical inspection`
+      : `Request ${id} completed`;
+    const requesterMessage = hasPendingInspections
+      ? `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been finalized by procurement and is awaiting technical inspection before you can mark items as received.`
+      : `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.`;
 
     notificationEntries.push({
       userId: requestRow.requester_id,
-      title: `Request ${id} completed`,
-      message: `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.`,
+      title: requesterTitle,
+      message: requesterMessage,
       link: `/requests/${id}`,
       metadata: {
         requestId: id,
         requestType: requestRow.request_type,
-        action: 'request_completed',
+        action: hasPendingInspections ? 'technical_inspection_pending' : 'request_completed',
       },
     });
 
@@ -762,12 +789,16 @@ const markRequestAsCompleted = async (req, res, next) => {
       notificationEntries.push({
         userId: requestRow.initiated_by_technician_id,
         title: `Maintenance request ${id} completed`,
-        message: `The maintenance request you initiated (ID: ${id}) has been marked as completed.`,
+        message: hasPendingInspections
+          ? `The maintenance request you initiated (ID: ${id}) is awaiting technical inspection after procurement finalized it.`
+          : `The maintenance request you initiated (ID: ${id}) has been marked as completed.`,
         link: `/requests/${id}`,
         metadata: {
           requestId: id,
           requestType: requestRow.request_type,
-          action: 'maintenance_completed',
+          action: hasPendingInspections
+            ? 'technical_inspection_pending'
+            : 'maintenance_completed',
         },
       });
     }
@@ -784,8 +815,8 @@ const markRequestAsCompleted = async (req, res, next) => {
       emailPromises.push(
         sendEmail(
           requesterEmail,
-          `Request ${id} completed`,
-          `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.\nYou can review the final details in the procurement portal.`,
+          requesterTitle,
+          `${requesterMessage}\nYou can review the latest status in the procurement portal.`,
         ),
       );
     }
@@ -798,8 +829,12 @@ const markRequestAsCompleted = async (req, res, next) => {
       emailPromises.push(
         sendEmail(
           technicianEmail,
-          `Maintenance request ${id} completed`,
-          `The maintenance request you initiated (ID: ${id}) has been marked as completed.\nPlease review the outcome with the requesting department.`,
+          hasPendingInspections
+            ? `Maintenance request ${id} pending technical inspection`
+            : `Maintenance request ${id} completed`,
+          hasPendingInspections
+            ? `The maintenance request you initiated (ID: ${id}) is awaiting technical inspection after procurement finalized it.\nPlease review the inspection outcome once available.`
+            : `The maintenance request you initiated (ID: ${id}) has been marked as completed.\nPlease review the outcome with the requesting department.`,
         ),
       );
     }
@@ -810,7 +845,11 @@ const markRequestAsCompleted = async (req, res, next) => {
       console.error('⚠️ Failed to send one or more completion notifications:', notificationErr);
     }
 
-    res.json({ message: '✅ Request marked as completed' });
+    const responseMessage = hasPendingInspections
+      ? '⚠️ Request finalized by procurement and waiting for technical inspection'
+      : '✅ Request marked as completed';
+
+    res.json({ message: responseMessage, status: nextStatus });
   } catch (err) {
     if (transactionActive) {
       try {
@@ -1091,6 +1130,16 @@ const markRequestAsReceived = async (req, res, next) => {
     const { requester_id, status, request_type: requestType } = requestRes.rows[0];
     const normalizedStatus = (status || '').trim().toLowerCase();
     const normalizedRequestType = (requestType || '').trim().toLowerCase();
+
+    if (normalizedStatus === 'technical_inspection_pending') {
+      await client.query('ROLLBACK');
+      return next(
+        createHttpError(
+          400,
+          'Request is awaiting technical inspection before items can be received',
+        ),
+      );
+    }
 
     if (!['completed', 'received'].includes(normalizedStatus)) {
       await client.query('ROLLBACK');

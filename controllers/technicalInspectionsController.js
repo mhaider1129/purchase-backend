@@ -1,5 +1,10 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const ensureTechnicalInspectionsTable = require('../utils/ensureTechnicalInspectionsTable');
+const {
+  applyRequestStatusFromInspections,
+  getInspectionSummaryForRequest,
+} = require('../utils/technicalInspectionStatus');
 
 const CONDITION_OPTIONS = new Set([
   'excellent',
@@ -29,71 +34,7 @@ const DEFAULT_CATEGORY_ITEMS = [
   'SDS available',
 ];
 
-const ensureTechnicalInspectionsTable = (() => {
-  let initialized = false;
-  let initializingPromise = null;
-
-  return async () => {
-    if (initialized) return;
-    if (initializingPromise) {
-      await initializingPromise;
-      return;
-    }
-
-    initializingPromise = (async () => {
-      try {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS technical_inspections (
-            id SERIAL PRIMARY KEY,
-            inspection_date DATE NOT NULL DEFAULT CURRENT_DATE,
-            location TEXT,
-            item_name TEXT NOT NULL,
-            item_category TEXT,
-            model_number TEXT,
-            serial_number TEXT,
-            lot_number TEXT,
-            manufacturer TEXT,
-            supplier_name TEXT,
-            general_checklist JSONB NOT NULL DEFAULT '[]'::jsonb,
-            category_checklist JSONB NOT NULL DEFAULT '[]'::jsonb,
-            summary JSONB NOT NULL DEFAULT '{}'::jsonb,
-            inspectors JSONB NOT NULL DEFAULT '[]'::jsonb,
-            approvals JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            created_by_name TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-        await pool.query(`
-          CREATE INDEX IF NOT EXISTS technical_inspections_item_name_idx
-            ON technical_inspections (LOWER(item_name));
-        `);
-
-        await pool.query(`
-          CREATE INDEX IF NOT EXISTS technical_inspections_supplier_idx
-            ON technical_inspections (LOWER(supplier_name));
-        `);
-
-        await pool.query(`
-          ALTER TABLE technical_inspections
-            ADD COLUMN IF NOT EXISTS manufacturer TEXT,
-            ADD COLUMN IF NOT EXISTS lot_number TEXT;
-        `);
-
-        initialized = true;
-      } catch (error) {
-        console.error('❌ Failed to ensure technical_inspections table exists:', error);
-        throw error;
-      } finally {
-        initializingPromise = null;
-      }
-    })();
-
-    await initializingPromise;
-  };
-})();
+const ACCEPTANCE_STATUSES = new Set(['pending', 'passed', 'failed']);
 
 const sanitizeText = (value) => {
   if (value === undefined || value === null) return null;
@@ -184,6 +125,12 @@ const normalizeApprovals = (approvals = {}) => {
   };
 };
 
+const normalizeAcceptanceStatus = (value) => {
+  if (!value && value !== '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  return ACCEPTANCE_STATUSES.has(normalized) ? normalized : null;
+};
+
 const parseDateOrThrow = (value, fieldName) => {
   if (!value) {
     throw createHttpError(400, `${fieldName} is required`);
@@ -194,6 +141,41 @@ const parseDateOrThrow = (value, fieldName) => {
     throw createHttpError(400, `${fieldName} must be a valid date`);
   }
   return parsed.toISOString().slice(0, 10);
+};
+
+const resolveRequestLink = async ({ request_id, requested_item_id }) => {
+  const parsedRequestId = Number(request_id);
+  const parsedRequestedItemId = Number(requested_item_id);
+
+  let resolvedRequestId = Number.isInteger(parsedRequestId) ? parsedRequestId : null;
+  let resolvedRequestedItemId = Number.isInteger(parsedRequestedItemId)
+    ? parsedRequestedItemId
+    : null;
+
+  if (resolvedRequestedItemId) {
+    const { rows, rowCount } = await pool.query(
+      'SELECT id, request_id FROM requested_items WHERE id = $1',
+      [resolvedRequestedItemId],
+    );
+
+    if (rowCount === 0) {
+      throw createHttpError(404, 'Requested item not found for technical inspection link');
+    }
+
+    resolvedRequestId = resolvedRequestId ?? rows[0].request_id ?? null;
+  }
+
+  if (resolvedRequestId) {
+    const requestCheck = await pool.query('SELECT id FROM requests WHERE id = $1', [
+      resolvedRequestId,
+    ]);
+
+    if (requestCheck.rowCount === 0) {
+      throw createHttpError(404, 'Request not found for technical inspection link');
+    }
+  }
+
+  return { requestId: resolvedRequestId, requestedItemId: resolvedRequestedItemId };
 };
 
 const formatRow = (row) => ({
@@ -207,6 +189,12 @@ const formatRow = (row) => ({
   summary: row.summary && typeof row.summary === 'object' ? row.summary : {},
   inspectors: Array.isArray(row.inspectors) ? row.inspectors : [],
   approvals: row.approvals && typeof row.approvals === 'object' ? row.approvals : {},
+  request_id: row.request_id ?? null,
+  requested_item_id: row.requested_item_id ?? null,
+  acceptance_status: row.acceptance_status || 'pending',
+  acceptance_notes: row.acceptance_notes || null,
+  acceptance_recorded_by: row.acceptance_recorded_by ?? null,
+  acceptance_recorded_at: row.acceptance_recorded_at || null,
 });
 
 const listTechnicalInspections = async (req, res, next) => {
@@ -303,6 +291,10 @@ const createTechnicalInspection = async (req, res, next) => {
       summary,
       inspectors,
       approvals,
+      request_id,
+      requested_item_id,
+      acceptance_status,
+      acceptance_notes,
     } = req.body || {};
 
     if (!item_name || typeof item_name !== 'string' || !item_name.trim()) {
@@ -326,6 +318,18 @@ const createTechnicalInspection = async (req, res, next) => {
     const normalizedSummary = normalizeSummary(summary);
     const normalizedInspectors = normalizeInspectors(inspectors);
     const normalizedApprovals = normalizeApprovals(approvals);
+
+    const acceptanceRecordedBy =
+      acceptanceStatus === 'pending' ? null : req.user?.id ?? null;
+    const acceptanceRecordedAt = acceptanceStatus === 'pending' ? null : new Date();
+
+    const acceptanceStatus = normalizeAcceptanceStatus(acceptance_status) || 'pending';
+    const acceptanceNotes = sanitizeText(acceptance_notes);
+
+    const { requestId, requestedItemId } = await resolveRequestLink({
+      request_id,
+      requested_item_id,
+    });
 
     const { rows } = await pool.query(
       `INSERT INTO technical_inspections (
@@ -344,9 +348,15 @@ const createTechnicalInspection = async (req, res, next) => {
         inspectors,
         approvals,
         created_by,
-        created_by_name
+        created_by_name,
+        request_id,
+        requested_item_id,
+        acceptance_status,
+        acceptance_notes,
+        acceptance_recorded_by,
+        acceptance_recorded_at
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
       ) RETURNING *`,
       [
         parsedDate,
@@ -365,10 +375,28 @@ const createTechnicalInspection = async (req, res, next) => {
         JSON.stringify(normalizedApprovals),
         req.user?.id ?? null,
         req.user?.name ?? null,
+        requestId,
+        requestedItemId,
+        acceptanceStatus,
+        acceptanceNotes,
+        acceptanceRecordedBy,
+        acceptanceRecordedAt,
       ],
     );
 
-    res.status(201).json(formatRow(rows[0]));
+    const createdInspection = formatRow(rows[0]);
+
+    if (requestId) {
+      await applyRequestStatusFromInspections(pool, {
+        requestId,
+        actorId: req.user?.id ?? null,
+        pendingComment:
+          'Procurement marked the request as complete; awaiting technical inspection confirmation.',
+        completedComment: 'Technical inspection completed and accepted.',
+      });
+    }
+
+    res.status(201).json(createdInspection);
   } catch (error) {
     next(error);
   }
@@ -384,13 +412,24 @@ const updateTechnicalInspection = async (req, res, next) => {
     }
 
     const existing = await pool.query(
-      'SELECT id FROM technical_inspections WHERE id = $1',
+      `SELECT
+        id,
+        request_id,
+        requested_item_id,
+        acceptance_status,
+        acceptance_notes,
+        acceptance_recorded_by,
+        acceptance_recorded_at
+       FROM technical_inspections
+      WHERE id = $1`,
       [id],
     );
 
     if (existing.rowCount === 0) {
       throw createHttpError(404, 'Inspection not found');
     }
+
+    const existingRow = existing.rows[0];
 
     const {
       inspection_date,
@@ -407,6 +446,10 @@ const updateTechnicalInspection = async (req, res, next) => {
       summary,
       inspectors,
       approvals,
+      request_id,
+      requested_item_id,
+      acceptance_status,
+      acceptance_notes,
     } = req.body || {};
 
     if (!item_name || typeof item_name !== 'string' || !item_name.trim()) {
@@ -431,6 +474,33 @@ const updateTechnicalInspection = async (req, res, next) => {
     const normalizedInspectors = normalizeInspectors(inspectors);
     const normalizedApprovals = normalizeApprovals(approvals);
 
+    const { requestId, requestedItemId } = await resolveRequestLink({
+      request_id: request_id ?? existingRow.request_id,
+      requested_item_id: requested_item_id ?? existingRow.requested_item_id,
+    });
+
+    const acceptanceStatus =
+      normalizeAcceptanceStatus(acceptance_status) || existingRow.acceptance_status || 'pending';
+
+    const acceptanceNotes =
+      acceptance_notes !== undefined
+        ? sanitizeText(acceptance_notes)
+        : existingRow.acceptance_notes || null;
+
+    const acceptanceRecordedBy =
+      acceptanceStatus === existingRow.acceptance_status
+        ? existingRow.acceptance_recorded_by
+        : acceptanceStatus === 'pending'
+          ? null
+          : req.user?.id ?? null;
+
+    const acceptanceRecordedAt =
+      acceptanceStatus === existingRow.acceptance_status
+        ? existingRow.acceptance_recorded_at
+        : acceptanceStatus === 'pending'
+          ? null
+          : new Date();
+
     const { rows } = await pool.query(
       `UPDATE technical_inspections
           SET inspection_date = $1,
@@ -447,8 +517,14 @@ const updateTechnicalInspection = async (req, res, next) => {
               summary = $12::jsonb,
               inspectors = $13::jsonb,
               approvals = $14::jsonb,
+              request_id = $15,
+              requested_item_id = $16,
+              acceptance_status = $17,
+              acceptance_notes = $18,
+              acceptance_recorded_by = $19,
+              acceptance_recorded_at = $20,
               updated_at = NOW()
-        WHERE id = $15
+        WHERE id = $21
       RETURNING *`,
       [
         parsedDate,
@@ -465,11 +541,28 @@ const updateTechnicalInspection = async (req, res, next) => {
         JSON.stringify(normalizedSummary),
         JSON.stringify(normalizedInspectors),
         JSON.stringify(normalizedApprovals),
+        requestId,
+        requestedItemId,
+        acceptanceStatus,
+        acceptanceNotes,
+        acceptanceRecordedBy,
+        acceptanceRecordedAt,
         id,
       ],
     );
 
-    res.json(formatRow(rows[0]));
+    const updatedRow = formatRow(rows[0]);
+
+    if (requestId) {
+      await applyRequestStatusFromInspections(pool, {
+        requestId,
+        actorId: req.user?.id ?? null,
+        pendingComment: 'Technical inspection recorded but pending acceptance.',
+        completedComment: 'Technical inspection updated and accepted.',
+      });
+    }
+
+    res.json(updatedRow);
   } catch (error) {
     next(error);
   }

@@ -232,6 +232,7 @@ const projectsRoutes = require('./routes/projects');
 const custodyRoutes = require('./routes/custody');
 const itemRecallsRoutes = require('./routes/itemRecalls');
 const contractsRoutes = require('./routes/contracts');
+const suppliersRoutes = require('./routes/suppliers');
 const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
 const technicalInspectionsRoutes = require('./routes/technicalInspections');
 const contractEvaluationsRouter = require('./routes/contractEvaluations');
@@ -274,6 +275,7 @@ apiRouter.use('/warehouse-supply-templates', authenticateUser, warehouseSupplyTe
 apiRouter.use('/projects', authenticateUser, projectsRoutes);
 apiRouter.use('/custody', authenticateUser, custodyRoutes);
 apiRouter.use('/contracts', authenticateUser, contractsRoutes);
+apiRouter.use('/suppliers', authenticateUser, suppliersRoutes);
 apiRouter.use('/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
 apiRouter.use('/technical-inspections', authenticateUser, technicalInspectionsRoutes);
 apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRouter);

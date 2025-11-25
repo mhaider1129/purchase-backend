@@ -52,6 +52,10 @@ describe('contractEvaluationsController', () => {
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure table exists
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure columns exist
       .mockResolvedValueOnce({
+        rows: [{ id: 22, vendor: 'Test Vendor', title: 'CT Scanner', end_user_department_id: 4 }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
         rows: [
           {
             id: 5,
@@ -62,6 +66,8 @@ describe('contractEvaluationsController', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] }) // deriveTechnicalInspectionResults
+      .mockResolvedValueOnce({ rows: [{ total: 0, completed: 0, avg_lead_time_days: null }] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -88,8 +94,8 @@ describe('contractEvaluationsController', () => {
 
     await createContractEvaluation(req, res, next);
 
-    expect(pool.query).toHaveBeenCalledTimes(4);
-    const insertParams = pool.query.mock.calls[3][1];
+    expect(pool.query).toHaveBeenCalledTimes(7);
+    const insertParams = pool.query.mock.calls[6][1];
     expect(insertParams[3]).toBe(5);
     expect(insertParams[6]).toBe('risk_issue_management');
 

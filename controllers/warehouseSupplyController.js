@@ -26,7 +26,15 @@ const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
 
 const decrementWarehouseStock = async (
   client,
-  { warehouseId, stockItem, quantity, requestId, departmentId, userId },
+  {
+    warehouseId,
+    stockItem,
+    quantity,
+    requestId,
+    departmentId,
+    userId,
+    skipIfMissingStockLevel = false,
+  },
 ) => {
   const { id: stockItemId, name: itemName } = stockItem;
   const balanceRes = await client.query(
@@ -38,6 +46,15 @@ const decrementWarehouseStock = async (
   );
 
   if (balanceRes.rowCount === 0) {
+    if (skipIfMissingStockLevel) {
+      return {
+        stock_item_id: stockItemId,
+        item_name: itemName,
+        warning:
+          'Warehouse inventory is not initialized for this stock item; stock was not decremented.',
+      };
+    }
+
     throw createHttpError(
       400,
       `Warehouse inventory for ${itemName} is not initialized. Please add stock before supplying items.`,
@@ -246,6 +263,7 @@ const recordSuppliedItems = async (req, res, next) => {
           requestId: request.id,
           departmentId: request.department_id,
           userId,
+          skipIfMissingStockLevel: true,
         });
         inventoryMovements.push({ ...movement, quantity: parsedQuantity, item_id: itemId });
       } else {
@@ -322,6 +340,9 @@ const recordSuppliedItems = async (req, res, next) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to record supplied items:', err);
+    if (err.statusCode) {
+      return next(err);
+    }
     next(createHttpError(500, 'Failed to record supplied items'));
   } finally {
     client.release();

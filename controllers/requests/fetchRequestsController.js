@@ -119,7 +119,8 @@ const getRequestItemsOnly = async (req, res, next) => {
   const { id } = req.params;
   const { id: userId } = req.user;
   const isPrivilegedViewer = req.user.hasPermission('requests.view-all');
-  
+  const userWarehouseId = req.user?.warehouse_id;
+
   try {
     let accessCheck;
 
@@ -134,7 +135,7 @@ const getRequestItemsOnly = async (req, res, next) => {
     } else {
       accessCheck = await pool.query(
         `
-        SELECT r.id, r.request_type, r.status, r.assigned_to
+        SELECT r.id, r.request_type, r.status, r.assigned_to, r.supply_warehouse_id
         FROM requests r
         LEFT JOIN approvals a ON r.id = a.request_id
         WHERE r.id = $1
@@ -142,10 +143,18 @@ const getRequestItemsOnly = async (req, res, next) => {
             r.requester_id = $2
             OR a.approver_id = $2
             OR r.assigned_to = $2
+            ${
+              req.user.hasPermission('warehouse.manage-supply') &&
+              Number.isInteger(userWarehouseId)
+                ? 'OR (r.request_type = \'Warehouse Supply\' AND r.supply_warehouse_id = $3)'
+                : ''
+            }
           )
         LIMIT 1
         `,
-        [id, userId],
+        req.user.hasPermission('warehouse.manage-supply') && Number.isInteger(userWarehouseId)
+          ? [id, userId, userWarehouseId]
+          : [id, userId],
       );
     }
 

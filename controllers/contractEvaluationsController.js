@@ -94,6 +94,166 @@ const normalizeComponentEntry = entry => {
   }
 };
 
+const normalizeTechnicalInspectionResults = input => {
+  const value = parseJsonValue(input);
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const normalizeIssues = issues => {
+    if (!Array.isArray(issues)) return [];
+    return issues
+      .map(issue => {
+        if (typeof issue === 'string') {
+          const summary = issue.trim();
+          return summary ? { summary, severity: null } : null;
+        }
+
+        if (issue && typeof issue === 'object') {
+          const summary = (issue.summary || issue.finding || issue.issue || '').trim();
+          const severity = (issue.severity || issue.level || '').toString().trim();
+          if (!summary) return null;
+          return { summary, severity: severity || null };
+        }
+
+        return null;
+      })
+      .filter(Boolean);
+  };
+
+  const normalizeChecklist = checklist => {
+    if (!Array.isArray(checklist)) return [];
+    return checklist
+      .map(entry => {
+        if (!entry || typeof entry !== 'object') return null;
+
+        const item = (entry.item || entry.name || '').trim();
+        const condition = (entry.condition || '').trim();
+        if (!item) return null;
+
+        return {
+          item,
+          condition: condition || null,
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const latestInspectionDate = value.latest_inspection_date || value.inspection_date || value.date || null;
+
+  return {
+    latest_inspection_date: latestInspectionDate ? new Date(latestInspectionDate).toISOString().slice(0, 10) : null,
+    overall_condition:
+      typeof value.overall_condition === 'string'
+        ? value.overall_condition
+        : typeof value.summary?.overall_condition === 'string'
+          ? value.summary.overall_condition
+          : null,
+    issues: normalizeIssues(value.issues || value.findings || value.flags),
+    checklist: normalizeChecklist(value.checklist || value.general_checklist || value.category_checklist),
+    summary: typeof value.summary === 'string' ? value.summary : value.summary?.notes || null,
+  };
+};
+
+const normalizeFulfillmentMetrics = input => {
+  const value = parseJsonValue(input);
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const numberOrNull = field => {
+    const numeric = Number(field);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  const completionRate = numberOrNull(value.completion_rate ?? value.fulfillment_rate);
+  const total = numberOrNull(value.total_requests ?? value.total ?? value.volume);
+  const completed = numberOrNull(value.completed_requests ?? value.completed);
+
+  return {
+    completion_rate: completionRate,
+    total_requests: total,
+    completed_requests: completed,
+    average_lead_time_days: numberOrNull(value.average_lead_time_days ?? value.lead_time),
+    on_time_rate: numberOrNull(value.on_time_rate ?? value.ontime_rate),
+    notes: typeof value.notes === 'string' ? value.notes.trim() || null : null,
+  };
+};
+
+const deriveTechnicalInspectionResults = async vendor => {
+  if (!vendor) return null;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT inspection_date, summary, general_checklist, category_checklist
+         FROM technical_inspections
+        WHERE LOWER(supplier_name) = LOWER($1)
+        ORDER BY inspection_date DESC, id DESC
+        LIMIT 1`,
+      [vendor]
+    );
+
+    if (!rows.length) {
+      return null;
+    }
+
+    const inspection = rows[0];
+    const generalChecklist = parseJsonValue(inspection.general_checklist) || [];
+    const categoryChecklist = parseJsonValue(inspection.category_checklist) || [];
+    const combinedChecklist = [...generalChecklist, ...categoryChecklist];
+
+    const issues = combinedChecklist
+      .filter(entry => ['poor', 'fair'].includes((entry?.condition || '').toLowerCase()))
+      .map(entry => ({
+        summary: entry?.item || entry?.name || 'Checklist issue',
+        severity: entry?.condition || null,
+      }));
+
+    return normalizeTechnicalInspectionResults({
+      inspection_date: inspection.inspection_date,
+      summary: inspection.summary,
+      checklist: combinedChecklist,
+      issues,
+    });
+  } catch (err) {
+    console.warn('⚠️ Unable to derive technical inspection results:', err.message);
+    return null;
+  }
+};
+
+const deriveFulfillmentMetrics = async departmentId => {
+  if (!departmentId) return null;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed,
+         AVG(extract(epoch FROM (updated_at - created_at)) / 86400) FILTER (WHERE status = 'Completed') AS avg_lead_time_days
+       FROM requests
+       WHERE department_id = $1`,
+      [departmentId]
+    );
+
+    const stats = rows[0];
+    if (!stats) return null;
+
+    const completionRate = stats.total > 0 ? Number(((stats.completed / stats.total) * 100).toFixed(2)) : null;
+
+    return {
+      completion_rate: completionRate,
+      total_requests: stats.total || 0,
+      completed_requests: stats.completed || 0,
+      average_lead_time_days: stats.avg_lead_time_days ? Number(stats.avg_lead_time_days.toFixed(2)) : null,
+      on_time_rate: null,
+      notes: null,
+    };
+  } catch (err) {
+    console.warn('⚠️ Unable to derive fulfillment metrics:', err.message);
+    return null;
+  }
+};
+
 const computeOverallScore = components => {
   const numericScores = components
     .map(component => (Number.isFinite(component.score) ? component.score : null))
@@ -183,6 +343,8 @@ const serializeEvaluationRow = row => {
   return {
     ...row,
     evaluation_criteria: evaluationCriteria,
+    technical_inspection_results: normalizeTechnicalInspectionResults(row.technical_inspection_results),
+    request_fulfillment_metrics: normalizeFulfillmentMetrics(row.request_fulfillment_metrics),
   };
 };
 
@@ -214,6 +376,8 @@ const ensureContractEvaluationsTable = (() => {
             criterion_name TEXT,
             criterion_role TEXT,
             criterion_code TEXT,
+            technical_inspection_results JSONB,
+            request_fulfillment_metrics JSONB,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
@@ -224,7 +388,9 @@ const ensureContractEvaluationsTable = (() => {
             ADD COLUMN IF NOT EXISTS criterion_id INTEGER REFERENCES evaluation_criteria(id) ON DELETE SET NULL,
             ADD COLUMN IF NOT EXISTS criterion_name TEXT,
             ADD COLUMN IF NOT EXISTS criterion_role TEXT,
-            ADD COLUMN IF NOT EXISTS criterion_code TEXT
+            ADD COLUMN IF NOT EXISTS criterion_code TEXT,
+            ADD COLUMN IF NOT EXISTS technical_inspection_results JSONB,
+            ADD COLUMN IF NOT EXISTS request_fulfillment_metrics JSONB
         `);
         initialized = true;
       } catch (err) {
@@ -252,6 +418,18 @@ const createContractEvaluation = async (req, res, next) => {
 
   try {
     await ensureContractEvaluationsTable();
+    const contractRes = await pool.query(
+      `SELECT id, vendor, title, end_user_department_id
+         FROM contracts
+        WHERE id = $1`,
+      [contract_id]
+    );
+
+    if (contractRes.rowCount === 0) {
+      return next(createHttpError(404, 'Contract not found'));
+    }
+
+    const contract = contractRes.rows[0];
     let criterionMeta = { id: null, name: null, role: null, components: [] };
 
     if (criterion_id) {
@@ -283,8 +461,8 @@ const createContractEvaluation = async (req, res, next) => {
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO contract_evaluations (contract_id, evaluator_id, evaluation_criteria, criterion_id, criterion_name, criterion_role, criterion_code)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO contract_evaluations (contract_id, evaluator_id, evaluation_criteria, criterion_id, criterion_name, criterion_role, criterion_code, technical_inspection_results, request_fulfillment_metrics)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         contract_id,
@@ -294,6 +472,11 @@ const createContractEvaluation = async (req, res, next) => {
         normalizedCriteria.criterionName,
         normalizedCriteria.criterionRole,
         normalizedCriteria.criterionCode,
+        normalizeTechnicalInspectionResults(
+          req.body?.technical_inspection_results
+        ) || (await deriveTechnicalInspectionResults(contract.vendor)),
+        normalizeFulfillmentMetrics(req.body?.request_fulfillment_metrics) ||
+          (await deriveFulfillmentMetrics(contract.end_user_department_id)),
       ]
     );
     res.status(201).json(serializeEvaluationRow(rows[0]));
@@ -334,7 +517,7 @@ const updateContractEvaluation = async (req, res, next) => {
   try {
     await ensureContractEvaluationsTable();
     const { rows: existingRows } = await pool.query(
-      `SELECT evaluator_id, criterion_id, criterion_name, criterion_role, criterion_code, evaluation_criteria
+      `SELECT evaluator_id, contract_id, criterion_id, criterion_name, criterion_role, criterion_code, evaluation_criteria, technical_inspection_results, request_fulfillment_metrics
          FROM contract_evaluations
         WHERE id = $1`,
       [id]
@@ -350,31 +533,46 @@ const updateContractEvaluation = async (req, res, next) => {
       return next(createHttpError(403, 'You are not authorized to update this evaluation'));
     }
 
-    let normalizedCriteria = normalizeEvaluationCriteriaStructure(
-      parseJsonValue(evaluation_criteria),
-      {
+    let normalizedCriteria = normalizeEvaluationCriteriaStructure(parseJsonValue(evaluation_criteria), {
+      id: existing.criterion_id,
+      name: existing.criterion_name,
+      role: existing.criterion_role,
+      code: existing.criterion_code,
+      components: normalizeEvaluationCriteriaStructure(parseJsonValue(existing.evaluation_criteria), {
         id: existing.criterion_id,
         name: existing.criterion_name,
         role: existing.criterion_role,
         code: existing.criterion_code,
-        components: normalizeEvaluationCriteriaStructure(
-          parseJsonValue(existing.evaluation_criteria),
-          {
-            id: existing.criterion_id,
-            name: existing.criterion_name,
-            role: existing.criterion_role,
-            code: existing.criterion_code,
-          }
-        ).components,
-      }
-    );
+      }).components,
+    });
+
+    const contractRes = await pool.query('SELECT vendor, end_user_department_id FROM contracts WHERE id = $1', [existing.contract_id]);
+    const contractRow = contractRes.rows?.[0] || {};
+
+    const normalizedTechnicalResults =
+      normalizeTechnicalInspectionResults(req.body?.technical_inspection_results) ||
+      normalizeTechnicalInspectionResults(existing.technical_inspection_results) ||
+      (await deriveTechnicalInspectionResults(contractRow.vendor));
+
+    const normalizedFulfillmentMetrics =
+      normalizeFulfillmentMetrics(req.body?.request_fulfillment_metrics) ||
+      normalizeFulfillmentMetrics(existing.request_fulfillment_metrics) ||
+      (await deriveFulfillmentMetrics(contractRow.end_user_department_id));
 
     const { rows } = await pool.query(
       `UPDATE contract_evaluations
-       SET status = $1, evaluation_notes = $2, evaluation_criteria = $3, criterion_code = COALESCE($4, criterion_code), updated_at = NOW()
-       WHERE id = $5
+       SET status = $1, evaluation_notes = $2, evaluation_criteria = $3, criterion_code = COALESCE($4, criterion_code), technical_inspection_results = $5, request_fulfillment_metrics = $6, updated_at = NOW()
+       WHERE id = $7
        RETURNING *`,
-      [status, evaluation_notes, normalizedCriteria, normalizedCriteria.criterionCode, id]
+      [
+        status,
+        evaluation_notes,
+        normalizedCriteria,
+        normalizedCriteria.criterionCode,
+        normalizedTechnicalResults,
+        normalizedFulfillmentMetrics,
+        id,
+      ]
     );
     res.json(serializeEvaluationRow(rows[0]));
   } catch (err) {

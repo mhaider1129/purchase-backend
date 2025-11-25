@@ -319,11 +319,10 @@ const createTechnicalInspection = async (req, res, next) => {
     const normalizedInspectors = normalizeInspectors(inspectors);
     const normalizedApprovals = normalizeApprovals(approvals);
 
+    const acceptanceStatus = normalizeAcceptanceStatus(acceptance_status) || 'pending';
     const acceptanceRecordedBy =
       acceptanceStatus === 'pending' ? null : req.user?.id ?? null;
     const acceptanceRecordedAt = acceptanceStatus === 'pending' ? null : new Date();
-
-    const acceptanceStatus = normalizeAcceptanceStatus(acceptance_status) || 'pending';
     const acceptanceNotes = sanitizeText(acceptance_notes);
 
     const { requestId, requestedItemId } = await resolveRequestLink({

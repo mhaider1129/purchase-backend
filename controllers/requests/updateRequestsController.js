@@ -739,9 +739,9 @@ const markRequestAsCompleted = async (req, res, next) => {
 
     await client.query(
       `UPDATE requests
-       SET status = $1,
+       SET status = $1::varchar,
            completed_at = CASE
-             WHEN $1 = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
+             WHEN $1::varchar = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
              ELSE completed_at
            END,
            updated_at = CURRENT_TIMESTAMP

@@ -918,6 +918,8 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
 
 const getClosedRequests = async (req, res, next) => {
   try {
+    const closedStatuses = ['completed', 'rejected', 'received', 'technical_inspection_pending'];
+
     const result = await pool.query(
       `SELECT
          r.id,
@@ -957,7 +959,7 @@ const getClosedRequests = async (req, res, next) => {
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN users u ON r.assigned_to = u.id
        LEFT JOIN public.requested_items ri ON ri.request_id = r.id
-       WHERE r.status IN ('completed', 'Rejected', 'Received')
+       WHERE LOWER(TRIM(r.status)) = ANY($2::text[])
          AND r.requester_id = $1
        GROUP BY
          r.id,
@@ -973,7 +975,7 @@ const getClosedRequests = async (req, res, next) => {
          p.name,
          u.name
        ORDER BY r.updated_at DESC`,
-      [req.user.id]
+      [req.user.id, closedStatuses]
     );
 
     res.json(result.rows);

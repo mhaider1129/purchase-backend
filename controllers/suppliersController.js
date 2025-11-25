@@ -165,10 +165,120 @@ const createSupplier = async (req, res, next) => {
   }
 };
 
+const updateSupplier = async (req, res, next) => {
+  const canManageSuppliers =
+    req.user?.hasPermission && req.user.hasPermission('contracts.manage');
+
+  if (!canManageSuppliers) {
+    return next(createHttpError(403, 'You are not authorized to update suppliers'));
+  }
+
+  const supplierId = Number(req.params.id);
+
+  if (!Number.isInteger(supplierId) || supplierId <= 0) {
+    return next(createHttpError(400, 'Invalid supplier id'));
+  }
+
+  try {
+    await ensureSuppliersTable();
+    const existing = await getSupplierById(pool, supplierId);
+
+    if (!existing) {
+      return next(createHttpError(404, 'Supplier not found'));
+    }
+
+    const updates = [];
+    const values = [];
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
+      const newName = normalizeText(req.body.name);
+
+      if (!newName) {
+        return next(createHttpError(400, 'Supplier name is required'));
+      }
+
+      updates.push(`name = $${updates.length + 1}`);
+      values.push(newName);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'contact_email')) {
+      updates.push(`contact_email = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.contact_email) || null);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'contact_phone')) {
+      updates.push(`contact_phone = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.contact_phone) || null);
+    }
+
+    if (updates.length === 0) {
+      return res.json(existing);
+    }
+
+    updates.push(`updated_at = NOW()`);
+    values.push(supplierId);
+
+    const query = `UPDATE suppliers
+                      SET ${updates.join(', ')}
+                    WHERE id = $${values.length}
+                RETURNING id, name, contact_email, contact_phone, created_at, updated_at`;
+
+    const { rows } = await pool.query(query, values);
+
+    return res.json(rows[0]);
+  } catch (err) {
+    if (err?.code === '23505') {
+      return next(createHttpError(400, 'A supplier with this name already exists'));
+    }
+
+    console.error('❌ Failed to update supplier:', err);
+    next(createHttpError(500, 'Failed to update supplier'));
+  }
+};
+
+const deleteSupplier = async (req, res, next) => {
+  const canManageSuppliers =
+    req.user?.hasPermission && req.user.hasPermission('contracts.manage');
+
+  if (!canManageSuppliers) {
+    return next(createHttpError(403, 'You are not authorized to delete suppliers'));
+  }
+
+  const supplierId = Number(req.params.id);
+
+  if (!Number.isInteger(supplierId) || supplierId <= 0) {
+    return next(createHttpError(400, 'Invalid supplier id'));
+  }
+
+  try {
+    await ensureSuppliersTable();
+    const existing = await getSupplierById(pool, supplierId);
+
+    if (!existing) {
+      return next(createHttpError(404, 'Supplier not found'));
+    }
+
+    await pool.query('DELETE FROM suppliers WHERE id = $1', [supplierId]);
+
+    return res.status(204).send();
+  } catch (err) {
+    if (err?.code === '23503') {
+      return next(
+        createHttpError(409, 'Supplier is linked to other records and cannot be deleted')
+      );
+    }
+
+    console.error('❌ Failed to delete supplier:', err);
+    next(createHttpError(500, 'Failed to delete supplier'));
+  }
+};
+
 module.exports = {
   ensureSuppliersTable,
   listSuppliers,
   createSupplier,
   getSupplierById,
   findOrCreateSupplierByName,
+  updateSupplier,
+  deleteSupplier,
 };

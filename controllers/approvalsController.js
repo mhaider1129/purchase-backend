@@ -4,6 +4,7 @@ const { sendEmail } = require('../utils/emailService');
 const { createNotifications } = require('../utils/notificationService');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
+const { ensureWarehouseSupplyApprovalColumns } = require('../utils/ensureWarehouseSupplyTables');
 const getColumnType = require('../utils/getColumnType');
 const { assignApprover } = require('./requests/createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('./utils/approvalRoutes');
@@ -49,8 +50,6 @@ const handleApprovalDecision = async (req, res, next) => {
     }
   }
 
-  await ensureRequestedItemApprovalColumns();
-
   const approverId = req.user?.id ?? null;
   if (!approverId) {
     return next(createHttpError(403, 'Unable to identify the current approver'));
@@ -82,6 +81,12 @@ const handleApprovalDecision = async (req, res, next) => {
     );
     const request = requestRes.rows[0];
     if (!request) return rollbackWithError(client, res, next, 404, 'Request not found');
+
+    if (request.request_type === 'Warehouse Supply') {
+      await ensureWarehouseSupplyApprovalColumns(client);
+    } else {
+      await ensureRequestedItemApprovalColumns(client);
+    }
 
     const routeDomain = await resolveRouteDomain({
       client,
@@ -414,27 +419,30 @@ const handleApprovalDecision = async (req, res, next) => {
     else if (statuses.every(s => s === 'Approved')) newStatus = 'Approved';
 
     let itemSummary = null;
-    if (request.request_type !== 'Warehouse Supply') {
-      const summaryRes = await client.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE approval_status = 'Approved') AS approved,
-           COUNT(*) FILTER (WHERE approval_status = 'Rejected') AS rejected,
-           COUNT(*) FILTER (
-             WHERE approval_status IS NULL OR approval_status = 'Pending'
-           ) AS pending
-         FROM public.requested_items
-         WHERE request_id = $1`,
-        [approval.request_id]
-      );
+    const itemSummaryTable =
+      request.request_type === 'Warehouse Supply'
+        ? 'warehouse_supply_items'
+        : 'requested_items';
 
-      if (summaryRes.rowCount > 0) {
-        const summaryRow = summaryRes.rows[0];
-        itemSummary = {
-          approved: Number(summaryRow.approved || 0),
-          rejected: Number(summaryRow.rejected || 0),
-          pending: Number(summaryRow.pending || 0),
-        };
-      }
+    const summaryRes = await client.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE approval_status = 'Approved') AS approved,
+         COUNT(*) FILTER (WHERE approval_status = 'Rejected') AS rejected,
+         COUNT(*) FILTER (
+           WHERE approval_status IS NULL OR approval_status = 'Pending'
+         ) AS pending
+       FROM public.${itemSummaryTable}
+       WHERE request_id = $1`,
+      [approval.request_id]
+    );
+
+    if (summaryRes.rowCount > 0) {
+      const summaryRow = summaryRes.rows[0];
+      itemSummary = {
+        approved: Number(summaryRow.approved || 0),
+        rejected: Number(summaryRow.rejected || 0),
+        pending: Number(summaryRow.pending || 0),
+      };
     }
 
     if (newStatus) {
@@ -565,8 +573,6 @@ const updateApprovalItems = async (req, res, next) => {
     return next(createHttpError(400, 'At least one item decision is required'));
   }
 
-  await ensureRequestedItemApprovalColumns();
-
   const rawApproverId = req.user?.id;
   const approverId = rawApproverId ?? null;
   const approverIdAsString = rawApproverId != null ? String(rawApproverId) : null;
@@ -610,7 +616,7 @@ const updateApprovalItems = async (req, res, next) => {
     }
 
     const requestRes = await client.query(
-      `SELECT request_type FROM requests WHERE id = $1`,
+      `SELECT request_type, estimated_cost FROM requests WHERE id = $1`,
       [approval.request_id]
     );
 
@@ -619,10 +625,17 @@ const updateApprovalItems = async (req, res, next) => {
       return next(createHttpError(404, 'Associated request not found'));
     }
 
-    if (requestRes.rows[0].request_type === 'Warehouse Supply') {
-      await client.query('ROLLBACK');
-      return next(createHttpError(400, 'Item-level approvals are not supported for warehouse supply requests'));
+    const requestType = requestRes.rows[0].request_type;
+    const isWarehouseSupply = requestType === 'Warehouse Supply';
+    const requestEstimatedCost = Number(requestRes.rows[0]?.estimated_cost || 0);
+
+    if (isWarehouseSupply) {
+      await ensureWarehouseSupplyApprovalColumns(client);
+    } else {
+      await ensureRequestedItemApprovalColumns(client);
     }
+
+    const targetTable = isWarehouseSupply ? 'warehouse_supply_items' : 'requested_items';
 
     const statusMap = {
       approved: 'Approved',
@@ -638,7 +651,7 @@ const updateApprovalItems = async (req, res, next) => {
 
     const approvedByColumnTypeRaw = await getColumnType(
       'public',
-      'requested_items',
+      targetTable,
       'approved_by',
       client,
     );
@@ -703,9 +716,13 @@ const updateApprovalItems = async (req, res, next) => {
       }
 
       const itemRes = await client.query(
-        `SELECT id, item_name, quantity, unit_cost, total_cost, approval_status, approved_by
-           FROM public.requested_items
-          WHERE id = $1 AND request_id = $2`,
+        isWarehouseSupply
+          ? `SELECT id, item_name, quantity, approval_status, approval_comments, approved_by, NULL::numeric AS unit_cost, NULL::numeric AS total_cost
+               FROM public.warehouse_supply_items
+              WHERE id = $1 AND request_id = $2`
+          : `SELECT id, item_name, quantity, unit_cost, total_cost, approval_status, approval_comments, approved_by
+               FROM public.requested_items
+              WHERE id = $1 AND request_id = $2`,
         [itemId, approval.request_id]
       );
 
@@ -761,19 +778,27 @@ const updateApprovalItems = async (req, res, next) => {
 
       if (quantityChanged) {
         const quantityUpdateRes = await client.query(
-          `UPDATE public.requested_items
-             SET quantity = $1,
-                 total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1 ELSE NULL END,
-                 updated_at = NOW()
-           WHERE id = $2 AND request_id = $3
-           RETURNING quantity, unit_cost, total_cost`,
+          isWarehouseSupply
+            ? `UPDATE public.warehouse_supply_items
+                 SET quantity = $1,
+                     updated_at = NOW()
+               WHERE id = $2 AND request_id = $3
+               RETURNING quantity`
+            : `UPDATE public.requested_items
+                 SET quantity = $1,
+                     total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1 ELSE NULL END,
+                     updated_at = NOW()
+               WHERE id = $2 AND request_id = $3
+               RETURNING quantity, unit_cost, total_cost`,
           [parsedQuantity, itemId, approval.request_id],
         );
 
         const updatedRow = quantityUpdateRes.rows[0];
         existingItem.quantity = updatedRow?.quantity ?? parsedQuantity;
-        existingItem.unit_cost = updatedRow?.unit_cost ?? existingItem.unit_cost;
-        existingItem.total_cost = updatedRow?.total_cost ?? existingItem.total_cost;
+        if (!isWarehouseSupply) {
+          existingItem.unit_cost = updatedRow?.unit_cost ?? existingItem.unit_cost;
+          existingItem.total_cost = updatedRow?.total_cost ?? existingItem.total_cost;
+        }
 
         quantityChanges.push({
           id: existingItem.id,
@@ -784,13 +809,22 @@ const updateApprovalItems = async (req, res, next) => {
       }
 
       const updateRes = await client.query(
-        `UPDATE public.requested_items
-           SET approval_status = $1,
-               approval_comments = $2,
-               approved_by = CASE WHEN $6 THEN $3${approvedByCastFragment} ELSE NULL END,
-               approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
-         WHERE id = $4 AND request_id = $5
-         RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, total_cost, unit_cost`,
+        isWarehouseSupply
+          ? `UPDATE public.warehouse_supply_items
+               SET approval_status = $1,
+                   approval_comments = $2,
+                   approved_by = CASE WHEN $6 THEN $3${approvedByCastFragment} ELSE NULL END,
+                   approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END,
+                   updated_at = NOW()
+             WHERE id = $4 AND request_id = $5
+             RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, NULL::numeric AS total_cost, NULL::numeric AS unit_cost`
+          : `UPDATE public.requested_items
+               SET approval_status = $1,
+                   approval_comments = $2,
+                   approved_by = CASE WHEN $6 THEN $3${approvedByCastFragment} ELSE NULL END,
+                   approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
+             WHERE id = $4 AND request_id = $5
+             RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, total_cost, unit_cost`,
         [
           finalStatus,
           itemDecision.comments ?? null,
@@ -826,7 +860,7 @@ const updateApprovalItems = async (req, res, next) => {
          COUNT(*) FILTER (
            WHERE approval_status IS NULL OR approval_status = 'Pending'
          ) AS pending
-       FROM public.requested_items
+       FROM public.${targetTable}
        WHERE request_id = $1`,
       [approval.request_id]
     );
@@ -871,22 +905,26 @@ const updateApprovalItems = async (req, res, next) => {
       );
     }
 
-    const estimatedCostRes = await client.query(
-      `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total
-         FROM public.requested_items
-        WHERE request_id = $1`,
-      [approval.request_id],
-    );
+    let updatedEstimatedCost = requestEstimatedCost;
 
-    const updatedEstimatedCost = Number(estimatedCostRes.rows[0]?.total || 0);
+    if (!isWarehouseSupply) {
+      const estimatedCostRes = await client.query(
+        `SELECT COALESCE(SUM(quantity * unit_cost), 0) AS total
+           FROM public.requested_items
+          WHERE request_id = $1`,
+        [approval.request_id],
+      );
 
-    await client.query(
-      `UPDATE requests
-          SET estimated_cost = $1,
-              updated_at = NOW()
-        WHERE id = $2`,
-      [updatedEstimatedCost, approval.request_id],
-    );
+      updatedEstimatedCost = Number(estimatedCostRes.rows[0]?.total || 0);
+
+      await client.query(
+        `UPDATE requests
+            SET estimated_cost = $1,
+                updated_at = NOW()
+          WHERE id = $2`,
+        [updatedEstimatedCost, approval.request_id],
+      );
+    }
 
     await client.query('COMMIT');
 

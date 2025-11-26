@@ -2,6 +2,7 @@ const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
+const { ensureWarehouseSupplyApprovalColumns } = require('../../utils/ensureWarehouseSupplyTables');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -166,6 +167,7 @@ const getRequestItemsOnly = async (req, res, next) => {
     let itemsRes;
     const reqType = requestMeta?.request_type;
     if (reqType === 'Warehouse Supply') {
+      await ensureWarehouseSupplyApprovalColumns();
       itemsRes = await pool.query(
         `
       SELECT
@@ -180,10 +182,10 @@ const getRequestItemsOnly = async (req, res, next) => {
         NULL::text AS procurement_status,
         NULL::text AS procurement_comment,
         NULL::text AS specs,
-        NULL::text AS approval_status,
-        NULL::text AS approval_comments,
-        NULL::integer AS approved_by,
-        NULL::timestamp AS approved_at,
+        COALESCE(approval_status, 'Pending') AS approval_status,
+        approval_comments,
+        approved_by,
+        approved_at,
         NULL::boolean AS is_received,
         NULL::integer AS received_by,
         NULL::timestamp AS received_at
@@ -667,7 +669,6 @@ const getPendingApprovals = async (req, res, next) => {
        WHERE a.approver_id = $1
          AND a.is_active = true
          AND a.status = 'Pending'
-         AND r.request_type != 'Maintenance'
          ORDER BY r.created_at DESC`,
       [req.user.id],
     );

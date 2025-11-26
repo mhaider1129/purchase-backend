@@ -9,6 +9,151 @@ const parseQuantity = (value) => {
   return parsed;
 };
 
+const issueWarehouseStock = async (req, res, next) => {
+  const {
+    stock_item_id: rawStockItemId,
+    quantity: rawQuantity,
+    department_id: rawDepartmentId,
+    warehouse_id,
+    notes,
+  } = req.body || {};
+
+  if (!req.user?.hasPermission('warehouse.manage-supply')) {
+    return next(createHttpError(403, 'You do not have permission to issue warehouse stock'));
+  }
+
+  const stockItemId = Number(rawStockItemId);
+  if (!Number.isInteger(stockItemId)) {
+    return next(createHttpError(400, 'A valid stock_item_id is required'));
+  }
+
+  const departmentId = Number(rawDepartmentId);
+  if (!Number.isInteger(departmentId)) {
+    return next(createHttpError(400, 'A valid department_id is required'));
+  }
+
+  const quantity = parseQuantity(rawQuantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return next(createHttpError(400, 'Quantity must be a positive number'));
+  }
+
+  await ensureWarehouseAssignments();
+
+  const fallbackWarehouseId = req.user?.warehouse_id;
+  const providedWarehouseId =
+    warehouse_id === undefined || warehouse_id === null || warehouse_id === ''
+      ? null
+      : Number(warehouse_id);
+  const warehouseId = providedWarehouseId ?? fallbackWarehouseId;
+
+  if (!Number.isInteger(warehouseId)) {
+    return next(createHttpError(400, 'A valid warehouse must be specified'));
+  }
+
+  await ensureWarehouseInventoryTables();
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const stockItemRes = await client.query(
+      'SELECT id, name FROM stock_items WHERE id = $1',
+      [stockItemId],
+    );
+
+    if (stockItemRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Stock item not found'));
+    }
+
+    const departmentRes = await client.query(
+      'SELECT id FROM departments WHERE id = $1',
+      [departmentId],
+    );
+
+    if (departmentRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Department not found'));
+    }
+
+    const itemName = stockItemRes.rows[0].name;
+
+    const balanceRes = await client.query(
+      `SELECT id, quantity
+         FROM warehouse_stock_levels
+        WHERE warehouse_id = $1 AND stock_item_id = $2
+        FOR UPDATE`,
+      [warehouseId, stockItemId],
+    );
+
+    if (balanceRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(
+        createHttpError(
+          400,
+          `Warehouse inventory for ${itemName} is not initialized. Please add stock before issuing items.`,
+        ),
+      );
+    }
+
+    const currentQty = Number(balanceRes.rows[0].quantity) || 0;
+    if (currentQty < quantity) {
+      await client.query('ROLLBACK');
+      return next(
+        createHttpError(
+          400,
+          `Insufficient stock for ${itemName}. Available: ${currentQty}, requested: ${quantity}`,
+        ),
+      );
+    }
+
+    const updatedBalanceRes = await client.query(
+      `UPDATE warehouse_stock_levels
+          SET quantity = quantity - $3,
+              updated_at = CURRENT_TIMESTAMP,
+              updated_by = $4
+        WHERE warehouse_id = $1 AND stock_item_id = $2
+        RETURNING id, warehouse_id, stock_item_id, item_name, quantity, updated_at`,
+      [warehouseId, stockItemId, quantity, req.user.id],
+    );
+
+    await client.query(
+      `UPDATE stock_items
+          SET available_quantity = GREATEST(0, COALESCE(available_quantity, 0) - $2),
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1`,
+      [stockItemId, quantity],
+    );
+
+    await client.query(
+      `INSERT INTO warehouse_stock_movements (
+          warehouse_id,
+          stock_item_id,
+          item_name,
+          direction,
+          quantity,
+          to_department_id,
+          created_by,
+          notes
+        ) VALUES ($1, $2, $3, 'out', $4, $5, $6, $7)`,
+      [warehouseId, stockItemId, itemName, quantity, departmentId, req.user.id, notes || null],
+    );
+
+    await client.query('COMMIT');
+
+    res.status(200).json({
+      message: 'Stock issued to department',
+      balance: updatedBalanceRes.rows[0],
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to issue warehouse stock:', err.message);
+    next(createHttpError(500, 'Failed to issue warehouse stock'));
+  } finally {
+    client.release();
+  }
+};
+
 const addWarehouseStock = async (req, res, next) => {
   const { stock_item_id: rawStockItemId, quantity: rawQuantity, notes, warehouse_id } = req.body || {};
 
@@ -184,5 +329,6 @@ const getWeeklyDepartmentStockingReport = async (req, res, next) => {
 module.exports = {
   addWarehouseStock,
   getWeeklyDepartmentStockingReport,
+  issueWarehouseStock,
   getWarehouseItems,
 };

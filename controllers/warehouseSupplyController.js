@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
-const ensureWarehouseSupplyTables = require('../utils/ensureWarehouseSupplyTables');
+const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 

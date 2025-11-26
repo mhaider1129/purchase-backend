@@ -1,7 +1,7 @@
 //controllers/requestedItemsController.js
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
-const ensureWarehouseSupplyTables = require('../utils/ensureWarehouseSupplyTables');
+const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
 
 // 📦 Add multiple items to a request
 const addRequestedItems = async (req, res, next) => {

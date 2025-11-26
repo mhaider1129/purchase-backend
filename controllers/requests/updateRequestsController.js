@@ -5,6 +5,9 @@ const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRoutes');
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
+const ensureWarehouseAssignments = require('../../utils/ensureWarehouseAssignments');
+const ensureWarehouseInventoryTables = require('../../utils/ensureWarehouseInventoryTables');
+const { getInspectionSummaryForRequest } = require('../../utils/technicalInspectionStatus');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -76,6 +79,69 @@ const assignRequestToProcurement = async (req, res, next) => {
     console.error('❌ Assignment error:', err);
     next(createHttpError(500, 'Failed to assign request'));
   }
+};
+
+const addReceivedStockToWarehouse = async (client, { warehouseId, requestId, itemName, quantity, userId }) => {
+  if (!Number.isInteger(warehouseId)) {
+    throw createHttpError(400, 'You must be assigned to a warehouse to receive stock items');
+  }
+
+  const parsedQuantity = Number(quantity);
+  if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+    throw createHttpError(400, `Cannot add a non-positive quantity for ${itemName || 'the stock item'}`);
+  }
+
+  await ensureWarehouseAssignments(client);
+  await ensureWarehouseInventoryTables(client);
+
+  const stockItemRes = await client.query(
+    `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+    [itemName],
+  );
+
+  if (stockItemRes.rowCount === 0) {
+    throw createHttpError(400, `Stock item '${itemName}' does not exist in the catalogue`);
+  }
+
+  const stockItemId = stockItemRes.rows[0].id;
+  const normalizedName = stockItemRes.rows[0].name;
+
+  await client.query(
+    `INSERT INTO warehouse_stock_levels (warehouse_id, stock_item_id, item_name, quantity, updated_by)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (warehouse_id, stock_item_id)
+     DO UPDATE SET
+       quantity = warehouse_stock_levels.quantity + EXCLUDED.quantity,
+       updated_at = CURRENT_TIMESTAMP,
+       updated_by = EXCLUDED.updated_by,
+       item_name = EXCLUDED.item_name`,
+    [warehouseId, stockItemId, normalizedName, parsedQuantity, userId],
+  );
+
+  await client.query(
+    `INSERT INTO warehouse_stock_movements (
+        warehouse_id, stock_item_id, item_name, direction, quantity, reference_request_id, created_by, notes
+      ) VALUES ($1, $2, $3, 'in', $4, $5, $6, $7)`,
+    [
+      warehouseId,
+      stockItemId,
+      normalizedName,
+      parsedQuantity,
+      requestId,
+      userId,
+      'Stock purchase received into warehouse inventory',
+    ],
+  );
+
+  await client.query(
+    `UPDATE stock_items
+        SET available_quantity = COALESCE(available_quantity, 0) + $2,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [stockItemId, parsedQuantity],
+  );
+
+  return { stock_item_id: stockItemId, item_name: normalizedName, quantity: parsedQuantity };
 };
 
 const updateApprovalStatus = async (req, res, next) => {
@@ -664,28 +730,54 @@ const markRequestAsCompleted = async (req, res, next) => {
       }
     }
 
+    const inspectionSummary = await getInspectionSummaryForRequest(client, id);
+    const hasInspections = inspectionSummary.totalCount > 0;
+    const hasPendingInspections =
+      hasInspections && inspectionSummary.pendingCount > 0;
+
+    const nextStatus = hasPendingInspections ? 'technical_inspection_pending' : 'completed';
+
     await client.query(
       `UPDATE requests
-       SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
-      [id],
+       SET status = $1::varchar,
+           completed_at = CASE
+             WHEN $1::varchar = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
+             ELSE completed_at
+           END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [nextStatus, id],
     );
+
+    const logAction = hasPendingInspections
+      ? 'Technical Inspection Pending'
+      : 'Marked as Completed';
+    const logComment = hasPendingInspections
+      ? 'Procurement finalized items; waiting for technical inspection acceptance.'
+      : 'All items finalized by procurement';
 
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, 'Marked as Completed', $2, 'All items finalized by procurement')`,
-      [id, user_id],
+       VALUES ($1, $2, $3, $4)`,
+      [id, logAction, user_id, logComment],
     );
+
+    const requesterTitle = hasPendingInspections
+      ? `Request ${id} awaiting technical inspection`
+      : `Request ${id} completed`;
+    const requesterMessage = hasPendingInspections
+      ? `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been finalized by procurement and is awaiting technical inspection before you can mark items as received.`
+      : `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.`;
 
     notificationEntries.push({
       userId: requestRow.requester_id,
-      title: `Request ${id} completed`,
-      message: `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.`,
+      title: requesterTitle,
+      message: requesterMessage,
       link: `/requests/${id}`,
       metadata: {
         requestId: id,
         requestType: requestRow.request_type,
-        action: 'request_completed',
+        action: hasPendingInspections ? 'technical_inspection_pending' : 'request_completed',
       },
     });
 
@@ -697,12 +789,16 @@ const markRequestAsCompleted = async (req, res, next) => {
       notificationEntries.push({
         userId: requestRow.initiated_by_technician_id,
         title: `Maintenance request ${id} completed`,
-        message: `The maintenance request you initiated (ID: ${id}) has been marked as completed.`,
+        message: hasPendingInspections
+          ? `The maintenance request you initiated (ID: ${id}) is awaiting technical inspection after procurement finalized it.`
+          : `The maintenance request you initiated (ID: ${id}) has been marked as completed.`,
         link: `/requests/${id}`,
         metadata: {
           requestId: id,
           requestType: requestRow.request_type,
-          action: 'maintenance_completed',
+          action: hasPendingInspections
+            ? 'technical_inspection_pending'
+            : 'maintenance_completed',
         },
       });
     }
@@ -719,8 +815,8 @@ const markRequestAsCompleted = async (req, res, next) => {
       emailPromises.push(
         sendEmail(
           requesterEmail,
-          `Request ${id} completed`,
-          `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.\nYou can review the final details in the procurement portal.`,
+          requesterTitle,
+          `${requesterMessage}\nYou can review the latest status in the procurement portal.`,
         ),
       );
     }
@@ -733,8 +829,12 @@ const markRequestAsCompleted = async (req, res, next) => {
       emailPromises.push(
         sendEmail(
           technicianEmail,
-          `Maintenance request ${id} completed`,
-          `The maintenance request you initiated (ID: ${id}) has been marked as completed.\nPlease review the outcome with the requesting department.`,
+          hasPendingInspections
+            ? `Maintenance request ${id} pending technical inspection`
+            : `Maintenance request ${id} completed`,
+          hasPendingInspections
+            ? `The maintenance request you initiated (ID: ${id}) is awaiting technical inspection after procurement finalized it.\nPlease review the inspection outcome once available.`
+            : `The maintenance request you initiated (ID: ${id}) has been marked as completed.\nPlease review the outcome with the requesting department.`,
         ),
       );
     }
@@ -745,7 +845,11 @@ const markRequestAsCompleted = async (req, res, next) => {
       console.error('⚠️ Failed to send one or more completion notifications:', notificationErr);
     }
 
-    res.json({ message: '✅ Request marked as completed' });
+    const responseMessage = hasPendingInspections
+      ? '⚠️ Request finalized by procurement and waiting for technical inspection'
+      : '✅ Request marked as completed';
+
+    res.json({ message: responseMessage, status: nextStatus });
   } catch (err) {
     if (transactionActive) {
       try {
@@ -1014,7 +1118,7 @@ const markRequestAsReceived = async (req, res, next) => {
     await ensureRequestedItemReceivedColumns(client);
 
     const requestRes = await client.query(
-      'SELECT requester_id, status FROM requests WHERE id = $1 FOR UPDATE',
+      'SELECT requester_id, status, request_type FROM requests WHERE id = $1 FOR UPDATE',
       [id]
     );
 
@@ -1023,8 +1127,19 @@ const markRequestAsReceived = async (req, res, next) => {
       return next(createHttpError(404, 'Request not found'));
     }
 
-    const { requester_id, status } = requestRes.rows[0];
+    const { requester_id, status, request_type: requestType } = requestRes.rows[0];
     const normalizedStatus = (status || '').trim().toLowerCase();
+    const normalizedRequestType = (requestType || '').trim().toLowerCase();
+
+    if (normalizedStatus === 'technical_inspection_pending') {
+      await client.query('ROLLBACK');
+      return next(
+        createHttpError(
+          400,
+          'Request is awaiting technical inspection before items can be received',
+        ),
+      );
+    }
 
     if (!['completed', 'received'].includes(normalizedStatus)) {
       await client.query('ROLLBACK');
@@ -1041,7 +1156,7 @@ const markRequestAsReceived = async (req, res, next) => {
     }
 
     const itemsRes = await client.query(
-      `SELECT id, item_name, is_received
+      `SELECT id, item_name, is_received, purchased_quantity, quantity
          FROM public.requested_items
         WHERE request_id = $1
         FOR UPDATE`,
@@ -1073,6 +1188,8 @@ const markRequestAsReceived = async (req, res, next) => {
       return next(createHttpError(404, 'Requested item not found for this request'));
     }
 
+    let inventoryUpdate = null;
+
     if (!item.is_received) {
       await client.query(
         `UPDATE public.requested_items
@@ -1088,6 +1205,18 @@ const markRequestAsReceived = async (req, res, next) => {
          VALUES ($1, 'Item Marked as Received', $2, $3)`,
         [id, user_id, `Item '${item.item_name}' marked as received by requester`]
       );
+
+      if (normalizedRequestType === 'stock') {
+        const warehouseId = req.user?.warehouse_id;
+        const receivedQuantity = item.purchased_quantity ?? item.quantity;
+        inventoryUpdate = await addReceivedStockToWarehouse(client, {
+          warehouseId,
+          requestId: id,
+          itemName: item.item_name,
+          quantity: receivedQuantity,
+          userId: user_id,
+        });
+      }
     }
 
     const remainingRes = await client.query(
@@ -1110,8 +1239,20 @@ const markRequestAsReceived = async (req, res, next) => {
 
       await client.query(
         `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, 'Marked as Received', $2, 'All items marked as received by requester')`,
+        VALUES ($1, 'Marked as Received', $2, 'All items marked as received by requester')`,
         [id, user_id]
+      );
+    }
+
+    if (inventoryUpdate) {
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Warehouse inventory updated', $2, $3)`,
+        [
+          id,
+          user_id,
+          `Added ${inventoryUpdate.quantity} of '${inventoryUpdate.item_name}' to warehouse stock`,
+        ],
       );
     }
 
@@ -1124,6 +1265,9 @@ const markRequestAsReceived = async (req, res, next) => {
     });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.statusCode || err.expose) {
+      return next(err);
+    }
     next(createHttpError(500, 'Failed to mark request as received'));
   } finally {
     client.release();

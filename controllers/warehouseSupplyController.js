@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
-const ensureWarehouseSupplyTables = require('../utils/ensureWarehouseSupplyTables');
+const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 
@@ -26,7 +26,15 @@ const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
 
 const decrementWarehouseStock = async (
   client,
-  { warehouseId, stockItem, quantity, requestId, departmentId, userId },
+  {
+    warehouseId,
+    stockItem,
+    quantity,
+    requestId,
+    departmentId,
+    userId,
+    skipIfMissingStockLevel = false,
+  },
 ) => {
   const { id: stockItemId, name: itemName } = stockItem;
   const balanceRes = await client.query(
@@ -38,6 +46,15 @@ const decrementWarehouseStock = async (
   );
 
   if (balanceRes.rowCount === 0) {
+    if (skipIfMissingStockLevel) {
+      return {
+        stock_item_id: stockItemId,
+        item_name: itemName,
+        warning:
+          'Warehouse inventory is not initialized for this stock item; stock was not decremented.',
+      };
+    }
+
     throw createHttpError(
       400,
       `Warehouse inventory for ${itemName} is not initialized. Please add stock before supplying items.`,
@@ -59,6 +76,14 @@ const decrementWarehouseStock = async (
             updated_by = $4
       WHERE warehouse_id = $1 AND stock_item_id = $2`,
     [warehouseId, stockItemId, quantity, userId],
+  );
+
+  await client.query(
+    `UPDATE stock_items
+        SET available_quantity = GREATEST(0, COALESCE(available_quantity, 0) - $2),
+            updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [stockItemId, quantity],
   );
 
   await client.query(
@@ -238,6 +263,7 @@ const recordSuppliedItems = async (req, res, next) => {
           requestId: request.id,
           departmentId: request.department_id,
           userId,
+          skipIfMissingStockLevel: true,
         });
         inventoryMovements.push({ ...movement, quantity: parsedQuantity, item_id: itemId });
       } else {
@@ -279,10 +305,29 @@ const recordSuppliedItems = async (req, res, next) => {
       })
       .join('; ');
 
+    const supplyTimestamp = new Date().toISOString();
+    const [departmentInfo, warehouseInfo] = await Promise.all([
+      client.query('SELECT name FROM departments WHERE id = $1', [
+        request.department_id,
+      ]),
+      client.query('SELECT name FROM warehouses WHERE id = $1', [
+        request.supply_warehouse_id,
+      ]),
+    ]);
+
+    const departmentName =
+      departmentInfo.rows[0]?.name || `Department ID ${request.department_id}`;
+    const warehouseName =
+      warehouseInfo.rows[0]?.name || `Warehouse ID ${request.supply_warehouse_id}`;
+
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
        VALUES ($1, 'Warehouse items supplied', $2, $3)`,
-      [requestId, userId, `Supplied items -> ${suppliedSummary}`],
+      [
+        requestId,
+        userId,
+        `Supplied on ${supplyTimestamp} from ${warehouseName} to ${departmentName} -> ${suppliedSummary}`,
+      ],
     );
 
     await client.query('COMMIT');
@@ -295,6 +340,9 @@ const recordSuppliedItems = async (req, res, next) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to record supplied items:', err);
+    if (err.statusCode) {
+      return next(err);
+    }
     next(createHttpError(500, 'Failed to record supplied items'));
   } finally {
     client.release();

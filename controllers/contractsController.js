@@ -1,6 +1,11 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureContractEvaluationsTable } = require('./contractEvaluationsController');
+const {
+  ensureSuppliersTable,
+  findOrCreateSupplierByName,
+  getSupplierById,
+} = require('./suppliersController');
 
 const CONTRACT_STATUSES = [
   'draft',
@@ -106,6 +111,42 @@ const parseOptionalInteger = (value, fieldName) => {
 
   return numeric;
 };
+
+const fetchRequestById = async (client, requestId) => {
+  const parsedId = Number(requestId);
+  if (!Number.isInteger(parsedId) || parsedId <= 0) {
+    return null;
+  }
+
+  try {
+    const { rows } = await client.query('SELECT id FROM requests WHERE id = $1', [parsedId]);
+    return rows[0] || null;
+  } catch (err) {
+    if (err?.code === '42P01') {
+      throw createHttpError(
+        400,
+        'The requests table is not available yet. Please complete request setup before linking contracts.'
+      );
+    }
+
+    throw err;
+  }
+};
+
+const assertRequestExists = async (client, requestId) => {
+  if (!requestId) {
+    return null;
+  }
+
+  const existing = await fetchRequestById(client, requestId);
+  if (!existing) {
+    throw createHttpError(404, `Request #${requestId} was not found`);
+  }
+
+  return existing;
+};
+
+const normalizeText = (value) => (typeof value === 'string' ? value.trim() : '');
 
 const dedupeUsersById = users => {
   const seen = new Set();
@@ -429,6 +470,9 @@ const ensureContractsTable = (() => {
   let assignmentColumnsEnsured = false;
   let endUserForeignKeyEnsured = false;
   let contractManagerForeignKeyEnsured = false;
+  let linkageColumnsEnsured = false;
+  let supplierForeignKeyEnsured = false;
+  let requestForeignKeyEnsured = false;
   let ensuringPromise = null;
 
   const ensureTableStructure = async () => {
@@ -446,6 +490,8 @@ const ensureContractsTable = (() => {
         delivery_terms TEXT,
         warranty_terms TEXT,
         performance_management TEXT,
+        supplier_id INTEGER,
+        source_request_id INTEGER,
         end_user_department_id INTEGER,
         contract_manager_id INTEGER,
         technical_department_ids JSONB,
@@ -471,6 +517,20 @@ const ensureContractsTable = (() => {
     `);
 
     assignmentColumnsEnsured = true;
+  };
+
+  const ensureLinkageColumns = async () => {
+    if (linkageColumnsEnsured) {
+      return;
+    }
+
+    await pool.query(`
+      ALTER TABLE contracts
+        ADD COLUMN IF NOT EXISTS supplier_id INTEGER,
+        ADD COLUMN IF NOT EXISTS source_request_id INTEGER
+    `);
+
+    linkageColumnsEnsured = true;
   };
 
   const ensureReferenceNumberIndex = async () => {
@@ -570,6 +630,53 @@ const ensureContractsTable = (() => {
     }
   };
 
+  const ensureSupplierForeignKey = async () => {
+    if (supplierForeignKeyEnsured) {
+      return;
+    }
+
+    try {
+      await ensureSuppliersTable();
+      await pool.query(`
+        ALTER TABLE contracts
+          ADD CONSTRAINT contracts_supplier_id_fkey
+          FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT
+      `);
+      supplierForeignKeyEnsured = true;
+    } catch (err) {
+      if (err?.code === '42710') {
+        supplierForeignKeyEnsured = true;
+      } else if (err?.code === '42P01') {
+        console.warn('⚠️ Suppliers table missing; will retry ensuring supplier foreign key later.');
+      } else {
+        throw err;
+      }
+    }
+  };
+
+  const ensureSourceRequestForeignKey = async () => {
+    if (requestForeignKeyEnsured) {
+      return;
+    }
+
+    try {
+      await pool.query(`
+        ALTER TABLE contracts
+          ADD CONSTRAINT contracts_source_request_id_fkey
+          FOREIGN KEY (source_request_id) REFERENCES requests(id) ON DELETE RESTRICT
+      `);
+      requestForeignKeyEnsured = true;
+    } catch (err) {
+      if (err?.code === '42710') {
+        requestForeignKeyEnsured = true;
+      } else if (err?.code === '42P01') {
+        console.warn('⚠️ Requests table missing; will retry ensuring source request foreign key later.');
+      } else {
+        throw err;
+      }
+    }
+  };
+
   return async () => {
     const indexSatisfied = referenceIndexStatus === 'ensured' || referenceIndexStatus === 'skipped';
     const constraintsSatisfied =
@@ -578,7 +685,10 @@ const ensureContractsTable = (() => {
       foreignKeyEnsured &&
       assignmentColumnsEnsured &&
       endUserForeignKeyEnsured &&
-      contractManagerForeignKeyEnsured;
+      contractManagerForeignKeyEnsured &&
+      linkageColumnsEnsured &&
+      supplierForeignKeyEnsured &&
+      requestForeignKeyEnsured;
 
     if (constraintsSatisfied) {
       return;
@@ -595,6 +705,10 @@ const ensureContractsTable = (() => {
             await ensureAssignmentColumns();
           }
 
+          if (!linkageColumnsEnsured) {
+            await ensureLinkageColumns();
+          }
+
           await ensureReferenceNumberIndex();
 
           if (!foreignKeyEnsured) {
@@ -608,6 +722,14 @@ const ensureContractsTable = (() => {
           if (!contractManagerForeignKeyEnsured) {
             await ensureContractManagerForeignKey();
           }
+
+          if (!supplierForeignKeyEnsured) {
+            await ensureSupplierForeignKey();
+          }
+
+          if (!requestForeignKeyEnsured) {
+            await ensureSourceRequestForeignKey();
+          }
         } catch (err) {
           console.error('❌ Failed to ensure contracts table exists:', err);
           throw err;
@@ -620,8 +742,6 @@ const ensureContractsTable = (() => {
     await ensuringPromise;
   };
 })();
-
-const normalizeText = (value) => (typeof value === 'string' ? value.trim() : '');
 
 const normalizeStatus = (value) => {
   const status = normalizeText(value).toLowerCase();
@@ -650,6 +770,25 @@ const parseContractValue = (value) => {
   }
 
   return numeric;
+};
+
+const resolveSupplier = async (client, { supplierId, vendorName }) => {
+  const normalizedVendor = normalizeText(vendorName);
+
+  if (!supplierId && !normalizedVendor) {
+    throw createHttpError(400, 'vendor is required');
+  }
+
+  if (supplierId) {
+    await ensureSuppliersTable();
+    const supplier = await getSupplierById(client, supplierId);
+    if (!supplier) {
+      throw createHttpError(404, `Supplier with id ${supplierId} was not found`);
+    }
+    return supplier;
+  }
+
+  return findOrCreateSupplierByName(client, normalizedVendor);
 };
 
 const canManageContracts = (req) =>
@@ -689,6 +828,8 @@ const serializeContract = (row) => {
   const technicalDepartmentIds = normalizeIdArray(row.technical_department_ids);
   const endUserDepartmentIdValue = Number(row.end_user_department_id);
   const contractManagerIdValue = Number(row.contract_manager_id);
+  const supplierIdValue = Number(row.supplier_id);
+  const sourceRequestIdValue = Number(row.source_request_id);
   const endUserDepartmentId =
     Number.isInteger(endUserDepartmentIdValue) && endUserDepartmentIdValue > 0
       ? endUserDepartmentIdValue
@@ -697,11 +838,19 @@ const serializeContract = (row) => {
     Number.isInteger(contractManagerIdValue) && contractManagerIdValue > 0
       ? contractManagerIdValue
       : null;
+  const supplierId =
+    Number.isInteger(supplierIdValue) && supplierIdValue > 0 ? supplierIdValue : null;
+  const sourceRequestId =
+    Number.isInteger(sourceRequestIdValue) && sourceRequestIdValue > 0
+      ? sourceRequestIdValue
+      : null;
 
   return {
     id: row.id,
     title: row.title,
     vendor: row.vendor,
+    supplier_id: supplierId,
+    source_request_id: sourceRequestId,
     reference_number: row.reference_number,
     start_date: toISODateString(row.start_date),
     end_date: toISODateString(row.end_date),
@@ -742,7 +891,7 @@ const listContracts = async (req, res, next) => {
     }
 
     if (search) {
-     const searchTerm = `%${search.toLowerCase()}%`;
+      const searchTerm = `%${search.toLowerCase()}%`;
       const baseIndex = values.length;
       values.push(searchTerm, searchTerm, searchTerm);
       filters.push(
@@ -754,8 +903,8 @@ const listContracts = async (req, res, next) => {
 
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
-      `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-              delivery_terms, warranty_terms, performance_management,
+      `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date,
+              contract_value, status, description, delivery_terms, warranty_terms, performance_management,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -783,8 +932,8 @@ const getContractById = async (req, res, next) => {
   try {
     await ensureContractsTable();
     const { rows } = await pool.query(
-      `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
-              delivery_terms, warranty_terms, performance_management,
+      `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date,
+              contract_value, status, description, delivery_terms, warranty_terms, performance_management,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -836,6 +985,8 @@ const createContract = async (req, res, next) => {
   let endUserDepartmentId = null;
   let contractManagerId = null;
   let technicalDepartmentIds = [];
+  let supplierId = null;
+  let sourceRequestId = null;
   try {
     startDate = parseISODate(req.body?.start_date, 'start_date');
     endDate = parseISODate(req.body?.end_date, 'end_date');
@@ -843,6 +994,8 @@ const createContract = async (req, res, next) => {
     endUserDepartmentId = parseOptionalInteger(req.body?.end_user_department_id, 'end_user_department_id');
     contractManagerId = parseOptionalInteger(req.body?.contract_manager_id, 'contract_manager_id');
     technicalDepartmentIds = normalizeIdArray(req.body?.technical_department_ids);
+    supplierId = parseOptionalInteger(req.body?.supplier_id, 'supplier_id');
+    sourceRequestId = parseOptionalInteger(req.body?.source_request_id, 'source_request_id');
   } catch (err) {
     return next(err);
   }
@@ -855,19 +1008,25 @@ const createContract = async (req, res, next) => {
   try {
     await client.query('BEGIN');
     await ensureContractsTable();
+
+    const supplier = await resolveSupplier(client, { supplierId, vendorName: vendor });
+    await assertRequestExists(client, sourceRequestId);
     const { rows } = await client.query(
       `INSERT INTO contracts (
-         title, vendor, reference_number, start_date, end_date, contract_value, status, description,
+         title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, status, description,
          delivery_terms, warranty_terms, performance_management, created_by,
          end_user_department_id, contract_manager_id, technical_department_ids
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
                  delivery_terms, warranty_terms, performance_management,
+                 supplier_id, source_request_id,
                  end_user_department_id, contract_manager_id, technical_department_ids,
                  created_by, created_at, updated_at`,
       [
         title,
-        vendor,
+        supplier.name,
+        supplier.id,
+        sourceRequestId,
         referenceNumber,
         startDate,
         endDate,
@@ -943,10 +1102,12 @@ const updateContract = async (req, res, next) => {
   }
 
   let existing;
+  const client = await pool.connect();
+
   try {
     await ensureContractsTable();
-    const current = await pool.query(
-      `SELECT id, start_date, end_date
+    const current = await client.query(
+      `SELECT id, start_date, end_date, vendor, supplier_id, source_request_id
          FROM contracts
         WHERE id = $1
         LIMIT 1`,
@@ -958,165 +1119,172 @@ const updateContract = async (req, res, next) => {
     }
 
     existing = current.rows[0];
-  } catch (err) {
-    console.error('❌ Failed to prepare contract update:', err);
-    return next(createHttpError(500, 'Failed to update contract'));
-  }
 
-  const assignments = [];
-  const values = [];
+    const assignments = [];
+    const values = [];
 
-  const pushAssignment = (column, value) => {
-    values.push(value);
-    assignments.push(`${column} = $${values.length}`);
-  };
+    const pushAssignment = (column, value) => {
+      values.push(value);
+      assignments.push(`${column} = $${values.length}`);
+    };
 
-  const title = req.body?.title !== undefined ? normalizeText(req.body.title) : undefined;
-  const vendor = req.body?.vendor !== undefined ? normalizeText(req.body.vendor) : undefined;
-  const referenceNumber =
-    req.body?.reference_number !== undefined ? normalizeText(req.body.reference_number) || null : undefined;
-  const description = req.body?.description !== undefined ? normalizeText(req.body.description) || null : undefined;
-  const deliveryTerms =
-    req.body?.delivery_terms !== undefined ? normalizeText(req.body.delivery_terms) || null : undefined;
-  const warrantyTerms =
-    req.body?.warranty_terms !== undefined ? normalizeText(req.body.warranty_terms) || null : undefined;
-  const performanceManagement =
-    req.body?.performance_management !== undefined ? normalizeText(req.body.performance_management) || null : undefined;
+    const title = req.body?.title !== undefined ? normalizeText(req.body.title) : undefined;
+    const vendor = req.body?.vendor !== undefined ? normalizeText(req.body.vendor) : undefined;
+    const referenceNumber =
+      req.body?.reference_number !== undefined ? normalizeText(req.body.reference_number) || null : undefined;
+    const description = req.body?.description !== undefined ? normalizeText(req.body.description) || null : undefined;
+    const deliveryTerms =
+      req.body?.delivery_terms !== undefined ? normalizeText(req.body.delivery_terms) || null : undefined;
+    const warrantyTerms =
+      req.body?.warranty_terms !== undefined ? normalizeText(req.body.warranty_terms) || null : undefined;
+    const performanceManagement =
+      req.body?.performance_management !== undefined ? normalizeText(req.body.performance_management) || null : undefined;
 
-  if (title !== undefined) {
-    if (!title) {
-      return next(createHttpError(400, 'title is required'));
+    if (title !== undefined) {
+      if (!title) {
+        return next(createHttpError(400, 'title is required'));
+      }
+      pushAssignment('title', title);
     }
-    pushAssignment('title', title);
-  }
 
-  if (vendor !== undefined) {
-    if (!vendor) {
+    if (vendor !== undefined && !vendor) {
       return next(createHttpError(400, 'vendor is required'));
     }
-    pushAssignment('vendor', vendor);
-  }
 
-  if (referenceNumber !== undefined) {
-    pushAssignment('reference_number', referenceNumber);
-  }
-
-  if (description !== undefined) {
-    pushAssignment('description', description);
-  }
-
-  if (deliveryTerms !== undefined) {
-    pushAssignment('delivery_terms', deliveryTerms);
-  }
-
-  if (warrantyTerms !== undefined) {
-    pushAssignment('warranty_terms', warrantyTerms);
-  }
-
-  if (performanceManagement !== undefined) {
-    pushAssignment('performance_management', performanceManagement);
-  }
-
-  if (req.body?.end_user_department_id !== undefined) {
-    try {
-      const parsedDepartment = parseOptionalInteger(
-        req.body.end_user_department_id,
-        'end_user_department_id'
-      );
-      pushAssignment('end_user_department_id', parsedDepartment);
-    } catch (err) {
-      return next(err);
+    if (referenceNumber !== undefined) {
+      pushAssignment('reference_number', referenceNumber);
     }
-  }
 
-  if (req.body?.contract_manager_id !== undefined) {
-    try {
+    if (description !== undefined) {
+      pushAssignment('description', description);
+    }
+
+    if (deliveryTerms !== undefined) {
+      pushAssignment('delivery_terms', deliveryTerms);
+    }
+
+    if (warrantyTerms !== undefined) {
+      pushAssignment('warranty_terms', warrantyTerms);
+    }
+
+    if (performanceManagement !== undefined) {
+      pushAssignment('performance_management', performanceManagement);
+    }
+
+    if (req.body?.end_user_department_id !== undefined) {
+      const parsedDepartment = parseOptionalInteger(req.body.end_user_department_id, 'end_user_department_id');
+      pushAssignment('end_user_department_id', parsedDepartment);
+    }
+
+    if (req.body?.contract_manager_id !== undefined) {
       const parsedManager = parseOptionalInteger(req.body.contract_manager_id, 'contract_manager_id');
       pushAssignment('contract_manager_id', parsedManager);
-    } catch (err) {
-      return next(err);
     }
-  }
 
-  if (req.body?.technical_department_ids !== undefined) {
-    const parsedDepartments = normalizeIdArray(req.body.technical_department_ids);
-    pushAssignment('technical_department_ids', toJsonbParameter(parsedDepartments));
-  }
-
-  if (req.body?.status !== undefined) {
-    const status = normalizeStatus(req.body.status);
-    if (!status) {
-      return next(createHttpError(400, 'status is invalid'));
+    if (req.body?.technical_department_ids !== undefined) {
+      const parsedDepartments = normalizeIdArray(req.body.technical_department_ids);
+      pushAssignment('technical_department_ids', toJsonbParameter(parsedDepartments));
     }
-    pushAssignment('status', status);
-  }
 
-  let requestedStart;
-  let startProvided = false;
-  if (req.body?.start_date !== undefined) {
-    try {
+    if (req.body?.status !== undefined) {
+      const status = normalizeStatus(req.body.status);
+      if (!status) {
+        return next(createHttpError(400, 'status is invalid'));
+      }
+      pushAssignment('status', status);
+    }
+
+    let requestedStart;
+    let startProvided = false;
+    if (req.body?.start_date !== undefined) {
       requestedStart = parseISODate(req.body.start_date, 'start_date');
       startProvided = true;
       pushAssignment('start_date', requestedStart);
-    } catch (err) {
-      return next(err);
     }
-  }
 
-  let requestedEnd;
-  let endProvided = false;
-  if (req.body?.end_date !== undefined) {
-    try {
+    let requestedEnd;
+    let endProvided = false;
+    if (req.body?.end_date !== undefined) {
       requestedEnd = parseISODate(req.body.end_date, 'end_date');
       endProvided = true;
       pushAssignment('end_date', requestedEnd);
-    } catch (err) {
-      return next(err);
     }
-  }
 
-  if (req.body?.contract_value !== undefined) {
-    try {
+    if (req.body?.contract_value !== undefined) {
       pushAssignment('contract_value', parseContractValue(req.body.contract_value));
-    } catch (err) {
-      return next(err);
     }
-  }
 
-  if (assignments.length === 0) {
-    return next(createHttpError(400, 'No valid fields provided for update'));
-  }
+    let supplierId;
+    let supplierProvided = false;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'supplier_id')) {
+      supplierProvided = true;
+      supplierId = parseOptionalInteger(req.body.supplier_id, 'supplier_id');
+    }
 
-  assignments.push('updated_at = NOW()');
+    let sourceRequestId;
+    let sourceRequestProvided = false;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'source_request_id')) {
+      sourceRequestProvided = true;
+      sourceRequestId = parseOptionalInteger(req.body.source_request_id, 'source_request_id');
+    }
 
-  const currentStart = toISODateString(existing.start_date);
-  const currentEnd = toISODateString(existing.end_date);
-  const nextStart = startProvided ? requestedStart : currentStart;
-  const nextEnd = endProvided ? requestedEnd : currentEnd;
+    await client.query('BEGIN');
 
-  if (nextStart && nextEnd && nextStart > nextEnd) {
-    return next(createHttpError(400, 'end_date must be after start_date'));
-  }
+    if (sourceRequestProvided) {
+      await assertRequestExists(client, sourceRequestId);
+      pushAssignment('source_request_id', sourceRequestId);
+    }
 
-  try {
-    const { rows } = await pool.query(
+    const needsSupplierResolution = supplierProvided || vendor !== undefined;
+    if (needsSupplierResolution) {
+      const supplier = await resolveSupplier(client, {
+        supplierId: supplierProvided ? supplierId : null,
+        vendorName: vendor !== undefined ? vendor : existing.vendor,
+      });
+      const vendorNameToPersist = vendor !== undefined ? vendor : supplier.name;
+      pushAssignment('vendor', vendorNameToPersist);
+      pushAssignment('supplier_id', supplier.id);
+    }
+
+    if (assignments.length === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'No valid fields provided for update'));
+    }
+
+    assignments.push('updated_at = NOW()');
+
+    const currentStart = toISODateString(existing.start_date);
+    const currentEnd = toISODateString(existing.end_date);
+    const nextStart = startProvided ? requestedStart : currentStart;
+    const nextEnd = endProvided ? requestedEnd : currentEnd;
+
+    if (nextStart && nextEnd && nextStart > nextEnd) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'end_date must be after start_date'));
+    }
+
+    const { rows } = await client.query(
       `UPDATE contracts
           SET ${assignments.join(', ')}
         WHERE id = $${values.length + 1}
-        RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
+        RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, status, description,
                   delivery_terms, warranty_terms, performance_management,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [...values, contractId]
     );
 
+    await client.query('COMMIT');
     res.json(serializeContract(rows[0]));
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     if (err?.code === '23505') {
       return next(createHttpError(409, 'A contract with this reference number already exists'));
     }
     console.error('❌ Failed to update contract:', err);
     next(createHttpError(500, 'Failed to update contract'));
+  } finally {
+    client.release();
   }
 };
 
@@ -1136,7 +1304,7 @@ const archiveContract = async (req, res, next) => {
       `UPDATE contracts
           SET status = 'archived', updated_at = NOW()
         WHERE id = $1
-        RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
+        RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, status, description,
                   created_by, created_at, updated_at`,
       [contractId]
     );

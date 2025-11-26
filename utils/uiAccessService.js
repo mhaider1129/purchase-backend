@@ -40,7 +40,7 @@ const defaultResources = [
     resourceKey: 'feature.technicalInspections',
     label: 'Technical Inspections',
     description: 'Controls access to the technical inspection log and form.',
-    permissions: ['warehouse.manage-supply'],
+    permissions: ['technical-inspections.manage'],
     requireAll: false,
   },
   {
@@ -220,8 +220,9 @@ const syncUiAccessResources = async () => {
   await ensureTable();
   for (const resource of defaultResources) {
     const { resourceKey, label, description, permissions, requireAll } = resource;
+    const normalizedPermissions = normalizePermissionList(permissions);
     const existing = await pool.query(
-      `SELECT permissions, require_all FROM ui_resource_permissions WHERE resource_key = $1`,
+      `SELECT label, description, permissions, require_all FROM ui_resource_permissions WHERE resource_key = $1`,
       [resourceKey]
     );
 
@@ -229,39 +230,30 @@ const syncUiAccessResources = async () => {
       await pool.query(
         `INSERT INTO ui_resource_permissions (resource_key, label, description, permissions, require_all)
          VALUES ($1, $2, $3, $4, $5)`,
-        [resourceKey, label, description, normalizePermissionList(permissions), requireAll]
+        [resourceKey, label, description, normalizedPermissions, requireAll]
       );
       continue;
     }
 
-    await pool.query(
-      `UPDATE ui_resource_permissions
-         SET label = $2,
-             description = $3
-       WHERE resource_key = $1`,
-      [resourceKey, label, description]
-    );
-
     const row = existing.rows[0];
-    const currentPermissions = Array.isArray(row.permissions)
-      ? row.permissions.filter(Boolean)
-      : [];
+    const currentPermissions = normalizePermissionList(row.permissions);
+    const currentRequireAll = Boolean(row.require_all);
 
-    if (currentPermissions.length === 0) {
-      await pool.query(
-        `UPDATE ui_resource_permissions
-           SET permissions = $2
-         WHERE resource_key = $1`,
-        [resourceKey, normalizePermissionList(permissions)]
-      );
-    }
+    const permissionsChanged =
+      currentPermissions.length !== normalizedPermissions.length ||
+      currentPermissions.some((code, idx) => code !== normalizedPermissions[idx]);
 
-    if (row.require_all === null) {
-      await pool.query(
-        `UPDATE ui_resource_permissions
-           SET require_all = $2
-         WHERE resource_key = $1`,
-        [resourceKey, Boolean(requireAll)]
+    const requireAllChanged = currentRequireAll !== Boolean(requireAll);
+
+    const labelChanged = row.label !== label || row.description !== description;
+
+    if (permissionsChanged || requireAllChanged || labelChanged) {
+      console.warn(
+        `⚠️ UI resource '${resourceKey}' differs from defaults. Current permissions=${
+          currentPermissions.join(', ') || 'none'
+        }, require_all=${currentRequireAll}. To align with defaults, update it via the UI to permissions=${
+          normalizedPermissions.join(', ') || 'none'
+        } and require_all=${Boolean(requireAll)}.`
       );
     }
   }

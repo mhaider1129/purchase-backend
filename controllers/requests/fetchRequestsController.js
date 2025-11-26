@@ -2,6 +2,7 @@ const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
+const { ensureWarehouseSupplyApprovalColumns } = require('../../utils/ensureWarehouseSupplyTables');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -119,7 +120,8 @@ const getRequestItemsOnly = async (req, res, next) => {
   const { id } = req.params;
   const { id: userId } = req.user;
   const isPrivilegedViewer = req.user.hasPermission('requests.view-all');
-  
+  const userWarehouseId = req.user?.warehouse_id;
+
   try {
     let accessCheck;
 
@@ -134,7 +136,7 @@ const getRequestItemsOnly = async (req, res, next) => {
     } else {
       accessCheck = await pool.query(
         `
-        SELECT r.id, r.request_type, r.status, r.assigned_to
+        SELECT r.id, r.request_type, r.status, r.assigned_to, r.supply_warehouse_id
         FROM requests r
         LEFT JOIN approvals a ON r.id = a.request_id
         WHERE r.id = $1
@@ -142,10 +144,18 @@ const getRequestItemsOnly = async (req, res, next) => {
             r.requester_id = $2
             OR a.approver_id = $2
             OR r.assigned_to = $2
+            ${
+              req.user.hasPermission('warehouse.manage-supply') &&
+              Number.isInteger(userWarehouseId)
+                ? 'OR (r.request_type = \'Warehouse Supply\' AND r.supply_warehouse_id = $3)'
+                : ''
+            }
           )
         LIMIT 1
         `,
-        [id, userId],
+        req.user.hasPermission('warehouse.manage-supply') && Number.isInteger(userWarehouseId)
+          ? [id, userId, userWarehouseId]
+          : [id, userId],
       );
     }
 
@@ -157,6 +167,7 @@ const getRequestItemsOnly = async (req, res, next) => {
     let itemsRes;
     const reqType = requestMeta?.request_type;
     if (reqType === 'Warehouse Supply') {
+      await ensureWarehouseSupplyApprovalColumns();
       itemsRes = await pool.query(
         `
       SELECT
@@ -171,10 +182,10 @@ const getRequestItemsOnly = async (req, res, next) => {
         NULL::text AS procurement_status,
         NULL::text AS procurement_comment,
         NULL::text AS specs,
-        NULL::text AS approval_status,
-        NULL::text AS approval_comments,
-        NULL::integer AS approved_by,
-        NULL::timestamp AS approved_at,
+        COALESCE(approval_status, 'Pending') AS approval_status,
+        approval_comments,
+        approved_by,
+        approved_at,
         NULL::boolean AS is_received,
         NULL::integer AS received_by,
         NULL::timestamp AS received_at
@@ -658,7 +669,6 @@ const getPendingApprovals = async (req, res, next) => {
        WHERE a.approver_id = $1
          AND a.is_active = true
          AND a.status = 'Pending'
-         AND r.request_type != 'Maintenance'
          ORDER BY r.created_at DESC`,
       [req.user.id],
     );
@@ -909,6 +919,8 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
 
 const getClosedRequests = async (req, res, next) => {
   try {
+    const closedStatuses = ['completed', 'rejected', 'received', 'technical_inspection_pending'];
+
     const result = await pool.query(
       `SELECT
          r.id,
@@ -948,7 +960,7 @@ const getClosedRequests = async (req, res, next) => {
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN users u ON r.assigned_to = u.id
        LEFT JOIN public.requested_items ri ON ri.request_id = r.id
-       WHERE r.status IN ('completed', 'Rejected', 'Received')
+       WHERE LOWER(TRIM(r.status)) = ANY($2::text[])
          AND r.requester_id = $1
        GROUP BY
          r.id,
@@ -964,7 +976,7 @@ const getClosedRequests = async (req, res, next) => {
          p.name,
          u.name
        ORDER BY r.updated_at DESC`,
-      [req.user.id]
+      [req.user.id, closedStatuses]
     );
 
     res.json(result.rows);

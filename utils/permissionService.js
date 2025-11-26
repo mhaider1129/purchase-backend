@@ -9,9 +9,19 @@ const normalizeRoleKey = (role) =>
 
 const DEFAULT_ROLE_PERMISSIONS = {
   requester: ['stock-requests.create'],
-  technician: ['warehouse.manage-supply', 'warehouse.view-supply', 'stock-requests.create'],
-  warehousemanager: ['warehouse.manage-supply', 'warehouse.view-supply', 'stock-requests.create'],
-  warehousekeeper: ['warehouse.manage-supply', 'warehouse.view-supply'],
+  technician: [
+    'warehouse.manage-supply',
+    'warehouse.view-supply',
+    'stock-requests.create',
+    'technical-inspections.manage',
+  ],
+  warehousemanager: [
+    'warehouse.manage-supply',
+    'warehouse.view-supply',
+    'stock-requests.create',
+    'technical-inspections.manage',
+  ],
+  warehousekeeper: ['warehouse.manage-supply', 'warehouse.view-supply', 'technical-inspections.manage'],
   scm: [
     'approvals.reassign',
     'contracts.manage',
@@ -47,6 +57,15 @@ const DEFAULT_ROLE_PERMISSIONS = {
   coo: ['requests.view-incomplete', 'requests.view-audit'],
   cmo: ['requests.view-incomplete', 'requests.view-audit'],
 };
+
+const CORE_PERMISSION_DEFINITIONS = [
+  {
+    code: 'technical-inspections.manage',
+    name: 'Manage technical inspections',
+    description:
+      'Create, edit, and delete technical inspection records.',
+  },
+];
 
 const getDefaultPermissionsForRole = (role) => {
   const key = normalizeRoleKey(role);
@@ -86,10 +105,78 @@ const ensurePermissionTables = async () => {
   `);
 };
 
+const logMissingPermissionDefinitions = async (definitions = []) => {
+  if (!Array.isArray(definitions) || definitions.length === 0) {
+    return;
+  }
+
+  const expectedCodes = definitions
+    .map((def) => (typeof def?.code === 'string' ? def.code.trim().toLowerCase() : ''))
+    .filter(Boolean);
+
+  if (expectedCodes.length === 0) {
+    return;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT LOWER(code) AS code FROM permissions WHERE LOWER(code) = ANY($1::TEXT[])`,
+    [expectedCodes]
+  );
+
+  const existing = new Set(rows.map((row) => row.code));
+  const missing = expectedCodes.filter((code) => !existing.has(code));
+
+  if (missing.length > 0) {
+    console.warn(
+      `⚠️ Missing required permissions in database: ${missing.join(', ')}. Add them via the permissions UI so they can be assigned to users.`
+    );
+  }
+};
+
 const syncPermissionCatalog = async () => {
   // Permissions are now managed directly in the database (Supabase).
-  // We only need to ensure the required tables exist; seeding happens externally.
+  // We only ensure the required tables exist; add missing permissions through the UI instead of seeding here.
   await ensurePermissionTables();
+
+  // Warn if critical permissions are absent so admins can create them via the frontend.
+  await logMissingPermissionDefinitions(CORE_PERMISSION_DEFINITIONS);
+};
+
+const ensurePermissionDefinitions = async (definitions = []) => {
+  if (!Array.isArray(definitions) || definitions.length === 0) {
+    return;
+  }
+
+  await ensurePermissionTables();
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const def of definitions) {
+      const code = typeof def?.code === 'string' ? def.code.trim().toLowerCase() : '';
+      const name = typeof def?.name === 'string' ? def.name.trim() : '';
+      const description = typeof def?.description === 'string' ? def.description.trim() : null;
+
+      if (!code || !name) {
+        continue;
+      }
+
+      await client.query(
+        `INSERT INTO permissions (code, name, description)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [code, name, description]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to ensure permission definitions:', error);
+  } finally {
+    client.release();
+  }
 };
 
 const getAllPermissionCodes = async () => {

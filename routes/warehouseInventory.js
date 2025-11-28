@@ -2,12 +2,14 @@ const express = require('express');
 const router = express.Router();
 const {
   addWarehouseStock,
+  discardWarehouseStock,
   getWeeklyDepartmentStockingReport,
   issueWarehouseStock,
   getWarehouseItems,
 } = require('../controllers/warehouseInventoryController');
 
 router.post('/stock', addWarehouseStock);
+router.post('/stock/discard', discardWarehouseStock);
 router.post('/stock/issue', issueWarehouseStock);
 router.get('/reports/weekly', getWeeklyDepartmentStockingReport);
 router.get('/:warehouseId/items', getWarehouseItems);

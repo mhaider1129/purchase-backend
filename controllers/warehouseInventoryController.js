@@ -377,7 +377,7 @@ const discardWarehouseStock = async (req, res, next) => {
       ? `Destroyed (${normalizedReason}): ${notes.trim()}`
       : `Destroyed (${normalizedReason})`;
 
-    await client.query(
+    const movementRes = await client.query(
       `INSERT INTO warehouse_stock_movements (
           warehouse_id,
           stock_item_id,
@@ -386,7 +386,8 @@ const discardWarehouseStock = async (req, res, next) => {
           quantity,
           notes,
           created_by
-        ) VALUES ($1, $2, $3, 'out', $4, $5, $6)`,
+        ) VALUES ($1, $2, $3, 'out', $4, $5, $6)
+        RETURNING id, warehouse_id, stock_item_id, item_name, direction, quantity, notes, created_at`,
       [warehouseId, stockItemId, itemName, quantity, destructionNotes, req.user.id],
     );
 
@@ -395,6 +396,8 @@ const discardWarehouseStock = async (req, res, next) => {
     res.status(200).json({
       message: 'Stock removal recorded',
       balance: updatedBalanceRes.rows[0],
+      movement: movementRes.rows[0],
+      reason: normalizedReason,
     });
   } catch (err) {
     await client.query('ROLLBACK');

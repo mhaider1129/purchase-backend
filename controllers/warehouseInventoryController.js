@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
+const recalculateAvailableQuantity = require('../utils/recalculateAvailableQuantity');
 
 const parseQuantity = (value) => {
   const parsed = Number(value);
@@ -146,13 +147,7 @@ const issueWarehouseStock = async (req, res, next) => {
         [warehouseId, stockItemId, quantity, req.user.id],
       );
 
-      await client.query(
-        `UPDATE stock_items
-            SET available_quantity = GREATEST(0, COALESCE(available_quantity, 0) - $2),
-                updated_at = CURRENT_TIMESTAMP
-          WHERE id = $1`,
-        [stockItemId, quantity],
-      );
+      await recalculateAvailableQuantity(client, stockItemId);
 
       await client.query(
         `INSERT INTO warehouse_stock_movements (
@@ -247,13 +242,7 @@ const addWarehouseStock = async (req, res, next) => {
       [warehouseId, stockItemId, itemName, quantity, req.user.id],
     );
 
-    await client.query(
-      `UPDATE stock_items
-          SET available_quantity = COALESCE(available_quantity, 0) + $2,
-              updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1`,
-      [stockItemId, quantity],
-    );
+    await recalculateAvailableQuantity(client, stockItemId);
 
     await client.query(
       `INSERT INTO warehouse_stock_movements (
@@ -365,13 +354,7 @@ const discardWarehouseStock = async (req, res, next) => {
       [warehouseId, stockItemId, quantity, req.user.id],
     );
 
-    await client.query(
-      `UPDATE stock_items
-          SET available_quantity = GREATEST(0, COALESCE(available_quantity, 0) - $2),
-              updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1`,
-      [stockItemId, quantity],
-    );
+    await recalculateAvailableQuantity(client, stockItemId);
 
     const destructionNotes = notes?.trim()
       ? `Destroyed (${normalizedReason}): ${notes.trim()}`

@@ -5,6 +5,7 @@ const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyT
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 const ensureItemRecallsTable = require('../utils/ensureItemRecallsTable');
+const recalculateAvailableQuantity = require('../utils/recalculateAvailableQuantity');
 
 const blockingRecallStatuses = [
   'pending warehouse review',
@@ -104,13 +105,7 @@ const decrementWarehouseStock = async (
     [warehouseId, stockItemId, quantity, userId],
   );
 
-  await client.query(
-    `UPDATE stock_items
-        SET available_quantity = GREATEST(0, COALESCE(available_quantity, 0) - $2),
-            updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1`,
-    [stockItemId, quantity],
-  );
+  await recalculateAvailableQuantity(client, stockItemId);
 
   await client.query(
     `INSERT INTO warehouse_stock_movements (

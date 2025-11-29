@@ -7,6 +7,7 @@ const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRo
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 const ensureWarehouseAssignments = require('../../utils/ensureWarehouseAssignments');
 const ensureWarehouseInventoryTables = require('../../utils/ensureWarehouseInventoryTables');
+const recalculateAvailableQuantity = require('../../utils/recalculateAvailableQuantity');
 const { getInspectionSummaryForRequest } = require('../../utils/technicalInspectionStatus');
 
 const assignRequestToProcurement = async (req, res, next) => {
@@ -133,13 +134,7 @@ const addReceivedStockToWarehouse = async (client, { warehouseId, requestId, ite
     ],
   );
 
-  await client.query(
-    `UPDATE stock_items
-        SET available_quantity = COALESCE(available_quantity, 0) + $2,
-            updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1`,
-    [stockItemId, parsedQuantity],
-  );
+  await recalculateAvailableQuantity(client, stockItemId);
 
   return { stock_item_id: stockItemId, item_name: normalizedName, quantity: parsedQuantity };
 };

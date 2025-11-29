@@ -6,6 +6,7 @@ const {
   createDepartmentRecallRequest,
   createWarehouseRecallRequest,
   escalateRecallToProcurement,
+  quarantineRecall,
 } = require('../controllers/itemRecallsController');
 
 // Warehouse and procurement teams can review recall queues
@@ -19,5 +20,8 @@ router.post('/warehouse', createWarehouseRecallRequest);
 
 // Warehouse users can escalate an existing department recall to procurement
 router.post('/:id/escalate', escalateRecallToProcurement);
+
+// Warehouse or procurement can quarantine a recall to block issuance
+router.post('/:id/quarantine', quarantineRecall);
 
 module.exports = router;

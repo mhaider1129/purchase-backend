@@ -3,6 +3,7 @@ const {
   createDepartmentRecallRequest,
   createWarehouseRecallRequest,
   escalateRecallToProcurement,
+  quarantineRecall,
 } = require('../controllers/itemRecallsController');
 
 jest.mock('../config/db', () => ({
@@ -13,6 +14,8 @@ jest.mock('../config/db', () => ({
 jest.mock('../utils/emailService', () => ({
   sendEmail: jest.fn().mockResolvedValue(null),
 }));
+
+jest.mock('../utils/ensureItemRecallsTable', () => jest.fn().mockResolvedValue());
 
 const db = require('../config/db');
 
@@ -86,7 +89,7 @@ describe('itemRecallsController', () => {
     expect(db.query).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining('INSERT INTO item_recalls'),
-      [null, 'Old gloves', 3, 'Expired stock', '', 2, 7],
+      [null, 'Old gloves', '', 3, 'Expired stock', '', 2, 7],
     );
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(
@@ -195,5 +198,63 @@ describe('itemRecallsController', () => {
     );
     expect(res.json).toHaveBeenCalledWith({ recalls: [] });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('quarantines a recall and notifies procurement', async () => {
+    const req = {
+      params: { id: '5' },
+      body: { quarantine_reason: 'Failed inspection', lot_number: 'LOT-55' },
+      user: {
+        ...createPermissionHelpers(['recalls.manage', 'warehouse.manage-supply']),
+        hasAnyPermission: jest.fn(() => true),
+      },
+    };
+
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    const mockClient = {
+      query: jest.fn(),
+      release: jest.fn(),
+    };
+
+    db.connect.mockResolvedValue(mockClient);
+
+    mockClient.query
+      .mockResolvedValueOnce({}) // BEGIN
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            id: 5,
+            item_name: 'Mask',
+            lot_number: 'LOT-55',
+            quarantine_active: false,
+            status: 'Pending Warehouse Review',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 5,
+            item_name: 'Mask',
+            lot_number: 'LOT-55',
+            quarantine_active: true,
+            status: 'Quarantined - Block Issuance',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ email: 'procurement@example.com' }] })
+      .mockResolvedValueOnce({}); // COMMIT
+
+    await quarantineRecall(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('Recall quarantined'),
+      }),
+    );
   });
 });

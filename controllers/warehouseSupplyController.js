@@ -4,6 +4,14 @@ const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItem
 const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
+const ensureItemRecallsTable = require('../utils/ensureItemRecallsTable');
+const recalculateAvailableQuantity = require('../utils/recalculateAvailableQuantity');
+
+const blockingRecallStatuses = [
+  'pending warehouse review',
+  'pending procurement action',
+  'quarantined - block issuance',
+];
 
 const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
   if (Number.isInteger(stockItemId)) {
@@ -19,6 +27,25 @@ const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
   const { rows } = await client.query(
     `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
     [itemName],
+  );
+
+  return rows[0] || null;
+};
+
+const findActiveRecallBlocker = async (client, { stockItemId, itemName }) => {
+  await ensureItemRecallsTable(client);
+
+  const { rows } = await client.query(
+    `SELECT id, item_name, lot_number, status, quarantine_active, quarantine_reason
+       FROM item_recalls
+      WHERE (item_id = $1 OR LOWER(item_name) = LOWER($2))
+        AND (
+          quarantine_active = TRUE
+          OR LOWER(status) = ANY($3)
+        )
+      ORDER BY quarantine_active DESC, updated_at DESC NULLS LAST, created_at DESC
+      LIMIT 1`,
+    [stockItemId ?? null, itemName || '', blockingRecallStatuses],
   );
 
   return rows[0] || null;
@@ -78,13 +105,7 @@ const decrementWarehouseStock = async (
     [warehouseId, stockItemId, quantity, userId],
   );
 
-  await client.query(
-    `UPDATE stock_items
-        SET available_quantity = GREATEST(0, COALESCE(available_quantity, 0) - $2),
-            updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1`,
-    [stockItemId, quantity],
-  );
+  await recalculateAvailableQuantity(client, stockItemId);
 
   await client.query(
     `INSERT INTO warehouse_stock_movements (
@@ -239,14 +260,6 @@ const recordSuppliedItems = async (req, res, next) => {
         );
       }
 
-      await client.query(
-        `INSERT INTO warehouse_supplied_items (request_id, item_id, supplied_quantity, supplied_by)
-         VALUES ($1,$2,$3,$4)`,
-        [requestId, itemId, parsedQuantity, userId]
-      );
-
-      suppliedMap[itemId] = newTotal;
-
       const stockItemId = Number.isInteger(item.stock_item_id)
         ? Number(item.stock_item_id)
         : null;
@@ -254,6 +267,30 @@ const recordSuppliedItems = async (req, res, next) => {
         stockItemId,
         itemName: requestedItem.item_name,
       });
+
+      const blockingRecall = await findActiveRecallBlocker(client, {
+        stockItemId: stockItem?.id ?? null,
+        itemName: requestedItem.item_name,
+      });
+
+      if (blockingRecall) {
+        await client.query('ROLLBACK');
+        return next(
+          createHttpError(
+            400,
+            `Issuance blocked for ${requestedItem.item_name} due to active recall/quarantine (ID ${blockingRecall.id}). ` +
+              'Coordinate with procurement before supplying this lot.',
+          ),
+        );
+      }
+
+      await client.query(
+        `INSERT INTO warehouse_supplied_items (request_id, item_id, supplied_quantity, supplied_by)
+         VALUES ($1,$2,$3,$4)`,
+        [requestId, itemId, parsedQuantity, userId]
+      );
+
+      suppliedMap[itemId] = newTotal;
 
       if (stockItem) {
         const movement = await decrementWarehouseStock(client, {

@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { sendEmail } = require('../utils/emailService');
+const ensureItemRecallsTable = require('../utils/ensureItemRecallsTable');
 
 const sanitizeString = value => (typeof value === 'string' ? value.trim() : '');
 
@@ -37,6 +38,7 @@ const selectVisibleRecallsQuery = `
     ir.id,
     ir.item_id,
     ir.item_name,
+    ir.lot_number,
     ir.quantity,
     ir.reason,
     ir.notes,
@@ -48,6 +50,9 @@ const selectVisibleRecallsQuery = `
     ir.escalated_at,
     ir.escalated_by_user_id,
     ir.warehouse_notes,
+    ir.quarantine_active,
+    ir.quarantine_reason,
+    ir.quarantine_started_at,
     ir.created_at,
     ir.updated_at,
     d.name AS department_name
@@ -59,6 +64,26 @@ const procurementNotificationRoles = [
   'ProcurementSpecialist',
   'SCM',
 ];
+
+const blockingStatuses = [
+  'pending warehouse review',
+  'pending procurement action',
+  'quarantined - block issuance',
+];
+
+const loadProcurementRecipients = async client => {
+  const runner = client || pool;
+  const procurementUsers = await runner.query(
+    `SELECT email, name
+       FROM users
+      WHERE role = ANY($1)
+        AND is_active = TRUE
+        AND email IS NOT NULL`,
+    [procurementNotificationRoles],
+  );
+
+  return procurementUsers.rows.map(row => row.email).filter(Boolean);
+};
 
 const fetchStockItemName = async itemId => {
   const { rows } = await pool.query(
@@ -74,6 +99,8 @@ const fetchStockItemName = async itemId => {
 };
 
 const listVisibleRecalls = async (req, res, next) => {
+  await ensureItemRecallsTable();
+
   if (!canViewRecalls(req.user)) {
     return next(createHttpError(403, 'Not authorized to view recall requests'));
   }
@@ -99,10 +126,13 @@ const listVisibleRecalls = async (req, res, next) => {
 };
 
 const createDepartmentRecallRequest = async (req, res, next) => {
+  await ensureItemRecallsTable();
+
   const { id: userId, department_id: departmentId } = req.user || {};
   const {
     item_id: rawItemId,
     item_name: rawItemName,
+    lot_number: rawLotNumber,
     quantity: rawQuantity,
     reason: rawReason,
     notes: rawNotes,
@@ -159,11 +189,14 @@ const createDepartmentRecallRequest = async (req, res, next) => {
     return next(createHttpError(400, 'Quantity must be a positive number if provided'));
   }
 
+  const lotNumber = sanitizeString(rawLotNumber);
+
   try {
     const { rows } = await pool.query(
       `INSERT INTO item_recalls (
         item_id,
         item_name,
+        lot_number,
         quantity,
         reason,
         notes,
@@ -177,8 +210,9 @@ const createDepartmentRecallRequest = async (req, res, next) => {
         $3,
         $4,
         NULLIF($5, ''),
-        $6,
+        NULLIF($6, ''),
         $7,
+        $8,
         'department_to_warehouse',
         'Pending Warehouse Review'
       )
@@ -186,6 +220,7 @@ const createDepartmentRecallRequest = async (req, res, next) => {
       [
         itemId,
         itemName,
+        lotNumber,
         quantity,
         reason,
         notes,
@@ -206,6 +241,8 @@ const createDepartmentRecallRequest = async (req, res, next) => {
 };
 
 const createWarehouseRecallRequest = async (req, res, next) => {
+  await ensureItemRecallsTable();
+
   const { id: userId, department_id: departmentId } = req.user || {};
 
   if (!isWarehouseUser(req.user)) {
@@ -223,6 +260,7 @@ const createWarehouseRecallRequest = async (req, res, next) => {
   const {
     item_id: rawItemId,
     item_name: rawItemName,
+    lot_number: rawLotNumber,
     quantity: rawQuantity,
     reason: rawReason,
     notes: rawNotes,
@@ -280,6 +318,8 @@ const createWarehouseRecallRequest = async (req, res, next) => {
     return next(createHttpError(400, 'Quantity must be a positive number if provided'));
   }
 
+  const lotNumber = sanitizeString(rawLotNumber);
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -287,6 +327,7 @@ const createWarehouseRecallRequest = async (req, res, next) => {
       `INSERT INTO item_recalls (
         item_id,
         item_name,
+        lot_number,
         quantity,
         reason,
         notes,
@@ -297,47 +338,47 @@ const createWarehouseRecallRequest = async (req, res, next) => {
         escalated_to_procurement,
         escalated_at,
         escalated_by_user_id,
-        warehouse_notes
+        warehouse_notes,
+        quarantine_active,
+        quarantine_reason,
+        quarantine_started_at
       ) VALUES (
         $1,
         $2,
         $3,
         $4,
         NULLIF($5, ''),
-        $6,
+        NULLIF($6, ''),
         $7,
+        $8,
         'warehouse_to_procurement',
-        'Pending Procurement Action',
+        'Quarantined - Block Issuance',
         TRUE,
         CURRENT_TIMESTAMP,
-        $7,
-        NULLIF($8, '')
+        $8,
+        NULLIF($9, ''),
+        TRUE,
+        NULLIF($10, ''),
+        CURRENT_TIMESTAMP
       )
       RETURNING *`,
       [
         itemId,
         itemName,
+        lotNumber,
         quantity,
         reason,
         notes,
         departmentId,
         userId,
         warehouseNotes,
+        reason,
       ],
     );
 
     const recall = insertResult.rows[0];
 
-    const procurementUsers = await client.query(
-      `SELECT email, name
-         FROM users
-        WHERE role = ANY($1)
-          AND is_active = TRUE
-          AND email IS NOT NULL`,
-      [procurementNotificationRoles],
-    );
-
-    const recipients = procurementUsers.rows.map(row => row.email).filter(Boolean);
+    const recipients = await loadProcurementRecipients(client);
 
     await client.query('COMMIT');
 
@@ -388,6 +429,8 @@ const escalateRecallToProcurement = async (req, res, next) => {
     return next(createHttpError(400, 'Invalid recall identifier'));
   }
 
+  await ensureItemRecallsTable();
+
   const { id: userId } = req.user || {};
   if (!isWarehouseUser(req.user)) {
     return next(createHttpError(403, 'Only warehouse staff can escalate recalls'));
@@ -429,16 +472,7 @@ const escalateRecallToProcurement = async (req, res, next) => {
 
     const recall = rows[0];
 
-    const procurementUsers = await pool.query(
-      `SELECT email
-         FROM users
-        WHERE role = ANY($1)
-          AND is_active = TRUE
-          AND email IS NOT NULL`,
-      [procurementNotificationRoles],
-    );
-
-    const recipients = procurementUsers.rows.map(row => row.email).filter(Boolean);
+    const recipients = await loadProcurementRecipients();
     if (recipients.length > 0) {
       const messageLines = [
         `A department recall has been escalated for ${recall.item_name}.`,
@@ -474,9 +508,109 @@ const escalateRecallToProcurement = async (req, res, next) => {
   }
 };
 
+const quarantineRecall = async (req, res, next) => {
+  const recallId = Number(req.params.id);
+  if (!Number.isInteger(recallId) || recallId <= 0) {
+    return next(createHttpError(400, 'Invalid recall identifier'));
+  }
+
+  if (!isWarehouseUser(req.user) && !isProcurementUser(req.user)) {
+    return next(createHttpError(403, 'You do not have permission to quarantine recalls'));
+  }
+
+  if (!req.user?.hasPermission || !req.user.hasPermission('recalls.manage')) {
+    return next(createHttpError(403, 'You do not have permission to quarantine recalls'));
+  }
+
+  const { quarantine_reason: rawReason, lot_number: rawLotNumber } = req.body || {};
+  const quarantineReason = sanitizeString(rawReason) || 'Lot quarantined pending supplier corrective action.';
+  const lotNumber = sanitizeString(rawLotNumber);
+
+  await ensureItemRecallsTable();
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const existingRes = await client.query(
+      `SELECT id, item_name, lot_number, quarantine_active, status
+         FROM item_recalls
+        WHERE id = $1
+        FOR UPDATE`,
+      [recallId],
+    );
+
+    if (existingRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Recall request not found'));
+    }
+
+    const existing = existingRes.rows[0];
+
+    if (existing.quarantine_active && blockingStatuses.includes(existing.status?.toLowerCase?.())) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Recall is already quarantined'));
+    }
+
+    const { rows } = await client.query(
+      `UPDATE item_recalls
+          SET status = 'Quarantined - Block Issuance',
+              quarantine_active = TRUE,
+              quarantine_reason = NULLIF($2, ''),
+              lot_number = COALESCE(NULLIF($3, ''), lot_number),
+              quarantine_started_at = COALESCE(quarantine_started_at, CURRENT_TIMESTAMP),
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        RETURNING *`,
+      [recallId, quarantineReason, lotNumber],
+    );
+
+    const recall = rows[0];
+
+    const recipients = await loadProcurementRecipients(client);
+    await client.query('COMMIT');
+
+    if (recipients.length > 0) {
+      const detailLines = [
+        `Lot ${recall.lot_number || 'unspecified'} for ${recall.item_name} has been quarantined.`,
+        '',
+        `Reason: ${quarantineReason}`,
+        '',
+        'Please coordinate supplier corrective actions and confirm replacement stock before lifting the quarantine.',
+      ];
+
+      try {
+        await sendEmail(
+          recipients,
+          'Quarantine initiated - supplier corrective action required',
+          detailLines.join('\n'),
+        );
+      } catch (emailErr) {
+        console.error('⚠️ Failed to send quarantine notification:', emailErr);
+      }
+    }
+
+    res.json({
+      message: 'Recall quarantined and issuance blocked for the flagged lot',
+      recall,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to quarantine recall:', err);
+    if (err.statusCode) {
+      return next(err);
+    }
+    next(createHttpError(500, 'Failed to quarantine recall'));
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   listVisibleRecalls,
   createDepartmentRecallRequest,
   createWarehouseRecallRequest,
   escalateRecallToProcurement,
+  quarantineRecall,
 };

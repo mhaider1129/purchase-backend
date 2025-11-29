@@ -6,6 +6,7 @@ const {
   findOrCreateSupplierByName,
   getSupplierById,
 } = require('./suppliersController');
+const { getComplianceStatusBySupplierIds } = require('./supplierSrmController');
 
 const CONTRACT_STATUSES = [
   'draft',
@@ -803,7 +804,7 @@ const toISODateString = (value) => {
   return date.toISOString().slice(0, 10);
 };
 
-const serializeContract = (row) => {
+const serializeContract = (row, compliance = null) => {
   if (!row) return null;
 
   const contractValue =
@@ -868,6 +869,7 @@ const serializeContract = (row) => {
     updated_at: row.updated_at,
     days_until_expiry: daysUntilExpiry,
     is_expired: typeof daysUntilExpiry === 'number' ? daysUntilExpiry < 0 : false,
+    supplier_compliance: compliance,
   };
 };
 
@@ -913,7 +915,18 @@ const listContracts = async (req, res, next) => {
       values
     );
 
-    res.json(rows.map(serializeContract));
+    const supplierIds = Array.from(
+      new Set(
+        rows
+          .map(row => Number(row.supplier_id))
+          .filter(value => Number.isInteger(value) && value > 0)
+      )
+    );
+    const complianceMap = await getComplianceStatusBySupplierIds(supplierIds);
+
+    res.json(
+      rows.map(row => serializeContract(row, complianceMap.get(row.supplier_id) || null))
+    );
   } catch (err) {
     console.error('❌ Failed to list contracts:', err);
     if (err.statusCode) {
@@ -946,7 +959,8 @@ const getContractById = async (req, res, next) => {
       return next(createHttpError(404, 'Contract not found'));
     }
 
-    res.json(serializeContract(rows[0]));
+    const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
+    res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
   } catch (err) {
     console.error('❌ Failed to fetch contract:', err);
     next(createHttpError(500, 'Failed to fetch contract'));
@@ -1043,7 +1057,8 @@ const createContract = async (req, res, next) => {
       ]
     );
 
-    const contract = serializeContract(rows[0]);
+    const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
+    const contract = serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null);
     await ensureContractEvaluationsTable();
     const { rows: criteria } = await client.query('SELECT * FROM evaluation_criteria');
     for (const criterion of criteria) {
@@ -1275,7 +1290,8 @@ const updateContract = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
-    res.json(serializeContract(rows[0]));
+    const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
+    res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (err?.code === '23505') {
@@ -1313,7 +1329,8 @@ const archiveContract = async (req, res, next) => {
       return next(createHttpError(404, 'Contract not found'));
     }
 
-    res.json(serializeContract(rows[0]));
+    const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
+    res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
   } catch (err) {
     console.error('❌ Failed to archive contract:', err);
     next(createHttpError(500, 'Failed to archive contract'));

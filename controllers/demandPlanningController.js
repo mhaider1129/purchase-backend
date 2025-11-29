@@ -1,6 +1,6 @@
 
-const pool = require('../../config/db');
-const createHttpError = require('../../utils/httpError');
+const pool = require('../config/db');
+const createHttpError = require('../utils/httpError');
 
 const DEFAULT_HISTORY_MONTHS = 12;
 

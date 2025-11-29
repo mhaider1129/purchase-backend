@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateUser } = require('../middleware/authMiddleware');
-const { getDemandForecast, calculateSafetyStock, runMrp } = require('../controllers/planning/demandPlanningController');
+const { getDemandForecast, calculateSafetyStock, runMrp } = require('../controllers/demandPlanningController');
 
 router.use(authenticateUser);
 

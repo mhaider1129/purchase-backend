@@ -3,6 +3,42 @@
 
 BEGIN;
 
+-- Ensure pgcrypto is available for gen_random_uuid() usage.
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Sequences backing serial/identity-like integer columns.
+CREATE SEQUENCE IF NOT EXISTS public.approval_logs_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.approval_routes_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.approvals_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.attachments_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.audit_logs_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.contract_evaluations_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.contracts_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.custody_records_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.departments_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.evaluation_criteria_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.item_recalls_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.maintenance_stock_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.notifications_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.permissions_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.procurement_plans_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.request_logs_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.requested_items_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.requests_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.roles_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.sections_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.stock_items_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_stock_levels_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_stock_movements_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.supplier_evaluations_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.technical_inspections_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.user_registration_requests_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.users_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_supplied_items_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_supply_items_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_supply_templates_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouses_id_seq;
+
 CREATE TABLE IF NOT EXISTS public.approval_logs (
   id integer NOT NULL DEFAULT nextval('approval_logs_id_seq'::regclass),
   approval_id integer,
@@ -458,7 +494,7 @@ CREATE TABLE IF NOT EXISTS public.ui_resource_permissions (
   resource_key text NOT NULL,
   label text NOT NULL,
   description text,
-  permissions ARRAY NOT NULL DEFAULT '{}'::text[],
+  permissions text[] NOT NULL DEFAULT '{}'::text[],
   require_all boolean NOT NULL DEFAULT false,
   CONSTRAINT ui_resource_permissions_pkey PRIMARY KEY (resource_key)
 );

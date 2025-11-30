@@ -68,7 +68,13 @@ const defaultResources = [
     resourceKey: 'feature.management',
     label: 'System Management',
     description: 'Shows the system management workspace.',
-    permissions: ['users.manage', 'departments.manage', 'permissions.manage', 'projects.manage'],
+    permissions: [
+      'users.manage',
+      'departments.manage',
+      'permissions.manage',
+      'projects.manage',
+      'roles.manage',
+    ],
     requireAll: false,
   },
   {

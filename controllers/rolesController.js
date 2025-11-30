@@ -1,7 +1,21 @@
 const pool = require('../config/db');
 
+const canManageRoles = (req) =>
+  Boolean(req.user?.hasAnyPermission?.(['roles.manage', 'permissions.manage']));
+
+const ensureCanManageRoles = (req, res) => {
+  if (canManageRoles(req)) {
+    return true;
+  }
+
+  res.status(403).json({ message: 'You do not have permission to manage roles' });
+  return false;
+};
+
 const getRoles = async (req, res) => {
   try {
+    if (!ensureCanManageRoles(req, res)) return;
+
     const { rows } = await pool.query('SELECT id, name FROM roles ORDER BY name');
     res.json(rows);
   } catch (err) {
@@ -16,6 +30,8 @@ const createRole = async (req, res) => {
     return res.status(400).json({ message: 'Role name is required' });
   }
   try {
+    if (!ensureCanManageRoles(req, res)) return;
+
     const { rows } = await pool.query(
       'INSERT INTO roles (name) VALUES ($1) RETURNING id, name',
       [name.trim()]
@@ -39,6 +55,8 @@ const updateRole = async (req, res) => {
   }
 
   try {
+    if (!ensureCanManageRoles(req, res)) return;
+
     const { rows } = await pool.query(
       'UPDATE roles SET name = $1 WHERE id = $2 RETURNING id, name',
       [name.trim(), id]
@@ -62,6 +80,8 @@ const deleteRole = async (req, res) => {
   const { id } = req.params;
 
   try {
+    if (!ensureCanManageRoles(req, res)) return;
+
     const { rowCount } = await pool.query('DELETE FROM roles WHERE id = $1', [id]);
 
     if (!rowCount) {

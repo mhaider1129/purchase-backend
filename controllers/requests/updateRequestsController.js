@@ -909,6 +909,299 @@ const updateRequestCost = async (req, res, next) => {
   }
 };
 
+const updateRequestBeforeApproval = async (req, res, next) => {
+  const requestId = Number(req.params.id);
+  let { items, justification } = req.body;
+  const projectIdInput = req.body?.project_id;
+  const temporaryRequesterName = req.body?.temporary_requester_name;
+  const supplyWarehouseInput = req.body?.supply_warehouse_id;
+
+  if (!Number.isInteger(requestId)) {
+    return next(createHttpError(400, 'Invalid request ID'));
+  }
+
+  if (typeof items === 'string') {
+    try {
+      items = JSON.parse(items);
+    } catch (err) {
+      return next(createHttpError(400, 'Invalid items payload'));
+    }
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return next(createHttpError(400, 'At least one item is required to update the request'));
+  }
+
+  const sanitizedItems = [];
+
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx] || {};
+    const itemName = typeof item.item_name === 'string' ? item.item_name.trim() : '';
+
+    if (!itemName) {
+      return next(createHttpError(400, `Item ${idx + 1} is missing a valid name`));
+    }
+
+    const parsedQuantity = Number(
+      typeof item.quantity === 'string' ? item.quantity.trim() : item.quantity,
+    );
+
+    if (!Number.isInteger(parsedQuantity) || parsedQuantity <= 0) {
+      return next(createHttpError(400, `Item ${idx + 1} must have a whole number quantity greater than 0`));
+    }
+
+    const hasUnitCost =
+      item.unit_cost !== undefined &&
+      item.unit_cost !== null &&
+      !(typeof item.unit_cost === 'string' && item.unit_cost.trim() === '');
+
+    let parsedUnitCost = null;
+
+    if (hasUnitCost) {
+      const normalizedUnitCost =
+        typeof item.unit_cost === 'string' ? item.unit_cost.trim() : item.unit_cost;
+      const numericUnitCost = Number(normalizedUnitCost);
+
+      if (!Number.isFinite(numericUnitCost) || numericUnitCost < 0) {
+        return next(
+          createHttpError(
+            400,
+            `Item ${idx + 1} has an invalid unit cost; provide a non-negative whole number`,
+          ),
+        );
+      }
+
+      if (!Number.isInteger(numericUnitCost)) {
+        return next(
+          createHttpError(400, `Item ${idx + 1} unit cost must be a whole number without decimals`),
+        );
+      }
+
+      parsedUnitCost = numericUnitCost;
+    }
+
+    sanitizedItems.push({
+      item_name: itemName,
+      brand: item.brand || null,
+      quantity: parsedQuantity,
+      unit_cost: parsedUnitCost,
+      total_cost: parsedUnitCost !== null ? parsedUnitCost * parsedQuantity : null,
+      available_quantity: item.available_quantity || null,
+      intended_use: item.intended_use || null,
+      specs: item.specs || null,
+    });
+  }
+
+  const client = await pool.connect();
+  let transactionActive = false;
+
+  try {
+    await client.query('BEGIN');
+    transactionActive = true;
+
+    const requestRes = await client.query(
+      `SELECT id, requester_id, status, request_type, department_id, request_domain, temporary_requester_name, project_id, supply_warehouse_id
+         FROM requests
+        WHERE id = $1
+        FOR UPDATE`,
+      [requestId],
+    );
+
+    if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      transactionActive = false;
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const requestRow = requestRes.rows[0];
+
+    if (requestRow.requester_id !== req.user.id) {
+      await client.query('ROLLBACK');
+      transactionActive = false;
+      return next(createHttpError(403, 'Only the requester can edit this submission'));
+    }
+
+    const normalizedStatus = (requestRow.status || '').trim().toLowerCase();
+    if (['approved', 'rejected', 'completed', 'received', 'cancelled'].includes(normalizedStatus)) {
+      await client.query('ROLLBACK');
+      transactionActive = false;
+      return next(createHttpError(400, 'This request can no longer be edited'));
+    }
+
+    const approvalLogs = await client.query(
+      `SELECT 1 FROM approval_logs WHERE request_id = $1 LIMIT 1`,
+      [requestId],
+    );
+
+    const approvalsProgressed = await client.query(
+      `SELECT 1
+         FROM approvals
+        WHERE request_id = $1
+          AND status IN ('Approved', 'Rejected')
+          AND approver_id IS DISTINCT FROM $2
+        LIMIT 1`,
+      [requestId, requestRow.requester_id],
+    );
+
+    if (approvalLogs.rowCount > 0 || approvalsProgressed.rowCount > 0) {
+      await client.query('ROLLBACK');
+      transactionActive = false;
+      return next(createHttpError(400, 'You can only edit a request before any approvals have occurred'));
+    }
+
+    let projectId = requestRow.project_id;
+    if (projectIdInput !== undefined && projectIdInput !== null && projectIdInput !== '') {
+      const candidate = String(projectIdInput).trim();
+      const uuidPattern =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidPattern.test(candidate)) {
+        await client.query('ROLLBACK');
+        transactionActive = false;
+        return next(createHttpError(400, 'Invalid project selected'));
+      }
+      projectId = candidate;
+    }
+
+    let supplyWarehouseId = requestRow.supply_warehouse_id;
+    if (requestRow.request_type === 'Warehouse Supply') {
+      const candidateWarehouseId = supplyWarehouseInput ?? supplyWarehouseId;
+      if (candidateWarehouseId === null || candidateWarehouseId === undefined || candidateWarehouseId === '') {
+        await client.query('ROLLBACK');
+        transactionActive = false;
+        return next(createHttpError(400, 'Select the warehouse fulfilling this supply request'));
+      }
+
+      const parsedWarehouseId = Number(candidateWarehouseId);
+      if (!Number.isInteger(parsedWarehouseId)) {
+        await client.query('ROLLBACK');
+        transactionActive = false;
+        return next(createHttpError(400, 'Supply warehouse must be a valid warehouse ID'));
+      }
+
+      const warehouseCheck = await client.query(
+        `SELECT id FROM warehouses WHERE id = $1`,
+        [parsedWarehouseId],
+      );
+
+      if (warehouseCheck.rowCount === 0) {
+        await client.query('ROLLBACK');
+        transactionActive = false;
+        return next(createHttpError(400, 'Selected warehouse does not exist'));
+      }
+
+      supplyWarehouseId = parsedWarehouseId;
+    }
+
+    const estimatedCost =
+      requestRow.request_type === 'Stock'
+        ? 0
+        : sanitizedItems.reduce((sum, item) => {
+            if (item.unit_cost === null || item.unit_cost === undefined) {
+              return sum;
+            }
+            return sum + item.quantity * item.unit_cost;
+          }, 0);
+
+    const normalizedTempRequesterName =
+      requestRow.request_type === 'Maintenance'
+        ? typeof temporaryRequesterName === 'string'
+          ? temporaryRequesterName.trim()
+          : requestRow.temporary_requester_name || null
+        : null;
+
+    await client.query(
+      `UPDATE requests
+          SET justification = $1,
+              estimated_cost = $2,
+              updated_at = CURRENT_TIMESTAMP,
+              temporary_requester_name = $3,
+              project_id = $4,
+              supply_warehouse_id = $5
+        WHERE id = $6`,
+      [
+        justification || requestRow.justification || null,
+        estimatedCost,
+        normalizedTempRequesterName,
+        projectId,
+        supplyWarehouseId,
+        requestId,
+      ],
+    );
+
+    if (requestRow.request_type === 'Warehouse Supply') {
+      await client.query(`DELETE FROM warehouse_supply_items WHERE request_id = $1`, [requestId]);
+
+      for (const item of sanitizedItems) {
+        await client.query(
+          `INSERT INTO warehouse_supply_items (request_id, item_name, quantity)
+             VALUES ($1, $2, $3)`,
+          [requestId, item.item_name, item.quantity],
+        );
+      }
+    } else {
+      await client.query(`UPDATE attachments SET item_id = NULL WHERE request_id = $1`, [requestId]);
+      await client.query(`DELETE FROM requested_items WHERE request_id = $1`, [requestId]);
+
+      for (const item of sanitizedItems) {
+        await client.query(
+          `INSERT INTO public.requested_items (
+              request_id,
+              item_name,
+              brand,
+              quantity,
+              unit_cost,
+              total_cost,
+              available_quantity,
+              intended_use,
+              specs
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            requestId,
+            item.item_name,
+            item.brand || null,
+            item.quantity,
+            item.unit_cost,
+            item.total_cost,
+            item.available_quantity,
+            item.intended_use,
+            item.specs,
+          ],
+        );
+      }
+    }
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Updated by Requester', $2, $3)`,
+      [requestId, req.user.id, justification || 'Edited before approvals started'],
+    );
+
+    await client.query('COMMIT');
+    transactionActive = false;
+
+    res.json({
+      message: '✅ Request updated successfully',
+      request_id: requestId,
+      estimated_cost: estimatedCost,
+    });
+  } catch (err) {
+    if (transactionActive) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('⚠️ Failed to rollback request edit:', rollbackErr);
+      }
+    }
+    console.error('❌ Failed to update request before approvals:', err);
+    if (err?.statusCode) {
+      return next(err);
+    }
+    return next(createHttpError(500, 'Failed to update request'));
+  } finally {
+    client.release();
+  }
+};
+
 const approveMaintenanceRequest = async (req, res, next) => {
   const { request_id, decision, comments = '' } = req.body;
   const user_id = req.user.id;

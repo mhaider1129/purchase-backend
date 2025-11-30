@@ -308,6 +308,22 @@ const getMyRequests = async (req, res, next) => {
         ap.approval_level AS current_approval_level,
         au.role AS current_approver_role,
         au.name AS current_approver_name,
+        (
+          EXISTS (
+            SELECT 1
+              FROM approval_logs al
+             WHERE al.request_id = r.id
+             LIMIT 1
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM approvals a
+             WHERE a.request_id = r.id
+               AND a.status IN ('Approved', 'Rejected')
+               AND a.approver_id IS DISTINCT FROM r.requester_id
+             LIMIT 1
+          )
+        ) AS has_approval_activity,
         EXISTS (
           SELECT 1 FROM approvals a
           WHERE a.request_id = r.id AND a.is_urgent = true

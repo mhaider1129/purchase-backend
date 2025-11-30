@@ -28,6 +28,7 @@ const {
   markRequestAsCompleted,
   markRequestAsReceived,
   updateRequestCost,
+  updateRequestBeforeApproval,
   approveMaintenanceRequest,
   reassignMaintenanceRequestToRequester,
 } = require('./requests/updateRequestsController');
@@ -58,6 +59,7 @@ module.exports = {
   markRequestAsCompleted,
   markRequestAsReceived,
   updateRequestCost,
+  updateRequestBeforeApproval,
   getAuditApprovedRejectedRequests,
   getClosedRequests,
   generateRfx,

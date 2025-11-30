@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS public.contracts (
   start_date date,
   end_date date,
   contract_value numeric,
+  amount_paid numeric DEFAULT 0,
   status text NOT NULL DEFAULT 'active'::text,
   description text,
   created_by integer,

@@ -30,6 +30,7 @@ const {
   markRequestAsCompleted,
   markRequestAsReceived,
   updateRequestCost,
+  updateRequestBeforeApproval,
   getClosedRequests,
   getAuditApprovedRejectedRequests
 } = require('../controllers/requestsController');
@@ -68,6 +69,7 @@ router.post('/:id/request-hod-approval', requestHodApproval); // Insert addition
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.put('/:id/cost', authenticateUser, updateRequestCost);
+router.put('/:id/edit', upload.any(), updateRequestBeforeApproval);
 
 
 // ==========================

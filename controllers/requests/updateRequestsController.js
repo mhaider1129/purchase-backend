@@ -1568,6 +1568,7 @@ module.exports = {
   markRequestAsCompleted,
   markRequestAsReceived,
   updateRequestCost,
+  updateRequestBeforeApproval,
   approveMaintenanceRequest,
   reassignMaintenanceRequestToRequester,
 };

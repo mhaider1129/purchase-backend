@@ -33,11 +33,7 @@ const ensureWarehouseInventoryTables = async (client = pool) => {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_wsl_warehouse_item ON public.warehouse_stock_levels(warehouse_id, stock_item_id)`,
     `CREATE INDEX IF NOT EXISTS idx_wsm_direction_created ON public.warehouse_stock_movements(direction, created_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_wsm_department ON public.warehouse_stock_movements(to_department_id)`,
-    `ALTER TABLE public.warehouse_stock_levels DROP CONSTRAINT IF EXISTS warehouse_stock_levels_warehouse_id_fkey`,
-    `ALTER TABLE public.warehouse_stock_levels ADD CONSTRAINT warehouse_stock_levels_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)`,
-    `ALTER TABLE public.warehouse_stock_movements DROP CONSTRAINT IF EXISTS warehouse_stock_movements_warehouse_id_fkey`,
-    `ALTER TABLE public.warehouse_stock_movements ADD CONSTRAINT warehouse_stock_movements_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)`
+    `CREATE INDEX IF NOT EXISTS idx_wsm_department ON public.warehouse_stock_movements(to_department_id)`
   ];
 
   for (const statement of statements) {

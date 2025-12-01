@@ -393,7 +393,7 @@ const getEvaluationCandidates = async (req, res, next) => {
     client = await pool.connect();
 
     const contractResult = await client.query(
-      `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
+      `SELECT id, title, vendor, reference_number, start_date, end_date, contract_value, amount_paid, status, description,
               delivery_terms, warranty_terms, performance_management,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
@@ -474,6 +474,7 @@ const ensureContractsTable = (() => {
   let linkageColumnsEnsured = false;
   let supplierForeignKeyEnsured = false;
   let requestForeignKeyEnsured = false;
+  let amountPaidColumnEnsured = false;
   let ensuringPromise = null;
 
   const ensureTableStructure = async () => {
@@ -486,6 +487,7 @@ const ensureContractsTable = (() => {
         start_date DATE,
         end_date DATE,
         contract_value NUMERIC(14, 2),
+        amount_paid NUMERIC(14, 2) DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'active',
         description TEXT,
         delivery_terms TEXT,
@@ -518,6 +520,26 @@ const ensureContractsTable = (() => {
     `);
 
     assignmentColumnsEnsured = true;
+  };
+
+  const ensureAmountPaidColumn = async () => {
+    if (amountPaidColumnEnsured) {
+      return;
+    }
+
+    try {
+      await pool.query(`
+        ALTER TABLE contracts
+          ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(14, 2) DEFAULT 0
+      `);
+      amountPaidColumnEnsured = true;
+    } catch (err) {
+      if (err?.code === '42P01') {
+        console.warn('⚠️ Contracts table missing; will retry ensuring amount_paid column later.');
+      } else {
+        throw err;
+      }
+    }
   };
 
   const ensureLinkageColumns = async () => {
@@ -685,6 +707,7 @@ const ensureContractsTable = (() => {
       indexSatisfied &&
       foreignKeyEnsured &&
       assignmentColumnsEnsured &&
+      amountPaidColumnEnsured &&
       endUserForeignKeyEnsured &&
       contractManagerForeignKeyEnsured &&
       linkageColumnsEnsured &&
@@ -704,6 +727,10 @@ const ensureContractsTable = (() => {
 
           if (!assignmentColumnsEnsured) {
             await ensureAssignmentColumns();
+          }
+
+          if (!amountPaidColumnEnsured) {
+            await ensureAmountPaidColumn();
           }
 
           if (!linkageColumnsEnsured) {
@@ -773,6 +800,23 @@ const parseContractValue = (value) => {
   return numeric;
 };
 
+const parseAmountPaid = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) {
+    throw createHttpError(400, 'amount_paid must be a valid number');
+  }
+
+  if (numeric < 0) {
+    throw createHttpError(400, 'amount_paid cannot be negative');
+  }
+
+  return numeric;
+};
+
 const resolveSupplier = async (client, { supplierId, vendorName }) => {
   const normalizedVendor = normalizeText(vendorName);
 
@@ -812,6 +856,9 @@ const serializeContract = (row, compliance = null) => {
       ? null
       : Number(row.contract_value);
 
+  const amountPaidValue =
+    row.amount_paid === null || row.amount_paid === undefined ? null : Number(row.amount_paid);
+
   const now = new Date();
   now.setHours(0, 0, 0, 0);
 
@@ -846,6 +893,12 @@ const serializeContract = (row, compliance = null) => {
       ? sourceRequestIdValue
       : null;
 
+  const paidPercentage =
+    typeof contractValue === 'number' && Number.isFinite(contractValue) && contractValue > 0 &&
+    typeof amountPaidValue === 'number' && Number.isFinite(amountPaidValue)
+      ? Number(Math.min((amountPaidValue / contractValue) * 100, 9999).toFixed(2))
+      : null;
+
   return {
     id: row.id,
     title: row.title,
@@ -856,6 +909,8 @@ const serializeContract = (row, compliance = null) => {
     start_date: toISODateString(row.start_date),
     end_date: toISODateString(row.end_date),
     contract_value: Number.isNaN(contractValue) ? null : contractValue,
+    amount_paid: Number.isNaN(amountPaidValue) ? null : amountPaidValue,
+    paid_percentage: paidPercentage,
     status: row.status,
     description: row.description,
     delivery_terms: row.delivery_terms,
@@ -906,7 +961,7 @@ const listContracts = async (req, res, next) => {
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
       `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date,
-              contract_value, status, description, delivery_terms, warranty_terms, performance_management,
+              contract_value, amount_paid, status, description, delivery_terms, warranty_terms, performance_management,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -946,7 +1001,7 @@ const getContractById = async (req, res, next) => {
     await ensureContractsTable();
     const { rows } = await pool.query(
       `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date,
-              contract_value, status, description, delivery_terms, warranty_terms, performance_management,
+              contract_value, amount_paid, status, description, delivery_terms, warranty_terms, performance_management,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -996,6 +1051,7 @@ const createContract = async (req, res, next) => {
   let startDate;
   let endDate;
   let contractValue;
+  let amountPaid;
   let endUserDepartmentId = null;
   let contractManagerId = null;
   let technicalDepartmentIds = [];
@@ -1005,11 +1061,22 @@ const createContract = async (req, res, next) => {
     startDate = parseISODate(req.body?.start_date, 'start_date');
     endDate = parseISODate(req.body?.end_date, 'end_date');
     contractValue = parseContractValue(req.body?.contract_value);
+    amountPaid = parseAmountPaid(req.body?.amount_paid);
     endUserDepartmentId = parseOptionalInteger(req.body?.end_user_department_id, 'end_user_department_id');
     contractManagerId = parseOptionalInteger(req.body?.contract_manager_id, 'contract_manager_id');
     technicalDepartmentIds = normalizeIdArray(req.body?.technical_department_ids);
     supplierId = parseOptionalInteger(req.body?.supplier_id, 'supplier_id');
     sourceRequestId = parseOptionalInteger(req.body?.source_request_id, 'source_request_id');
+
+    if (
+      typeof contractValue === 'number' &&
+      contractValue !== null &&
+      typeof amountPaid === 'number' &&
+      amountPaid !== null &&
+      amountPaid > contractValue
+    ) {
+      throw createHttpError(400, 'amount_paid cannot exceed contract_value');
+    }
   } catch (err) {
     return next(err);
   }
@@ -1027,11 +1094,11 @@ const createContract = async (req, res, next) => {
     await assertRequestExists(client, sourceRequestId);
     const { rows } = await client.query(
       `INSERT INTO contracts (
-         title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, status, description,
+         title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, amount_paid, status, description,
          delivery_terms, warranty_terms, performance_management, created_by,
          end_user_department_id, contract_manager_id, technical_department_ids
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-       RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, status, description,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       RETURNING id, title, vendor, reference_number, start_date, end_date, contract_value, amount_paid, status, description,
                  delivery_terms, warranty_terms, performance_management,
                  supplier_id, source_request_id,
                  end_user_department_id, contract_manager_id, technical_department_ids,
@@ -1045,6 +1112,7 @@ const createContract = async (req, res, next) => {
         startDate,
         endDate,
         contractValue,
+        amountPaid,
         status,
         description,
         deliveryTerms,
@@ -1122,7 +1190,7 @@ const updateContract = async (req, res, next) => {
   try {
     await ensureContractsTable();
     const current = await client.query(
-      `SELECT id, start_date, end_date, vendor, supplier_id, source_request_id
+      `SELECT id, start_date, end_date, vendor, supplier_id, source_request_id, contract_value, amount_paid
          FROM contracts
         WHERE id = $1
         LIMIT 1`,
@@ -1134,6 +1202,16 @@ const updateContract = async (req, res, next) => {
     }
 
     existing = current.rows[0];
+
+    const existingContractValue =
+      existing.contract_value === null || existing.contract_value === undefined
+        ? null
+        : Number(existing.contract_value);
+    const existingAmountPaid =
+      existing.amount_paid === null || existing.amount_paid === undefined ? null : Number(existing.amount_paid);
+
+    let nextContractValue = existingContractValue;
+    let nextAmountPaid = existingAmountPaid;
 
     const assignments = [];
     const values = [];
@@ -1226,7 +1304,15 @@ const updateContract = async (req, res, next) => {
     }
 
     if (req.body?.contract_value !== undefined) {
-      pushAssignment('contract_value', parseContractValue(req.body.contract_value));
+      const parsedContractValue = parseContractValue(req.body.contract_value);
+      nextContractValue = parsedContractValue;
+      pushAssignment('contract_value', parsedContractValue);
+    }
+
+    if (req.body?.amount_paid !== undefined) {
+      const parsedAmountPaid = parseAmountPaid(req.body.amount_paid);
+      nextAmountPaid = parsedAmountPaid;
+      pushAssignment('amount_paid', parsedAmountPaid);
     }
 
     let supplierId;
@@ -1278,11 +1364,22 @@ const updateContract = async (req, res, next) => {
       return next(createHttpError(400, 'end_date must be after start_date'));
     }
 
+    if (
+      typeof nextContractValue === 'number' &&
+      nextContractValue !== null &&
+      typeof nextAmountPaid === 'number' &&
+      nextAmountPaid !== null &&
+      nextAmountPaid > nextContractValue
+    ) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'amount_paid cannot exceed contract_value'));
+    }
+
     const { rows } = await client.query(
       `UPDATE contracts
           SET ${assignments.join(', ')}
         WHERE id = $${values.length + 1}
-        RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, status, description,
+        RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, amount_paid, status, description,
                   delivery_terms, warranty_terms, performance_management,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
@@ -1320,7 +1417,9 @@ const archiveContract = async (req, res, next) => {
       `UPDATE contracts
           SET status = 'archived', updated_at = NOW()
         WHERE id = $1
-        RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, status, description,
+        RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, end_date, contract_value, amount_paid, status, description,
+                  delivery_terms, warranty_terms, performance_management,
+                  end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [contractId]
     );

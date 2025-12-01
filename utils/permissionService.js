@@ -27,6 +27,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'contracts.manage',
     'departments.manage',
     'evaluations.manage',
+    'roles.manage',
     'permissions.manage',
     'procurement.update-cost',
     'procurement.update-status',
@@ -59,6 +60,11 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+  {
+    code: 'roles.manage',
+    name: 'Manage roles',
+    description: 'Create, edit, and delete system roles.',
+  },
   {
     code: 'technical-inspections.manage',
     name: 'Manage technical inspections',

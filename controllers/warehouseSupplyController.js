@@ -13,6 +13,9 @@ const blockingRecallStatuses = [
   'quarantined - block issuance',
 ];
 
+const canViewOrSupplyWarehouseRequests = (user) =>
+  user && user.hasPermission('warehouse.manage-supply');
+
 const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
   if (Number.isInteger(stockItemId)) {
     const { rows } = await client.query(
@@ -144,7 +147,7 @@ const recordSuppliedItems = async (req, res, next) => {
 
   const warehouseId = req.user?.warehouse_id;
 
-  if (!req.user.hasPermission('warehouse.manage-supply')) {
+  if (!canViewOrSupplyWarehouseRequests(req.user)) {
     return next(createHttpError(403, 'You do not have permission to record supplied items'));
   }
 
@@ -412,7 +415,7 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
        LEFT JOIN sections s ON r.section_id = s.id
        LEFT JOIN warehouses w ON r.supply_warehouse_id = w.id
        WHERE r.request_type = 'Warehouse Supply'
-         AND r.status = 'Approved'
+         AND r.status IN ('Approved', 'Completed')
          AND r.supply_warehouse_id = $1
        ORDER BY r.created_at DESC`,
       [warehouseId]
@@ -462,4 +465,174 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
   }
 };
 
-module.exports = { recordSuppliedItems, getWarehouseSupplyRequests };
+const closeWarehouseSupplyRequest = async (req, res, next) => {
+  if (!canViewOrSupplyWarehouseRequests(req.user)) {
+    return next(createHttpError(403, 'You do not have permission to close warehouse supply requests'));
+  }
+
+  const { requestId } = req.params;
+  const warehouseId = req.user?.warehouse_id;
+
+  if (!Number.isInteger(Number(requestId))) {
+    return next(createHttpError(400, 'Invalid request ID'));
+  }
+
+  if (!Number.isInteger(warehouseId)) {
+    return next(createHttpError(400, 'You must belong to a warehouse to close supply requests'));
+  }
+
+  await ensureWarehouseAssignments();
+  await ensureWarehouseSupplyTables();
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const requestRes = await client.query(
+      `SELECT id, request_type, status, supply_warehouse_id
+         FROM requests
+        WHERE id = $1
+        FOR UPDATE`,
+      [requestId],
+    );
+
+    if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const request = requestRes.rows[0];
+
+    if (request.request_type !== 'Warehouse Supply') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Only warehouse supply requests can be closed here'));
+    }
+
+    if (request.supply_warehouse_id !== warehouseId) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'You cannot close requests for another warehouse'));
+    }
+
+    if (request.status === 'Completed') {
+      await client.query('ROLLBACK');
+      return res.status(200).json({ message: 'Request already completed', status: 'Completed' });
+    }
+
+    if (request.status !== 'Approved') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Only approved warehouse supply requests can be closed'));
+    }
+
+    await client.query(
+      `UPDATE requests
+          SET status = 'Completed',
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1`,
+      [requestId],
+    );
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, 'Warehouse request closed', $2, $3)`,
+      [requestId, req.user.id, 'Warehouse closed request without requiring full fulfillment'],
+    );
+
+    await client.query('COMMIT');
+
+    res.json({ message: 'Request closed', status: 'Completed' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to close warehouse supply request:', err);
+    if (err.statusCode) {
+      return next(err);
+    }
+    next(createHttpError(500, 'Failed to close warehouse supply request'));
+  } finally {
+    client.release();
+  }
+};
+
+// Prepare printable data for a warehouse supply request
+const printWarehouseSupplyRequest = async (req, res, next) => {
+  if (!req.user.hasPermission('warehouse.view-supply')) {
+    return next(
+      createHttpError(403, 'You do not have permission to print warehouse supply requests'),
+    );
+  }
+
+  const { id } = req.params;
+
+  try {
+    await ensureWarehouseAssignments();
+    await ensureWarehouseSupplyTables();
+
+    const warehouseId = req.user?.warehouse_id;
+    if (!Number.isInteger(warehouseId)) {
+      return next(createHttpError(400, 'You must belong to a warehouse to print requests'));
+    }
+
+    const requestRes = await pool.query(
+      `SELECT r.*, COALESCE(r.print_count, 0) AS print_count,
+              d.name AS department_name,
+              s.name AS section_name,
+              w.name AS warehouse_name,
+              requester.name AS requester_name,
+              requester.role AS requester_role
+         FROM requests r
+         LEFT JOIN departments d ON r.department_id = d.id
+         LEFT JOIN sections s ON r.section_id = s.id
+         LEFT JOIN warehouses w ON r.supply_warehouse_id = w.id
+         LEFT JOIN users requester ON r.requester_id = requester.id
+        WHERE r.id = $1
+          AND r.request_type = 'Warehouse Supply'
+          AND r.supply_warehouse_id = $2
+        LIMIT 1`,
+      [id, warehouseId],
+    );
+
+    if (requestRes.rowCount === 0) {
+      return next(createHttpError(404, 'Warehouse supply request not found'));
+    }
+
+    const currentCount = Number(requestRes.rows[0].print_count) || 0;
+
+    const updateRes = await pool.query(
+      `UPDATE requests SET print_count = $1 WHERE id = $2 RETURNING *`,
+      [currentCount + 1, id],
+    );
+
+    const request = {
+      ...updateRes.rows[0],
+      department_name: requestRes.rows[0].department_name,
+      section_name: requestRes.rows[0].section_name,
+      warehouse_name: requestRes.rows[0].warehouse_name,
+      requester_name: requestRes.rows[0].requester_name,
+      requester_role: requestRes.rows[0].requester_role,
+    };
+
+    const itemsRes = await pool.query(
+      `SELECT wsi.id, wsi.item_name, wsi.quantity,
+              COALESCE(SUM(wsup.supplied_quantity), 0) AS supplied_quantity
+         FROM warehouse_supply_items wsi
+         LEFT JOIN warehouse_supplied_items wsup
+           ON wsup.item_id = wsi.id AND wsup.request_id = wsi.request_id
+        WHERE wsi.request_id = $1
+        GROUP BY wsi.id, wsi.item_name, wsi.quantity
+        ORDER BY wsi.item_name`,
+      [id],
+    );
+
+    res.json({
+      message: `Warehouse supply request printed (${currentCount + 1})`,
+      request,
+      items: itemsRes.rows,
+      print_count: currentCount + 1,
+    });
+  } catch (err) {
+    console.error('❌ Failed to print warehouse supply request:', err);
+    next(createHttpError(500, 'Failed to print warehouse supply request'));
+  }
+};
+
+module.exports = { recordSuppliedItems, getWarehouseSupplyRequests, closeWarehouseSupplyRequest, printWarehouseSupplyRequest };

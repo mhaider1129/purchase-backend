@@ -32,7 +32,8 @@ const {
   updateRequestCost,
   updateRequestBeforeApproval,
   getClosedRequests,
-  getAuditApprovedRejectedRequests
+  getAuditApprovedRejectedRequests,
+  insertHistoricalRequest,
 } = require('../controllers/requestsController');
 
 const {
@@ -54,6 +55,7 @@ const pool = require('../config/db');
 // ==========================
 
 router.post('/', upload.any(), createRequest); // Create new request with optional attachments
+router.post('/historical', insertHistoricalRequest); // Record approved paper requests for KPIs
 router.get('/', getAllRequests); // Admin/SCM view all
 router.get('/my', getMyRequests); // My submitted requests
 router.get('/my-maintenance', getMyMaintenanceRequests); // Maintenance only

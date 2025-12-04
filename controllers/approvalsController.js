@@ -66,7 +66,15 @@ const handleApprovalDecision = async (req, res, next) => {
     );
     const approval = approvalRes.rows[0];
     if (!approval) return rollbackWithError(client, res, next, 404, 'Approval not found');
-    if (approval.status !== 'Pending') return rollbackWithError(client, res, next, 403, `This approval has already been ${approval.status.toLowerCase()}.`);
+    if (!['Pending', 'On Hold'].includes(approval.status)) {
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        `This approval has already been ${approval.status.toLowerCase()}.`,
+      );
+    }
     if (!approval.is_active) return rollbackWithError(client, res, next, 403, 'This approval is not yet active for your action.');
     if (approval.approver_id !== approver_id) return rollbackWithError(client, res, next, 403, 'You are not authorized to act on this approval.');
 
@@ -561,6 +569,126 @@ const handleApprovalDecision = async (req, res, next) => {
   }
 };
 
+// 🔘 Allow approver to place an approval on hold or resume it
+const setApprovalHoldStatus = async (req, res, next) => {
+  const { id } = req.params;
+  const { on_hold: onHoldFlag, status: statusInput, comments } = req.body;
+
+  if (!/^\d+$/.test(id)) {
+    return next(createHttpError(400, 'Invalid approval ID'));
+  }
+
+  const approverId = req.user?.id ?? null;
+  if (!Number.isInteger(approverId)) {
+    return next(createHttpError(403, 'Unable to identify the current approver'));
+  }
+
+  const normalizedStatus =
+    typeof statusInput === 'string' ? statusInput.trim().toLowerCase() : null;
+
+  let targetStatus = null;
+  if (typeof onHoldFlag === 'boolean') {
+    targetStatus = onHoldFlag ? 'On Hold' : 'Pending';
+  } else if (normalizedStatus === 'on hold' || normalizedStatus === 'hold') {
+    targetStatus = 'On Hold';
+  } else if (normalizedStatus === 'pending' || normalizedStatus === 'resume') {
+    targetStatus = 'Pending';
+  }
+
+  if (!targetStatus) {
+    return next(
+      createHttpError(
+        400,
+        'Provide on_hold flag or status field with "On Hold" or "Pending" to update hold state',
+      ),
+    );
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      `SELECT id, request_id, approver_id, status, is_active
+         FROM approvals
+        WHERE id = $1
+        FOR UPDATE`,
+      [Number(id)],
+    );
+
+    const approval = rows[0];
+
+    if (!approval) {
+      return rollbackWithError(client, res, next, 404, 'Approval not found');
+    }
+
+    if (approval.approver_id !== approverId) {
+      return rollbackWithError(client, res, next, 403, 'You are not authorized to update this approval.');
+    }
+
+    if (!approval.is_active) {
+      return rollbackWithError(client, res, next, 403, 'This approval is not active for your action.');
+    }
+
+    if (['Approved', 'Rejected'].includes(approval.status)) {
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        'Completed approvals cannot be placed on hold or resumed.',
+      );
+    }
+
+    if (approval.status === targetStatus) {
+      await client.query('ROLLBACK');
+      return res.json({
+        message: targetStatus === 'On Hold' ? 'Approval is already on hold.' : 'Approval is already pending.',
+        status: targetStatus,
+      });
+    }
+
+    await client.query(
+      `UPDATE approvals
+          SET status = $1,
+              comments = CASE WHEN $2::TEXT IS NOT NULL THEN $2 ELSE comments END,
+              approved_at = NULL,
+              updated_at = NOW(),
+              is_active = TRUE
+        WHERE id = $3`,
+      [targetStatus, comments || null, approval.id],
+    );
+
+    const actionLabel = targetStatus === 'On Hold' ? 'Approval placed on hold' : 'Approval resumed';
+    const approvalActionLabel = targetStatus === 'On Hold' ? 'On Hold' : 'Resumed';
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, $2, $3, $4)`,
+      [approval.request_id, actionLabel, approverId, comments || null],
+    );
+
+    await client.query(
+      `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [approval.id, approval.request_id, approverId, approvalActionLabel, comments || null],
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: targetStatus === 'On Hold' ? 'Approval placed on hold' : 'Approval resumed for review',
+      status: targetStatus,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to update approval hold status:', err);
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 // 🔘 Allow approvers to record decisions for individual items before final approval
 const updateApprovalItems = async (req, res, next) => {
   const { id } = req.params;
@@ -1038,5 +1166,6 @@ module.exports = {
   handleApprovalDecision,
   getApprovalSummary,
   getApprovalDetailsForRequest,
+  setApprovalHoldStatus,
   updateApprovalItems,
 };

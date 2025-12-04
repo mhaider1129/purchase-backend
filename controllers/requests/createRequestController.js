@@ -137,6 +137,13 @@ const createRequest = async (req, res, next) => {
       );
     }
 
+    const normalizedItemName = item.item_name.trim();
+    if (!normalizedItemName) {
+      return next(
+        createHttpError(400, `Item ${idx + 1} is missing a valid name`),
+      );
+    }
+
     const quantityCandidate = item.quantity;
     const parsedQuantity = Number(
       typeof quantityCandidate === "string"
@@ -200,6 +207,7 @@ const createRequest = async (req, res, next) => {
 
     sanitizedItems.push({
       ...item,
+      item_name: normalizedItemName,
       quantity: parsedQuantity,
       unit_cost: parsedUnitCost,
       total_cost:
@@ -208,6 +216,48 @@ const createRequest = async (req, res, next) => {
   }
 
   items = sanitizedItems;
+  if (request_type === "Warehouse Supply") {
+    await ensureWarehouseInventoryTables();
+
+    const { rows: warehouseItems } = await pool.query(
+      `SELECT stock_item_id, TRIM(LOWER(item_name)) AS normalized_name
+         FROM warehouse_stock_levels
+        WHERE warehouse_id = $1`,
+      [supplyWarehouseId],
+    );
+
+    const allowedItems = new Map();
+    warehouseItems.forEach((row) => {
+      if (row.normalized_name) {
+        allowedItems.set(row.normalized_name, row.stock_item_id);
+      }
+    });
+
+    const missingFromWarehouse = [];
+    items = items.map((item) => {
+      const normalizedName = item.item_name.toLowerCase();
+      const stockItemId = allowedItems.get(normalizedName);
+
+      if (!stockItemId) {
+        missingFromWarehouse.push(item.item_name);
+      }
+
+      return {
+        ...item,
+        stock_item_id: stockItemId || item.stock_item_id || null,
+      };
+    });
+
+    if (missingFromWarehouse.length > 0) {
+      return next(
+        createHttpError(
+          400,
+          `The following items are not available in the selected warehouse: ${missingFromWarehouse.join(", ")}`,
+        ),
+      );
+    }
+  }
+
   if (!req.user?.id || !req.user?.department_id)
     return next(createHttpError(400, "Invalid user context"));
 

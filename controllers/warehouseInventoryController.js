@@ -15,6 +15,7 @@ const issueWarehouseStock = async (req, res, next) => {
     stock_item_id: rawStockItemId,
     quantity: rawQuantity,
     department_id: rawDepartmentId,
+    section_id: rawSectionId,
     warehouse_id,
     notes,
     items: rawItems,
@@ -27,6 +28,12 @@ const issueWarehouseStock = async (req, res, next) => {
   const departmentId = Number(rawDepartmentId);
   if (!Number.isInteger(departmentId)) {
     return next(createHttpError(400, 'A valid department_id is required'));
+  }
+
+  const hasSectionId = rawSectionId !== undefined && rawSectionId !== null && rawSectionId !== '';
+  const sectionId = hasSectionId ? Number(rawSectionId) : null;
+  if (hasSectionId && !Number.isInteger(sectionId)) {
+    return next(createHttpError(400, 'A valid section_id is required'));
   }
 
   const rawIssueItems = Array.isArray(rawItems) && rawItems.length > 0
@@ -89,6 +96,18 @@ const issueWarehouseStock = async (req, res, next) => {
     if (departmentRes.rowCount === 0) {
       await client.query('ROLLBACK');
       return next(createHttpError(404, 'Department not found'));
+    }
+
+    if (sectionId !== null) {
+      const sectionRes = await client.query(
+        'SELECT id FROM sections WHERE id = $1 AND department_id = $2',
+        [sectionId, departmentId],
+      );
+
+      if (sectionRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'Section does not belong to the selected department'));
+      }
     }
 
     const balances = [];
@@ -157,10 +176,11 @@ const issueWarehouseStock = async (req, res, next) => {
             direction,
             quantity,
             to_department_id,
+            to_section_id,
             created_by,
             notes
           ) VALUES ($1, $2, $3, 'out', $4, $5, $6, $7)`,
-        [warehouseId, stockItemId, itemName, quantity, departmentId, req.user.id, itemNotes || null],
+        [warehouseId, stockItemId, itemName, quantity, departmentId, sectionId, req.user.id, itemNotes || null],
       );
 
       balances.push(updatedBalanceRes.rows[0]);

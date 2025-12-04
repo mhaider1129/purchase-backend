@@ -8,6 +8,7 @@ const {
   getApprovalDetailsForRequest,
   getApprovalSummary,
   updateApprovalItems,
+  setApprovalHoldStatus,
 } = require('../controllers/approvalsController');
 
 // 📊 GET /api/approvals/summary
@@ -21,6 +22,10 @@ router.get('/request/:request_id/approvals', authenticateUser, getApprovalDetail
 // ✅ PATCH /api/approvals/:id/decision
 // → Submit an approval or rejection for a specific approval entry
 router.patch('/:id/decision', authenticateUser, handleApprovalDecision);
+
+// ⏸️ PATCH /api/approvals/:id/hold
+// → Place an approval on hold or resume it
+router.patch('/:id/hold', authenticateUser, setApprovalHoldStatus);
 
 // ✅ PATCH /api/approvals/:id/items
 // → Record approval decisions for selected items under an approval

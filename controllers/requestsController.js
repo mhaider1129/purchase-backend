@@ -4,6 +4,8 @@ const {
   assignApprover,
 } = require('./requests/createRequestController');
 
+const { insertHistoricalRequest } = require('./requests/historicalRequestController');
+
 const {
   getRequestDetails,
   getRequestItemsOnly,
@@ -64,4 +66,5 @@ module.exports = {
   getClosedRequests,
   generateRfx,
   printRequest,
+  insertHistoricalRequest,
 };

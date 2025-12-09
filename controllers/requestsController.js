@@ -35,6 +35,11 @@ const {
   reassignMaintenanceRequestToRequester,
 } = require('./requests/updateRequestsController');
 
+const {
+  sendStatusCommunication,
+  listStatusCommunications,
+} = require('./requests/statusCommunicationController');
+
 const { generateRfx } = require('./requests/generateRfxController');
 const { printRequest } = require('./requests/printRequestController');
 
@@ -67,4 +72,6 @@ module.exports = {
   generateRfx,
   printRequest,
   insertHistoricalRequest,
+  sendStatusCommunication,
+  listStatusCommunications,
 };

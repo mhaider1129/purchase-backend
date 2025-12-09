@@ -22,6 +22,11 @@ const ensureItemRecallsTable = async (client = pool) => {
           quantity NUMERIC,
           reason TEXT NOT NULL,
           notes TEXT,
+          recall_notice TEXT,
+          supplier_letters TEXT,
+          ncr_reference TEXT,
+          capa_reference TEXT,
+          final_report TEXT,
           recall_type TEXT NOT NULL,
           status TEXT NOT NULL,
           department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
@@ -51,6 +56,11 @@ const ensureItemRecallsTable = async (client = pool) => {
         `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS quarantine_started_at TIMESTAMPTZ`,
         `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP`,
         `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP`,
+        `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS recall_notice TEXT`,
+        `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS supplier_letters TEXT`,
+        `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS ncr_reference TEXT`,
+        `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS capa_reference TEXT`,
+        `ALTER TABLE item_recalls ADD COLUMN IF NOT EXISTS final_report TEXT`,
       ];
 
       for (const statement of statements) {

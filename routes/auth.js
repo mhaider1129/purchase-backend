@@ -11,12 +11,21 @@ const {
 } = require('../utils/permissionService');
 const createHttpError = require('http-errors');
 const checkColumnExists = require('../utils/checkColumnExists');
+const { sendEmail } = require('../utils/emailService');
 
 const normalizeEmail = (email = '') => email.trim().toLowerCase();
 const ensureScmOrAdmin = (user) => {
   if (!user?.hasPermission || !user.hasPermission('users.manage')) {
     throw createHttpError(403, 'You do not have permission to perform this action');
   }
+};
+
+const getScmEmails = async (client = pool) => {
+  const { rows } = await client.query(
+    `SELECT email FROM users WHERE role = 'SCM' AND is_active = true`
+  );
+
+  return rows.map(row => row.email).filter(Boolean);
 };
 
 const ensureUsersUpdatedAtColumn = async () => {
@@ -289,6 +298,34 @@ router.post('/register-request', async (req, res) => {
       [trimmedName, normalizedEmail, passwordHash, role, departmentId, sectionId, employeeId]
     );
 
+    try {
+      const scmEmails = await getScmEmails();
+      if (scmEmails.length === 0) {
+        console.warn('⚠️ No active SCM users found to notify about registration request');
+      }
+
+      const messageLines = [
+        `${trimmedName} (${normalizedEmail}) submitted a new account registration request.`,
+        `Requested role: ${role}.`,
+        `Employee ID: ${employeeId}.`,
+        `Department ID: ${departmentId}.`,
+      ];
+
+      if (sectionId) {
+        messageLines.push(`Section ID: ${sectionId}.`);
+      }
+
+      await Promise.all(
+        scmEmails.map(emailAddress => sendEmail(
+          emailAddress,
+          'New user registration request submitted',
+          messageLines.join('\n')
+        ))
+      );
+    } catch (notifyErr) {
+      console.error('⚠️ Failed to notify SCM about registration request:', notifyErr);
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Account request submitted successfully',
@@ -443,6 +480,23 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     );
 
     await client.query('COMMIT');
+
+    try {
+      await sendEmail(
+        normalizedEmail,
+        'Your account registration has been approved',
+        [
+          `Hi ${request.name},`,
+          '',
+          'Great news! Your account request has been approved and your profile is now active in the system.',
+          'You can log in using the email address you registered with.',
+          '',
+          'If you run into any issues signing in, please reach out to the SCM team for assistance.',
+        ].join('\n')
+      );
+    } catch (emailErr) {
+      console.error('⚠️ Failed to send account approval email:', emailErr);
+    }
 
     return res.json({
       success: true,

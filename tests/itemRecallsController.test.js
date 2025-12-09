@@ -89,7 +89,21 @@ describe('itemRecallsController', () => {
     expect(db.query).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining('INSERT INTO item_recalls'),
-      [null, 'Old gloves', '', 3, 'Expired stock', '', 2, 7],
+      [
+        null,
+        'Old gloves',
+        '',
+        3,
+        'Expired stock',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        2,
+        7,
+      ],
     );
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(

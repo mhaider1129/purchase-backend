@@ -42,6 +42,11 @@ const selectVisibleRecallsQuery = `
     ir.quantity,
     ir.reason,
     ir.notes,
+    ir.recall_notice,
+    ir.supplier_letters,
+    ir.ncr_reference,
+    ir.capa_reference,
+    ir.final_report,
     ir.recall_type,
     ir.status,
     ir.department_id,
@@ -136,6 +141,11 @@ const createDepartmentRecallRequest = async (req, res, next) => {
     quantity: rawQuantity,
     reason: rawReason,
     notes: rawNotes,
+    recall_notice: rawRecallNotice,
+    supplier_letters: rawSupplierLetters,
+    ncr_reference: rawNcrReference,
+    capa_reference: rawCapaReference,
+    final_report: rawFinalReport,
   } = req.body || {};
 
   if (!departmentId) {
@@ -148,6 +158,11 @@ const createDepartmentRecallRequest = async (req, res, next) => {
   }
 
   const notes = sanitizeString(rawNotes);
+  const recallNotice = sanitizeString(rawRecallNotice);
+  const supplierLetters = sanitizeString(rawSupplierLetters);
+  const ncrReference = sanitizeString(rawNcrReference);
+  const capaReference = sanitizeString(rawCapaReference);
+  const finalReport = sanitizeString(rawFinalReport);
 
   let itemId = null;
   if (rawItemId !== undefined && rawItemId !== null && String(rawItemId).trim() !== '') {
@@ -200,6 +215,11 @@ const createDepartmentRecallRequest = async (req, res, next) => {
         quantity,
         reason,
         notes,
+        recall_notice,
+        supplier_letters,
+        ncr_reference,
+        capa_reference,
+        final_report,
         department_id,
         initiated_by_user_id,
         recall_type,
@@ -211,8 +231,13 @@ const createDepartmentRecallRequest = async (req, res, next) => {
         $4,
         NULLIF($5, ''),
         NULLIF($6, ''),
-        $7,
-        $8,
+        NULLIF($7, ''),
+        NULLIF($8, ''),
+        NULLIF($9, ''),
+        NULLIF($10, ''),
+        NULLIF($11, ''),
+        $12,
+        $13,
         'department_to_warehouse',
         'Pending Warehouse Review'
       )
@@ -224,6 +249,11 @@ const createDepartmentRecallRequest = async (req, res, next) => {
         quantity,
         reason,
         notes,
+        recallNotice,
+        supplierLetters,
+        ncrReference,
+        capaReference,
+        finalReport,
         departmentId,
         userId,
       ],
@@ -266,6 +296,11 @@ const createWarehouseRecallRequest = async (req, res, next) => {
     notes: rawNotes,
     warehouse_notes: rawWarehouseNotes,
     warehouseNotes: rawWarehouseNotesAlt,
+    recall_notice: rawRecallNotice,
+    supplier_letters: rawSupplierLetters,
+    ncr_reference: rawNcrReference,
+    capa_reference: rawCapaReference,
+    final_report: rawFinalReport,
   } = req.body || {};
 
   const reason = sanitizeString(rawReason);
@@ -277,6 +312,11 @@ const createWarehouseRecallRequest = async (req, res, next) => {
   const warehouseNotes = sanitizeString(
     rawWarehouseNotes !== undefined ? rawWarehouseNotes : rawWarehouseNotesAlt,
   );
+  const recallNotice = sanitizeString(rawRecallNotice);
+  const supplierLetters = sanitizeString(rawSupplierLetters);
+  const ncrReference = sanitizeString(rawNcrReference);
+  const capaReference = sanitizeString(rawCapaReference);
+  const finalReport = sanitizeString(rawFinalReport);
 
   let itemId = null;
   if (rawItemId !== undefined && rawItemId !== null && String(rawItemId).trim() !== '') {
@@ -331,6 +371,11 @@ const createWarehouseRecallRequest = async (req, res, next) => {
         quantity,
         reason,
         notes,
+        recall_notice,
+        supplier_letters,
+        ncr_reference,
+        capa_reference,
+        final_report,
         department_id,
         initiated_by_user_id,
         recall_type,
@@ -349,16 +394,21 @@ const createWarehouseRecallRequest = async (req, res, next) => {
         $4,
         NULLIF($5, ''),
         NULLIF($6, ''),
-        $7,
-        $8,
+        NULLIF($7, ''),
+        NULLIF($8, ''),
+        NULLIF($9, ''),
+        NULLIF($10, ''),
+        NULLIF($11, ''),
+        $12,
+        $13,
         'warehouse_to_procurement',
         'Quarantined - Block Issuance',
         TRUE,
         CURRENT_TIMESTAMP,
-        $8,
-        NULLIF($9, ''),
+        $13,
+        NULLIF($14, ''),
         TRUE,
-        NULLIF($10, ''),
+        NULLIF($15, ''),
         CURRENT_TIMESTAMP
       )
       RETURNING *`,
@@ -369,6 +419,11 @@ const createWarehouseRecallRequest = async (req, res, next) => {
         quantity,
         reason,
         notes,
+        recallNotice,
+        supplierLetters,
+        ncrReference,
+        capaReference,
+        finalReport,
         departmentId,
         userId,
         warehouseNotes,

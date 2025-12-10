@@ -581,6 +581,34 @@ const updateContractEvaluation = async (req, res, next) => {
   }
 };
 
+const deleteContractEvaluation = async (req, res, next) => {
+  const { id } = req.params;
+
+  try {
+    await ensureContractEvaluationsTable();
+
+    const { rows } = await pool.query(
+      'SELECT evaluator_id FROM contract_evaluations WHERE id = $1',
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return next(createHttpError(404, 'Evaluation not found'));
+    }
+
+    if (rows[0].evaluator_id !== req.user.id && !canManageContractEvaluations(req)) {
+      return next(createHttpError(403, 'You are not authorized to delete this evaluation'));
+    }
+
+    await pool.query('DELETE FROM contract_evaluations WHERE id = $1', [id]);
+
+    res.json({ message: 'Evaluation deleted successfully' });
+  } catch (err) {
+    console.error('❌ Failed to delete contract evaluation:', err);
+    next(createHttpError(500, 'Failed to delete contract evaluation'));
+  }
+};
+
 const getMyEvaluations = async (req, res, next) => {
   try {
     await ensureContractEvaluationsTable();
@@ -648,6 +676,7 @@ module.exports = {
   createContractEvaluation,
   getContractEvaluations,
   updateContractEvaluation,
+  deleteContractEvaluation,
   getMyEvaluations,
   getContractEvaluationById,
   getEvaluationCriteria,

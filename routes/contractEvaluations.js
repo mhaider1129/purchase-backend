@@ -3,6 +3,7 @@ const {
   createContractEvaluation,
   getContractEvaluations,
   updateContractEvaluation,
+  deleteContractEvaluation,
   getMyEvaluations,
   getEvaluationCriteria,
   getContractEvaluationById,
@@ -16,5 +17,6 @@ router.get('/', getContractEvaluations);
 router.get('/:id', getContractEvaluationById);
 router.post('/', createContractEvaluation);
 router.patch('/:id', updateContractEvaluation);
+router.delete('/:id', deleteContractEvaluation);
 
 module.exports = router;

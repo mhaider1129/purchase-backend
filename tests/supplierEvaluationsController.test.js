@@ -8,6 +8,21 @@ const {
   createSupplierEvaluation,
 } = require('../controllers/supplierEvaluationsController');
 
+const COMPLETE_CRITERIA = {
+  scheduled_annually: true,
+  travel_required: false,
+  evaluation_criteria_notes: null,
+  overall_supplier_happiness: 4,
+  price_satisfaction: 4,
+  delivery_as_scheduled: 4,
+  delivery_in_good_condition: 4,
+  delivery_meets_quality_expectations: 4,
+  communication_effectiveness: 4,
+  compliance_alignment: 4,
+  operations_effectiveness_rating: 4,
+  payment_terms_comfort: 4,
+};
+
 describe('supplierEvaluationsController', () => {
   beforeEach(() => {
     pool.query.mockReset();
@@ -66,6 +81,7 @@ describe('supplierEvaluationsController', () => {
         delivery_score: 90,
         compliance_score: 85,
         strengths: 'Reliable delivery',
+        criteria_responses: COMPLETE_CRITERIA,
       },
     };
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
@@ -75,6 +91,7 @@ describe('supplierEvaluationsController', () => {
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure table
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure index
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure extended columns
+      .mockResolvedValueOnce({ rows: [{ latest_date: null }], rowCount: 1 }) // cadence check
       .mockResolvedValueOnce({
         rows: [
           {
@@ -104,7 +121,7 @@ describe('supplierEvaluationsController', () => {
 
     await createSupplierEvaluation(req, res, next);
 
-    expect(pool.query).toHaveBeenCalledTimes(4);
+    expect(pool.query).toHaveBeenCalledTimes(5);
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -114,6 +131,36 @@ describe('supplierEvaluationsController', () => {
       })
     );
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects criteria ratings outside the 1-5 scale', async () => {
+    const req = {
+      user: {
+        role: 'SCM',
+        id: 7,
+        name: 'Bob Tester',
+        hasPermission: jest.fn().mockImplementation(code => code === 'evaluations.manage'),
+      },
+      body: {
+        supplier_name: 'Acme Corp',
+        evaluation_date: '2024-02-02',
+        quality_score: 75,
+        criteria_responses: {
+          ...COMPLETE_CRITERIA,
+          overall_supplier_happiness: 6,
+        },
+      },
+    };
+
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const next = jest.fn();
+
+    await createSupplierEvaluation(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 400 })
+    );
+    expect(pool.query).not.toHaveBeenCalled();
   });
 
   it('computes weighted KPI scores when KPI data is provided', async () => {
@@ -130,6 +177,7 @@ describe('supplierEvaluationsController', () => {
         corrective_actions_score: 60,
         esg_compliance_score: 88,
         strengths: 'Great ESG focus',
+        criteria_responses: COMPLETE_CRITERIA,
       },
     };
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };

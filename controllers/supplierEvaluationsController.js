@@ -110,6 +110,18 @@ const ensureSupplierEvaluationsTable = (() => {
             strengths TEXT,
             weaknesses TEXT,
             action_items TEXT,
+            scheduled_annually BOOLEAN NOT NULL DEFAULT TRUE,
+            travel_required BOOLEAN DEFAULT FALSE,
+            evaluation_criteria_notes TEXT,
+            overall_supplier_happiness NUMERIC(3, 1),
+            price_satisfaction NUMERIC(3, 1),
+            delivery_as_scheduled NUMERIC(3, 1),
+            delivery_in_good_condition NUMERIC(3, 1),
+            delivery_meets_quality_expectations NUMERIC(3, 1),
+            communication_effectiveness NUMERIC(3, 1),
+            compliance_alignment NUMERIC(3, 1),
+            operations_effectiveness_rating NUMERIC(3, 1),
+            payment_terms_comfort NUMERIC(3, 1),
             criteria_responses JSONB,
             evaluator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             evaluator_name TEXT,
@@ -130,7 +142,114 @@ const ensureSupplierEvaluationsTable = (() => {
             ADD COLUMN IF NOT EXISTS esg_compliance_score NUMERIC(5, 2),
             ADD COLUMN IF NOT EXISTS weighted_overall_score NUMERIC(5, 2),
             ADD COLUMN IF NOT EXISTS kpi_weights JSONB,
-            ADD COLUMN IF NOT EXISTS criteria_responses JSONB
+            ADD COLUMN IF NOT EXISTS criteria_responses JSONB,
+            ADD COLUMN IF NOT EXISTS scheduled_annually BOOLEAN NOT NULL DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS travel_required BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS evaluation_criteria_notes TEXT,
+            ADD COLUMN IF NOT EXISTS overall_supplier_happiness NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS price_satisfaction NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS delivery_as_scheduled NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS delivery_in_good_condition NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS delivery_meets_quality_expectations NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS communication_effectiveness NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS compliance_alignment NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS operations_effectiveness_rating NUMERIC(3, 1),
+            ADD COLUMN IF NOT EXISTS payment_terms_comfort NUMERIC(3, 1)
+        `);
+
+        await pool.query(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_overall_supplier_happiness_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_overall_supplier_happiness_scale
+                  CHECK (overall_supplier_happiness IS NULL OR (overall_supplier_happiness >= 1 AND overall_supplier_happiness <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_price_satisfaction_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_price_satisfaction_scale
+                  CHECK (price_satisfaction IS NULL OR (price_satisfaction >= 1 AND price_satisfaction <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_delivery_as_scheduled_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_delivery_as_scheduled_scale
+                  CHECK (delivery_as_scheduled IS NULL OR (delivery_as_scheduled >= 1 AND delivery_as_scheduled <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_delivery_in_good_condition_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_delivery_in_good_condition_scale
+                  CHECK (delivery_in_good_condition IS NULL OR (delivery_in_good_condition >= 1 AND delivery_in_good_condition <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_delivery_quality_expectations_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_delivery_quality_expectations_scale
+                  CHECK (delivery_meets_quality_expectations IS NULL OR (delivery_meets_quality_expectations >= 1 AND delivery_meets_quality_expectations <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_communication_effectiveness_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_communication_effectiveness_scale
+                  CHECK (communication_effectiveness IS NULL OR (communication_effectiveness >= 1 AND communication_effectiveness <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_compliance_alignment_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_compliance_alignment_scale
+                  CHECK (compliance_alignment IS NULL OR (compliance_alignment >= 1 AND compliance_alignment <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_operations_effectiveness_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_operations_effectiveness_scale
+                  CHECK (operations_effectiveness_rating IS NULL OR (operations_effectiveness_rating >= 1 AND operations_effectiveness_rating <= 5));
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+                FROM information_schema.check_constraints
+               WHERE constraint_name = 'chk_supplier_eval_payment_terms_comfort_scale'
+            ) THEN
+              ALTER TABLE supplier_evaluations
+                ADD CONSTRAINT chk_supplier_eval_payment_terms_comfort_scale
+                  CHECK (payment_terms_comfort IS NULL OR (payment_terms_comfort >= 1 AND payment_terms_comfort <= 5));
+            END IF;
+          END $$;
         `);
 
         initialized = true;
@@ -323,6 +442,52 @@ const formatDateOnly = (value) => {
   return parsed.toISOString().slice(0, 10);
 };
 
+const parseJsonField = (value, label) => {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch (err) {
+      console.warn(`⚠️ Failed to parse ${label} JSON payload`, err);
+      return null;
+    }
+  }
+
+  return value;
+};
+
+const buildCriteriaFromRow = (row) => {
+  const criteriaFromJson = parseJsonField(row.criteria_responses, 'criteria_responses');
+
+  const merged = {
+    ...DEFAULT_CRITERIA_RESPONSES,
+    ...(criteriaFromJson || {}),
+  };
+
+  if (row.scheduled_annually !== null && row.scheduled_annually !== undefined) {
+    merged.scheduled_annually = Boolean(row.scheduled_annually);
+  }
+
+  if (row.travel_required !== null && row.travel_required !== undefined) {
+    merged.travel_required = Boolean(row.travel_required);
+  }
+
+  if (row.evaluation_criteria_notes !== null && row.evaluation_criteria_notes !== undefined) {
+    merged.evaluation_criteria_notes = row.evaluation_criteria_notes;
+  }
+
+  CRITERIA_SCALE_FIELDS.forEach(({ key }) => {
+    if (row[key] !== null && row[key] !== undefined) {
+      merged[key] = Number(row[key]);
+    }
+  });
+
+  return merged;
+};
+
 const serializeEvaluation = (row) => {
   if (!row) {
     return null;
@@ -330,25 +495,6 @@ const serializeEvaluation = (row) => {
 
   const toNumber = (value) =>
     value === null || value === undefined ? null : Number(value);
-
-  const parseWeights = (value) => {
-    if (!value) {
-      return null;
-    }
-
-    if (typeof value === 'string') {
-      try {
-        return JSON.parse(value);
-      } catch (err) {
-        console.warn('⚠️ Failed to parse kpi_weights JSON payload', err);
-        return null;
-      }
-    }
-
-    return value;
-  };
-
-  const parsedCriteria = parseWeights(row.criteria_responses);
 
   return {
     id: row.id,
@@ -363,14 +509,11 @@ const serializeEvaluation = (row) => {
     esg_compliance_score: toNumber(row.esg_compliance_score),
     overall_score: toNumber(row.overall_score),
     weighted_overall_score: toNumber(row.weighted_overall_score),
-    kpi_weights: parseWeights(row.kpi_weights),
+    kpi_weights: parseJsonField(row.kpi_weights, 'kpi_weights'),
     strengths: row.strengths,
     weaknesses: row.weaknesses,
     action_items: row.action_items,
-    criteria_responses: {
-      ...DEFAULT_CRITERIA_RESPONSES,
-      ...(parsedCriteria || {}),
-    },
+    criteria_responses: buildCriteriaFromRow(row),
     evaluator_id: row.evaluator_id,
     evaluator_name: row.evaluator_name,
     created_at: row.created_at,
@@ -508,7 +651,13 @@ const listSupplierEvaluations = async (req, res, next) => {
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
               kpi_weights, strengths, weaknesses, action_items, criteria_responses,
-              evaluator_id, evaluator_name, created_at, updated_at
+              evaluator_id, evaluator_name, created_at, updated_at,
+              scheduled_annually, travel_required, evaluation_criteria_notes,
+              overall_supplier_happiness, price_satisfaction,
+              delivery_as_scheduled, delivery_in_good_condition,
+              delivery_meets_quality_expectations, communication_effectiveness,
+              compliance_alignment, operations_effectiveness_rating,
+              payment_terms_comfort
          FROM supplier_evaluations
          ${whereClause}
         ORDER BY evaluation_date DESC, created_at DESC`,
@@ -624,7 +773,13 @@ const getSupplierEvaluationById = async (req, res, next) => {
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
               kpi_weights, strengths, weaknesses, action_items, criteria_responses,
-              evaluator_id, created_at, updated_at, evaluator_name
+              evaluator_id, created_at, updated_at, evaluator_name,
+              scheduled_annually, travel_required, evaluation_criteria_notes,
+              overall_supplier_happiness, price_satisfaction,
+              delivery_as_scheduled, delivery_in_good_condition,
+              delivery_meets_quality_expectations, communication_effectiveness,
+              compliance_alignment, operations_effectiveness_rating,
+              payment_terms_comfort
          FROM supplier_evaluations
         WHERE id = $1`,
       [evaluationId]
@@ -726,17 +881,28 @@ const createSupplierEvaluation = async (req, res, next) => {
          supplier_name, evaluation_date, quality_score, delivery_score, cost_score,
          compliance_score, otif_score, corrective_actions_score, esg_compliance_score,
          overall_score, weighted_overall_score, kpi_weights, strengths, weaknesses,
-         action_items, criteria_responses, evaluator_id, evaluator_name
+         action_items, scheduled_annually, travel_required, evaluation_criteria_notes,
+         overall_supplier_happiness, price_satisfaction, delivery_as_scheduled,
+         delivery_in_good_condition, delivery_meets_quality_expectations,
+         communication_effectiveness, compliance_alignment,
+         operations_effectiveness_rating, payment_terms_comfort, criteria_responses,
+         evaluator_id, evaluator_name
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-         $18
+         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
        )
        RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
                  cost_score, compliance_score, otif_score, corrective_actions_score,
                  esg_compliance_score, overall_score, weighted_overall_score,
                  kpi_weights, strengths, weaknesses, action_items, criteria_responses,
-                 evaluator_id, evaluator_name, created_at, updated_at`,
+                 evaluator_id, evaluator_name, created_at, updated_at,
+                 scheduled_annually, travel_required, evaluation_criteria_notes,
+                 overall_supplier_happiness, price_satisfaction,
+                 delivery_as_scheduled, delivery_in_good_condition,
+                 delivery_meets_quality_expectations, communication_effectiveness,
+                 compliance_alignment, operations_effectiveness_rating,
+                 payment_terms_comfort`,
       [
         supplierName,
         evaluationDate,
@@ -753,6 +919,18 @@ const createSupplierEvaluation = async (req, res, next) => {
         strengths,
         weaknesses,
         actionItems,
+        criteriaResponses.scheduled_annually,
+        criteriaResponses.travel_required,
+        criteriaResponses.evaluation_criteria_notes,
+        criteriaResponses.overall_supplier_happiness,
+        criteriaResponses.price_satisfaction,
+        criteriaResponses.delivery_as_scheduled,
+        criteriaResponses.delivery_in_good_condition,
+        criteriaResponses.delivery_meets_quality_expectations,
+        criteriaResponses.communication_effectiveness,
+        criteriaResponses.compliance_alignment,
+        criteriaResponses.operations_effectiveness_rating,
+        criteriaResponses.payment_terms_comfort,
         criteriaResponses ? JSON.stringify(criteriaResponses) : null,
         req.user?.id ?? null,
         sanitizeText(req.user?.name),
@@ -786,7 +964,13 @@ const updateSupplierEvaluation = async (req, res, next) => {
       `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
-              kpi_weights, strengths, weaknesses, action_items, criteria_responses
+              kpi_weights, strengths, weaknesses, action_items, criteria_responses,
+              scheduled_annually, travel_required, evaluation_criteria_notes,
+              overall_supplier_happiness, price_satisfaction,
+              delivery_as_scheduled, delivery_in_good_condition,
+              delivery_meets_quality_expectations, communication_effectiveness,
+              compliance_alignment, operations_effectiveness_rating,
+              payment_terms_comfort
          FROM supplier_evaluations
         WHERE id = $1`,
       [evaluationId]
@@ -812,20 +996,7 @@ const updateSupplierEvaluation = async (req, res, next) => {
       }
     }
 
-    const existingCriteriaRaw = existing.criteria_responses;
-    let existingCriteria = null;
-    if (existingCriteriaRaw) {
-      if (typeof existingCriteriaRaw === 'string') {
-        try {
-          existingCriteria = JSON.parse(existingCriteriaRaw);
-        } catch (err) {
-          console.warn('⚠️ Unable to parse stored criteria responses, discarding value', err);
-          existingCriteria = null;
-        }
-      } else {
-        existingCriteria = existingCriteriaRaw;
-      }
-    }
+    const existingCriteria = buildCriteriaFromRow(existing);
 
     let supplierName = existing.supplier_name;
     if (Object.prototype.hasOwnProperty.call(req.body, 'supplier_name')) {
@@ -956,16 +1127,34 @@ const updateSupplierEvaluation = async (req, res, next) => {
               strengths = $13,
               weaknesses = $14,
               action_items = $15,
-              criteria_responses = $16,
-              evaluator_id = $17,
-              evaluator_name = $18,
+              scheduled_annually = $16,
+              travel_required = $17,
+              evaluation_criteria_notes = $18,
+              overall_supplier_happiness = $19,
+              price_satisfaction = $20,
+              delivery_as_scheduled = $21,
+              delivery_in_good_condition = $22,
+              delivery_meets_quality_expectations = $23,
+              communication_effectiveness = $24,
+              compliance_alignment = $25,
+              operations_effectiveness_rating = $26,
+              payment_terms_comfort = $27,
+              criteria_responses = $28,
+              evaluator_id = $29,
+              evaluator_name = $30,
               updated_at = NOW()
-        WHERE id = $19
+        WHERE id = $31
       RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
                 cost_score, compliance_score, otif_score, corrective_actions_score,
                 esg_compliance_score, overall_score, weighted_overall_score,
                 kpi_weights, strengths, weaknesses, action_items, criteria_responses,
-                evaluator_id, evaluator_name, created_at, updated_at`,
+                evaluator_id, evaluator_name, created_at, updated_at,
+                scheduled_annually, travel_required, evaluation_criteria_notes,
+                overall_supplier_happiness, price_satisfaction,
+                delivery_as_scheduled, delivery_in_good_condition,
+                delivery_meets_quality_expectations, communication_effectiveness,
+                compliance_alignment, operations_effectiveness_rating,
+                payment_terms_comfort`,
       [
         supplierName,
         evaluationDate,
@@ -982,6 +1171,18 @@ const updateSupplierEvaluation = async (req, res, next) => {
         strengths,
         weaknesses,
         actionItems,
+        criteriaResponses.scheduled_annually,
+        criteriaResponses.travel_required,
+        criteriaResponses.evaluation_criteria_notes,
+        criteriaResponses.overall_supplier_happiness,
+        criteriaResponses.price_satisfaction,
+        criteriaResponses.delivery_as_scheduled,
+        criteriaResponses.delivery_in_good_condition,
+        criteriaResponses.delivery_meets_quality_expectations,
+        criteriaResponses.communication_effectiveness,
+        criteriaResponses.compliance_alignment,
+        criteriaResponses.operations_effectiveness_rating,
+        criteriaResponses.payment_terms_comfort,
         criteriaResponses ? JSON.stringify(criteriaResponses) : null,
         req.user?.id ?? null,
         sanitizeText(req.user?.name),

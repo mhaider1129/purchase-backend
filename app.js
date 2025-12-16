@@ -238,6 +238,7 @@ const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
 const supplierSrmRoutes = require('./routes/supplierSrm');
 const technicalInspectionsRoutes = require('./routes/technicalInspections');
 const contractEvaluationsRouter = require('./routes/contractEvaluations');
+const rfxPortalRoutes = require('./routes/rfxPortal');
 const uiAccessRoutes = require('./routes/uiAccess');
 const notificationsRoutes = require('./routes/notifications');
 
@@ -283,6 +284,7 @@ apiRouter.use('/supplier-evaluations', authenticateUser, supplierEvaluationsRout
 apiRouter.use('/supplier-srm', authenticateUser, supplierSrmRoutes);
 apiRouter.use('/technical-inspections', authenticateUser, technicalInspectionsRoutes);
 apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRouter);
+apiRouter.use('/rfx-portal', authenticateUser, rfxPortalRoutes);
 apiRouter.use('/ui-access', authenticateUser, uiAccessRoutes);
 apiRouter.use('/notifications', authenticateUser, notificationsRoutes);
 

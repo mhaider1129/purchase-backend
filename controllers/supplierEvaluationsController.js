@@ -488,6 +488,9 @@ const buildCriteriaFromRow = (row) => {
   return merged;
 };
 
+const toNumberOrNull = (value) =>
+  value === null || value === undefined ? null : Number(value);
+
 const serializeEvaluation = (row) => {
   if (!row) {
     return null;
@@ -796,6 +799,111 @@ const getSupplierEvaluationById = async (req, res, next) => {
       return next(err);
     }
     next(createHttpError(500, 'Failed to fetch supplier evaluation'));
+  }
+};
+
+const getSupplierEvaluationDashboard = async (req, res, next) => {
+  try {
+    await ensureSupplierEvaluationsTable();
+
+    const [summaryResult, kpiAverages, trendResult, recentResult, topSuppliers] =
+      await Promise.all([
+        pool.query(`
+          SELECT COUNT(*) AS total_evaluations,
+                 COUNT(DISTINCT LOWER(supplier_name)) AS unique_suppliers,
+                 AVG(overall_score) AS avg_overall_score,
+                 AVG(weighted_overall_score) AS avg_weighted_overall_score,
+                 SUM(CASE
+                       WHEN evaluation_date >= CURRENT_DATE - INTERVAL '90 days'
+                       THEN 1
+                       ELSE 0
+                     END) AS evaluations_last_90_days
+            FROM supplier_evaluations
+        `),
+        pool.query(`
+          SELECT AVG(otif_score) AS avg_otif_score,
+                 AVG(corrective_actions_score) AS avg_corrective_actions_score,
+                 AVG(esg_compliance_score) AS avg_esg_compliance_score
+            FROM supplier_evaluations
+        `),
+        pool.query(`
+          SELECT date_trunc('month', evaluation_date) AS period_start,
+                 COUNT(*) AS evaluation_count,
+                 AVG(overall_score) AS avg_overall_score,
+                 AVG(weighted_overall_score) AS avg_weighted_overall_score
+            FROM supplier_evaluations
+        GROUP BY period_start
+        ORDER BY period_start DESC
+           LIMIT 12
+        `),
+        pool.query(`
+          SELECT id,
+                 supplier_name,
+                 evaluation_date,
+                 overall_score,
+                 weighted_overall_score
+            FROM supplier_evaluations
+        ORDER BY evaluation_date DESC, created_at DESC
+           LIMIT 8
+        `),
+        pool.query(`
+          SELECT supplier_name,
+                 COUNT(*) AS evaluation_count,
+                 MAX(evaluation_date) AS last_evaluation_date,
+                 AVG(overall_score) AS avg_overall_score,
+                 AVG(weighted_overall_score) AS avg_weighted_overall_score
+            FROM supplier_evaluations
+        GROUP BY supplier_name
+        ORDER BY avg_weighted_overall_score DESC NULLS LAST, evaluation_count DESC
+           LIMIT 10
+        `),
+      ]);
+
+    const summary = summaryResult.rows[0] || {};
+    const kpis = kpiAverages.rows[0] || {};
+
+    res.json({
+      totals: {
+        evaluations: Number(summary.total_evaluations) || 0,
+        suppliers_evaluated: Number(summary.unique_suppliers) || 0,
+        evaluations_last_90_days: Number(summary.evaluations_last_90_days) || 0,
+        avg_overall_score: toNumberOrNull(summary.avg_overall_score),
+        avg_weighted_score: toNumberOrNull(summary.avg_weighted_overall_score),
+      },
+      kpi_averages: {
+        otif_score: toNumberOrNull(kpis.avg_otif_score),
+        corrective_actions_score: toNumberOrNull(kpis.avg_corrective_actions_score),
+        esg_compliance_score: toNumberOrNull(kpis.avg_esg_compliance_score),
+      },
+      trends: trendResult.rows
+        .map((row) => ({
+          period_start: formatDateOnly(row.period_start),
+          evaluation_count: Number(row.evaluation_count) || 0,
+          avg_overall_score: toNumberOrNull(row.avg_overall_score),
+          avg_weighted_score: toNumberOrNull(row.avg_weighted_overall_score),
+        }))
+        .reverse(),
+      recent_evaluations: recentResult.rows.map((row) => ({
+        id: row.id,
+        supplier_name: row.supplier_name,
+        evaluation_date: formatDateOnly(row.evaluation_date),
+        overall_score: toNumberOrNull(row.overall_score),
+        weighted_overall_score: toNumberOrNull(row.weighted_overall_score),
+      })),
+      top_suppliers: topSuppliers.rows.map((row) => ({
+        supplier_name: row.supplier_name,
+        evaluation_count: Number(row.evaluation_count) || 0,
+        last_evaluation_date: formatDateOnly(row.last_evaluation_date),
+        avg_overall_score: toNumberOrNull(row.avg_overall_score),
+        avg_weighted_score: toNumberOrNull(row.avg_weighted_overall_score),
+      })),
+    });
+  } catch (err) {
+    console.error('❌ Failed to load supplier evaluation dashboard:', err);
+    if (err.statusCode) {
+      return next(err);
+    }
+    next(createHttpError(500, 'Failed to load supplier evaluation dashboard'));
   }
 };
 
@@ -1234,9 +1342,11 @@ const deleteSupplierEvaluation = async (req, res, next) => {
 };
 
 module.exports = {
+  ensureSupplierEvaluationsTable,
   listSupplierEvaluations,
   getSupplierEvaluationBenchmarks,
   getSupplierEvaluationById,
+  getSupplierEvaluationDashboard,
   createSupplierEvaluation,
   updateSupplierEvaluation,
   deleteSupplierEvaluation,

@@ -1,6 +1,7 @@
 
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const { ensureSupplierEvaluationsTable } = require('./supplierEvaluationsController');
 
 const normalizeText = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -273,12 +274,81 @@ const deleteSupplier = async (req, res, next) => {
   }
 };
 
+const getSuppliersDashboard = async (req, res, next) => {
+  try {
+    await ensureSuppliersTable();
+    await ensureSupplierEvaluationsTable();
+
+    const [summaryResult, coverageResult, recentResult] = await Promise.all([
+      pool.query(`
+        SELECT COUNT(*) AS total_suppliers,
+               SUM(CASE WHEN contact_email IS NOT NULL AND contact_email <> '' THEN 1 ELSE 0 END) AS with_email,
+               SUM(CASE WHEN contact_phone IS NOT NULL AND contact_phone <> '' THEN 1 ELSE 0 END) AS with_phone,
+               SUM(CASE
+                     WHEN (contact_email IS NOT NULL AND contact_email <> '')
+                          OR (contact_phone IS NOT NULL AND contact_phone <> '')
+                     THEN 1 ELSE 0 END) AS with_contact
+          FROM suppliers
+      `),
+      pool.query(`
+        SELECT s.id,
+               s.name,
+               s.contact_email,
+               s.contact_phone,
+               MAX(se.evaluation_date) AS last_evaluation_date,
+               COUNT(se.id) AS evaluation_count
+          FROM suppliers s
+     LEFT JOIN supplier_evaluations se ON LOWER(se.supplier_name) = LOWER(s.name)
+      GROUP BY s.id, s.name, s.contact_email, s.contact_phone
+      ORDER BY last_evaluation_date DESC NULLS LAST, s.name ASC
+         LIMIT 12
+      `),
+      pool.query(`
+        SELECT id, name, contact_email, contact_phone, created_at
+          FROM suppliers
+      ORDER BY created_at DESC
+         LIMIT 8
+      `),
+    ]);
+
+    const summary = summaryResult.rows[0] || {};
+    const totalSuppliers = Number(summary.total_suppliers) || 0;
+    const withContact = Number(summary.with_contact) || 0;
+
+    res.json({
+      totals: {
+        suppliers: totalSuppliers,
+        with_email: Number(summary.with_email) || 0,
+        with_phone: Number(summary.with_phone) || 0,
+        with_contact,
+        without_contact: Math.max(totalSuppliers - withContact, 0),
+      },
+      coverage: coverageResult.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        contact_email: row.contact_email,
+        contact_phone: row.contact_phone,
+        last_evaluation_date: row.last_evaluation_date,
+        evaluation_count: Number(row.evaluation_count) || 0,
+      })),
+      recent_suppliers: recentResult.rows,
+    });
+  } catch (err) {
+    console.error('❌ Failed to load suppliers dashboard:', err);
+    if (err.statusCode) {
+      return next(err);
+    }
+    next(createHttpError(500, 'Failed to load suppliers dashboard'));
+  }
+};
+
 module.exports = {
   ensureSuppliersTable,
   listSuppliers,
   createSupplier,
   getSupplierById,
   findOrCreateSupplierByName,
+  getSuppliersDashboard,
   updateSupplier,
   deleteSupplier,
 };

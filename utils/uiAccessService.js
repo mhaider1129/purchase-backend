@@ -44,6 +44,13 @@ const defaultResources = [
     requireAll: false,
   },
   {
+    resourceKey: 'feature.riskManagement',
+    label: 'Risk Management',
+    description: 'Track and mitigate organizational risks.',
+    permissions: ['risks.view', 'risks.manage'],
+    requireAll: false,
+  },
+  {
     resourceKey: 'feature.warehouseTemplates',
     label: 'Warehouse Supply Templates',
     description: 'Allows users to manage warehouse supply templates.',
@@ -166,6 +173,14 @@ const defaultResources = [
     label: 'Lifecycle Analytics',
     description: 'Controls the lifecycle analytics view.',
     permissions: ['dashboard.view'],
+    requireAll: false,
+  },
+  {
+    resourceKey: 'feature.dispensing',
+    label: 'Monthly Dispensing',
+    description:
+      'Controls access to monthly dispensing ingestion and analytics.',
+    permissions: ['dashboard.view', 'warehouse.manage-supply'],
     requireAll: false,
   },
 ];

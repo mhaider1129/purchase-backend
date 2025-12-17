@@ -112,6 +112,31 @@ function applySopAdjustments(forecast, sopAdjustments = []) {
 }
 
 async function fetchMonthlyDemand(itemName, months = DEFAULT_HISTORY_MONTHS) {
+  const { rows: tableCheck } = await pool.query(
+    "SELECT to_regclass('public.monthly_dispensing') AS table_name",
+  );
+
+  if (tableCheck?.[0]?.table_name) {
+    const { rows: dispensingRows } = await pool.query(
+      `SELECT TO_CHAR(month_start, 'YYYY-MM') AS bucket, COALESCE(SUM(quantity), 0) AS quantity
+         FROM monthly_dispensing
+        WHERE item_name ILIKE $1
+          AND month_start >= date_trunc('month', CURRENT_DATE) - ($2 || ' months')::INTERVAL
+        GROUP BY bucket
+        ORDER BY bucket`,
+      [itemName, months],
+    );
+
+    const normalized = dispensingRows.map(row => ({
+      bucket: row.bucket,
+      quantity: Number(row.quantity) || 0,
+    }));
+
+    if (normalized.length) {
+      return { history: normalized, source: 'monthly_dispensing' };
+    }
+  }
+
   const { rows } = await pool.query(
     `SELECT TO_CHAR(r.created_at, 'YYYY-MM') AS bucket, COALESCE(SUM(ri.quantity), 0) AS quantity
      FROM requested_items ri
@@ -122,7 +147,11 @@ async function fetchMonthlyDemand(itemName, months = DEFAULT_HISTORY_MONTHS) {
      ORDER BY bucket`,
     [itemName, months]
   );
-  return rows.map(row => ({ bucket: row.bucket, quantity: Number(row.quantity) || 0 }));
+
+  return {
+    history: rows.map(row => ({ bucket: row.bucket, quantity: Number(row.quantity) || 0 })),
+    source: 'requests',
+  };
 }
 
 async function fetchDailyDemand(itemName, days = 120) {
@@ -152,7 +181,7 @@ const getDemandForecast = async (req, res, next) => {
   }
 
   try {
-    const history = await fetchMonthlyDemand(itemName, DEFAULT_HISTORY_MONTHS);
+    const { history, source: historySource } = await fetchMonthlyDemand(itemName, DEFAULT_HISTORY_MONTHS);
     let forecast;
 
     if (method === 'linear_trend') {
@@ -168,6 +197,7 @@ const getDemandForecast = async (req, res, next) => {
       method,
       horizon_months: horizon,
       history,
+      history_source: historySource,
       forecast: adjustedForecast,
       assumptions: {
         window_size: Number(windowSize) || 3,

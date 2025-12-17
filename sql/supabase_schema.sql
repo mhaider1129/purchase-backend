@@ -38,6 +38,7 @@ CREATE SEQUENCE IF NOT EXISTS public.technical_inspections_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.user_registration_requests_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.users_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_supplied_items_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.monthly_dispensing_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_supply_items_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_supply_templates_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouses_id_seq;
@@ -715,5 +716,24 @@ CREATE TABLE IF NOT EXISTS public.warehouses (
   CONSTRAINT warehouses_pkey PRIMARY KEY (id),
   CONSTRAINT warehouses_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id)
 );
+
+-- Monthly dispensing snapshots
+CREATE TABLE IF NOT EXISTS public.monthly_dispensing (
+  id integer NOT NULL DEFAULT nextval('public.monthly_dispensing_id_seq'::regclass),
+  month_start date NOT NULL,
+  item_name text NOT NULL,
+  quantity numeric NOT NULL DEFAULT 0,
+  unit text,
+  facility_name text,
+  notes text,
+  created_by integer REFERENCES public.users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT monthly_dispensing_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monthly_dispensing_month ON public.monthly_dispensing (month_start);
+CREATE INDEX IF NOT EXISTS idx_monthly_dispensing_item ON public.monthly_dispensing (LOWER(item_name));
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_monthly_dispensing_month_item_facility
+  ON public.monthly_dispensing (month_start, item_name, COALESCE(facility_name, ''));
 
 COMMIT;

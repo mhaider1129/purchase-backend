@@ -150,7 +150,9 @@ const createRfxEvent = async (req, res, next) => {
 };
 
 const submitRfxResponse = async (req, res, next) => {
-  if (!canRespondToRfx(req.user) && !canManageRfx(req.user)) {
+  const hasPrivilegedAccess = canRespondToRfx(req.user) || canManageRfx(req.user);
+
+  if (!hasPrivilegedAccess && req.user) {
     return next(createHttpError(403, 'You are not authorized to submit responses'));
   }
 

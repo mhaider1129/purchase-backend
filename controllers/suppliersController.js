@@ -320,7 +320,7 @@ const getSuppliersDashboard = async (req, res, next) => {
         suppliers: totalSuppliers,
         with_email: Number(summary.with_email) || 0,
         with_phone: Number(summary.with_phone) || 0,
-        with_contact,
+        with_contact: withContact,
         without_contact: Math.max(totalSuppliers - withContact, 0),
       },
       coverage: coverageResult.rows.map((row) => ({

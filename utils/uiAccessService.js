@@ -99,6 +99,13 @@ const defaultResources = [
     requireAll: false,
   },
   {
+    resourceKey: 'feature.rfxPortal',
+    label: 'RFX Collaboration Portal',
+    description: 'Publish RFQs/RFPs and review supplier responses.',
+    permissions: ['rfx.manage', 'rfx.respond'],
+    requireAll: false,
+  },
+  {
     resourceKey: 'feature.supplierEvaluations',
     label: 'Supplier Evaluations',
     description: 'Allows managing supplier evaluations.',

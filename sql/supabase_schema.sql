@@ -539,6 +539,36 @@ CREATE TABLE IF NOT EXISTS public.supplier_evaluations (
   weighted_overall_score numeric,
   kpi_weights jsonb,
   criteria_responses jsonb,
+  scheduled_annually boolean DEFAULT true NOT NULL,
+  travel_required boolean DEFAULT false,
+  evaluation_criteria_notes text,
+  overall_supplier_happiness numeric(3, 1),
+  price_satisfaction numeric(3, 1),
+  delivery_as_scheduled numeric(3, 1),
+  delivery_in_good_condition numeric(3, 1),
+  delivery_meets_quality_expectations numeric(3, 1),
+  communication_effectiveness numeric(3, 1),
+  compliance_alignment numeric(3, 1),
+  operations_effectiveness_rating numeric(3, 1),
+  payment_terms_comfort numeric(3, 1),
+  CONSTRAINT chk_supplier_eval_overall_supplier_happiness_scale
+    CHECK (overall_supplier_happiness IS NULL OR (overall_supplier_happiness >= 1 AND overall_supplier_happiness <= 5)),
+  CONSTRAINT chk_supplier_eval_price_satisfaction_scale
+    CHECK (price_satisfaction IS NULL OR (price_satisfaction >= 1 AND price_satisfaction <= 5)),
+  CONSTRAINT chk_supplier_eval_delivery_as_scheduled_scale
+    CHECK (delivery_as_scheduled IS NULL OR (delivery_as_scheduled >= 1 AND delivery_as_scheduled <= 5)),
+  CONSTRAINT chk_supplier_eval_delivery_in_good_condition_scale
+    CHECK (delivery_in_good_condition IS NULL OR (delivery_in_good_condition >= 1 AND delivery_in_good_condition <= 5)),
+  CONSTRAINT chk_supplier_eval_delivery_quality_expectations_scale
+    CHECK (delivery_meets_quality_expectations IS NULL OR (delivery_meets_quality_expectations >= 1 AND delivery_meets_quality_expectations <= 5)),
+  CONSTRAINT chk_supplier_eval_communication_effectiveness_scale
+    CHECK (communication_effectiveness IS NULL OR (communication_effectiveness >= 1 AND communication_effectiveness <= 5)),
+  CONSTRAINT chk_supplier_eval_compliance_alignment_scale
+    CHECK (compliance_alignment IS NULL OR (compliance_alignment >= 1 AND compliance_alignment <= 5)),
+  CONSTRAINT chk_supplier_eval_operations_effectiveness_scale
+    CHECK (operations_effectiveness_rating IS NULL OR (operations_effectiveness_rating >= 1 AND operations_effectiveness_rating <= 5)),
+  CONSTRAINT chk_supplier_eval_payment_terms_comfort_scale
+    CHECK (payment_terms_comfort IS NULL OR (payment_terms_comfort >= 1 AND payment_terms_comfort <= 5)),
   CONSTRAINT supplier_evaluations_pkey PRIMARY KEY (id),
   CONSTRAINT supplier_evaluations_evaluator_id_fkey FOREIGN KEY (evaluator_id) REFERENCES public.users(id)
 );

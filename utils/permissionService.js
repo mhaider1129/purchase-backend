@@ -42,6 +42,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'warehouse.manage-supply',
     'warehouse.view-supply',
     'dashboard.view',
+    'rfx.manage',
+    'rfx.respond',
   ],
   procurementspecialist: [
     'contracts.manage',
@@ -51,8 +53,10 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'requests.manage',
     'requests.view-all',
     'requests.view-incomplete',
+    'rfx.manage',
+    'rfx.respond',
   ],
-  contractmanager: ['contracts.manage', 'evaluations.manage'],
+  contractmanager: ['contracts.manage', 'evaluations.manage', 'rfx.manage'],
   medicaldevices: ['contracts.manage'],
   audit: ['requests.view-incomplete', 'requests.view-audit'],
   coo: ['requests.view-incomplete', 'requests.view-audit'],
@@ -70,6 +74,16 @@ const CORE_PERMISSION_DEFINITIONS = [
     name: 'Manage technical inspections',
     description:
       'Create, edit, and delete technical inspection records.',
+  },
+  {
+    code: 'rfx.manage',
+    name: 'Manage RFX events',
+    description: 'Publish and manage requests for proposals/quotations.',
+  },
+  {
+    code: 'rfx.respond',
+    name: 'Respond to RFX events',
+    description: 'Submit supplier responses to RFQ or RFP events.',
   },
 ];
 

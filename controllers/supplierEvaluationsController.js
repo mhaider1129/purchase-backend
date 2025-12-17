@@ -806,58 +806,94 @@ const getSupplierEvaluationDashboard = async (req, res, next) => {
   try {
     await ensureSupplierEvaluationsTable();
 
-    const [summaryResult, kpiAverages, trendResult, recentResult, topSuppliers] =
-      await Promise.all([
-        pool.query(`
-          SELECT COUNT(*) AS total_evaluations,
-                 COUNT(DISTINCT LOWER(supplier_name)) AS unique_suppliers,
-                 AVG(overall_score) AS avg_overall_score,
-                 AVG(weighted_overall_score) AS avg_weighted_overall_score,
-                 SUM(CASE
-                       WHEN evaluation_date >= CURRENT_DATE - INTERVAL '90 days'
-                       THEN 1
-                       ELSE 0
-                     END) AS evaluations_last_90_days
-            FROM supplier_evaluations
-        `),
-        pool.query(`
-          SELECT AVG(otif_score) AS avg_otif_score,
-                 AVG(corrective_actions_score) AS avg_corrective_actions_score,
-                 AVG(esg_compliance_score) AS avg_esg_compliance_score
-            FROM supplier_evaluations
-        `),
-        pool.query(`
-          SELECT date_trunc('month', evaluation_date) AS period_start,
-                 COUNT(*) AS evaluation_count,
-                 AVG(overall_score) AS avg_overall_score,
-                 AVG(weighted_overall_score) AS avg_weighted_overall_score
-            FROM supplier_evaluations
-        GROUP BY period_start
-        ORDER BY period_start DESC
-           LIMIT 12
-        `),
-        pool.query(`
-          SELECT id,
-                 supplier_name,
-                 evaluation_date,
-                 overall_score,
-                 weighted_overall_score
-            FROM supplier_evaluations
-        ORDER BY evaluation_date DESC, created_at DESC
-           LIMIT 8
-        `),
-        pool.query(`
-          SELECT supplier_name,
-                 COUNT(*) AS evaluation_count,
-                 MAX(evaluation_date) AS last_evaluation_date,
-                 AVG(overall_score) AS avg_overall_score,
-                 AVG(weighted_overall_score) AS avg_weighted_overall_score
-            FROM supplier_evaluations
-        GROUP BY supplier_name
-        ORDER BY avg_weighted_overall_score DESC NULLS LAST, evaluation_count DESC
-           LIMIT 10
-        `),
-      ]);
+    const [
+      summaryResult,
+      kpiAverages,
+      trendResult,
+      recentResult,
+      topSuppliers,
+      indicatorAveragesResult,
+      supplierAverageRatingsResult,
+      yearlyAveragesResult,
+    ] = await Promise.all([
+      pool.query(`
+        SELECT COUNT(*) AS total_evaluations,
+               COUNT(DISTINCT LOWER(supplier_name)) AS unique_suppliers,
+               AVG(overall_score) AS avg_overall_score,
+               AVG(weighted_overall_score) AS avg_weighted_overall_score,
+               SUM(CASE
+                     WHEN evaluation_date >= CURRENT_DATE - INTERVAL '90 days'
+                     THEN 1
+                     ELSE 0
+                   END) AS evaluations_last_90_days
+          FROM supplier_evaluations
+      `),
+      pool.query(`
+        SELECT AVG(otif_score) AS avg_otif_score,
+               AVG(corrective_actions_score) AS avg_corrective_actions_score,
+               AVG(esg_compliance_score) AS avg_esg_compliance_score
+          FROM supplier_evaluations
+      `),
+      pool.query(`
+        SELECT date_trunc('month', evaluation_date) AS period_start,
+               COUNT(*) AS evaluation_count,
+               AVG(overall_score) AS avg_overall_score,
+               AVG(weighted_overall_score) AS avg_weighted_overall_score
+          FROM supplier_evaluations
+      GROUP BY period_start
+      ORDER BY period_start DESC
+         LIMIT 12
+      `),
+      pool.query(`
+        SELECT id,
+               supplier_name,
+               evaluation_date,
+               overall_score,
+               weighted_overall_score
+          FROM supplier_evaluations
+      ORDER BY evaluation_date DESC, created_at DESC
+         LIMIT 8
+      `),
+      pool.query(`
+        SELECT supplier_name,
+               COUNT(*) AS evaluation_count,
+               MAX(evaluation_date) AS last_evaluation_date,
+               AVG(overall_score) AS avg_overall_score,
+               AVG(weighted_overall_score) AS avg_weighted_overall_score
+          FROM supplier_evaluations
+      GROUP BY supplier_name
+      ORDER BY avg_weighted_overall_score DESC NULLS LAST, evaluation_count DESC
+         LIMIT 10
+      `),
+      pool.query(`
+        SELECT AVG(quality_score) AS avg_quality_score,
+               AVG(delivery_score) AS avg_delivery_score,
+               AVG(cost_score) AS avg_cost_score,
+               AVG(compliance_score) AS avg_compliance_score,
+               AVG(otif_score) AS avg_otif_score,
+               AVG(corrective_actions_score) AS avg_corrective_actions_score,
+               AVG(esg_compliance_score) AS avg_esg_compliance_score
+          FROM supplier_evaluations
+      `),
+      pool.query(`
+        SELECT supplier_name,
+               AVG(overall_score) AS avg_overall_score,
+               AVG(weighted_overall_score) AS avg_weighted_overall_score,
+               COUNT(*) AS evaluation_count
+          FROM supplier_evaluations
+      GROUP BY supplier_name
+      ORDER BY avg_overall_score DESC NULLS LAST, evaluation_count DESC
+      `),
+      pool.query(`
+        SELECT date_part('year', evaluation_date) AS year,
+               AVG(overall_score) AS avg_overall_score,
+               AVG(weighted_overall_score) AS avg_weighted_overall_score,
+               COUNT(*) AS evaluation_count
+          FROM supplier_evaluations
+      GROUP BY year
+      ORDER BY year ASC
+      `),
+    ]);
 
     const summary = summaryResult.rows[0] || {};
     const kpis = kpiAverages.rows[0] || {};
@@ -874,6 +910,41 @@ const getSupplierEvaluationDashboard = async (req, res, next) => {
         otif_score: toNumberOrNull(kpis.avg_otif_score),
         corrective_actions_score: toNumberOrNull(kpis.avg_corrective_actions_score),
         esg_compliance_score: toNumberOrNull(kpis.avg_esg_compliance_score),
+      },
+      rating_insights: {
+        indicator_averages: [
+          { indicator: 'Quality', average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_quality_score) },
+          { indicator: 'Delivery', average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_delivery_score) },
+          { indicator: 'Cost', average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_cost_score) },
+          {
+            indicator: 'Compliance',
+            average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_compliance_score),
+          },
+          {
+            indicator: 'OTIF',
+            average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_otif_score),
+          },
+          {
+            indicator: 'Corrective actions',
+            average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_corrective_actions_score),
+          },
+          {
+            indicator: 'ESG compliance',
+            average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_esg_compliance_score),
+          },
+        ].filter((item) => item.average_score !== null),
+        supplier_averages: supplierAverageRatingsResult.rows.map((row) => ({
+          supplier_name: row.supplier_name,
+          avg_overall_score: toNumberOrNull(row.avg_overall_score),
+          avg_weighted_overall_score: toNumberOrNull(row.avg_weighted_overall_score),
+          evaluation_count: Number(row.evaluation_count) || 0,
+        })),
+        yearly_averages: yearlyAveragesResult.rows.map((row) => ({
+          year: Number(row.year),
+          avg_overall_score: toNumberOrNull(row.avg_overall_score),
+          avg_weighted_overall_score: toNumberOrNull(row.avg_weighted_overall_score),
+          evaluation_count: Number(row.evaluation_count) || 0,
+        })),
       },
       trends: trendResult.rows
         .map((row) => ({

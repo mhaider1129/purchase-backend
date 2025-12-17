@@ -35,6 +35,62 @@ function isDatabaseConnectivityError(err) {
 }
 
 // 🔐 JWT Authentication Middleware
+const attachUserFromToken = async (token) => {
+  // ✅ Verify JWT Token
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (err) {
+    console.error('❌ JWT verification failed:', err.message);
+    throw createHttpError(401, 'Unauthorized: Invalid or expired token');
+  }
+
+  // Ensure required warehouse-related columns exist before querying
+  await ensureWarehouseAssignments();
+
+  // 🔎 Fetch user from DB
+  const userRes = await pool.query(
+    `SELECT id, name, role, department_id, warehouse_id, is_active, can_request_medication
+         FROM users WHERE id = $1`,
+    [decoded.user_id]
+  );
+
+  if (userRes.rowCount === 0) {
+    throw createHttpError(401, 'Unauthorized: User not found');
+  }
+
+  const user = userRes.rows[0];
+
+  if (!user.is_active) {
+    throw createHttpError(401, 'Unauthorized: User is deactivated');
+  }
+
+  const { permissions = [] } = await getPermissionsForUserId(user.id);
+
+  const userContext = {
+    id: user.id,
+    user_id: decoded.user_id,
+    name: user.name,
+    role: user.role,
+    department_id: user.department_id,
+    warehouse_id: user.warehouse_id,
+    can_request_medication: user.can_request_medication,
+    permissions,
+  };
+
+  userContext.permissionSet = buildPermissionSet(permissions);
+  userContext.hasPermission = permissionCode => userHasPermission(userContext, permissionCode);
+  userContext.hasAnyPermission = codes =>
+    Array.isArray(codes) && codes.some(code => userHasPermission(userContext, code));
+  userContext.requirePermission = (code) => {
+    if (!userHasPermission(userContext, code)) {
+      throw createHttpError(403, 'You do not have permission to perform this action');
+    }
+  };
+
+  return userContext;
+};
+
 const authenticateUser = async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
@@ -44,59 +100,7 @@ const authenticateUser = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
-
-    // ✅ Verify JWT Token
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (err) {
-      console.error('❌ JWT verification failed:', err.message);
-      return next(createHttpError(401, 'Unauthorized: Invalid or expired token'));
-    }
-
-    // Ensure required warehouse-related columns exist before querying
-    await ensureWarehouseAssignments();
-
-    // 🔎 Fetch user from DB
-    const userRes = await pool.query(
-      `SELECT id, name, role, department_id, warehouse_id, is_active, can_request_medication
-         FROM users WHERE id = $1`,
-      [decoded.user_id]
-    );
-
-    if (userRes.rowCount === 0) {
-      return next(createHttpError(401, 'Unauthorized: User not found'));
-    }
-
-    const user = userRes.rows[0];
-
-    if (!user.is_active) {
-      return next(createHttpError(401, 'Unauthorized: User is deactivated'));
-    }
-
-    // ✅ Attach user context to request
-    const { permissions = [] } = await getPermissionsForUserId(user.id);
-
-    req.user = {
-      id: user.id,
-      user_id: decoded.user_id,
-      name: user.name,
-      role: user.role,
-      department_id: user.department_id,
-      warehouse_id: user.warehouse_id,
-      can_request_medication: user.can_request_medication,
-      permissions,
-    };
-
-    req.user.permissionSet = buildPermissionSet(permissions);
-    req.user.hasPermission = permissionCode => userHasPermission(req.user, permissionCode);
-    req.user.hasAnyPermission = codes =>
-      Array.isArray(codes) && codes.some(code => userHasPermission(req.user, code));
-    req.user.requirePermission = (code) => {
-      if (!userHasPermission(req.user, code)) {
-        throw createHttpError(403, 'You do not have permission to perform this action');
-      }
-    };
+    req.user = await attachUserFromToken(token);
 
     next();
   } catch (err) {
@@ -106,8 +110,29 @@ const authenticateUser = async (req, res, next) => {
       return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
     }
 
-    next(createHttpError(500, 'Authentication middleware failed'));
+    next(err);
   }
 };
 
-module.exports = { authenticateUser };
+const authenticateUserOptional = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return next();
+    }
+
+    const token = authHeader.split(' ')[1];
+    req.user = await attachUserFromToken(token);
+
+    next();
+  } catch (err) {
+    if (isDatabaseConnectivityError(err)) {
+      return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
+    }
+
+    next(err);
+  }
+};
+
+module.exports = { authenticateUser, authenticateUserOptional };

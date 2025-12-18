@@ -166,6 +166,7 @@ const supplierScoreToLevel = score => {
 const normalizeSupplierRisk = value => {
   if (!value || typeof value !== 'object') return null;
 
+  const supplierId = parseNumber(value.supplier_id ?? value.supplierId);
   const supplierName = sanitizeText(value.supplier_name || value.supplierName);
   const criticalityLevel = sanitizeText(value.criticality_level || value.criticalityLevel);
   const lastAssessmentDate = normalizeDate(value.last_assessment_date || value.lastAssessmentDate);
@@ -186,6 +187,7 @@ const normalizeSupplierRisk = value => {
   pushRisk('supply_continuity', value.supply_continuity || value.supplyContinuity);
 
   const hasData =
+    supplierId !== null ||
     supplierName ||
     criticalityLevel ||
     lastAssessmentDate ||
@@ -208,6 +210,7 @@ const normalizeSupplierRisk = value => {
   }, {});
 
   return {
+    supplier_id: supplierId,
     supplier_name: supplierName,
     criticality_level: criticalityLevel,
     last_assessment_date: lastAssessmentDate,

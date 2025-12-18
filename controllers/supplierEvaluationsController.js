@@ -813,6 +813,7 @@ const getSupplierEvaluationDashboard = async (req, res, next) => {
       recentResult,
       topSuppliers,
       indicatorAveragesResult,
+      supplierIndicatorAveragesResult,
       supplierAverageRatingsResult,
       yearlyAveragesResult,
     ] = await Promise.all([
@@ -877,6 +878,18 @@ const getSupplierEvaluationDashboard = async (req, res, next) => {
       `),
       pool.query(`
         SELECT supplier_name,
+               AVG(quality_score) AS avg_quality_score,
+               AVG(delivery_score) AS avg_delivery_score,
+               AVG(cost_score) AS avg_cost_score,
+               AVG(compliance_score) AS avg_compliance_score,
+               AVG(otif_score) AS avg_otif_score,
+               AVG(corrective_actions_score) AS avg_corrective_actions_score,
+               AVG(esg_compliance_score) AS avg_esg_compliance_score
+          FROM supplier_evaluations
+      GROUP BY supplier_name
+      `),
+      pool.query(`
+        SELECT supplier_name,
                AVG(overall_score) AS avg_overall_score,
                AVG(weighted_overall_score) AS avg_weighted_overall_score,
                COUNT(*) AS evaluation_count
@@ -933,6 +946,24 @@ const getSupplierEvaluationDashboard = async (req, res, next) => {
             average_score: toNumberOrNull(indicatorAveragesResult.rows[0]?.avg_esg_compliance_score),
           },
         ].filter((item) => item.average_score !== null),
+        supplier_indicator_averages: supplierIndicatorAveragesResult.rows.map((row) => ({
+          supplier_name: row.supplier_name,
+          indicators: [
+            { indicator: 'Quality', average_score: toNumberOrNull(row.avg_quality_score) },
+            { indicator: 'Delivery', average_score: toNumberOrNull(row.avg_delivery_score) },
+            { indicator: 'Cost', average_score: toNumberOrNull(row.avg_cost_score) },
+            { indicator: 'Compliance', average_score: toNumberOrNull(row.avg_compliance_score) },
+            { indicator: 'OTIF', average_score: toNumberOrNull(row.avg_otif_score) },
+            {
+              indicator: 'Corrective actions',
+              average_score: toNumberOrNull(row.avg_corrective_actions_score),
+            },
+            {
+              indicator: 'ESG compliance',
+              average_score: toNumberOrNull(row.avg_esg_compliance_score),
+            },
+          ].filter((item) => item.average_score !== null),
+        })),
         supplier_averages: supplierAverageRatingsResult.rows.map((row) => ({
           supplier_name: row.supplier_name,
           avg_overall_score: toNumberOrNull(row.avg_overall_score),

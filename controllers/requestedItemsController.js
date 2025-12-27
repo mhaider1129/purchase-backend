@@ -2,6 +2,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
+const ensureRequestedItemPoIssuanceColumn = require('../utils/ensureRequestedItemPoIssuanceColumn');
 
 // 📦 Add multiple items to a request
 const addRequestedItems = async (req, res, next) => {
@@ -229,7 +230,7 @@ const updateItemCost = async (req, res, next) => {
 // 🆕 ✅ Update procurement status
 const updateItemProcurementStatus = async (req, res, next) => {
   const { item_id } = req.params;
-  const { procurement_status, procurement_comment } = req.body;
+  const { procurement_status, procurement_comment, po_issuance_method } = req.body;
   const { id: user_id } = req.user;
 
   const allowedStatuses = [
@@ -254,6 +255,8 @@ const updateItemProcurementStatus = async (req, res, next) => {
   try {
     await client.query('BEGIN');
 
+    await ensureRequestedItemPoIssuanceColumn(client);
+
     const itemRes = await client.query(
       `SELECT * FROM public.requested_items WHERE id = $1`,
       [item_id]
@@ -271,15 +274,28 @@ const updateItemProcurementStatus = async (req, res, next) => {
        SET procurement_status = $1,
            procurement_comment = $2,
            procurement_updated_by = $3,
-           procurement_updated_at = CURRENT_TIMESTAMP
+           procurement_updated_at = CURRENT_TIMESTAMP,
+           po_issuance_method = COALESCE($5, po_issuance_method)
        WHERE id = $4`,
-      [procurement_status, procurement_comment || null, user_id, item_id]
+      [
+        procurement_status,
+        procurement_comment || null,
+        user_id,
+        item_id,
+        po_issuance_method || null,
+      ]
     );
 
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
        VALUES ($1, 'Procurement Status Updated', $2, $3)`,
-      [item.request_id, user_id, `Updated status of item '${item.item_name}' to '${procurement_status}'`]
+      [
+        item.request_id,
+        user_id,
+        po_issuance_method
+          ? `Updated status of item '${item.item_name}' to '${procurement_status}' (PO issuance: ${po_issuance_method})`
+          : `Updated status of item '${item.item_name}' to '${procurement_status}'`,
+      ]
     );
 
     await client.query('COMMIT');

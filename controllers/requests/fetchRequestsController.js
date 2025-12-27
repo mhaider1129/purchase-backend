@@ -2,6 +2,7 @@ const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
+const ensureRequestedItemPoIssuanceColumn = require('../../utils/ensureRequestedItemPoIssuanceColumn');
 const { ensureWarehouseSupplyApprovalColumns } = require('../../utils/ensureWarehouseSupplyTables');
 
 const getRequestDetails = async (req, res, next) => {
@@ -51,6 +52,9 @@ const getRequestDetails = async (req, res, next) => {
            NULL::numeric AS unit_cost,
            NULL::numeric AS total_cost,
            NULL::text AS specs,
+           NULL::text AS procurement_status,
+           NULL::text AS procurement_comment,
+           NULL::text AS po_issuance_method,
            NULL::text AS approval_status,
          NULL::text AS approval_comments,
          NULL::integer AS approved_by,
@@ -65,6 +69,7 @@ const getRequestDetails = async (req, res, next) => {
     } else {
       await ensureRequestedItemApprovalColumns();
       await ensureRequestedItemReceivedColumns();
+      await ensureRequestedItemPoIssuanceColumn();
       itemsRes = await pool.query(
         `SELECT
            id,
@@ -75,6 +80,9 @@ const getRequestDetails = async (req, res, next) => {
            purchased_quantity,
            unit_cost,
            total_cost,
+           procurement_status,
+           procurement_comment,
+           po_issuance_method,
            specs,
            approval_status,
            approval_comments,
@@ -181,6 +189,7 @@ const getRequestItemsOnly = async (req, res, next) => {
         NULL::numeric AS total_cost,
         NULL::text AS procurement_status,
         NULL::text AS procurement_comment,
+        NULL::text AS po_issuance_method,
         NULL::text AS specs,
         COALESCE(approval_status, 'Pending') AS approval_status,
         approval_comments,
@@ -197,6 +206,7 @@ const getRequestItemsOnly = async (req, res, next) => {
     } else {
       await ensureRequestedItemApprovalColumns();
       await ensureRequestedItemReceivedColumns();
+      await ensureRequestedItemPoIssuanceColumn();
       itemsRes = await pool.query(
         `
       SELECT
@@ -210,6 +220,7 @@ const getRequestItemsOnly = async (req, res, next) => {
         total_cost,
         procurement_status,
         procurement_comment,
+        po_issuance_method,
         specs,
         approval_status,
         approval_comments,

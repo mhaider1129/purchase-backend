@@ -59,6 +59,30 @@ const ensureRfxTables = async () => {
 
 const normalizeText = (value) => (typeof value === 'string' ? value.trim() : '');
 
+const clampScore = (value, fallback = 0) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  if (numeric < 0) return 0;
+  if (numeric > 100) return 100;
+  return numeric;
+};
+
+const normalizeBidAmount = (value) => {
+  if (value === null || value === undefined) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+};
+
+const calculatePriceScore = (bidAmount, minBid, maxBid) => {
+  if (!Number.isFinite(bidAmount) || minBid === null || maxBid === null) return null;
+  if (maxBid === minBid) return 100;
+
+  const distanceFromMin = maxBid - bidAmount;
+  const priceRange = maxBid - minBid;
+  const normalized = (distanceFromMin / priceRange) * 100;
+  return clampScore(normalized, 0);
+};
+
 const userHasRole = (user, ...roles) => {
   const normalizedRole = user?.role?.toLowerCase?.() ?? '';
   return roles.some((role) => normalizedRole === String(role).toLowerCase());
@@ -290,10 +314,90 @@ const updateRfxStatus = async (req, res, next) => {
   }
 };
 
+const analyzeQuotations = async (req, res, next) => {
+  if (!canManageRfx(req.user)) {
+    return next(createHttpError(403, 'You are not authorized to analyze quotations'));
+  }
+
+  const rfxId = Number(req.params.id);
+  const quotations = Array.isArray(req.body?.quotations) ? req.body.quotations : [];
+
+  if (!Number.isInteger(rfxId) || rfxId <= 0) {
+    return next(createHttpError(400, 'Invalid RFX id'));
+  }
+
+  if (quotations.length === 0) {
+    return next(createHttpError(400, 'Provide at least one quotation to analyze'));
+  }
+
+  try {
+    await ensureRfxTables();
+
+    const existingEvent = await pool.query(
+      `SELECT id FROM rfx_events WHERE id = $1 LIMIT 1`,
+      [rfxId]
+    );
+
+    if (existingEvent.rowCount === 0) {
+      return next(createHttpError(404, 'RFX event not found'));
+    }
+
+    const bidValues = quotations
+      .map((quote) => normalizeBidAmount(quote?.bid_amount))
+      .filter((value) => value !== null);
+    const minBid = bidValues.length ? Math.min(...bidValues) : null;
+    const maxBid = bidValues.length ? Math.max(...bidValues) : null;
+
+    const weightedResults = quotations.map((quote, index) => {
+      const supplierName = normalizeText(quote?.supplier_name) || `Supplier ${index + 1}`;
+      const bidAmount = normalizeBidAmount(quote?.bid_amount);
+      const safetyScore = clampScore(quote?.safety_score ?? quote?.safety);
+      const valueScore = clampScore(quote?.value_score ?? quote?.value);
+      const jciScore = clampScore(
+        quote?.jci_score ?? quote?.jci_compliance_score ?? quote?.jci_compliance
+      );
+      const deliveryScore = clampScore(quote?.delivery_score ?? quote?.delivery);
+
+      const priceScore = calculatePriceScore(bidAmount, minBid, maxBid);
+
+      // Weighted formula tuned for price/value competitiveness with safety and JCI compliance
+      const combinedScore =
+        (priceScore ?? 0) * 0.3 + valueScore * 0.3 + safetyScore * 0.25 + jciScore * 0.1 + deliveryScore * 0.05;
+
+      return {
+        supplier_name: supplierName,
+        bid_amount: bidAmount,
+        safety_score: safetyScore,
+        value_score: valueScore,
+        jci_score: jciScore,
+        delivery_score: deliveryScore,
+        price_score: priceScore,
+        composite_score: Number(combinedScore.toFixed(2)),
+        notes: normalizeText(quote?.notes) || null,
+      };
+    });
+
+    const rankings = weightedResults
+      .sort((a, b) => b.composite_score - a.composite_score)
+      .map((result, position) => ({ ...result, rank: position + 1 }));
+
+    res.json({
+      rfx_id: rfxId,
+      evaluated_on: new Date().toISOString(),
+      best_quotation: rankings[0],
+      rankings,
+    });
+  } catch (err) {
+    console.error('❌ Failed to analyze quotations:', err);
+    next(createHttpError(500, 'Failed to analyze quotations'));
+  }
+};
+
 module.exports = {
   listRfxEvents,
   createRfxEvent,
   submitRfxResponse,
   listRfxResponses,
   updateRfxStatus,
+  analyzeQuotations,
 };

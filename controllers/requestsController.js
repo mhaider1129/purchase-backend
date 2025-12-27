@@ -39,6 +39,7 @@ const {
   sendStatusCommunication,
   listStatusCommunications,
 } = require('./requests/statusCommunicationController');
+const { recordDirectPurchaseCommunication } = require('./requests/directPurchaseCommunicationController');
 
 const { generateRfx } = require('./requests/generateRfxController');
 const { printRequest } = require('./requests/printRequestController');
@@ -74,4 +75,5 @@ module.exports = {
   insertHistoricalRequest,
   sendStatusCommunication,
   listStatusCommunications,
+  recordDirectPurchaseCommunication,
 };

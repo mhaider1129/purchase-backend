@@ -22,6 +22,7 @@ const {
   getRequestLogs,
   sendStatusCommunication,
   listStatusCommunications,
+  recordDirectPurchaseCommunication,
   printRequest,
   updateApprovalStatus,
   requestHodApproval,
@@ -223,6 +224,7 @@ router.get('/:id/items', getRequestItemsOnly);
 router.get('/:id/logs', getRequestLogs);
 router.get('/:id/status-communications', listStatusCommunications);
 router.post('/:id/status-communications', sendStatusCommunication);
+router.post('/:id/direct-purchase-communications', recordDirectPurchaseCommunication);
 router.get('/:id/rfx', generateRfx);
 router.get('/:id/print', printRequest);
 router.get('/:id', getRequestDetails);

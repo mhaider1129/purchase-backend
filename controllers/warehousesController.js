@@ -9,10 +9,19 @@ const requireWarehousePermission = user => {
 
 const listWarehouses = async (req, res, next) => {
   try {
+    const params = [];
+    let whereClause = '';
+    if (Number.isInteger(req.user?.institute_id)) {
+      params.push(req.user.institute_id);
+      whereClause = 'WHERE institute_id = $1';
+    }
+
     const { rows } = await pool.query(
-      `SELECT id, name, type, location, description, department_id, created_at, updated_at
+      `SELECT id, name, type, location, description, department_id, institute_id, created_at, updated_at
          FROM warehouses
-        ORDER BY name ASC`
+         ${whereClause}
+        ORDER BY name ASC`,
+      params
     );
     res.json(rows);
   } catch (err) {
@@ -36,11 +45,15 @@ const createWarehouse = async (req, res, next) => {
   }
 
   try {
+    if (!Number.isInteger(req.user?.institute_id)) {
+      return next(createHttpError(400, 'User is not linked to an institute'));
+    }
+
     const { rows } = await pool.query(
-      `INSERT INTO warehouses (name, location, description)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, type, location, description, department_id, created_at, updated_at`,
-      [trimmedName, location || null, description || null]
+      `INSERT INTO warehouses (name, location, description, institute_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, type, location, description, department_id, institute_id, created_at, updated_at`,
+      [trimmedName, location || null, description || null, req.user.institute_id]
     );
 
     res.status(201).json(rows[0]);
@@ -73,15 +86,23 @@ const updateWarehouse = async (req, res, next) => {
   }
 
   try {
+    const params = [trimmedName, location || null, description || null, warehouseId];
+    let instituteClause = '';
+
+    if (Number.isInteger(req.user?.institute_id)) {
+      params.push(req.user.institute_id);
+      instituteClause = ` AND institute_id = $${params.length}`;
+    }
+
     const { rowCount, rows } = await pool.query(
       `UPDATE warehouses
           SET name = $1,
               location = $2,
               description = $3,
               updated_at = NOW()
-        WHERE id = $4
-        RETURNING id, name, type, location, description, department_id, created_at, updated_at`,
-      [trimmedName, location || null, description || null, warehouseId]
+        WHERE id = $4${instituteClause}
+        RETURNING id, name, type, location, description, department_id, institute_id, created_at, updated_at`,
+      params
     );
 
     if (rowCount === 0) {

@@ -50,7 +50,7 @@ const attachUserFromToken = async (token) => {
 
   // 🔎 Fetch user from DB
   const userRes = await pool.query(
-    `SELECT id, name, role, department_id, warehouse_id, is_active, can_request_medication
+    `SELECT id, name, role, department_id, institute_id, warehouse_id, is_active, can_request_medication
          FROM users WHERE id = $1`,
     [decoded.user_id]
   );
@@ -73,6 +73,7 @@ const attachUserFromToken = async (token) => {
     name: user.name,
     role: user.role,
     department_id: user.department_id,
+    institute_id: user.institute_id,
     warehouse_id: user.warehouse_id,
     can_request_medication: user.can_request_medication,
     permissions,

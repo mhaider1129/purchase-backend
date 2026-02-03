@@ -3,6 +3,40 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { applyDefaultRolePermissions } = require('../utils/permissionService');
 
+const ensureInstituteMatch = async (client, instituteId, { departmentId, warehouseId }) => {
+  if (!Number.isInteger(instituteId)) {
+    return;
+  }
+
+  if (Number.isInteger(departmentId)) {
+    const { rows } = await client.query(
+      'SELECT institute_id FROM departments WHERE id = $1',
+      [departmentId]
+    );
+    const departmentInstituteId = rows[0]?.institute_id;
+    if (!Number.isInteger(departmentInstituteId)) {
+      throw createHttpError(400, 'Department not found');
+    }
+    if (departmentInstituteId !== instituteId) {
+      throw createHttpError(403, 'Department is outside your institute');
+    }
+  }
+
+  if (Number.isInteger(warehouseId)) {
+    const { rows } = await client.query(
+      'SELECT institute_id FROM warehouses WHERE id = $1',
+      [warehouseId]
+    );
+    const warehouseInstituteId = rows[0]?.institute_id;
+    if (!Number.isInteger(warehouseInstituteId)) {
+      throw createHttpError(400, 'Warehouse not found');
+    }
+    if (warehouseInstituteId !== instituteId) {
+      throw createHttpError(403, 'Warehouse is outside your institute');
+    }
+  }
+};
+
 // 🚫 Deactivate user by ID
 const deactivateUser = async (req, res, next) => {
   const { id } = req.params;
@@ -106,8 +140,13 @@ const assignUser = async (req, res, next) => {
   }
 
   try {
+    await ensureInstituteMatch(pool, req.user?.institute_id, {
+      departmentId,
+      warehouseId,
+    });
+
     const userRes = await pool.query(
-      `SELECT id, role FROM users WHERE id = $1`,
+      `SELECT id, role, institute_id FROM users WHERE id = $1`,
       [userId]
     );
 
@@ -118,6 +157,10 @@ const assignUser = async (req, res, next) => {
     const existingUser = userRes.rows[0];
     if (existingUser.role === 'admin' && actingRole !== 'admin') {
       return next(createHttpError(403, 'Only Admin can modify other Admin accounts'));
+    }
+
+    if (Number.isInteger(req.user?.institute_id) && existingUser.institute_id !== req.user.institute_id) {
+      return next(createHttpError(403, 'User is outside your institute'));
     }
 
     const roleProvided = typeof role !== 'undefined' || typeof role_id !== 'undefined';

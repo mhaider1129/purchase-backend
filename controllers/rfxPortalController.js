@@ -59,6 +59,11 @@ const ensureRfxTables = async () => {
         `);
 
         await pool.query(`
+          ALTER TABLE rfx_events
+            ADD COLUMN IF NOT EXISTS details JSONB;
+        `);
+
+        await pool.query(`
           ALTER TABLE rfx_responses
             ADD COLUMN IF NOT EXISTS request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL;
         `);
@@ -213,6 +218,7 @@ const listRfxEvents = async (req, res, next) => {
               e.title,
               e.rfx_type,
               e.description,
+              e.details,
               e.request_id,
               e.due_date,
               e.status,
@@ -247,6 +253,7 @@ const createRfxEvent = async (req, res, next) => {
   const title = normalizeText(req.body?.title);
   const rfxType = normalizeText(req.body?.rfx_type || req.body?.type).toLowerCase();
   const description = normalizeText(req.body?.description) || null;
+  const incomingDetails = req.body?.details ?? (req.body?.items ? { items: req.body.items } : null);
   const requestIdRaw = req.body?.request_id ?? req.body?.requestId;
   const dueDateRaw = normalizeText(req.body?.due_date);
   const allowedTypes = new Set(['rfq', 'rfp', 'rfi', 'itt', 'rft']);
@@ -285,10 +292,10 @@ const createRfxEvent = async (req, res, next) => {
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO rfx_events (title, rfx_type, description, request_id, due_date, status, created_by)
-       VALUES ($1, $2, $3, $4, $5, 'open', $6)
-       RETURNING id, title, rfx_type, description, request_id, due_date, status, created_by, created_at, updated_at`,
-      [title, rfxType.toUpperCase(), description, requestId, dueDate, req.user?.id || null]
+      `INSERT INTO rfx_events (title, rfx_type, description, details, request_id, due_date, status, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, 'open', $7)
+       RETURNING id, title, rfx_type, description, details, request_id, due_date, status, created_by, created_at, updated_at`,
+      [title, rfxType.toUpperCase(), description, incomingDetails, requestId, dueDate, req.user?.id || null]
     );
 
     res.status(201).json(rows[0]);

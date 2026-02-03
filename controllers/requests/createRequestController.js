@@ -260,6 +260,9 @@ const createRequest = async (req, res, next) => {
 
   if (!req.user?.id || !req.user?.department_id)
     return next(createHttpError(400, "Invalid user context"));
+  if (!Number.isInteger(req.user?.institute_id)) {
+    return next(createHttpError(400, "User is not linked to an institute"));
+  }
 
   const userRole = (req.user.role || "").toLowerCase().replace(/_/g, "");
   const warehouseRoles = ["warehousekeeper", "warehousemanager"];
@@ -286,6 +289,7 @@ const createRequest = async (req, res, next) => {
 
   const requester_id = req.user.id;
   const department_id = req.body.target_department_id || req.user.department_id;
+  const institute_id = req.user.institute_id;
   const section_id = req.body.target_section_id || req.user.section_id || null;
 
   const rawTempRequester =
@@ -370,10 +374,15 @@ const createRequest = async (req, res, next) => {
     }
 
     const deptRes = await client.query(
-      "SELECT type FROM departments WHERE id = $1",
+      "SELECT type, institute_id FROM departments WHERE id = $1",
       [department_id],
     );
     const deptType = deptRes.rows[0]?.type?.toLowerCase();
+    const departmentInstituteId = deptRes.rows[0]?.institute_id;
+    if (Number.isInteger(departmentInstituteId) && departmentInstituteId !== institute_id) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'Department is outside your institute'));
+    }
     let requestDomain = deptType === "medical" ? "medical" : "operational";
 
     if (
@@ -385,15 +394,16 @@ const createRequest = async (req, res, next) => {
 
     const requestRes = await client.query(
       `INSERT INTO requests (
-        request_type, requester_id, department_id, section_id, justification,
+        request_type, requester_id, department_id, institute_id, section_id, justification,
         estimated_cost, request_domain,
         maintenance_ref_number, initiated_by_technician_id,
         project_id, temporary_requester_name, supply_warehouse_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [
         request_type,
         requester_id,
         department_id,
+        institute_id,
         section_id,
         justification,
         estimatedCost,

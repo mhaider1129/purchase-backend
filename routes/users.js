@@ -51,11 +51,13 @@ router.get('/me', authenticateUser, async (req, res, next) => {
       `SELECT u.id, u.name, u.email, u.role,
               ${employeeIdSelect},
               u.department_id, d.name AS department_name,
+              u.institute_id, i.name AS institute_name,
               u.section_id, s.name AS section_name,
               u.warehouse_id, w.name AS warehouse_name,
               u.can_request_medication
         FROM users u
         LEFT JOIN departments d ON u.department_id = d.id
+        LEFT JOIN institutes i ON u.institute_id = i.id
         LEFT JOIN sections s ON u.section_id = s.id
         LEFT JOIN warehouses w ON u.warehouse_id = w.id
         WHERE u.id = $1`,

@@ -37,6 +37,13 @@ const defaultResources = [
     requireAll: false,
   },
   {
+    resourceKey: 'feature.itemMaster',
+    label: 'Item Master Data',
+    description: 'Shows the central item master catalog (read-only).',
+    permissions: [],
+    requireAll: false,
+  },
+  {
     resourceKey: 'feature.technicalInspections',
     label: 'Technical Inspections',
     description: 'Controls access to the technical inspection log and form.',

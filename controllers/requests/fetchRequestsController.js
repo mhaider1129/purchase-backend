@@ -4,6 +4,7 @@ const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedI
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 const ensureRequestedItemPoIssuanceColumn = require('../../utils/ensureRequestedItemPoIssuanceColumn');
 const { ensureWarehouseSupplyApprovalColumns } = require('../../utils/ensureWarehouseSupplyTables');
+const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureRequestedItemFinancialsTable');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -61,7 +62,17 @@ const getRequestDetails = async (req, res, next) => {
          NULL::timestamp AS approved_at,
          NULL::boolean AS is_received,
          NULL::integer AS received_by,
-         NULL::timestamp AS received_at
+         NULL::timestamp AS received_at,
+         NULL::text AS po_number,
+         NULL::text AS invoice_number,
+         NULL::numeric AS committed_cost,
+         NULL::numeric AS paid_cost,
+         NULL::text AS currency,
+         NULL::text AS savings_driver,
+         NULL::text AS savings_notes,
+         NULL::numeric AS savings_baseline,
+         NULL::integer AS contract_id,
+         NULL::numeric AS contract_value_snapshot
        FROM warehouse_supply_items
        WHERE request_id = $1`,
         [id]
@@ -70,29 +81,41 @@ const getRequestDetails = async (req, res, next) => {
       await ensureRequestedItemApprovalColumns();
       await ensureRequestedItemReceivedColumns();
       await ensureRequestedItemPoIssuanceColumn();
+      await ensureRequestedItemFinancialsTable();
       itemsRes = await pool.query(
         `SELECT
-           id,
-           item_name,
-           brand,
-           quantity,
-           available_quantity,
-           purchased_quantity,
-           unit_cost,
-           total_cost,
-           procurement_status,
-           procurement_comment,
-           po_issuance_method,
-           specs,
-           approval_status,
-           approval_comments,
-           approved_by,
-           approved_at,
-           is_received,
-           received_by,
-           received_at
-         FROM public.requested_items
-         WHERE request_id = $1`,
+           ri.id,
+           ri.item_name,
+           ri.brand,
+           ri.quantity,
+           ri.available_quantity,
+           ri.purchased_quantity,
+           ri.unit_cost,
+           ri.total_cost,
+           ri.procurement_status,
+           ri.procurement_comment,
+           ri.po_issuance_method,
+           ri.specs,
+           ri.approval_status,
+           ri.approval_comments,
+           ri.approved_by,
+           ri.approved_at,
+           ri.is_received,
+           ri.received_by,
+           ri.received_at,
+           rif.po_number,
+           rif.invoice_number,
+           rif.committed_cost,
+           rif.paid_cost,
+           rif.currency,
+           rif.savings_driver,
+           rif.savings_notes,
+           rif.savings_baseline,
+           rif.contract_id,
+           rif.contract_value_snapshot
+         FROM public.requested_items ri
+         LEFT JOIN public.requested_item_financials rif ON rif.requested_item_id = ri.id
+         WHERE ri.request_id = $1`,
         [id]
       );
     }
@@ -197,7 +220,17 @@ const getRequestItemsOnly = async (req, res, next) => {
         approved_at,
         NULL::boolean AS is_received,
         NULL::integer AS received_by,
-        NULL::timestamp AS received_at
+        NULL::timestamp AS received_at,
+        NULL::text AS po_number,
+        NULL::text AS invoice_number,
+        NULL::numeric AS committed_cost,
+        NULL::numeric AS paid_cost,
+        NULL::text AS currency,
+        NULL::text AS savings_driver,
+        NULL::text AS savings_notes,
+        NULL::numeric AS savings_baseline,
+        NULL::integer AS contract_id,
+        NULL::numeric AS contract_value_snapshot
       FROM warehouse_supply_items
       WHERE request_id = $1
       `,
@@ -207,30 +240,42 @@ const getRequestItemsOnly = async (req, res, next) => {
       await ensureRequestedItemApprovalColumns();
       await ensureRequestedItemReceivedColumns();
       await ensureRequestedItemPoIssuanceColumn();
+      await ensureRequestedItemFinancialsTable();
       itemsRes = await pool.query(
         `
       SELECT
-        id,
-        item_name,
-        brand,
-        quantity,
-        available_quantity,
-        purchased_quantity,
-        unit_cost,
-        total_cost,
-        procurement_status,
-        procurement_comment,
-        po_issuance_method,
-        specs,
-        approval_status,
-        approval_comments,
-        approved_by,
-        approved_at,
-        is_received,
-        received_by,
-        received_at
-      FROM public.requested_items
-      WHERE request_id = $1
+        ri.id,
+        ri.item_name,
+        ri.brand,
+        ri.quantity,
+        ri.available_quantity,
+        ri.purchased_quantity,
+        ri.unit_cost,
+        ri.total_cost,
+        ri.procurement_status,
+        ri.procurement_comment,
+        ri.po_issuance_method,
+        ri.specs,
+        ri.approval_status,
+        ri.approval_comments,
+        ri.approved_by,
+        ri.approved_at,
+        ri.is_received,
+        ri.received_by,
+        ri.received_at,
+        rif.po_number,
+        rif.invoice_number,
+        rif.committed_cost,
+        rif.paid_cost,
+        rif.currency,
+        rif.savings_driver,
+        rif.savings_notes,
+        rif.savings_baseline,
+        rif.contract_id,
+        rif.contract_value_snapshot
+      FROM public.requested_items ri
+      LEFT JOIN public.requested_item_financials rif ON rif.requested_item_id = ri.id
+      WHERE ri.request_id = $1
       `,
         [id]
       );
@@ -302,6 +347,11 @@ const getMyRequests = async (req, res, next) => {
               AND LOWER(ri.item_name) LIKE ${placeholder}
           )
         )`);
+    }
+
+    if (Number.isInteger(req.user?.institute_id)) {
+      params.push(req.user.institute_id);
+      conditions.push(`r.institute_id = $${params.length}`);
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -384,6 +434,11 @@ const getApprovalHistory = async (req, res, next) => {
     conditions.push(`a.approved_at <= $${params.length}`);
   }
 
+  if (Number.isInteger(req.user?.institute_id)) {
+    params.push(req.user.institute_id);
+    conditions.push(`r.institute_id = $${params.length}`);
+  }
+
   const whereSQL = conditions.join(' AND ');
 
   try {
@@ -415,11 +470,19 @@ const getApprovalHistory = async (req, res, next) => {
 
 const getProcurementUsers = async (req, res, next) => {
   try {
-    const result = await pool.query(`
-      SELECT id, name FROM users
-      WHERE role IN ('ProcurementSpecialist', 'SCM')
-      AND is_active = true
-    `);
+    const params = [];
+    let instituteClause = '';
+    if (Number.isInteger(req.user?.institute_id)) {
+      params.push(req.user.institute_id);
+      instituteClause = ` AND institute_id = $1`;
+    }
+
+    const result = await pool.query(
+      `SELECT id, name FROM users
+       WHERE role IN ('ProcurementSpecialist', 'SCM')
+         AND is_active = true${instituteClause}`,
+      params
+    );
     res.json(result.rows);
   } catch (err) {
     console.error('❌ Failed to fetch procurement users:', err);
@@ -512,6 +575,11 @@ const getAllRequests = async (req, res, next) => {
   if (department_id) {
     params.push(department_id);
     whereClauses.push(`r.department_id = $${params.length}`);
+  }
+
+  if (Number.isInteger(req.user?.institute_id)) {
+    params.push(req.user.institute_id);
+    whereClauses.push(`r.institute_id = $${params.length}`);
   }
 
   if (sort === 'assigned') {

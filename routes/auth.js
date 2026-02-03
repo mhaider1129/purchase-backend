@@ -20,12 +20,26 @@ const ensureScmOrAdmin = (user) => {
   }
 };
 
-const getScmEmails = async (client = pool) => {
-  const { rows } = await client.query(
-    `SELECT email FROM users WHERE role = 'SCM' AND is_active = true`
-  );
+const getScmEmails = async ({ client = pool, instituteId } = {}) => {
+  const params = ["SCM"];
+  let query = `SELECT email FROM users WHERE role = $1 AND is_active = true`;
+
+  if (Number.isInteger(instituteId)) {
+    params.push(instituteId);
+    query += ` AND institute_id = $2`;
+  }
+
+  const { rows } = await client.query(query, params);
 
   return rows.map(row => row.email).filter(Boolean);
+};
+
+const fetchInstituteIdForDepartment = async (client, departmentId) => {
+  const { rows } = await client.query(
+    `SELECT institute_id FROM departments WHERE id = $1`,
+    [departmentId]
+  );
+  return rows[0]?.institute_id ?? null;
 };
 
 const ensureUsersUpdatedAtColumn = async () => {
@@ -85,6 +99,17 @@ router.post('/register', authenticateUser, async (req, res) => {
     client = await pool.connect();
     await client.query('BEGIN');
 
+    const instituteId = await fetchInstituteIdForDepartment(client, departmentId);
+    if (!Number.isInteger(instituteId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Department does not exist' });
+    }
+
+    if (Number.isInteger(req.user?.institute_id) && req.user.institute_id !== instituteId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Department is outside your institute' });
+    }
+
     const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
     if (existingUser.rows.length > 0) {
       await client.query('ROLLBACK');
@@ -113,10 +138,19 @@ router.post('/register', authenticateUser, async (req, res) => {
     const sectionIdValue = sectionId === null ? null : sectionId;
 
     const newUser = await client.query(
-      `INSERT INTO users (name, email, password, role, department_id, section_id, employee_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, email, role, department_id, section_id, employee_id`,
-      [trimmedName, normalizedEmail, hashedPassword, normalizedRole, departmentId, sectionIdValue, employeeId]
+      `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id`,
+      [
+        trimmedName,
+        normalizedEmail,
+        hashedPassword,
+        normalizedRole,
+        departmentId,
+        instituteId,
+        sectionIdValue,
+        employeeId,
+      ]
     );
 
     const newUserId = newUser.rows[0]?.id;
@@ -184,7 +218,8 @@ router.post('/login', async (req, res) => {
       {
         user_id: user.id,
         role: user.role,
-        department_id: user.department_id
+        department_id: user.department_id,
+        institute_id: user.institute_id
       },
       JWT_SECRET,
       { expiresIn: '8h' }
@@ -201,6 +236,7 @@ router.post('/login', async (req, res) => {
         name: user.name,
         role: user.role,
         department_id: user.department_id,
+        institute_id: user.institute_id,
         section_id: user.section_id,
         permissions,
       }
@@ -260,6 +296,11 @@ router.post('/register-request', async (req, res) => {
   }
 
   try {
+    const instituteId = await fetchInstituteIdForDepartment(pool, departmentId);
+    if (!Number.isInteger(instituteId)) {
+      return res.status(400).json({ success: false, message: 'Department does not exist' });
+    }
+
     const userExists = await pool.query('SELECT 1 FROM users WHERE email = $1', [normalizedEmail]);
     if (userExists.rowCount > 0) {
       return res.status(409).json({ success: false, message: 'An account with this email already exists' });
@@ -292,14 +333,23 @@ router.post('/register-request', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
     const { rows } = await pool.query(
       `INSERT INTO user_registration_requests
-        (name, email, password_hash, requested_role, department_id, section_id, employee_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, email, requested_role AS role, department_id, section_id, employee_id, status, created_at`,
-      [trimmedName, normalizedEmail, passwordHash, role, departmentId, sectionId, employeeId]
+        (name, email, password_hash, requested_role, department_id, institute_id, section_id, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, email, requested_role AS role, department_id, institute_id, section_id, employee_id, status, created_at`,
+      [
+        trimmedName,
+        normalizedEmail,
+        passwordHash,
+        role,
+        departmentId,
+        instituteId,
+        sectionId,
+        employeeId,
+      ]
     );
 
     try {
-      const scmEmails = await getScmEmails();
+      const scmEmails = await getScmEmails({ instituteId });
       if (scmEmails.length === 0) {
         console.warn('⚠️ No active SCM users found to notify about registration request');
       }
@@ -351,12 +401,21 @@ router.get('/register-requests', authenticateUser, async (req, res) => {
   }
 
   try {
+    const params = [];
+    let whereClause = '';
+
+    if (Number.isInteger(req.user?.institute_id)) {
+      params.push(req.user.institute_id);
+      whereClause = 'WHERE r.institute_id = $1';
+    }
+
     const { rows } = await pool.query(
       `SELECT r.id,
               r.name,
               r.email,
               r.requested_role AS role,
               r.department_id,
+              r.institute_id,
               d.name AS department_name,
               r.section_id,
               s.name AS section_name,
@@ -371,7 +430,9 @@ router.get('/register-requests', authenticateUser, async (req, res) => {
     LEFT JOIN departments d ON d.id = r.department_id
     LEFT JOIN sections s ON s.id = r.section_id
     LEFT JOIN users reviewer ON reviewer.id = r.reviewer_id
-        ORDER BY (r.status = 'pending') DESC, r.created_at ASC`
+        ${whereClause}
+        ORDER BY (r.status = 'pending') DESC, r.created_at ASC`,
+      params
     );
 
     return res.json({ success: true, requests: rows });
@@ -406,7 +467,7 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     await client.query('BEGIN');
 
     const requestRes = await client.query(
-      `SELECT id, name, email, password_hash, requested_role, department_id, section_id, employee_id, status
+      `SELECT id, name, email, password_hash, requested_role, department_id, institute_id, section_id, employee_id, status
          FROM user_registration_requests
         WHERE id = $1
         FOR UPDATE`,
@@ -423,6 +484,11 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     if (request.status !== 'pending') {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Account request has already been processed' });
+    }
+
+    if (Number.isInteger(req.user?.institute_id) && request.institute_id !== req.user.institute_id) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Account request belongs to another institute' });
     }
 
     const normalizedEmail = normalizeEmail(request.email);
@@ -446,15 +512,16 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     }
 
     const newUser = await client.query(
-      `INSERT INTO users (name, email, password, role, department_id, section_id, employee_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, email, role, department_id, section_id, employee_id`,
+      `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id`,
       [
         request.name,
         normalizedEmail,
         request.password_hash,
         request.requested_role,
         request.department_id,
+        request.institute_id,
         request.section_id,
         employeeId,
       ]
@@ -533,6 +600,14 @@ router.post('/register-requests/:id/reject', authenticateUser, async (req, res) 
   }
 
   try {
+    const params = [requestId, reason ? reason.trim() : null, req.user.id];
+    let instituteClause = '';
+
+    if (Number.isInteger(req.user?.institute_id)) {
+      params.push(req.user.institute_id);
+      instituteClause = ` AND institute_id = $${params.length}`;
+    }
+
     const { rowCount } = await pool.query(
       `UPDATE user_registration_requests
           SET status = 'rejected',
@@ -540,8 +615,8 @@ router.post('/register-requests/:id/reject', authenticateUser, async (req, res) 
               reviewer_id = $3,
               reviewed_at = NOW(),
               updated_at = NOW()
-        WHERE id = $1 AND status = 'pending'`,
-      [requestId, reason ? reason.trim() : null, req.user.id]
+        WHERE id = $1 AND status = 'pending'${instituteClause}`,
+      params
     );
 
     if (rowCount === 0) {
@@ -556,13 +631,46 @@ router.post('/register-requests/:id/reject', authenticateUser, async (req, res) 
 });
 
 // ============================
+// 📋 GET /auth/register-request/institutes (Public)
+// ============================
+router.get('/register-request/institutes', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name
+         FROM institutes
+        ORDER BY name`
+    );
+
+    return res.json({ success: true, institutes: rows });
+  } catch (err) {
+    console.error('❌ Public institutes fetch error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to load institutes' });
+  }
+});
+
+// ============================
 // 📋 GET /auth/register-request/departments (Public)
 // ============================
 router.get('/register-request/departments', async (req, res) => {
   try {
+    const rawInstituteId = req.query?.institute_id;
+    const instituteId = rawInstituteId ? parseInt(rawInstituteId, 10) : null;
+    const params = [];
+    let whereClause = '';
+
+    if (rawInstituteId && Number.isNaN(instituteId)) {
+      return res.status(400).json({ success: false, message: 'Institute is invalid' });
+    }
+
+    if (Number.isInteger(instituteId)) {
+      params.push(instituteId);
+      whereClause = `WHERE d.institute_id = $1`;
+    }
+
     const { rows } = await pool.query(
       `SELECT d.id,
               d.name,
+              d.institute_id,
               COALESCE(
                 JSON_AGG(
                   JSON_BUILD_OBJECT('id', s.id, 'name', s.name)
@@ -572,8 +680,10 @@ router.get('/register-request/departments', async (req, res) => {
               ) AS sections
          FROM departments d
     LEFT JOIN sections s ON s.department_id = d.id
+        ${whereClause}
         GROUP BY d.id
-        ORDER BY d.name`
+        ORDER BY d.name`,
+      params
     );
 
     return res.json({ success: true, departments: rows });

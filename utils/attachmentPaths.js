@@ -30,6 +30,8 @@ function serializeAttachment(row) {
   const storedPath = (row.file_path || '').replace(/\\/g, '/');
   const isLocal = isStoredLocally(storedPath);
   const filename = row.file_name || (storedPath ? path.basename(storedPath) : 'attachment');
+  const itemId = row.item_id ?? row.itemId ?? null;
+  const itemName = row.item_name || row.itemName;
 
   let downloadUrl = null;
 
@@ -48,6 +50,16 @@ function serializeAttachment(row) {
     uploaded_by: row.uploaded_by,
     uploaded_at: row.uploaded_at,
   };
+
+  if (itemId !== null && itemId !== undefined) {
+    result.item_id = itemId;
+    result.itemId = itemId;
+  }
+
+  if (itemName) {
+    result.item_name = itemName;
+    result.itemName = itemName;
+  }
 
   if (storedPath) {
     result.file_path = storedPath;

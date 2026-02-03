@@ -174,14 +174,28 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
       );
     }
 
+    const { rows: itemRows } = await pool.query(
+      `SELECT request_id
+         FROM requested_items
+        WHERE id = $1
+        LIMIT 1`,
+      [itemId]
+    );
+
+    if (itemRows.length === 0) {
+      return next(createHttpError(404, 'Item not found'));
+    }
+
+    const requestIdForItem = itemRows[0]?.request_id ?? null;
+
     const { objectKey } = await uploadAttachmentToStorage({
       file,
-      requestId: null,
+      requestId: requestIdForItem,
       itemId,
     });
 
     const saved = await insertAttachment(pool, {
-      requestId: null,
+      requestId: requestIdForItem,
       itemId,
       fileName: file.originalname,
       filePath: objectKey,
@@ -210,9 +224,16 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
     }
 
     const result = await pool.query(
-      `SELECT id, file_name, file_path, uploaded_by, uploaded_at
-       FROM attachments
-       WHERE item_id = $1`,
+      `SELECT a.id,
+              a.file_name,
+              a.file_path,
+              a.uploaded_by,
+              a.uploaded_at,
+              a.item_id,
+              i.item_name
+         FROM attachments a
+         LEFT JOIN requested_items i ON i.id = a.item_id
+        WHERE a.item_id = $1`,
       [itemId]
     );
 
@@ -358,12 +379,33 @@ router.get('/:requestId', authenticateUser, async (req, res, next) => {
   const { requestId } = req.params;
 
   try {
-    const result = await pool.query(
-      `SELECT id, file_name, file_path, uploaded_by, uploaded_at
-       FROM attachments
-       WHERE request_id = $1`,
-      [requestId]
-    );
+    await ensureAttachmentsItemIdColumn(pool);
+    const supportsItemAttachments = await attachmentsHasItemIdColumn(pool);
+
+    let result;
+
+    if (supportsItemAttachments) {
+      result = await pool.query(
+        `SELECT a.id,
+                a.file_name,
+                a.file_path,
+                a.uploaded_by,
+                a.uploaded_at,
+                a.item_id,
+                i.item_name
+           FROM attachments a
+           LEFT JOIN requested_items i ON i.id = a.item_id
+          WHERE a.request_id = $1`,
+        [requestId]
+      );
+    } else {
+      result = await pool.query(
+        `SELECT id, file_name, file_path, uploaded_by, uploaded_at
+           FROM attachments
+          WHERE request_id = $1`,
+        [requestId]
+      );
+    }
 
     res.json(result.rows.map(serializeAttachment));
   } catch (err) {

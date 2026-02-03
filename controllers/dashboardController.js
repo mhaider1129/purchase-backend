@@ -283,4 +283,126 @@ const getLifecycleAnalytics = async (req, res) => {
   }
 };
 
-module.exports = { getDashboardSummary, getDepartmentMonthlySpending, getLifecycleAnalytics };
+const getWorkloadAnalysis = async (req, res) => {
+  if (!req.user.hasPermission('dashboard.view')) {
+    return res.status(403).json({ message: 'You do not have permission to view this dashboard' });
+  }
+
+  try {
+    const [backlogSummaryRes, userWorkloadRes, levelBacklogRes, departmentBacklogRes, completionTrendRes] =
+      await Promise.all([
+        pool.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS active_pending,
+            COUNT(*) FILTER (WHERE a.status = 'On Hold' AND a.is_active = TRUE) AS on_hold,
+            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_pending,
+            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400)
+              FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS avg_age_days
+          FROM approvals a
+          JOIN requests r ON a.request_id = r.id
+        `),
+        pool.query(`
+          SELECT
+            a.approver_id,
+            COALESCE(u.name, 'Unassigned') AS approver_name,
+            COALESCE(u.role, 'Unknown') AS role,
+            COALESCE(d.name, 'Unassigned') AS department,
+            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS pending_count,
+            COUNT(*) FILTER (WHERE a.status = 'On Hold' AND a.is_active = TRUE) AS on_hold_count,
+            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_count,
+            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400)
+              FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS avg_age_days
+          FROM approvals a
+          LEFT JOIN users u ON a.approver_id = u.id
+          JOIN requests r ON a.request_id = r.id
+          LEFT JOIN departments d ON r.department_id = d.id
+          WHERE a.is_active = TRUE
+            AND a.status IN ('Pending', 'On Hold')
+          GROUP BY a.approver_id, approver_name, role, department
+          ORDER BY pending_count DESC, urgent_count DESC
+        `),
+        pool.query(`
+          SELECT
+            a.approval_level,
+            COUNT(*) AS pending_count,
+            COUNT(*) FILTER (WHERE a.is_urgent = TRUE) AS urgent_count,
+            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400) AS avg_age_days
+          FROM approvals a
+          JOIN requests r ON a.request_id = r.id
+          WHERE a.is_active = TRUE
+            AND a.status IN ('Pending', 'On Hold')
+          GROUP BY a.approval_level
+          ORDER BY a.approval_level
+        `),
+        pool.query(`
+          SELECT
+            COALESCE(d.name, 'Unassigned') AS department,
+            COUNT(*) AS pending_count,
+            COUNT(*) FILTER (WHERE r.is_urgent) AS urgent_count,
+            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400) AS avg_age_days
+          FROM approvals a
+          JOIN requests r ON a.request_id = r.id
+          LEFT JOIN departments d ON r.department_id = d.id
+          WHERE a.is_active = TRUE
+            AND a.status IN ('Pending', 'On Hold')
+          GROUP BY department
+          ORDER BY pending_count DESC
+        `),
+        pool.query(`
+          SELECT
+            TO_CHAR(DATE_TRUNC('day', a.approved_at), 'YYYY-MM-DD') AS day,
+            COUNT(*) AS approvals_completed
+          FROM approvals a
+          WHERE a.status = 'Approved'
+            AND a.approved_at >= (CURRENT_DATE - INTERVAL '29 days')
+          GROUP BY day
+          ORDER BY day
+        `),
+      ]);
+
+    const summary = backlogSummaryRes.rows[0] || {};
+
+    res.json({
+      total_active: Number(summary.active_pending || 0),
+      on_hold: Number(summary.on_hold || 0),
+      urgent_active: Number(summary.urgent_pending || 0),
+      avg_age_days: parseFloat(summary.avg_age_days) || 0,
+      workload_by_user: userWorkloadRes.rows.map((row) => ({
+        approver_id: row.approver_id,
+        approver_name: row.approver_name,
+        role: row.role,
+        department: row.department,
+        pending_count: Number(row.pending_count || 0),
+        on_hold_count: Number(row.on_hold_count || 0),
+        urgent_count: Number(row.urgent_count || 0),
+        avg_age_days: parseFloat(row.avg_age_days) || 0,
+      })),
+      workload_by_level: levelBacklogRes.rows.map((row) => ({
+        approval_level: Number(row.approval_level),
+        pending_count: Number(row.pending_count || 0),
+        urgent_count: Number(row.urgent_count || 0),
+        avg_age_days: parseFloat(row.avg_age_days) || 0,
+      })),
+      backlog_by_department: departmentBacklogRes.rows.map((row) => ({
+        department: row.department,
+        pending_count: Number(row.pending_count || 0),
+        urgent_count: Number(row.urgent_count || 0),
+        avg_age_days: parseFloat(row.avg_age_days) || 0,
+      })),
+      completions_trend: completionTrendRes.rows.map((row) => ({
+        day: row.day,
+        approvals_completed: Number(row.approvals_completed || 0),
+      })),
+    });
+  } catch (err) {
+    console.error('❌ Failed to fetch workload analysis:', err);
+    res.status(500).json({ error: 'Failed to fetch workload analysis' });
+  }
+};
+
+module.exports = {
+  getDashboardSummary,
+  getDepartmentMonthlySpending,
+  getLifecycleAnalytics,
+  getWorkloadAnalysis,
+};

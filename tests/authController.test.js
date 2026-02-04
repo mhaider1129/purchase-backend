@@ -25,7 +25,16 @@ describe('authController.login', () => {
   });
 
   it('returns token and user on success', async () => {
-    const user = { id: 1, name: 'Test', email: 'test@example.com', password: 'hashed', role: 'User', department_id: 1, section_id: 2 };
+    const user = {
+      id: 1,
+      name: 'Test',
+      email: 'test@example.com',
+      password: 'hashed',
+      role: 'User',
+      department_id: 1,
+      institute_id: 10,
+      section_id: 2,
+    };
     pool.query.mockResolvedValue({ rows: [user] });
     bcrypt.compare.mockResolvedValue(true);
     jwt.sign.mockReturnValue('mocktoken');

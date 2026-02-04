@@ -18,6 +18,20 @@ router.get('/:id/sections', async (req, res) => {
   const departmentId = req.params.id;
 
   try {
+    if (Number.isInteger(req.user?.institute_id)) {
+      const { rows } = await pool.query(
+        'SELECT institute_id FROM departments WHERE id = $1',
+        [departmentId]
+      );
+      const instituteId = rows[0]?.institute_id;
+      if (!Number.isInteger(instituteId)) {
+        return res.status(404).json({ message: 'Department not found.' });
+      }
+      if (instituteId !== req.user.institute_id) {
+        return res.status(403).json({ message: 'Department is outside your institute.' });
+      }
+    }
+
     const { rows } = await pool.query(
       'SELECT id, name FROM sections WHERE department_id = $1',
       [departmentId]

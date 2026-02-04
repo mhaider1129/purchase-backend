@@ -186,12 +186,23 @@ const insertHistoricalRequest = async (req, res, next) => {
     await client.query('BEGIN');
 
     const deptRes = await client.query(
-      'SELECT type FROM departments WHERE id = $1',
+      'SELECT type, institute_id FROM departments WHERE id = $1',
       [departmentId],
     );
     if (deptRes.rowCount === 0) {
       await client.query('ROLLBACK');
       return next(createHttpError(404, 'Department not found'));
+    }
+
+    const instituteId = deptRes.rows[0]?.institute_id;
+    if (!Number.isInteger(instituteId)) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Department is missing an institute'));
+    }
+
+    if (Number.isInteger(req.user?.institute_id) && req.user.institute_id !== instituteId) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'Department is outside your institute'));
     }
 
     let requestDomain = deptRes.rows[0]?.type?.toLowerCase() === 'medical'
@@ -215,13 +226,14 @@ const insertHistoricalRequest = async (req, res, next) => {
 
     const requestRes = await client.query(
       `INSERT INTO requests (
-        request_type, requester_id, department_id, justification, estimated_cost,
+        request_type, requester_id, department_id, institute_id, justification, estimated_cost,
         status, request_domain, temporary_requester_name, completed_at, project_id, supply_warehouse_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [
         requestType,
         requesterId,
         departmentId,
+        instituteId,
         req.body.justification || null,
         estimatedCost,
         markCompleted ? 'completed' : 'approved',

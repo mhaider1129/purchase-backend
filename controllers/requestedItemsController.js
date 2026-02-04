@@ -3,6 +3,131 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
 const ensureRequestedItemPoIssuanceColumn = require('../utils/ensureRequestedItemPoIssuanceColumn');
+const { ensureRequestedItemFinancialsTable } = require('../utils/ensureRequestedItemFinancialsTable');
+
+const parseOptionalNumber = (value, fieldLabel) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    throw createHttpError(400, `${fieldLabel} must be a non-negative number`);
+  }
+
+  return numeric;
+};
+
+const parseOptionalInteger = (value, fieldLabel) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw createHttpError(400, `${fieldLabel} must be a positive integer`);
+  }
+
+  return numeric;
+};
+
+const fetchRequestBaseline = async (client, requestId) => {
+  const { rows } = await client.query(
+    `SELECT estimated_cost FROM requests WHERE id = $1 LIMIT 1`,
+    [requestId]
+  );
+
+  const estimated = rows[0]?.estimated_cost;
+  const numericEstimated = Number(estimated);
+  return Number.isFinite(numericEstimated) ? numericEstimated : null;
+};
+
+const fetchContractSnapshot = async (client, contractId) => {
+  if (!contractId) {
+    return { contractId: null, contractValue: null };
+  }
+
+  const parsedId = parseOptionalInteger(contractId, 'contract_id');
+  const { rows } = await client.query(
+    `SELECT contract_value FROM contracts WHERE id = $1 LIMIT 1`,
+    [parsedId]
+  );
+
+  if (rows.length === 0) {
+    throw createHttpError(404, `Contract #${parsedId} was not found`);
+  }
+
+  const numericValue = rows[0]?.contract_value;
+  return {
+    contractId: parsedId,
+    contractValue: numericValue === null || numericValue === undefined ? null : Number(numericValue),
+  };
+};
+
+const upsertItemFinancials = async (client, item, updates, userId) => {
+  await ensureRequestedItemFinancialsTable(client);
+
+  const requestBaseline =
+    updates.savings_baseline !== undefined
+      ? updates.savings_baseline
+      : await fetchRequestBaseline(client, item.request_id);
+
+  const { contractId, contractValue } = await fetchContractSnapshot(
+    client,
+    updates.contract_id
+  );
+
+  const params = [
+    item.id,
+    item.request_id,
+    updates.po_number || null,
+    updates.invoice_number || null,
+    updates.committed_cost ?? null,
+    updates.paid_cost ?? null,
+    updates.currency || null,
+    updates.savings_driver || null,
+    updates.savings_notes || null,
+    requestBaseline,
+    contractId,
+    updates.contract_value_snapshot ?? contractValue,
+    userId || null,
+  ];
+
+  await client.query(
+    `INSERT INTO public.requested_item_financials (
+       requested_item_id,
+       request_id,
+       po_number,
+       invoice_number,
+       committed_cost,
+       paid_cost,
+       currency,
+       savings_driver,
+       savings_notes,
+       savings_baseline,
+       contract_id,
+       contract_value_snapshot,
+       created_by
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (requested_item_id) DO UPDATE SET
+       po_number = COALESCE(EXCLUDED.po_number, requested_item_financials.po_number),
+       invoice_number = COALESCE(EXCLUDED.invoice_number, requested_item_financials.invoice_number),
+       committed_cost = COALESCE(EXCLUDED.committed_cost, requested_item_financials.committed_cost),
+       paid_cost = COALESCE(EXCLUDED.paid_cost, requested_item_financials.paid_cost),
+       currency = COALESCE(EXCLUDED.currency, requested_item_financials.currency),
+       savings_driver = COALESCE(EXCLUDED.savings_driver, requested_item_financials.savings_driver),
+       savings_notes = COALESCE(EXCLUDED.savings_notes, requested_item_financials.savings_notes),
+       savings_baseline = COALESCE(EXCLUDED.savings_baseline, requested_item_financials.savings_baseline),
+       contract_id = COALESCE(EXCLUDED.contract_id, requested_item_financials.contract_id),
+       contract_value_snapshot = COALESCE(EXCLUDED.contract_value_snapshot, requested_item_financials.contract_value_snapshot),
+       updated_at = now(),
+       created_by = COALESCE(requested_item_financials.created_by, EXCLUDED.created_by)`
+    ,
+    params
+  );
+};
+
 
 // 📦 Add multiple items to a request
 const addRequestedItems = async (req, res, next) => {
@@ -16,6 +141,7 @@ const addRequestedItems = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await ensureRequestedItemFinancialsTable(client);
     const insertedItems = [];
 
     const typeRes = await client.query('SELECT request_type FROM requests WHERE id = $1', [request_id]);
@@ -164,9 +290,10 @@ const updateItemCost = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
-      `SELECT ri.*, r.assigned_to
+      `SELECT ri.*, r.assigned_to, r.estimated_cost AS request_estimated_cost
        FROM public.requested_items ri
        JOIN requests r ON ri.request_id = r.id
        WHERE ri.id = $1`,
@@ -184,8 +311,27 @@ const updateItemCost = async (req, res, next) => {
       `UPDATE public.requested_items
        SET unit_cost = $1::numeric,
            total_cost = quantity * $1::numeric
-       WHERE id = $2`,
+      WHERE id = $2`,
       [parsedUnitCost, item_id]
+    );
+
+    const requestedQty = Number(item.purchased_quantity ?? item.quantity ?? 0);
+    const committedCost =
+      Number.isFinite(requestedQty) && requestedQty >= 0
+        ? Number((requestedQty * parsedUnitCost).toFixed(2))
+        : null;
+
+    await upsertItemFinancials(
+      client,
+      item,
+      {
+        committed_cost: committedCost,
+        savings_baseline:
+          item.request_estimated_cost !== undefined
+            ? Number(item.request_estimated_cost)
+            : null,
+      },
+      user_id
     );
 
     const totalRes = await client.query(
@@ -230,7 +376,20 @@ const updateItemCost = async (req, res, next) => {
 // 🆕 ✅ Update procurement status
 const updateItemProcurementStatus = async (req, res, next) => {
   const { item_id } = req.params;
-  const { procurement_status, procurement_comment, po_issuance_method } = req.body;
+  const {
+    procurement_status,
+    procurement_comment,
+    po_issuance_method,
+    invoice_number,
+    paid_cost,
+    committed_cost,
+    currency,
+    po_number,
+    savings_driver,
+    savings_notes,
+    contract_id,
+    contract_value_snapshot,
+  } = req.body;
   const { id: user_id } = req.user;
 
   const allowedStatuses = [
@@ -240,6 +399,22 @@ const updateItemProcurementStatus = async (req, res, next) => {
     'completed',
     'canceled',
   ];
+
+  let parsedCommittedCost;
+  let parsedPaidCost;
+  let parsedContractId;
+  let parsedContractSnapshot;
+  try {
+    parsedCommittedCost = parseOptionalNumber(committed_cost, 'committed_cost');
+    parsedPaidCost = parseOptionalNumber(paid_cost, 'paid_cost');
+    parsedContractId = parseOptionalInteger(contract_id, 'contract_id');
+    parsedContractSnapshot = parseOptionalNumber(
+      contract_value_snapshot,
+      'contract_value_snapshot'
+    );
+  } catch (err) {
+    return next(err);
+  }
 
   if (!req.user.hasPermission('procurement.update-status')) {
     return next(createHttpError(403, 'You do not have permission to update procurement status'));
@@ -256,9 +431,13 @@ const updateItemProcurementStatus = async (req, res, next) => {
     await client.query('BEGIN');
 
     await ensureRequestedItemPoIssuanceColumn(client);
+    await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
-      `SELECT * FROM public.requested_items WHERE id = $1`,
+      `SELECT ri.*, r.estimated_cost AS request_estimated_cost
+         FROM public.requested_items ri
+         JOIN requests r ON ri.request_id = r.id
+        WHERE ri.id = $1`,
       [item_id]
     );
 
@@ -284,6 +463,35 @@ const updateItemProcurementStatus = async (req, res, next) => {
         item_id,
         po_issuance_method || null,
       ]
+    );
+
+    const requestedQty = Number(item.purchased_quantity ?? item.quantity ?? 0);
+    const computedCommitted =
+      parsedCommittedCost !== null && parsedCommittedCost !== undefined
+        ? parsedCommittedCost
+        : Number.isFinite(requestedQty) && item.unit_cost !== null && item.unit_cost !== undefined
+          ? Number((requestedQty * Number(item.unit_cost)).toFixed(2))
+          : null;
+
+    await upsertItemFinancials(
+      client,
+      item,
+      {
+        po_number: po_number || null,
+        invoice_number: invoice_number || null,
+        paid_cost: parsedPaidCost,
+        committed_cost: computedCommitted,
+        currency: currency || null,
+        savings_driver: savings_driver || null,
+        savings_notes: savings_notes || null,
+        contract_id: parsedContractId,
+        contract_value_snapshot: parsedContractSnapshot ?? undefined,
+        savings_baseline:
+          item.request_estimated_cost !== undefined
+            ? Number(item.request_estimated_cost)
+            : undefined,
+      },
+      user_id
     );
 
     await client.query(
@@ -328,6 +536,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
       `SELECT * FROM public.requested_items WHERE id = $1`,
@@ -355,6 +564,20 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
        VALUES ($1, 'Purchased Quantity Updated', $2, $3)`,
       [item.request_id, user_id, `Set purchased qty to ${purchased_quantity} for '${item.item_name}'`]
     );
+
+    const committedCost =
+      item.unit_cost !== null && item.unit_cost !== undefined
+        ? Number((purchased_quantity * Number(item.unit_cost)).toFixed(2))
+        : null;
+
+    if (committedCost !== null) {
+      await upsertItemFinancials(
+        client,
+        item,
+        { committed_cost: committedCost },
+        user_id
+      );
+    }
 
     await client.query('COMMIT');
 

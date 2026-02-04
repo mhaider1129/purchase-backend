@@ -2,8 +2,21 @@ const pool = require('../config/db');
 
 const getDepartmentsWithSections = async (req, res) => {
   try {
-    const depRes = await pool.query('SELECT * FROM departments');
-    const secRes = await pool.query('SELECT * FROM sections');
+    const params = [];
+    let whereClause = '';
+    if (Number.isInteger(req.user?.institute_id)) {
+      params.push(req.user.institute_id);
+      whereClause = 'WHERE institute_id = $1';
+    }
+
+    const depRes = await pool.query(`SELECT * FROM departments ${whereClause}`, params);
+    const departmentIds = depRes.rows.map(dep => dep.id);
+    const secRes = departmentIds.length
+      ? await pool.query(
+        'SELECT * FROM sections WHERE department_id = ANY($1::INT[])',
+        [departmentIds]
+      )
+      : { rows: [] };
 
     const departments = depRes.rows.map(dep => ({
       ...dep,
@@ -56,9 +69,13 @@ const createDepartment = async (req, res) => {
   }
 
   try {
+    if (!Number.isInteger(req.user?.institute_id)) {
+      return res.status(400).json({ message: 'User is not linked to an institute' });
+    }
+
     const { rows } = await pool.query(
-      'INSERT INTO departments (name, type) VALUES ($1, $2) RETURNING *',
-      [name, normalizedType]
+      'INSERT INTO departments (name, type, institute_id) VALUES ($1, $2, $3) RETURNING *',
+      [name, normalizedType, req.user.institute_id]
     );
 
     res.status(201).json(rows[0]);
@@ -78,6 +95,20 @@ const createSection = async (req, res) => {
     return res.status(400).json({ message: 'Department and name are required' });
   }
   try {
+    if (Number.isInteger(req.user?.institute_id)) {
+      const { rows } = await pool.query(
+        'SELECT institute_id FROM departments WHERE id = $1',
+        [departmentId]
+      );
+      const instituteId = rows[0]?.institute_id;
+      if (!Number.isInteger(instituteId)) {
+        return res.status(404).json({ message: 'Department not found' });
+      }
+      if (instituteId !== req.user.institute_id) {
+        return res.status(403).json({ message: 'Department is outside your institute' });
+      }
+    }
+
     const { rows } = await pool.query(
       'INSERT INTO sections (name, department_id) VALUES ($1, $2) RETURNING *',
       [name, departmentId]

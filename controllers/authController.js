@@ -18,7 +18,9 @@ const login = async (req, res, next) => {
   try {
     // 1. Fetch active user by email
     const { rows } = await pool.query(
-      `SELECT id, name, email, password, role, department_id, section_id FROM users WHERE email = $1 AND is_active = TRUE`,
+      `SELECT id, name, email, password, role, department_id, section_id, institute_id
+         FROM users
+        WHERE email = $1 AND is_active = TRUE`,
       [email]
     );
 
@@ -39,6 +41,7 @@ const login = async (req, res, next) => {
         user_id: user.id,
         role: user.role,
         department_id: user.department_id,
+        institute_id: user.institute_id,
         section_id: user.section_id || null // Optional field
       },
       process.env.JWT_SECRET,
@@ -57,6 +60,7 @@ const login = async (req, res, next) => {
         name: user.name,
         role: user.role,
         department_id: user.department_id,
+        institute_id: user.institute_id,
         section_id: user.section_id || null, // Optional field
         permissions,
       }

@@ -1446,6 +1446,9 @@ const updateContract = async (req, res, next) => {
     res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    if (err?.statusCode) {
+      return next(err);
+    }
     if (err?.code === '23505') {
       return next(createHttpError(409, 'A contract with this reference number already exists'));
     }

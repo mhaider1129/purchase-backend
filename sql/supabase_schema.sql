@@ -17,6 +17,7 @@ CREATE SEQUENCE IF NOT EXISTS public.contracts_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.custody_records_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.departments_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.evaluation_criteria_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.institutes_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.item_recalls_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.maintenance_stock_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.notifications_id_seq;
@@ -24,6 +25,7 @@ CREATE SEQUENCE IF NOT EXISTS public.permissions_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.procurement_plans_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.request_logs_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.requested_items_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.requested_item_financials_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.requests_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.roles_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.sections_id_seq;
@@ -42,6 +44,15 @@ CREATE SEQUENCE IF NOT EXISTS public.monthly_dispensing_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_supply_items_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_supply_templates_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouses_id_seq;
+
+CREATE TABLE IF NOT EXISTS public.institutes (
+  id integer NOT NULL DEFAULT nextval('institutes_id_seq'::regclass),
+  name text NOT NULL UNIQUE,
+  governance_group text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT institutes_pkey PRIMARY KEY (id)
+);
 
 CREATE TABLE IF NOT EXISTS public.approval_logs (
   id integer NOT NULL DEFAULT nextval('approval_logs_id_seq'::regclass),
@@ -191,7 +202,9 @@ CREATE TABLE IF NOT EXISTS public.departments (
   id integer NOT NULL DEFAULT nextval('departments_id_seq'::regclass),
   name character varying NOT NULL,
   type character varying NOT NULL CHECK (type::text = ANY (ARRAY['Medical'::character varying::text, 'Operational'::character varying::text])),
-  CONSTRAINT departments_pkey PRIMARY KEY (id)
+  institute_id integer NOT NULL,
+  CONSTRAINT departments_pkey PRIMARY KEY (id),
+  CONSTRAINT departments_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 
 CREATE TABLE IF NOT EXISTS public.evaluation_criteria (
@@ -329,11 +342,40 @@ CREATE TABLE IF NOT EXISTS public.requested_items (
   CONSTRAINT requested_items_procurement_updated_by_fkey FOREIGN KEY (procurement_updated_by) REFERENCES public.users(id)
 );
 
+CREATE TABLE IF NOT EXISTS public.requested_item_financials (
+  id integer NOT NULL DEFAULT nextval('requested_item_financials_id_seq'::regclass),
+  requested_item_id integer NOT NULL,
+  request_id integer NOT NULL,
+  po_number text,
+  invoice_number text,
+  committed_cost numeric(14, 2),
+  paid_cost numeric(14, 2),
+  currency text,
+  savings_driver text,
+  savings_notes text,
+  savings_baseline numeric(14, 2),
+  contract_id integer,
+  contract_value_snapshot numeric(14, 2),
+  created_by integer,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT requested_item_financials_pkey PRIMARY KEY (id),
+  CONSTRAINT requested_item_financials_requested_item_id_key UNIQUE (requested_item_id),
+  CONSTRAINT requested_item_financials_requested_item_id_fkey FOREIGN KEY (requested_item_id) REFERENCES public.requested_items(id) ON DELETE CASCADE,
+  CONSTRAINT requested_item_financials_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id) ON DELETE CASCADE,
+  CONSTRAINT requested_item_financials_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+
+CREATE INDEX IF NOT EXISTS requested_item_financials_item_idx ON public.requested_item_financials (requested_item_id);
+CREATE INDEX IF NOT EXISTS requested_item_financials_request_idx ON public.requested_item_financials (request_id);
+CREATE INDEX IF NOT EXISTS requested_item_financials_contract_idx ON public.requested_item_financials (contract_id);
+
 CREATE TABLE IF NOT EXISTS public.requests (
   id integer NOT NULL DEFAULT nextval('requests_id_seq'::regclass),
   request_type character varying NOT NULL CHECK (request_type::text = ANY (ARRAY['Stock'::character varying, 'Non-Stock'::character varying, 'Medical Device'::character varying, 'Medication'::character varying, 'IT Item'::character varying, 'Maintenance'::character varying, 'Warehouse Supply'::character varying]::text[])),
   requester_id integer,
   department_id integer,
+  institute_id integer NOT NULL,
   status character varying DEFAULT 'Submitted'::character varying,
   justification text,
   estimated_cost bigint,
@@ -353,6 +395,7 @@ CREATE TABLE IF NOT EXISTS public.requests (
   CONSTRAINT requests_pkey PRIMARY KEY (id),
   CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
+  CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
   CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
   CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
@@ -622,6 +665,7 @@ CREATE TABLE IF NOT EXISTS public.user_registration_requests (
   password_hash text NOT NULL,
   requested_role text NOT NULL DEFAULT 'requester'::text,
   department_id integer NOT NULL,
+  institute_id integer NOT NULL,
   section_id integer,
   status text NOT NULL DEFAULT 'pending'::text,
   rejection_reason text,
@@ -632,6 +676,7 @@ CREATE TABLE IF NOT EXISTS public.user_registration_requests (
   employee_id text,
   CONSTRAINT user_registration_requests_pkey PRIMARY KEY (id),
   CONSTRAINT user_registration_requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
+  CONSTRAINT user_registration_requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT user_registration_requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
   CONSTRAINT user_registration_requests_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES public.users(id)
 );
@@ -643,6 +688,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   password character varying NOT NULL,
   role character varying NOT NULL,
   department_id integer,
+  institute_id integer NOT NULL,
   section_id integer,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   is_active boolean DEFAULT true,
@@ -651,6 +697,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   warehouse_id integer,
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
+  CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT users_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
   CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id)
 );
@@ -711,10 +758,12 @@ CREATE TABLE IF NOT EXISTS public.warehouses (
   location text,
   description text,
   department_id integer UNIQUE,
+  institute_id integer NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT warehouses_pkey PRIMARY KEY (id),
-  CONSTRAINT warehouses_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id)
+  CONSTRAINT warehouses_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
+  CONSTRAINT warehouses_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 
 -- Monthly dispensing snapshots

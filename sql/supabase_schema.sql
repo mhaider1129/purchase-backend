@@ -23,6 +23,9 @@ CREATE SEQUENCE IF NOT EXISTS public.maintenance_stock_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.notifications_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.permissions_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.procurement_plans_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.procurement_plan_items_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.procurement_plan_item_requests_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.procurement_plan_item_consumptions_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.request_logs_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.requested_items_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.requested_item_financials_id_seq;
@@ -33,6 +36,8 @@ CREATE SEQUENCE IF NOT EXISTS public.stock_items_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_item_batches_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_stock_levels_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_stock_movements_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_replenishment_policies_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_replenishment_tasks_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.department_stock_levels_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.department_stock_movements_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.supplier_evaluations_id_seq;
@@ -287,6 +292,61 @@ CREATE TABLE IF NOT EXISTS public.procurement_plans (
   CONSTRAINT procurement_plans_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id)
 );
 
+CREATE TABLE IF NOT EXISTS public.procurement_plan_items (
+  id integer NOT NULL DEFAULT nextval('procurement_plan_items_id_seq'::regclass),
+  plan_id integer NOT NULL,
+  stock_item_id integer,
+  item_name text NOT NULL,
+  description text,
+  unit_of_measure text,
+  planned_quantity numeric NOT NULL,
+  planned_unit_cost numeric,
+  planned_total_cost numeric,
+  currency text,
+  needed_by_date date,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT procurement_plan_items_pkey PRIMARY KEY (id),
+  CONSTRAINT procurement_plan_items_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.procurement_plans(id) ON DELETE CASCADE,
+  CONSTRAINT procurement_plan_items_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id)
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_plan_item_requests (
+  id integer NOT NULL DEFAULT nextval('procurement_plan_item_requests_id_seq'::regclass),
+  plan_item_id integer NOT NULL,
+  request_id integer,
+  requested_item_id integer,
+  quantity numeric NOT NULL,
+  unit_cost numeric,
+  total_cost numeric,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT procurement_plan_item_requests_pkey PRIMARY KEY (id),
+  CONSTRAINT procurement_plan_item_requests_unique UNIQUE (plan_item_id, requested_item_id),
+  CONSTRAINT procurement_plan_item_requests_plan_item_id_fkey FOREIGN KEY (plan_item_id) REFERENCES public.procurement_plan_items(id) ON DELETE CASCADE,
+  CONSTRAINT procurement_plan_item_requests_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
+  CONSTRAINT procurement_plan_item_requests_requested_item_id_fkey FOREIGN KEY (requested_item_id) REFERENCES public.requested_items(id)
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_plan_item_consumptions (
+  id integer NOT NULL DEFAULT nextval('procurement_plan_item_consumptions_id_seq'::regclass),
+  plan_item_id integer NOT NULL,
+  warehouse_stock_movement_id integer,
+  department_stock_movement_id integer,
+  quantity numeric NOT NULL,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT procurement_plan_item_consumptions_pkey PRIMARY KEY (id),
+  CONSTRAINT procurement_plan_item_consumptions_unique UNIQUE (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id),
+  CONSTRAINT procurement_plan_item_consumptions_plan_item_id_fkey FOREIGN KEY (plan_item_id) REFERENCES public.procurement_plan_items(id) ON DELETE CASCADE,
+  CONSTRAINT procurement_plan_item_consumptions_warehouse_stock_movement_id_fkey FOREIGN KEY (warehouse_stock_movement_id) REFERENCES public.warehouse_stock_movements(id),
+  CONSTRAINT procurement_plan_item_consumptions_department_stock_movement_id_fkey FOREIGN KEY (department_stock_movement_id) REFERENCES public.department_stock_movements(id),
+  CONSTRAINT procurement_plan_item_consumptions_movement_check CHECK (
+    warehouse_stock_movement_id IS NOT NULL OR department_stock_movement_id IS NOT NULL
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON public.procurement_plan_items (plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_item_requests_item ON public.procurement_plan_item_requests (plan_item_id);
+CREATE INDEX IF NOT EXISTS idx_plan_item_consumptions_item ON public.procurement_plan_item_consumptions (plan_item_id);
+
 CREATE TABLE IF NOT EXISTS public.projects (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   name text NOT NULL UNIQUE,
@@ -487,15 +547,27 @@ CREATE TABLE IF NOT EXISTS public.warehouse_stock_levels (
   id integer NOT NULL DEFAULT nextval('warehouse_stock_levels_id_seq'::regclass),
   warehouse_id integer NOT NULL,
   stock_item_id integer NOT NULL,
+  batch_id integer,
   item_name text NOT NULL,
+  lot_number text,
+  expiry_date date,
+  serial_number text,
   quantity numeric NOT NULL DEFAULT 0,
   updated_by integer,
   updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT warehouse_stock_levels_pkey PRIMARY KEY (id),
   CONSTRAINT warehouse_stock_levels_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
+  CONSTRAINT warehouse_stock_levels_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.warehouse_item_batches(id),
   CONSTRAINT warehouse_stock_levels_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id),
   CONSTRAINT warehouse_stock_levels_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
-  CONSTRAINT warehouse_stock_levels_unique_item_per_warehouse UNIQUE (warehouse_id, stock_item_id)
+  CONSTRAINT warehouse_stock_levels_unique_item_per_warehouse UNIQUE (
+    warehouse_id,
+    stock_item_id,
+    batch_id,
+    lot_number,
+    expiry_date,
+    serial_number
+  )
 );
 
 -- Stock movements for audit trail
@@ -505,6 +577,9 @@ CREATE TABLE IF NOT EXISTS public.warehouse_stock_movements (
   stock_item_id integer,
   batch_id integer,
   item_name text NOT NULL,
+  lot_number text,
+  expiry_date date,
+  serial_number text,
   direction text NOT NULL CHECK (direction = ANY (ARRAY['in'::text, 'out'::text])),
   quantity numeric NOT NULL,
   reference_request_id integer,
@@ -530,6 +605,9 @@ CREATE TABLE IF NOT EXISTS public.department_stock_levels (
   section_id integer,
   warehouse_batch_id integer,
   stock_item_id integer NOT NULL,
+  lot_number text,
+  expiry_date date,
+  serial_number text,
   quantity numeric NOT NULL DEFAULT 0,
   updated_by integer,
   updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
@@ -538,7 +616,15 @@ CREATE TABLE IF NOT EXISTS public.department_stock_levels (
   CONSTRAINT department_stock_levels_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
   CONSTRAINT department_stock_levels_warehouse_batch_id_fkey FOREIGN KEY (warehouse_batch_id) REFERENCES public.warehouse_item_batches(id),
   CONSTRAINT department_stock_levels_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
-  CONSTRAINT department_stock_levels_unique_stock UNIQUE (department_id, section_id, stock_item_id, warehouse_batch_id)
+  CONSTRAINT department_stock_levels_unique_stock UNIQUE (
+    department_id,
+    section_id,
+    stock_item_id,
+    warehouse_batch_id,
+    lot_number,
+    expiry_date,
+    serial_number
+  )
 );
 
 -- Movement log for department/section inventory sourced from warehouses
@@ -549,6 +635,9 @@ CREATE TABLE IF NOT EXISTS public.department_stock_movements (
   quantity numeric NOT NULL,
   source_warehouse_id integer,
   source_batch_id integer,
+  lot_number text,
+  expiry_date date,
+  serial_number text,
   reference_request_id integer,
   notes text,
   created_by integer,
@@ -559,6 +648,45 @@ CREATE TABLE IF NOT EXISTS public.department_stock_movements (
   CONSTRAINT department_stock_movements_source_batch_id_fkey FOREIGN KEY (source_batch_id) REFERENCES public.warehouse_item_batches(id),
   CONSTRAINT department_stock_movements_reference_request_id_fkey FOREIGN KEY (reference_request_id) REFERENCES public.requests(id),
   CONSTRAINT department_stock_movements_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
+
+-- Replenishment policies for warehouse stock
+CREATE TABLE IF NOT EXISTS public.warehouse_replenishment_policies (
+  id integer NOT NULL DEFAULT nextval('warehouse_replenishment_policies_id_seq'::regclass),
+  warehouse_id integer NOT NULL,
+  stock_item_id integer NOT NULL,
+  reorder_point numeric NOT NULL DEFAULT 0,
+  safety_stock numeric NOT NULL DEFAULT 0,
+  lead_time_days integer NOT NULL DEFAULT 14,
+  review_period_days integer NOT NULL DEFAULT 7,
+  lot_size numeric NOT NULL DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_by integer,
+  CONSTRAINT warehouse_replenishment_policies_pkey PRIMARY KEY (id),
+  CONSTRAINT warehouse_replenishment_policies_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT warehouse_replenishment_policies_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
+  CONSTRAINT warehouse_replenishment_policies_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id),
+  CONSTRAINT warehouse_replenishment_policies_unique UNIQUE (warehouse_id, stock_item_id)
+);
+
+-- Auto-generated replenishment tasks
+CREATE TABLE IF NOT EXISTS public.warehouse_replenishment_tasks (
+  id integer NOT NULL DEFAULT nextval('warehouse_replenishment_tasks_id_seq'::regclass),
+  warehouse_id integer NOT NULL,
+  stock_item_id integer NOT NULL,
+  current_quantity numeric NOT NULL DEFAULT 0,
+  reorder_point numeric NOT NULL DEFAULT 0,
+  safety_stock numeric NOT NULL DEFAULT 0,
+  suggested_quantity numeric NOT NULL DEFAULT 0,
+  due_date date,
+  status text NOT NULL DEFAULT 'open'::text CHECK (status = ANY (ARRAY['open'::text, 'planned'::text, 'ordered'::text, 'completed'::text, 'dismissed'::text])),
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  created_by integer,
+  CONSTRAINT warehouse_replenishment_tasks_pkey PRIMARY KEY (id),
+  CONSTRAINT warehouse_replenishment_tasks_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT warehouse_replenishment_tasks_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
+  CONSTRAINT warehouse_replenishment_tasks_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
 );
 
 CREATE TABLE IF NOT EXISTS public.supplier_evaluations (

@@ -1,7 +1,6 @@
 // middleware/errorHandler.js
 
-const fs = require('fs'); // Optional for future file logging
-const path = require('path');
+const { log } = require('../utils/observability');
 
 // 🔥 Global Error Handling Middleware
 const errorHandler = (err, req, res, next) => {
@@ -40,22 +39,32 @@ const errorHandler = (err, req, res, next) => {
     // Add more database-specific errors if needed
   }
 
-  // 📄 Log errors (console or file)
+  const payload = {
+    requestId: req?.requestId,
+    statusCode,
+    errorCode: err.code,
+    path: req?.originalUrl,
+    method: req?.method,
+  };
+
   if (!isProduction) {
-    console.error('❌ Error Stack:', err.stack || err);
+    log('error', 'request_failed', {
+      ...payload,
+      message,
+      stack: err.stack,
+    });
   } else {
-    console.error('❌ Error:', message);
-    // Optional: log to file instead of console
-    /*
-    const logPath = path.resolve(__dirname, '../logs/error.log');
-    fs.appendFileSync(logPath, `${new Date().toISOString()} - ${message}\n`);
-    */
+    log('error', 'request_failed', {
+      ...payload,
+      message,
+    });
   }
 
   // 🧾 Standardized error response
   res.status(statusCode).json({
     success: false,
     message,
+    requestId: req?.requestId,
     ...(isProduction ? {} : { code: err.code, stack: err.stack }),
   });
 };

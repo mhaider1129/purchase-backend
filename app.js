@@ -10,24 +10,34 @@ const remindPendingApprovals = require('./controllers/utils/remindPendingApprova
 const { syncPermissionCatalog } = require('./utils/permissionService');
 const { syncUiAccessResources } = require('./utils/uiAccessService');
 const ensureWarehouseAssignments = require('./utils/ensureWarehouseAssignments');
+const { loadEnvironmentConfig } = require('./config/environment');
+const { writeAuditTrail } = require('./middleware/writeAuditTrail');
+const {
+  log,
+  requestTracingMiddleware,
+  metricsHandler,
+  errorBudgetHandler,
+} = require('./utils/observability');
 
 // Load environment variables
 dotenv.config();
+const environmentConfig = loadEnvironmentConfig();
 
 // Initialize Express app
 const app = express();
+console.log(`✅ Environment profile loaded (${environmentConfig.nodeEnv}) with config version ${environmentConfig.appConfigVersion}`);
 
 syncPermissionCatalog()
-  .then(() => console.log('✅ Permission catalog synchronized'))
-  .catch(err => console.error('❌ Failed to synchronize permission catalog:', err));
+  .then(() => log('info', 'permission_catalog_synchronized'))
+  .catch(err => log('error', 'permission_catalog_sync_failed', { error: err.message }));
 
 syncUiAccessResources()
-  .then(() => console.log('✅ UI access resources synchronized'))
-  .catch(err => console.error('❌ Failed to synchronize UI access resources:', err));
+  .then(() => log('info', 'ui_access_resources_synchronized'))
+  .catch(err => log('error', 'ui_access_resource_sync_failed', { error: err.message }));
 
 ensureWarehouseAssignments()
-  .then(() => console.log('✅ Warehouse assignment columns ensured'))
-  .catch(err => console.error('❌ Failed to ensure warehouse assignment columns:', err));
+  .then(() => log('info', 'warehouse_assignment_columns_ensured'))
+  .catch(err => log('error', 'warehouse_assignment_ensure_failed', { error: err.message }));
 
 function getLANIP() {
   const interfaces = os.networkInterfaces();
@@ -77,7 +87,7 @@ const parseOrigins = raw => {
         return parsed.map(item => String(item)).map(stripQuotes);
       }
     } catch (error) {
-      console.warn('⚠️ Failed to parse JSON CORS origin list, falling back to delimiter parsing.', error.message);
+      log('warn', 'cors_origin_json_parse_failed', { error: error.message });
     }
   }
 
@@ -122,9 +132,9 @@ const allowedOrigins = Array.from(
 );
 
 if (allowedOrigins.length > 0) {
-  console.log('✅ Allowed CORS origins:', allowedOrigins);
+  log('info', 'cors_origins_configured', { allowedOrigins });
 } else {
-  console.warn('⚠️ No CORS origins configured — only same-origin requests without an Origin header will be accepted.');
+  log('warn', 'cors_origins_missing');
 }
 
 const allowedOriginsSet = new Set(allowedOrigins);
@@ -155,11 +165,13 @@ const appendCorsHeaders = (req, res) => {
   );
 };
 
+app.use(requestTracingMiddleware);
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
   if (origin && !allowOrigin(origin)) {
-    console.warn(`🚫 Blocked CORS origin: ${origin}`);
+    log('warn', 'cors_origin_blocked', { origin });
 
     if (req.method === 'OPTIONS') {
       appendCorsHeaders(req, res);
@@ -276,6 +288,7 @@ const rfxPortalRoutes = require('./routes/rfxPortal');
 const uiAccessRoutes = require('./routes/uiAccess');
 const notificationsRoutes = require('./routes/notifications');
 const dispensingRoutes = require('./routes/dispensing');
+const procureToPayRoutes = require('./routes/procureToPay');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -289,43 +302,44 @@ app.use('/auth', authRoutes);
 // =========================
 // 🔒 Protected Routes
 // =========================
-apiRouter.use('/files', authenticateUser, filesRoutes);
-apiRouter.use('/requests', authenticateUser, requestsRoutes);
-apiRouter.use('/requested-items', authenticateUser, requestedItemsRoutes);
-apiRouter.use('/approvals', authenticateUser, approvalsRoutes);
-apiRouter.use('/audit-log', authenticateUser, auditLogRoutes);
-apiRouter.use('/attachments', authenticateUser, attachmentsRoutes);
-apiRouter.use('/admin-tools', authenticateUser, adminToolsRoutes);
-apiRouter.use('/users', authenticateUser, usersRoutes);
-apiRouter.use('/dashboard', authenticateUser, dashboardRoutes);
-apiRouter.use('/departments', authenticateUser, departmentsRoutes);
-apiRouter.use('/warehouses', authenticateUser, warehousesRoutes);
-apiRouter.use('/roles', authenticateUser, rolesRoutes);
-apiRouter.use('/permissions', authenticateUser, permissionsRouter);
-apiRouter.use('/maintenance-stock', authenticateUser, maintenanceStockRoutes);
-apiRouter.use('/procurement-plans', authenticateUser, procurementPlansRoutes);
-apiRouter.use('/planning', authenticateUser, planningRoutes);
-apiRouter.use('/stock-items', authenticateUser, stockItemsRoutes);
-apiRouter.use('/stock-item-requests', authenticateUser, stockItemRequestsRoutes);
-apiRouter.use('/warehouse-inventory', authenticateUser, warehouseInventoryRoutes);
-apiRouter.use('/item-recalls', authenticateUser, itemRecallsRoutes);
-apiRouter.use('/warehouse-supply', authenticateUser, warehouseSupplyRoutes);
-apiRouter.use('/warehouse-transfers', authenticateUser, warehouseTransfersRoutes);
-apiRouter.use('/approval-routes', authenticateUser, approvalRoutesRoutes);
-apiRouter.use('/warehouse-supply-templates', authenticateUser, warehouseSupplyTemplatesRoutes);
-apiRouter.use('/projects', authenticateUser, projectsRoutes);
-apiRouter.use('/custody', authenticateUser, custodyRoutes);
-apiRouter.use('/contracts', authenticateUser, contractsRoutes);
-apiRouter.use('/suppliers', authenticateUser, suppliersRoutes);
-apiRouter.use('/supplier-evaluations', authenticateUser, supplierEvaluationsRoutes);
-apiRouter.use('/supplier-srm', authenticateUser, supplierSrmRoutes);
-apiRouter.use('/technical-inspections', authenticateUser, technicalInspectionsRoutes);
-apiRouter.use('/contract-evaluations', authenticateUser, contractEvaluationsRouter);
-apiRouter.use('/risk-management', authenticateUser, riskManagementRoutes);
-apiRouter.use('/rfx-portal', authenticateUserOptional, rfxPortalRoutes);
-apiRouter.use('/ui-access', authenticateUser, uiAccessRoutes);
-apiRouter.use('/notifications', authenticateUser, notificationsRoutes);
-apiRouter.use('/dispensing', authenticateUser, dispensingRoutes);
+apiRouter.use('/files', authenticateUser, writeAuditTrail, filesRoutes);
+apiRouter.use('/requests', authenticateUser, writeAuditTrail, requestsRoutes);
+apiRouter.use('/requested-items', authenticateUser, writeAuditTrail, requestedItemsRoutes);
+apiRouter.use('/approvals', authenticateUser, writeAuditTrail, approvalsRoutes);
+apiRouter.use('/audit-log', authenticateUser, writeAuditTrail, auditLogRoutes);
+apiRouter.use('/attachments', authenticateUser, writeAuditTrail, attachmentsRoutes);
+apiRouter.use('/admin-tools', authenticateUser, writeAuditTrail, adminToolsRoutes);
+apiRouter.use('/users', authenticateUser, writeAuditTrail, usersRoutes);
+apiRouter.use('/dashboard', authenticateUser, writeAuditTrail, dashboardRoutes);
+apiRouter.use('/departments', authenticateUser, writeAuditTrail, departmentsRoutes);
+apiRouter.use('/warehouses', authenticateUser, writeAuditTrail, warehousesRoutes);
+apiRouter.use('/roles', authenticateUser, writeAuditTrail, rolesRoutes);
+apiRouter.use('/permissions', authenticateUser, writeAuditTrail, permissionsRouter);
+apiRouter.use('/maintenance-stock', authenticateUser, writeAuditTrail, maintenanceStockRoutes);
+apiRouter.use('/procurement-plans', authenticateUser, writeAuditTrail, procurementPlansRoutes);
+apiRouter.use('/planning', authenticateUser, writeAuditTrail, planningRoutes);
+apiRouter.use('/stock-items', authenticateUser, writeAuditTrail, stockItemsRoutes);
+apiRouter.use('/stock-item-requests', authenticateUser, writeAuditTrail, stockItemRequestsRoutes);
+apiRouter.use('/warehouse-inventory', authenticateUser, writeAuditTrail, warehouseInventoryRoutes);
+apiRouter.use('/item-recalls', authenticateUser, writeAuditTrail, itemRecallsRoutes);
+apiRouter.use('/warehouse-supply', authenticateUser, writeAuditTrail, warehouseSupplyRoutes);
+apiRouter.use('/warehouse-transfers', authenticateUser, writeAuditTrail, warehouseTransfersRoutes);
+apiRouter.use('/approval-routes', authenticateUser, writeAuditTrail, approvalRoutesRoutes);
+apiRouter.use('/warehouse-supply-templates', authenticateUser, writeAuditTrail, warehouseSupplyTemplatesRoutes);
+apiRouter.use('/projects', authenticateUser, writeAuditTrail, projectsRoutes);
+apiRouter.use('/custody', authenticateUser, writeAuditTrail, custodyRoutes);
+apiRouter.use('/contracts', authenticateUser, writeAuditTrail, contractsRoutes);
+apiRouter.use('/suppliers', authenticateUser, writeAuditTrail, suppliersRoutes);
+apiRouter.use('/supplier-evaluations', authenticateUser, writeAuditTrail, supplierEvaluationsRoutes);
+apiRouter.use('/supplier-srm', authenticateUser, writeAuditTrail, supplierSrmRoutes);
+apiRouter.use('/technical-inspections', authenticateUser, writeAuditTrail, technicalInspectionsRoutes);
+apiRouter.use('/contract-evaluations', authenticateUser, writeAuditTrail, contractEvaluationsRouter);
+apiRouter.use('/risk-management', authenticateUser, writeAuditTrail, riskManagementRoutes);
+apiRouter.use('/rfx-portal', authenticateUserOptional, writeAuditTrail, rfxPortalRoutes);
+apiRouter.use('/ui-access', authenticateUser, writeAuditTrail, uiAccessRoutes);
+apiRouter.use('/notifications', authenticateUser, writeAuditTrail, notificationsRoutes);
+apiRouter.use('/dispensing', authenticateUser, writeAuditTrail, dispensingRoutes);
+apiRouter.use('/procure-to-pay', authenticateUser, writeAuditTrail, procureToPayRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);
@@ -335,8 +349,11 @@ app.use('/api/api', apiRouter); // Alias for malformed client requests
 // 🛠️ Utility Routes
 // =========================
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: '✅ OK', timestamp: new Date() });
+  res.status(200).json({ status: '✅ OK', timestamp: new Date(), requestId: req.requestId });
 });
+
+app.get('/metrics', metricsHandler);
+app.get('/error-budget', errorBudgetHandler);
 
 // =========================
 // 🚫 404 Fallback Handler
@@ -357,19 +374,19 @@ const { ensureEvaluationCriteriaTable } = require('./utils/evaluationCriteriaSee
 
 const startServer = (port = process.env.PORT || 5000, host = process.env.HOST || getLANIP()) => {
   const server = app.listen(port, host, async () => {
-    console.log(`🚀 Server started on http://${host}:${port}`);
+    log('info', 'server_started', { host, port });
     try {
       await ensureEvaluationCriteriaTable();
       await reassignPendingApprovals();
-      console.log('🔄 Pending approvals reassigned on startup');
+      log('info', 'pending_approvals_reassigned_on_startup');
       await remindPendingApprovals();
       setInterval(() => {
         remindPendingApprovals().catch(err =>
-          console.error('❌ Reminder job failed:', err)
+          log('error', 'reminder_job_failed', { error: err.message })
         );
       }, 24 * 60 * 60 * 1000); // daily
     } catch (err) {
-      console.error('❌ Auto-reassignment error on startup:', err);
+      log('error', 'startup_reassignment_failed', { error: err.message });
     }
   });
 

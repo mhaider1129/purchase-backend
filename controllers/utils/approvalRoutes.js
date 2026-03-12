@@ -1,5 +1,9 @@
 
 const pool = require('../../config/db');
+const {
+  ensureApprovalRouteVersioning,
+  getActiveVersion,
+} = require('./approvalRouteVersioning');
 
 const DEFAULT_MIN_AMOUNT = 0;
 const DEFAULT_MAX_AMOUNT = 999999999;
@@ -40,14 +44,23 @@ const fetchApprovalRoutes = async ({
 
   const numericAmount = normalizeAmount(amount);
 
+  await ensureApprovalRouteVersioning(runner);
+  const activeVersion = await getActiveVersion(runner);
+
+  if (!activeVersion) {
+    return [];
+  }
+
   const { rows } = await runner.query(
     `SELECT id, request_type, department_type, approval_level, role, min_amount, max_amount
-       FROM approval_routes
-      WHERE request_type = $1
-        AND department_type = $2
-        AND $3 BETWEEN COALESCE(min_amount, $4) AND COALESCE(max_amount, $5)
+       FROM approval_route_rules
+      WHERE version_id = $1
+        AND request_type = $2
+        AND department_type = $3
+        AND $4 BETWEEN COALESCE(min_amount, $5) AND COALESCE(max_amount, $6)
       ORDER BY approval_level, id`,
     [
+      activeVersion.id,
       normalizedRequestType,
       normalizedDepartmentType,
       numericAmount,

@@ -72,3 +72,26 @@ ON CONFLICT (id) DO UPDATE
       role = EXCLUDED.role,
       min_amount = EXCLUDED.min_amount,
       max_amount = EXCLUDED.max_amount;
+-- Route versioning tables for Workflow Engine Lite
+CREATE TABLE IF NOT EXISTS public.approval_route_versions (
+  id SERIAL PRIMARY KEY,
+  version_label VARCHAR(120) NOT NULL,
+  change_summary TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by INTEGER,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.approval_route_rules (
+  id SERIAL PRIMARY KEY,
+  version_id INTEGER NOT NULL REFERENCES public.approval_route_versions(id) ON DELETE CASCADE,
+  request_type VARCHAR(50) NOT NULL,
+  department_type VARCHAR(50) NOT NULL,
+  approval_level INTEGER NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  min_amount BIGINT DEFAULT 0,
+  max_amount BIGINT DEFAULT 999999999
+);
+
+CREATE INDEX IF NOT EXISTS approval_route_rules_lookup_idx
+  ON public.approval_route_rules (version_id, request_type, department_type, approval_level);

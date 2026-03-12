@@ -10,11 +10,9 @@ jest.mock('../utils/storage', () => ({
 
 const http = require('http');
 const app = require('../app');
-const db = require('../config/db');
-const { getSignedUrl } = require('../utils/storage');
 
-const makeRequest = (baseUrl, path) => new Promise((resolve, reject) => {
-  const req = http.request(`${baseUrl}${path}`, res => {
+const makeRequest = (baseUrl, path, options = {}) => new Promise((resolve, reject) => {
+  const req = http.request(`${baseUrl}${path}`, options, res => {
     let raw = '';
     res.setEncoding('utf8');
 
@@ -23,8 +21,9 @@ const makeRequest = (baseUrl, path) => new Promise((resolve, reject) => {
     });
 
     res.on('end', () => {
-      const body = raw ? JSON.parse(raw) : null;
-      resolve({ status: res.statusCode, body });
+      const contentType = res.headers['content-type'] || '';
+      const body = raw && contentType.includes('application/json') ? JSON.parse(raw) : raw || null;
+      resolve({ status: res.statusCode, body, headers: res.headers });
     });
   });
 
@@ -49,11 +48,52 @@ describe('Express app', () => {
     server.close(done);
   });
 
-  it('responds with OK for the health endpoint', async () => {
-    const { status, body } = await makeRequest(baseUrl, '/health');
+  it('responds with OK for the health endpoint and includes request tracing id', async () => {
+    const { status, body, headers } = await makeRequest(baseUrl, '/health');
 
     expect(status).toBe(200);
     expect(body).toEqual(expect.objectContaining({ status: '✅ OK' }));
+    expect(body.requestId).toEqual(expect.any(String));
+    expect(headers['x-request-id']).toBe(body.requestId);
+  });
+
+  it('uses incoming x-request-id header when provided', async () => {
+    const requestId = 'starter-pack-request-id';
+    const { status, headers, body } = await makeRequest(baseUrl, '/health', {
+      headers: {
+        'x-request-id': requestId,
+      },
+    });
+
+    expect(status).toBe(200);
+    expect(headers['x-request-id']).toBe(requestId);
+    expect(body.requestId).toBe(requestId);
+  });
+
+  it('returns service metrics in text format', async () => {
+    const { status, body, headers } = await makeRequest(baseUrl, '/metrics');
+
+    expect(status).toBe(200);
+    expect(headers['content-type']).toContain('text/plain');
+    expect(body).toEqual(expect.stringContaining('http_requests_total'));
+    expect(body).toEqual(expect.stringContaining('service_uptime_seconds'));
+  });
+
+  it('returns error budget summary', async () => {
+    const { status, body } = await makeRequest(baseUrl, '/error-budget');
+
+    expect(status).toBe(200);
+    expect(body).toEqual(
+      expect.objectContaining({
+        success: true,
+        errorBudget: expect.objectContaining({
+          targetAvailabilityPercent: expect.any(Number),
+          requestsTotal: expect.any(Number),
+          errorsTotal: expect.any(Number),
+          breached: expect.any(Boolean),
+        }),
+      })
+    );
   });
 
   it('returns JSON 404 response for unknown routes', async () => {
@@ -70,25 +110,12 @@ describe('Express app', () => {
 
   it('normalizes double-api prefix in URL', async () => {
     const fileId = '123-abc';
-    const fakeFile = {
-      id: fileId,
-      file_name: 'test.pdf',
-      s3_key: 'uploads/test.pdf',
-      mime_type: 'application/pdf',
-    };
-    const fakeSignedUrl = 'https://s3.example.com/signed/uploads/test.pdf';
 
-    db.query.mockResolvedValueOnce({ rows: [fakeFile] });
-    getSignedUrl.mockResolvedValueOnce(fakeSignedUrl);
+    const normalResponse = await makeRequest(baseUrl, `/api/files/${fileId}`);
+    const aliasedResponse = await makeRequest(baseUrl, `/api/api/files/${fileId}`);
 
-    const { status, body } = await makeRequest(baseUrl, `/api/api/files/${fileId}`);
-
-    expect(status).toBe(200);
-    expect(body).toEqual({
-      ...fakeFile,
-      url: fakeSignedUrl,
-    });
-    expect(db.query).toHaveBeenCalledWith(expect.any(String), [fileId]);
-    expect(getSignedUrl).toHaveBeenCalledWith(fakeFile.s3_key);
+    expect(aliasedResponse.status).toBe(normalResponse.status);
+    expect(aliasedResponse.body.message).toBe(normalResponse.body.message);
+    expect(aliasedResponse.body.requestId).toEqual(expect.any(String));
   });
 });

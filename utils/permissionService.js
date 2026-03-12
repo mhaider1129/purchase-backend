@@ -21,7 +21,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'stock-requests.create',
     'technical-inspections.manage',
   ],
-  warehousekeeper: ['warehouse.manage-supply', 'warehouse.view-supply', 'technical-inspections.manage'],
+  warehousekeeper: ['warehouse.manage-supply', 'warehouse.view-supply', 'technical-inspections.manage', 'procure-to-pay.receipts.manage'],
   scm: [
     'approvals.reassign',
     'contracts.manage',
@@ -46,6 +46,16 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'dashboard.view',
     'rfx.manage',
     'rfx.respond',
+    'procure-to-pay.lifecycle.view',
+    'procure-to-pay.match.manage',
+    'procure-to-pay.invoices.manage',
+    'procure-to-pay.vouchers.manage',
+    'procure-to-pay.payments.manage',
+    'finance.verify',
+    'finance.voucher.create',
+    'finance.post-ledger',
+    'finance.payment.manage',
+    'finance.override-mismatch',
   ],
   procurementspecialist: [
     'contracts.manage',
@@ -59,6 +69,21 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'requests.view-incomplete',
     'rfx.manage',
     'rfx.respond',
+    'procure-to-pay.lifecycle.view',
+    'procure-to-pay.match.manage',
+    'procure-to-pay.invoices.manage',
+  ],
+  finance: [
+    'procure-to-pay.lifecycle.view',
+    'finance.verify',
+    'finance.voucher.create',
+    'finance.post-ledger',
+    'finance.payment.manage',
+  ],
+  financeapprover: [
+    'procure-to-pay.lifecycle.view',
+    'finance.verify',
+    'finance.override-mismatch',
   ],
   contractmanager: [
     'contracts.manage',
@@ -74,6 +99,52 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+
+  {
+    code: 'procure-to-pay.lifecycle.view',
+    name: 'View procure-to-pay lifecycle',
+    description: 'View lifecycle, receipts, invoices, matching, finance and payment data for requests.',
+  },
+  {
+    code: 'procure-to-pay.receipts.manage',
+    name: 'Manage goods receipts',
+    description: 'Create and update goods receipt events including partial and discrepancy captures.',
+  },
+  {
+    code: 'procure-to-pay.invoices.manage',
+    name: 'Manage supplier invoices',
+    description: 'Capture supplier invoices and invoice line details.',
+  },
+  {
+    code: 'procure-to-pay.match.manage',
+    name: 'Manage invoice matching',
+    description: 'Run 2-way/3-way invoice matching and review mismatch details.',
+  },
+  {
+    code: 'finance.verify',
+    name: 'Verify finance records',
+    description: 'Perform finance review and verification before posting.',
+  },
+  {
+    code: 'finance.voucher.create',
+    name: 'Create AP vouchers',
+    description: 'Create AP voucher headers and lines within the internal finance module.',
+  },
+  {
+    code: 'finance.post-ledger',
+    name: 'Post to internal ledger',
+    description: 'Post verified vouchers to the internal liability recognition state.',
+  },
+  {
+    code: 'finance.payment.manage',
+    name: 'Manage payment states',
+    description: 'Mark payment pending and paid states for tracked liabilities.',
+  },
+  {
+    code: 'finance.override-mismatch',
+    name: 'Override invoice mismatches',
+    description: 'Approve authorized mismatches with reason codes for audit.',
+  },
   {
     code: 'roles.manage',
     name: 'Manage roles',

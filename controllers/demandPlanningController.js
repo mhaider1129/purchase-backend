@@ -247,6 +247,8 @@ const calculateSafetyStock = async (req, res, next) => {
       safety_stock: safetyStock,
       reorder_point: reorderPoint,
       reorder_recommendation: projectedGap > 0 ? Number(projectedGap.toFixed(2)) : 0,
+      advisory_note:
+        'Warehouse stock levels track quantity only. Min/max targets, safety stock, and reorder thresholds are advisory outputs and are not stored in the inventory schema.',
     });
   } catch (err) {
     console.error('❌ Safety stock calculation failed:', err);
@@ -361,4 +363,150 @@ const runMrp = async (req, res, next) => {
   }
 };
 
-module.exports = { getDemandForecast, calculateSafetyStock, runMrp };
+const saveReplenishmentPolicy = async (req, res, next) => {
+  const {
+    warehouse_id: warehouseId,
+    stock_item_id: stockItemId,
+    reorder_point: reorderPoint = 0,
+    safety_stock: safetyStock = 0,
+    lead_time_days: leadTimeDays = 14,
+    review_period_days: reviewPeriodDays = 7,
+    lot_size: lotSize = 0,
+    is_active: isActive = true,
+  } = req.body;
+
+  if (!warehouseId || !stockItemId) {
+    return next(createHttpError(400, 'warehouse_id and stock_item_id are required'));
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO warehouse_replenishment_policies (
+        warehouse_id,
+        stock_item_id,
+        reorder_point,
+        safety_stock,
+        lead_time_days,
+        review_period_days,
+        lot_size,
+        is_active,
+        updated_by
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (warehouse_id, stock_item_id)
+      DO UPDATE SET
+        reorder_point = EXCLUDED.reorder_point,
+        safety_stock = EXCLUDED.safety_stock,
+        lead_time_days = EXCLUDED.lead_time_days,
+        review_period_days = EXCLUDED.review_period_days,
+        lot_size = EXCLUDED.lot_size,
+        is_active = EXCLUDED.is_active,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *`,
+      [
+        warehouseId,
+        stockItemId,
+        Number(reorderPoint),
+        Number(safetyStock),
+        Number(leadTimeDays),
+        Number(reviewPeriodDays),
+        Number(lotSize),
+        Boolean(isActive),
+        req.user?.id || null,
+      ],
+    );
+
+    res.json({ policy: rows[0] });
+  } catch (err) {
+    console.error('❌ Failed to save replenishment policy:', err);
+    next(createHttpError(500, 'Failed to save replenishment policy'));
+  }
+};
+
+const runReplenishmentPlanner = async (req, res, next) => {
+  const { warehouse_id: warehouseId } = req.body;
+
+  if (!warehouseId) {
+    return next(createHttpError(400, 'warehouse_id is required'));
+  }
+
+  try {
+    const { rows: policies } = await pool.query(
+      `SELECT
+        p.warehouse_id,
+        p.stock_item_id,
+        p.reorder_point,
+        p.safety_stock,
+        p.lead_time_days,
+        p.review_period_days,
+        p.lot_size,
+        s.quantity AS current_quantity
+      FROM warehouse_replenishment_policies p
+      JOIN warehouse_stock_levels s
+        ON s.warehouse_id = p.warehouse_id
+       AND s.stock_item_id = p.stock_item_id
+      WHERE p.warehouse_id = $1
+        AND p.is_active = true`,
+      [warehouseId],
+    );
+
+    const tasks = [];
+
+    for (const policy of policies) {
+      const currentQuantity = Number(policy.current_quantity || 0);
+      const reorderPoint = Number(policy.reorder_point || 0);
+      const safetyStock = Number(policy.safety_stock || 0);
+
+      if (currentQuantity > reorderPoint) {
+        continue;
+      }
+
+      const required = reorderPoint + safetyStock - currentQuantity;
+      const lotSize = Number(policy.lot_size || 0);
+      const suggestedQuantity = lotSize > 0 ? Math.ceil(required / lotSize) * lotSize : required;
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + Number(policy.lead_time_days || 0));
+
+      const { rows: inserted } = await pool.query(
+        `INSERT INTO warehouse_replenishment_tasks (
+          warehouse_id,
+          stock_item_id,
+          current_quantity,
+          reorder_point,
+          safety_stock,
+          suggested_quantity,
+          due_date,
+          created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *`,
+        [
+          policy.warehouse_id,
+          policy.stock_item_id,
+          currentQuantity,
+          reorderPoint,
+          safetyStock,
+          Number(suggestedQuantity.toFixed(2)),
+          dueDate.toISOString().slice(0, 10),
+          req.user?.id || null,
+        ],
+      );
+
+      tasks.push(inserted[0]);
+    }
+
+    res.json({ warehouse_id: Number(warehouseId), tasks });
+  } catch (err) {
+    console.error('❌ Replenishment planner failed:', err);
+    next(createHttpError(500, 'Failed to run replenishment planner'));
+  }
+};
+
+module.exports = {
+  getDemandForecast,
+  calculateSafetyStock,
+  runMrp,
+  saveReplenishmentPolicy,
+  runReplenishmentPlanner,
+};

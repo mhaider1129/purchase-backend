@@ -11,6 +11,7 @@ const {
   isStoredLocally,
 } = require('../../utils/attachmentPaths');
 const sanitize = require('sanitize-filename');
+const ensureProcurementPlanTables = require('../../utils/ensureProcurementPlanTables');
 
 const PLANS_STORAGE_PREFIX = process.env.SUPABASE_PLANS_PREFIX || 'procurement-plans';
 
@@ -46,6 +47,25 @@ function serializePlan(row) {
     download_url: fileUrl,
   };
 }
+
+const parsePositiveNumber = (value, fieldLabel) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    throw createHttpError(400, `${fieldLabel} must be a positive number`);
+  }
+  return numeric;
+};
+
+const parseOptionalNumber = (value, fieldLabel) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    throw createHttpError(400, `${fieldLabel} must be a non-negative number`);
+  }
+  return numeric;
+};
 
 const uploadPlan = async (req, res, next) => {
   const department_id =
@@ -177,4 +197,328 @@ const downloadPlan = async (req, res, next) => {
   }
 };
 
-module.exports = { uploadPlan, getPlans, getPlanById, getPlanForRequest, downloadPlan };
+const createPlanItems = async (req, res, next) => {
+  const { id } = req.params;
+  const planId = parseInt(id, 10);
+  const { items } = req.body;
+
+  if (!Number.isInteger(planId)) {
+    return next(createHttpError(400, 'Plan id must be a valid number'));
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return next(createHttpError(400, 'items must be a non-empty array'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await ensureProcurementPlanTables(client);
+
+    const planRes = await client.query('SELECT id FROM procurement_plans WHERE id = $1', [planId]);
+    if (planRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Plan not found'));
+    }
+
+    const inserted = [];
+
+    for (const item of items) {
+      const plannedQuantity = parsePositiveNumber(item.planned_quantity, 'planned_quantity');
+      const plannedUnitCost = parseOptionalNumber(item.planned_unit_cost, 'planned_unit_cost');
+      const plannedTotalCost =
+        item.planned_total_cost === undefined || item.planned_total_cost === null
+          ? plannedUnitCost !== null
+            ? plannedUnitCost * plannedQuantity
+            : null
+          : parseOptionalNumber(item.planned_total_cost, 'planned_total_cost');
+
+      if (!item.item_name) {
+        throw createHttpError(400, 'item_name is required for each plan item');
+      }
+
+      const { rows } = await client.query(
+        `INSERT INTO procurement_plan_items
+          (plan_id, stock_item_id, item_name, description, unit_of_measure, planned_quantity,
+           planned_unit_cost, planned_total_cost, currency, needed_by_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING *`,
+        [
+          planId,
+          item.stock_item_id || null,
+          item.item_name,
+          item.description || null,
+          item.unit_of_measure || null,
+          plannedQuantity,
+          plannedUnitCost,
+          plannedTotalCost,
+          item.currency || null,
+          item.needed_by_date || null,
+        ]
+      );
+
+      inserted.push(rows[0]);
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(inserted);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+const getPlanItems = async (req, res, next) => {
+  const { id } = req.params;
+  const planId = parseInt(id, 10);
+
+  if (!Number.isInteger(planId)) {
+    return next(createHttpError(400, 'Plan id must be a valid number'));
+  }
+
+  try {
+    await ensureProcurementPlanTables();
+    const { rows } = await pool.query(
+      'SELECT * FROM procurement_plan_items WHERE plan_id = $1 ORDER BY id',
+      [planId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to fetch procurement plan items:', err);
+    next(createHttpError(500, 'Failed to fetch procurement plan items'));
+  }
+};
+
+const linkPlanItemRequests = async (req, res, next) => {
+  const { id, itemId } = req.params;
+  const planId = parseInt(id, 10);
+  const planItemId = parseInt(itemId, 10);
+  const { requested_item_ids = [], items = [] } = req.body;
+
+  if (!Number.isInteger(planId) || !Number.isInteger(planItemId)) {
+    return next(createHttpError(400, 'Plan id and item id must be valid numbers'));
+  }
+
+  const ids = [
+    ...requested_item_ids,
+    ...items.map(item => item.requested_item_id),
+  ].filter(Boolean);
+
+  if (ids.length === 0) {
+    return next(createHttpError(400, 'requested_item_ids are required'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await ensureProcurementPlanTables(client);
+
+    const planItemRes = await client.query(
+      'SELECT id, plan_id FROM procurement_plan_items WHERE id = $1',
+      [planItemId]
+    );
+    if (planItemRes.rowCount === 0 || planItemRes.rows[0].plan_id !== planId) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Plan item not found'));
+    }
+
+    const linked = [];
+    for (const requestedItemId of ids) {
+      const itemRes = await client.query(
+        `SELECT id, request_id, quantity, unit_cost, total_cost
+         FROM requested_items WHERE id = $1`,
+        [requestedItemId]
+      );
+      if (itemRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(404, `Requested item ${requestedItemId} not found`));
+      }
+
+      const requestedItem = itemRes.rows[0];
+      const { rows } = await client.query(
+        `INSERT INTO procurement_plan_item_requests
+          (plan_item_id, request_id, requested_item_id, quantity, unit_cost, total_cost)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (plan_item_id, requested_item_id)
+         DO UPDATE SET
+           request_id = EXCLUDED.request_id,
+           quantity = EXCLUDED.quantity,
+           unit_cost = EXCLUDED.unit_cost,
+           total_cost = EXCLUDED.total_cost
+         RETURNING *`,
+        [
+          planItemId,
+          requestedItem.request_id,
+          requestedItem.id,
+          requestedItem.quantity,
+          requestedItem.unit_cost,
+          requestedItem.total_cost,
+        ]
+      );
+
+      linked.push(rows[0]);
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(linked);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+const linkPlanItemConsumptions = async (req, res, next) => {
+  const { id, itemId } = req.params;
+  const planId = parseInt(id, 10);
+  const planItemId = parseInt(itemId, 10);
+  const { warehouse_stock_movement_ids = [], department_stock_movement_ids = [] } = req.body;
+
+  if (!Number.isInteger(planId) || !Number.isInteger(planItemId)) {
+    return next(createHttpError(400, 'Plan id and item id must be valid numbers'));
+  }
+
+  const movementIds = [
+    ...warehouse_stock_movement_ids.map(idValue => ({ idValue, type: 'warehouse' })),
+    ...department_stock_movement_ids.map(idValue => ({ idValue, type: 'department' })),
+  ];
+
+  if (movementIds.length === 0) {
+    return next(createHttpError(400, 'movement ids are required'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await ensureProcurementPlanTables(client);
+
+    const planItemRes = await client.query(
+      'SELECT id, plan_id FROM procurement_plan_items WHERE id = $1',
+      [planItemId]
+    );
+    if (planItemRes.rowCount === 0 || planItemRes.rows[0].plan_id !== planId) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Plan item not found'));
+    }
+
+    const linked = [];
+    for (const movement of movementIds) {
+      if (movement.type === 'warehouse') {
+        const movementRes = await client.query(
+          `SELECT id, direction, quantity FROM warehouse_stock_movements WHERE id = $1`,
+          [movement.idValue]
+        );
+        if (movementRes.rowCount === 0) {
+          await client.query('ROLLBACK');
+          return next(createHttpError(404, `Warehouse stock movement ${movement.idValue} not found`));
+        }
+        if (movementRes.rows[0].direction !== 'out') {
+          await client.query('ROLLBACK');
+          return next(createHttpError(400, 'Only outbound warehouse movements can be linked'));
+        }
+
+        const { rows } = await client.query(
+          `INSERT INTO procurement_plan_item_consumptions
+            (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id, quantity)
+           VALUES ($1,$2,NULL,$3)
+           ON CONFLICT (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id)
+           DO UPDATE SET quantity = EXCLUDED.quantity
+           RETURNING *`,
+          [planItemId, movement.idValue, movementRes.rows[0].quantity]
+        );
+        linked.push(rows[0]);
+      } else {
+        const movementRes = await client.query(
+          `SELECT id, direction, quantity FROM department_stock_movements WHERE id = $1`,
+          [movement.idValue]
+        );
+        if (movementRes.rowCount === 0) {
+          await client.query('ROLLBACK');
+          return next(createHttpError(404, `Department stock movement ${movement.idValue} not found`));
+        }
+        if (movementRes.rows[0].direction !== 'out') {
+          await client.query('ROLLBACK');
+          return next(createHttpError(400, 'Only outbound department movements can be linked'));
+        }
+
+        const { rows } = await client.query(
+          `INSERT INTO procurement_plan_item_consumptions
+            (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id, quantity)
+           VALUES ($1,NULL,$2,$3)
+           ON CONFLICT (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id)
+           DO UPDATE SET quantity = EXCLUDED.quantity
+           RETURNING *`,
+          [planItemId, movement.idValue, movementRes.rows[0].quantity]
+        );
+        linked.push(rows[0]);
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(linked);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+const getPlanItemVariance = async (req, res, next) => {
+  const { id } = req.params;
+  const planId = parseInt(id, 10);
+
+  if (!Number.isInteger(planId)) {
+    return next(createHttpError(400, 'Plan id must be a valid number'));
+  }
+
+  try {
+    await ensureProcurementPlanTables();
+    const { rows } = await pool.query(
+      `SELECT
+        ppi.*,
+        COALESCE(req_totals.requested_quantity, 0) AS requested_quantity,
+        COALESCE(req_totals.requested_cost, 0) AS requested_cost,
+        COALESCE(cons_totals.consumed_quantity, 0) AS consumed_quantity,
+        COALESCE(req_totals.requested_quantity, 0) - ppi.planned_quantity AS request_quantity_variance,
+        COALESCE(cons_totals.consumed_quantity, 0) - ppi.planned_quantity AS consumption_quantity_variance
+       FROM procurement_plan_items ppi
+       LEFT JOIN (
+         SELECT plan_item_id,
+           SUM(quantity) AS requested_quantity,
+           SUM(total_cost) AS requested_cost
+         FROM procurement_plan_item_requests
+         GROUP BY plan_item_id
+       ) req_totals ON req_totals.plan_item_id = ppi.id
+       LEFT JOIN (
+         SELECT plan_item_id,
+           SUM(quantity) AS consumed_quantity
+         FROM procurement_plan_item_consumptions
+         GROUP BY plan_item_id
+       ) cons_totals ON cons_totals.plan_item_id = ppi.id
+       WHERE ppi.plan_id = $1
+       ORDER BY ppi.id`,
+      [planId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to fetch procurement plan variance:', err);
+    next(createHttpError(500, 'Failed to fetch procurement plan variance'));
+  }
+};
+
+module.exports = {
+  uploadPlan,
+  getPlans,
+  getPlanById,
+  getPlanForRequest,
+  downloadPlan,
+  createPlanItems,
+  getPlanItems,
+  linkPlanItemRequests,
+  linkPlanItemConsumptions,
+  getPlanItemVariance,
+};

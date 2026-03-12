@@ -4,7 +4,7 @@ const express = require('express');
 const dotenv = require('dotenv');
 const path = require('path');
 const os = require('os');
-const pool = require('./config/db');
+const morgan = require('morgan');
 const reassignPendingApprovals = require('./controllers/utils/reassignPendingApprovals');
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
 const { syncPermissionCatalog } = require('./utils/permissionService');
@@ -181,6 +181,11 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
+app.use(
+  morgan('combined', {
+    skip: () => process.env.NODE_ENV === 'test',
+  })
+);
 
 // =========================
 // 🛣️ API Router
@@ -195,13 +200,40 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // =========================
 // 🧠 Rate Limiting (Optional for Public Routes)
 // =========================
-// const rateLimit = require('express-rate-limit');
-// const authLimiter = rateLimit({
-//   windowMs: 15 * 60 * 1000,
-//   max: 100,
-//   message: 'Too many requests, try again later.',
-// });
-// app.use('/auth', authLimiter);
+const authRateLimitWindowMs = 15 * 60 * 1000;
+const authRateLimitMax = 100;
+const authAttempts = new Map();
+
+const resetOldAuthEntries = () => {
+  const now = Date.now();
+  for (const [key, entry] of authAttempts.entries()) {
+    if (now - entry.start > authRateLimitWindowMs) {
+      authAttempts.delete(key);
+    }
+  }
+};
+
+setInterval(resetOldAuthEntries, authRateLimitWindowMs).unref();
+
+const authLimiter = (req, res, next) => {
+  const key = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = authAttempts.get(key) || { count: 0, start: now };
+
+  if (now - entry.start > authRateLimitWindowMs) {
+    entry.count = 0;
+    entry.start = now;
+  }
+
+  entry.count += 1;
+  authAttempts.set(key, entry);
+
+  if (entry.count > authRateLimitMax) {
+    return res.status(429).json({ message: 'Too many requests, try again later.' });
+  }
+
+  next();
+};
 
 // =========================
 // 🔄 Route Imports
@@ -227,6 +259,7 @@ const stockItemsRoutes = require('./routes/stockItems');
 const stockItemRequestsRoutes = require('./routes/stockItemRequests');
 const warehouseSupplyRoutes = require('./routes/warehouseSupply');
 const warehouseInventoryRoutes = require('./routes/warehouseInventory');
+const warehouseTransfersRoutes = require('./routes/warehouseTransfers');
 const approvalRoutesRoutes = require('./routes/approvalRoutes');
 const warehouseSupplyTemplatesRoutes = require('./routes/warehouseSupplyTemplates');
 const projectsRoutes = require('./routes/projects');
@@ -250,12 +283,13 @@ const errorHandler = require('./middleware/errorHandler');
 // =========================
 // 🔓 Public Routes
 // =========================
+app.use('/auth', authLimiter);
 app.use('/auth', authRoutes);
-apiRouter.use('/files', filesRoutes); // Optional: consider protecting this too
 
 // =========================
 // 🔒 Protected Routes
 // =========================
+apiRouter.use('/files', authenticateUser, filesRoutes);
 apiRouter.use('/requests', authenticateUser, requestsRoutes);
 apiRouter.use('/requested-items', authenticateUser, requestedItemsRoutes);
 apiRouter.use('/approvals', authenticateUser, approvalsRoutes);
@@ -276,6 +310,7 @@ apiRouter.use('/stock-item-requests', authenticateUser, stockItemRequestsRoutes)
 apiRouter.use('/warehouse-inventory', authenticateUser, warehouseInventoryRoutes);
 apiRouter.use('/item-recalls', authenticateUser, itemRecallsRoutes);
 apiRouter.use('/warehouse-supply', authenticateUser, warehouseSupplyRoutes);
+apiRouter.use('/warehouse-transfers', authenticateUser, warehouseTransfersRoutes);
 apiRouter.use('/approval-routes', authenticateUser, approvalRoutesRoutes);
 apiRouter.use('/warehouse-supply-templates', authenticateUser, warehouseSupplyTemplatesRoutes);
 apiRouter.use('/projects', authenticateUser, projectsRoutes);
@@ -299,15 +334,6 @@ app.use('/api/api', apiRouter); // Alias for malformed client requests
 // =========================
 // 🛠️ Utility Routes
 // =========================
-app.get('/departments', async (req, res, next) => {
-  try {
-    const result = await pool.query('SELECT * FROM departments');
-    res.json(result.rows);
-  } catch (err) {
-    next(err);
-  }
-});
-
 app.get('/health', (req, res) => {
   res.status(200).json({ status: '✅ OK', timestamp: new Date() });
 });

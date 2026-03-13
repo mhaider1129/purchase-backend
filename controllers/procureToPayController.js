@@ -783,10 +783,229 @@ const createPurchaseOrder = async (req, res, next) => {
 const listPurchaseOrders = async (req, res, next) => {
   try {
     await ensureProcureToPayTables();
-    const requestId = Number(req.query.request_id || 0);
-    const { rows } = requestId
-      ? await pool.query(`SELECT * FROM purchase_orders WHERE request_id=$1 ORDER BY created_at DESC`, [requestId])
-      : await pool.query(`SELECT * FROM purchase_orders ORDER BY created_at DESC LIMIT 200`);
+    const {
+      status = null,
+      supplier = null,
+      request_id: requestId = null,
+      date_from: dateFrom = null,
+      date_to: dateTo = null,
+      search = null,
+      page = 1,
+      page_size: pageSize = 20,
+    } = req.query;
+
+    const filters = [];
+    const values = [];
+    const safePage = Math.max(Number(page) || 1, 1);
+    const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
+
+    if (status) {
+      values.push(status);
+      filters.push(`po.status = $${values.length}`);
+    }
+    if (supplier) {
+      values.push(`%${supplier}%`);
+      filters.push(`COALESCE(po.supplier_name, '') ILIKE $${values.length}`);
+    }
+    if (requestId) {
+      values.push(Number(requestId));
+      filters.push(`po.request_id = $${values.length}`);
+    }
+    if (dateFrom) {
+      values.push(dateFrom);
+      filters.push(`po.created_at::date >= $${values.length}::date`);
+    }
+    if (dateTo) {
+      values.push(dateTo);
+      filters.push(`po.created_at::date <= $${values.length}::date`);
+    }
+    if (search) {
+      values.push(`%${search}%`);
+      filters.push(`(po.po_number ILIKE $${values.length} OR COALESCE(po.supplier_name, '') ILIKE $${values.length} OR po.request_id::text ILIKE $${values.length})`);
+    }
+
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const totalValues = [...values];
+    const totalResult = await pool.query(`SELECT COUNT(*)::int AS total FROM purchase_orders po ${whereClause}`, totalValues);
+
+    values.push(safePageSize, (safePage - 1) * safePageSize);
+    const { rows } = await pool.query(
+      `SELECT po.*, COALESCE(SUM(poi.quantity * poi.unit_price), 0) AS total_amount
+       FROM purchase_orders po
+       LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
+       ${whereClause}
+       GROUP BY po.id
+       ORDER BY po.created_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+
+    res.json({ data: rows, pagination: { page: safePage, page_size: safePageSize, total: totalResult.rows[0].total } });
+  } catch (error) { next(error); }
+};
+
+const getProcureToPayDashboard = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const [awaitingPo, awaitingReceipt, pendingMatch, matchException, dueToday, overdue, paymentsWeek] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status = 'approved' AND id NOT IN (SELECT request_id FROM purchase_orders)`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM purchase_orders po WHERE NOT EXISTS (SELECT 1 FROM goods_receipts gr WHERE gr.purchase_order_id = po.id)`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM supplier_invoices si LEFT JOIN invoice_match_results imr ON imr.supplier_invoice_id = si.id WHERE imr.id IS NULL OR imr.match_status = 'PENDING_MATCH'`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM invoice_match_results WHERE match_status = 'EXCEPTION'`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM ap_payables WHERE open_balance > 0 AND due_date = CURRENT_DATE`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM ap_payables WHERE open_balance > 0 AND due_date < CURRENT_DATE`),
+      pool.query(`SELECT COALESCE(SUM(amount_paid), 0) AS total FROM payment_records WHERE paid_at >= date_trunc('week', NOW())`),
+    ]);
+
+    res.json({
+      data: {
+        approved_requests_awaiting_po: awaitingPo.rows[0].count,
+        pos_awaiting_receipt: awaitingReceipt.rows[0].count,
+        invoices_pending_match: pendingMatch.rows[0].count,
+        invoices_in_exception: matchException.rows[0].count,
+        open_payables_due_today: dueToday.rows[0].count,
+        overdue_payables: overdue.rows[0].count,
+        payments_posted_this_week: Number(paymentsWeek.rows[0].total) || 0,
+      },
+    });
+  } catch (error) { next(error); }
+};
+
+const getPoSourceRequests = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { search = null } = req.query;
+    const values = [];
+    let searchFilter = '';
+    if (search) {
+      values.push(`%${search}%`);
+      searchFilter = `AND (r.id::text ILIKE $${values.length} OR COALESCE(r.request_type, '') ILIKE $${values.length})`;
+    }
+    const { rows } = await pool.query(
+      `SELECT r.id, r.request_type, r.status, r.created_at
+       FROM requests r
+       WHERE LOWER(r.status) = 'approved'
+         AND NOT EXISTS (SELECT 1 FROM purchase_orders po WHERE po.request_id = r.id)
+         ${searchFilter}
+       ORDER BY r.created_at DESC
+       LIMIT 200`,
+      values
+    );
+    res.json({ data: rows });
+  } catch (error) { next(error); }
+};
+
+const listGoodsReceipts = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { po_id: poId = null, status = null, supplier = null, date_from: dateFrom = null, date_to: dateTo = null, page = 1, page_size: pageSize = 20 } = req.query;
+    const values = [];
+    const filters = [];
+    const safePage = Math.max(Number(page) || 1, 1);
+    const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
+    if (poId) { values.push(Number(poId)); filters.push(`gr.purchase_order_id = $${values.length}`); }
+    if (status) { values.push(status); filters.push(`COALESCE(gr.receipt_status, 'POSTED') = $${values.length}`); }
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(po.supplier_name, '') ILIKE $${values.length}`); }
+    if (dateFrom) { values.push(dateFrom); filters.push(`gr.received_at::date >= $${values.length}::date`); }
+    if (dateTo) { values.push(dateTo); filters.push(`gr.received_at::date <= $${values.length}::date`); }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM goods_receipts gr LEFT JOIN purchase_orders po ON po.id = gr.purchase_order_id ${whereClause}`, values);
+    values.push(safePageSize, (safePage - 1) * safePageSize);
+    const { rows } = await pool.query(
+      `SELECT gr.*, po.po_number, po.supplier_name,
+              CASE
+                WHEN po.id IS NULL THEN 'NO_PO'
+                WHEN COALESCE(SUM(poi.quantity), 0) <= COALESCE(SUM(poi.received_quantity), 0) THEN 'FULLY_RECEIVED'
+                ELSE 'PARTIAL'
+              END AS status
+       FROM goods_receipts gr
+       LEFT JOIN purchase_orders po ON po.id = gr.purchase_order_id
+       LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
+       ${whereClause}
+       GROUP BY gr.id, po.id
+       ORDER BY gr.received_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+    res.json({ data: rows, pagination: { page: safePage, page_size: safePageSize, total: countResult.rows[0].total } });
+  } catch (error) { next(error); }
+};
+
+const listOpenPosForReceipt = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { rows } = await pool.query(
+      `SELECT po.*, COALESCE(SUM(poi.quantity), 0) AS ordered_qty, COALESCE(SUM(poi.received_quantity), 0) AS received_qty
+       FROM purchase_orders po
+       LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
+       GROUP BY po.id
+       HAVING COALESCE(SUM(poi.received_quantity), 0) < COALESCE(SUM(poi.quantity), 0)
+       ORDER BY po.created_at DESC`
+    );
+    res.json({ data: rows });
+  } catch (error) { next(error); }
+};
+
+const listApInvoices = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { status = null, supplier = null, po_id: poId = null, date_from: dateFrom = null, date_to: dateTo = null, search = null, page = 1, page_size: pageSize = 20 } = req.query;
+    const values = [];
+    const filters = [];
+    const safePage = Math.max(Number(page) || 1, 1);
+    const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`si.supplier ILIKE $${values.length}`); }
+    if (poId) { values.push(Number(poId)); filters.push(`si.purchase_order_id = $${values.length}`); }
+    if (dateFrom) { values.push(dateFrom); filters.push(`si.invoice_date >= $${values.length}::date`); }
+    if (dateTo) { values.push(dateTo); filters.push(`si.invoice_date <= $${values.length}::date`); }
+    if (search) { values.push(`%${search}%`); filters.push(`(si.invoice_number ILIKE $${values.length} OR si.supplier ILIKE $${values.length})`); }
+    if (status) { values.push(status); filters.push(`COALESCE(imr.match_status, 'SUBMITTED') = $${values.length}`); }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM supplier_invoices si LEFT JOIN invoice_match_results imr ON imr.supplier_invoice_id = si.id ${whereClause}`, values);
+    values.push(safePageSize, (safePage - 1) * safePageSize);
+    const { rows } = await pool.query(
+      `SELECT si.*, po.po_number, gr.receipt_number,
+              COALESCE(imr.match_status, 'SUBMITTED') AS status,
+              (si.invoice_date + INTERVAL '30 day')::date AS due_date
+       FROM supplier_invoices si
+       LEFT JOIN purchase_orders po ON po.id = si.purchase_order_id
+       LEFT JOIN goods_receipts gr ON gr.id = si.receipt_id
+       LEFT JOIN LATERAL (
+         SELECT match_status
+         FROM invoice_match_results
+         WHERE supplier_invoice_id = si.id
+         ORDER BY matched_at DESC
+         LIMIT 1
+       ) imr ON TRUE
+       ${whereClause}
+       ORDER BY si.submitted_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+    res.json({ data: rows, pagination: { page: safePage, page_size: safePageSize, total: countResult.rows[0].total } });
+  } catch (error) { next(error); }
+};
+
+const listInvoiceMatchingQueue = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { rows } = await pool.query(
+      `SELECT si.id AS invoice_id, si.request_id, si.invoice_number, si.supplier,
+              COALESCE(imr.match_status, 'PENDING_MATCH') AS match_status,
+              COALESCE(imr.mismatch_reasons, '[]'::jsonb) AS mismatch_reasons,
+              COALESCE(imr.override_approved, FALSE) AS override_approved
+       FROM supplier_invoices si
+       LEFT JOIN LATERAL (
+         SELECT match_status, mismatch_reasons, override_approved
+         FROM invoice_match_results
+         WHERE supplier_invoice_id = si.id
+         ORDER BY matched_at DESC
+         LIMIT 1
+       ) imr ON TRUE
+       WHERE COALESCE(imr.match_status, 'PENDING_MATCH') IN ('PENDING_MATCH', 'EXCEPTION', 'MISMATCH')
+       ORDER BY si.submitted_at DESC`
+    );
     res.json({ data: rows });
   } catch (error) { next(error); }
 };
@@ -832,7 +1051,61 @@ const postPayableFromInvoice = async (req, res, next) => {
 const listAccountsPayable = async (req, res, next) => {
   try {
     await ensureProcureToPayTables();
-    const { rows } = await pool.query(`SELECT * FROM ap_payables ORDER BY posted_at DESC LIMIT 300`);
+    const { status = null, supplier = null, due_from: dueFrom = null, due_to: dueTo = null, overdue = null, page = 1, page_size: pageSize = 20 } = req.query;
+    const values = [];
+    const filters = [];
+    const safePage = Math.max(Number(page) || 1, 1);
+    const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
+    if (status) { values.push(status); filters.push(`ap.payable_status = $${values.length}`); }
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`ap.supplier_name ILIKE $${values.length}`); }
+    if (dueFrom) { values.push(dueFrom); filters.push(`ap.due_date >= $${values.length}::date`); }
+    if (dueTo) { values.push(dueTo); filters.push(`ap.due_date <= $${values.length}::date`); }
+    if (overdue === 'true') { filters.push(`ap.due_date < CURRENT_DATE AND ap.open_balance > 0`); }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM ap_payables ap ${whereClause}`, values);
+    values.push(safePageSize, (safePage - 1) * safePageSize);
+    const { rows } = await pool.query(
+      `SELECT ap.*, si.invoice_number,
+              CASE
+                WHEN ap.open_balance <= 0 THEN 'PAID'
+                WHEN ap.due_date < CURRENT_DATE THEN 'OVERDUE'
+                WHEN ap.due_date < CURRENT_DATE + INTERVAL '7 day' THEN '0-7 DAYS'
+                WHEN ap.due_date < CURRENT_DATE + INTERVAL '30 day' THEN '8-30 DAYS'
+                ELSE '30+ DAYS'
+              END AS aging_bucket
+       FROM ap_payables ap
+       LEFT JOIN supplier_invoices si ON si.id = ap.supplier_invoice_id
+       ${whereClause}
+       ORDER BY ap.due_date ASC NULLS LAST, ap.posted_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+    res.json({ data: rows, pagination: { page: safePage, page_size: safePageSize, total: countResult.rows[0].total } });
+  } catch (error) { next(error); }
+};
+
+const listPayments = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { status = null, supplier = null, date_from: dateFrom = null, date_to: dateTo = null } = req.query;
+    const values = [];
+    const filters = [];
+    if (status) { values.push(status); filters.push(`pr.payment_status = $${values.length}`); }
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(ap.supplier_name, '') ILIKE $${values.length}`); }
+    if (dateFrom) { values.push(dateFrom); filters.push(`pr.paid_at::date >= $${values.length}::date`); }
+    if (dateTo) { values.push(dateTo); filters.push(`pr.paid_at::date <= $${values.length}::date`); }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const { rows } = await pool.query(
+      `SELECT pr.*, ap.id AS payable_id, ap.supplier_name, si.invoice_number
+       FROM payment_records pr
+       LEFT JOIN payment_allocations pa ON pa.payment_record_id = pr.id
+       LEFT JOIN ap_payables ap ON ap.id = pa.ap_payable_id
+       LEFT JOIN supplier_invoices si ON si.id = ap.supplier_invoice_id
+       ${whereClause}
+       ORDER BY pr.paid_at DESC NULLS LAST, pr.created_at DESC
+       LIMIT 300`,
+      values
+    );
     res.json({ data: rows });
   } catch (error) { next(error); }
 };
@@ -874,6 +1147,48 @@ const getDocumentFlow = async (req, res, next) => {
     const requestId = Number(req.params.requestId);
     await ensureProcureToPayTables();
     const { rows } = await pool.query(`SELECT * FROM document_flow_links WHERE request_id=$1 ORDER BY created_at ASC`, [requestId]);
+    res.json({ data: rows });
+  } catch (error) { next(error); }
+};
+
+const listDocumentFlow = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { search = null, request_number = null, po_number = null, invoice_number = null, supplier = null, payment_reference = null } = req.query;
+    const values = [];
+    const filters = [];
+    const addLike = (expr, value) => {
+      values.push(`%${value}%`);
+      filters.push(`${expr} ILIKE $${values.length}`);
+    };
+    if (search) {
+      values.push(`%${search}%`);
+      filters.push(`(
+        dfl.request_id::text ILIKE $${values.length}
+        OR COALESCE(po.po_number, '') ILIKE $${values.length}
+        OR COALESCE(si.invoice_number, '') ILIKE $${values.length}
+        OR COALESCE(ap.supplier_name, '') ILIKE $${values.length}
+        OR COALESCE(pr.payment_reference, '') ILIKE $${values.length}
+      )`);
+    }
+    if (request_number) addLike(`dfl.request_id::text`, request_number);
+    if (po_number) addLike(`COALESCE(po.po_number, '')`, po_number);
+    if (invoice_number) addLike(`COALESCE(si.invoice_number, '')`, invoice_number);
+    if (supplier) addLike(`COALESCE(ap.supplier_name, '')`, supplier);
+    if (payment_reference) addLike(`COALESCE(pr.payment_reference, '')`, payment_reference);
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const { rows } = await pool.query(
+      `SELECT dfl.*, po.po_number, si.invoice_number, ap.supplier_name, pr.payment_reference
+       FROM document_flow_links dfl
+       LEFT JOIN purchase_orders po ON po.id::text = dfl.source_document_id OR po.id::text = dfl.target_document_id
+       LEFT JOIN supplier_invoices si ON si.id::text = dfl.source_document_id OR si.id::text = dfl.target_document_id
+       LEFT JOIN ap_payables ap ON ap.id::text = dfl.source_document_id OR ap.id::text = dfl.target_document_id
+       LEFT JOIN payment_records pr ON pr.id::text = dfl.source_document_id OR pr.id::text = dfl.target_document_id
+       ${whereClause}
+       ORDER BY dfl.created_at DESC
+       LIMIT 500`,
+      values
+    );
     res.json({ data: rows });
   } catch (error) { next(error); }
 };
@@ -940,9 +1255,15 @@ const getLifecycleDetail = async (req, res, next) => {
 };
 
 module.exports = {
+  getProcureToPayDashboard,
+  getPoSourceRequests,
   getLifecycleDetail,
   createPurchaseOrder,
   listPurchaseOrders,
+  listGoodsReceipts,
+  listOpenPosForReceipt,
+  listApInvoices,
+  listInvoiceMatchingQueue,
   getPurchaseOrderDetail,
   createGoodsReceipt,
   listReceiptsByRequest,
@@ -951,7 +1272,9 @@ module.exports = {
   approveMatchOverride,
   postPayableFromInvoice,
   listAccountsPayable,
+  listPayments,
   recordPayablePayment,
+  listDocumentFlow,
   getDocumentFlow,
   createApVoucher,
   verifyFinanceRecord,

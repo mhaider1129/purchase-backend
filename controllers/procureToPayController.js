@@ -1,6 +1,9 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureProcureToPayTables } = require('../utils/ensureProcureToPayTables');
+const { ensureFinanceCoreTables } = require('../utils/ensureFinanceCoreTables');
+const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
+const recalculateAvailableQuantity = require('../utils/recalculateAvailableQuantity');
 const {
   LIFECYCLE_STATES,
   MATCH_POLICIES,
@@ -8,6 +11,13 @@ const {
   canTransitionState,
 } = require('../services/procureToPayService');
 const { insertGoodsReceipt, insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
+const {
+  assertBudgetCanCover,
+  recordCommitment,
+  postProcureToPayAccrual,
+  resolveBudgetEnvelope,
+  getBudgetSnapshot,
+} = require('../services/financeCoreService');
 
 
 const requirePermission = (req, permissionCode, fallbackRoles = []) => {
@@ -73,16 +83,44 @@ const transitionLifecycleState = async (client, requestId, toState, userId, reas
 const createGoodsReceipt = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    requirePermission(req, 'warehouse.manage-supply', ['warehousekeeper', 'warehousemanager', 'scm', 'admin']);
+    requirePermission(req, 'procure-to-pay.receipts.manage', ['warehousekeeper', 'warehousemanager', 'scm', 'admin']);
     const requestId = Number(req.params.requestId);
-    const { warehouse_location = null, received_at, notes = null, discrepancy_notes = null, items = [] } = req.body;
+    const {
+      warehouse_id,
+      warehouse_location = null,
+      received_at,
+      notes = null,
+      discrepancy_notes = null,
+      items = [],
+    } = req.body;
 
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw createHttpError(400, 'Invalid request id');
     }
     await client.query('BEGIN');
     await ensureProcureToPayTables(client);
+    await ensureWarehouseInventoryTables(client);
+    await ensureFinanceCoreTables(client);
     await ensureLifecycleRow(client, requestId, req.user.id);
+
+    const requestRes = await client.query(
+      `SELECT supply_warehouse_id, department_id, project_id FROM requests WHERE id = $1 FOR UPDATE`,
+      [requestId]
+    );
+
+    if (requestRes.rowCount === 0) {
+      throw createHttpError(404, 'Request not found');
+    }
+
+    const fallbackWarehouseId = requestRes.rows[0].supply_warehouse_id || req.user?.warehouse_id || null;
+    const explicitWarehouseId = warehouse_id === undefined || warehouse_id === null || warehouse_id === ''
+      ? null
+      : Number(warehouse_id);
+    const targetWarehouseId = explicitWarehouseId || Number(fallbackWarehouseId);
+
+    if (!Number.isInteger(targetWarehouseId) || targetWarehouseId <= 0) {
+      throw createHttpError(400, 'A valid warehouse_id is required to update warehouse stock');
+    }
 
     const receipt = await insertGoodsReceipt(client, {
       requestId,
@@ -94,11 +132,145 @@ const createGoodsReceipt = async (req, res, next) => {
       items,
     });
 
+    const inventoryUpdates = [];
+    const inventoryWarnings = [];
+
+    for (const receiptItem of receipt.items || []) {
+      const receivedQuantity = Number(receiptItem.received_quantity) || 0;
+      const damagedQuantity = Number(receiptItem.damaged_quantity) || 0;
+      const shortQuantity = Number(receiptItem.short_quantity) || 0;
+      const netQuantity = receivedQuantity - damagedQuantity - shortQuantity;
+
+      if (netQuantity <= 0) {
+        inventoryWarnings.push(`Skipped ${receiptItem.item_name}: net received quantity is 0 after discrepancy values.`);
+        continue;
+      }
+
+      let stockItem = null;
+
+      if (receiptItem.requested_item_id) {
+        const fromRequested = await client.query(
+          `SELECT si.id, si.name
+           FROM requested_items ri
+           JOIN stock_items si ON LOWER(si.name) = LOWER(ri.item_name)
+           WHERE ri.id = $1 AND ri.request_id = $2
+           LIMIT 1`,
+          [receiptItem.requested_item_id, requestId]
+        );
+        stockItem = fromRequested.rows[0] || null;
+      }
+
+      if (!stockItem) {
+        const fromItemName = await client.query(
+          `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+          [receiptItem.item_name]
+        );
+        stockItem = fromItemName.rows[0] || null;
+      }
+
+      if (!stockItem) {
+        inventoryWarnings.push(`No stock item found for "${receiptItem.item_name}". Warehouse stock was not updated for this line.`);
+        continue;
+      }
+
+      await client.query(
+        `INSERT INTO warehouse_stock_levels (
+          warehouse_id,
+          stock_item_id,
+          item_name,
+          quantity,
+          updated_by,
+          updated_at
+        ) VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (warehouse_id, stock_item_id)
+        DO UPDATE
+          SET quantity = warehouse_stock_levels.quantity + EXCLUDED.quantity,
+              item_name = EXCLUDED.item_name,
+              updated_by = EXCLUDED.updated_by,
+              updated_at = NOW()`,
+        [targetWarehouseId, stockItem.id, stockItem.name, netQuantity, req.user.id]
+      );
+
+      await recalculateAvailableQuantity(client, stockItem.id);
+
+      await client.query(
+        `INSERT INTO warehouse_stock_movements (
+          warehouse_id,
+          stock_item_id,
+          item_name,
+          direction,
+          quantity,
+          reference_request_id,
+          created_by,
+          notes
+        ) VALUES ($1, $2, $3, 'in', $4, $5, $6, $7)`,
+        [
+          targetWarehouseId,
+          stockItem.id,
+          stockItem.name,
+          netQuantity,
+          requestId,
+          req.user.id,
+          `Goods receipt ${receipt.receipt_number}`,
+        ]
+      );
+
+      inventoryUpdates.push({
+        stock_item_id: stockItem.id,
+        item_name: stockItem.name,
+        quantity_added: netQuantity,
+      });
+    }
+
+    const estimatedReceiptValue = (receipt.items || []).reduce((sum, line) => {
+      const netQuantity =
+        (Number(line.received_quantity) || 0) -
+        (Number(line.damaged_quantity) || 0) -
+        (Number(line.short_quantity) || 0);
+      const unitPrice = Number(line.unit_price) || 0;
+      return sum + (netQuantity > 0 ? netQuantity * unitPrice : 0);
+    }, 0);
+
+    const requestMeta = requestRes.rows[0];
+    const receiptBudgetEnvelope = await resolveBudgetEnvelope(client, {
+      departmentId: requestMeta.department_id,
+      projectId: requestMeta.project_id || null,
+      currency: 'USD',
+    });
+
+    let commitmentEntry = null;
+    if (receiptBudgetEnvelope && estimatedReceiptValue > 0) {
+      commitmentEntry = await recordCommitment(client, {
+        requestId,
+        budgetEnvelopeId: receiptBudgetEnvelope.id,
+        stage: 'encumbrance',
+        amount: estimatedReceiptValue,
+        currency: 'USD',
+        sourceType: 'goods_receipt',
+        sourceId: String(receipt.id),
+        notes: `Encumbrance from receipt ${receipt.receipt_number}`,
+        actorId: req.user.id,
+      });
+    }
+
     await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.GOODS_RECEIVED, req.user.id, 'Goods receipt captured');
-    await logFinanceAction(client, requestId, req.user.id, 'GOODS_RECEIPT_CREATED', { receipt_id: receipt.id });
+    await logFinanceAction(client, requestId, req.user.id, 'GOODS_RECEIPT_CREATED', {
+      receipt_id: receipt.id,
+      warehouse_id: targetWarehouseId,
+      inventory_updates: inventoryUpdates,
+      inventory_warnings: inventoryWarnings,
+      encumbrance_commitment_id: commitmentEntry?.id || null,
+    });
     await client.query('COMMIT');
 
-    res.status(201).json({ message: 'Goods receipt captured', receipt });
+    res.status(201).json({
+      message: 'Goods receipt captured',
+      receipt,
+      warehouse_id: targetWarehouseId,
+      inventory_updates: inventoryUpdates,
+      inventory_warnings: inventoryWarnings,
+      encumbrance_commitment_id: commitmentEntry?.id || null,
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -111,6 +283,7 @@ const listReceiptsByRequest = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
     await ensureProcureToPayTables();
+    await ensureFinanceCoreTables();
     const { rows } = await pool.query(
       `SELECT gr.*, COALESCE(json_agg(gri.*) FILTER (WHERE gri.id IS NOT NULL), '[]'::json) AS items
        FROM goods_receipts gr
@@ -129,7 +302,7 @@ const listReceiptsByRequest = async (req, res, next) => {
 const submitInvoice = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    requirePermission(req, 'procurement.update-status', ['procurementspecialist', 'scm', 'admin']);
+    requirePermission(req, 'procure-to-pay.invoices.manage', ['procurementspecialist', 'scm', 'admin']);
     const requestId = Number(req.params.requestId);
     const {
       supplier,
@@ -148,7 +321,26 @@ const submitInvoice = async (req, res, next) => {
 
     await client.query('BEGIN');
     await ensureProcureToPayTables(client);
+    await ensureFinanceCoreTables(client);
     await ensureLifecycleRow(client, requestId, req.user.id);
+
+    const requestMetaRes = await client.query(
+      `SELECT department_id, project_id FROM requests WHERE id = $1 FOR UPDATE`,
+      [requestId]
+    );
+
+    if (requestMetaRes.rowCount === 0) {
+      throw createHttpError(404, 'Request not found');
+    }
+
+    const requestMeta = requestMetaRes.rows[0];
+
+    const budgetCheck = await assertBudgetCanCover(client, {
+      departmentId: requestMeta.department_id,
+      projectId: requestMeta.project_id || null,
+      amount: Number(total_amount) || 0,
+      currency,
+    });
 
     const invoice = await insertSupplierInvoice(client, {
       requestId,
@@ -167,12 +359,45 @@ const submitInvoice = async (req, res, next) => {
       items,
     });
 
+    const actualCommitment = await recordCommitment(client, {
+      requestId,
+      budgetEnvelopeId: budgetCheck.envelope.id,
+      stage: 'actual',
+      amount: Number(total_amount) || 0,
+      currency,
+      sourceType: 'supplier_invoice',
+      sourceId: String(invoice.id),
+      notes: `Actual spend from supplier invoice ${invoice.invoice_number}`,
+      actorId: req.user.id,
+    });
+
+    const glPosting = await postProcureToPayAccrual(client, {
+      requestId,
+      sourceId: invoice.id,
+      amount: Number(total_amount) || 0,
+      currency,
+      actorId: req.user.id,
+    });
+
+    const budgetSnapshot = await getBudgetSnapshot(client, budgetCheck.envelope.id);
+
     await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.INVOICE_RECEIVED, req.user.id, 'Invoice submitted');
     await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.INVOICE_MATCH_PENDING, req.user.id, 'Awaiting matching');
-    await logFinanceAction(client, requestId, req.user.id, 'SUPPLIER_INVOICE_SUBMITTED', { supplier_invoice_id: invoice.id });
+    await logFinanceAction(client, requestId, req.user.id, 'SUPPLIER_INVOICE_SUBMITTED', {
+      supplier_invoice_id: invoice.id,
+      budget_envelope_id: budgetCheck.envelope.id,
+      actual_commitment_id: actualCommitment?.id || null,
+      gl_posting_id: glPosting?.id || null,
+    });
 
     await client.query('COMMIT');
-    res.status(201).json({ message: 'Invoice submitted', invoice });
+    res.status(201).json({
+      message: 'Invoice submitted',
+      invoice,
+      budget: budgetSnapshot,
+      actual_commitment: actualCommitment,
+      gl_posting: glPosting,
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -184,7 +409,7 @@ const submitInvoice = async (req, res, next) => {
 const runInvoiceMatch = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    requirePermission(req, 'procurement.update-status', ['procurementspecialist', 'scm', 'admin']);
+    requirePermission(req, 'procure-to-pay.match.manage', ['procurementspecialist', 'scm', 'admin']);
     const requestId = Number(req.params.requestId);
     const supplierInvoiceId = Number(req.params.invoiceId);
     const policy = req.body?.policy === MATCH_POLICIES.TWO_WAY ? MATCH_POLICIES.TWO_WAY : MATCH_POLICIES.THREE_WAY;
@@ -487,10 +712,26 @@ const getLifecycleDetail = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
     await ensureProcureToPayTables();
+    await ensureFinanceCoreTables();
 
-    const [lifecycle, stateHistory, receipts, invoices, matches, vouchers, postings, payments, actions] = await Promise.all([
+    const [lifecycle, stateHistory, requestMeta, requestItems, receipts, invoices, matches, vouchers, postings, payments, actions, commitments, glPostings] = await Promise.all([
       pool.query(`SELECT * FROM procurement_lifecycle_states WHERE request_id = $1`, [requestId]),
       pool.query(`SELECT * FROM procurement_state_history WHERE request_id = $1 ORDER BY changed_at DESC`, [requestId]),
+      pool.query(
+        `SELECT r.id, r.request_type, r.status, r.supply_warehouse_id, r.department_id,
+                w.name AS supply_warehouse_name
+           FROM requests r
+           LEFT JOIN warehouses w ON w.id = r.supply_warehouse_id
+          WHERE r.id = $1`,
+        [requestId]
+      ),
+      pool.query(
+        `SELECT id, item_name, quantity, unit_cost
+           FROM requested_items
+          WHERE request_id = $1
+          ORDER BY id ASC`,
+        [requestId]
+      ),
       pool.query(`SELECT * FROM goods_receipts WHERE request_id = $1 ORDER BY received_at DESC`, [requestId]),
       pool.query(`SELECT * FROM supplier_invoices WHERE request_id = $1 ORDER BY submitted_at DESC`, [requestId]),
       pool.query(`SELECT * FROM invoice_match_results WHERE request_id = $1 ORDER BY matched_at DESC`, [requestId]),
@@ -498,10 +739,14 @@ const getLifecycleDetail = async (req, res, next) => {
       pool.query(`SELECT * FROM finance_postings WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM payment_records WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM finance_action_history WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
+      pool.query(`SELECT * FROM commitment_ledger WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
+      pool.query(`SELECT * FROM gl_postings WHERE request_id = $1 ORDER BY posted_at DESC`, [requestId]),
     ]);
 
     res.json({
       lifecycle: lifecycle.rows[0] || null,
+      request: requestMeta.rows[0] || null,
+      request_items: requestItems.rows,
       state_history: stateHistory.rows,
       receipts: receipts.rows,
       invoices: invoices.rows,
@@ -510,6 +755,8 @@ const getLifecycleDetail = async (req, res, next) => {
       postings: postings.rows,
       payments: payments.rows,
       finance_actions: actions.rows,
+      commitments: commitments.rows,
+      gl_postings: glPostings.rows,
     });
   } catch (error) {
     next(error);

@@ -80,6 +80,22 @@ const CAPABILITY_MATRIX = [
     permissions: ['rfx.manage', 'rfx.respond'],
   },
   {
+    routePrefix: '/procure-to-pay',
+    module: 'finance-core',
+    resource: 'procure-to-pay',
+    permissions: [
+      'procure-to-pay.lifecycle.view',
+      'procure-to-pay.receipts.manage',
+      'procure-to-pay.invoices.manage',
+      'procure-to-pay.match.manage',
+      'finance.verify',
+      'finance.voucher.create',
+      'finance.post-ledger',
+      'finance.payment.manage',
+      'finance.override-mismatch',
+    ],
+  },
+  {
     routePrefix: '/warehouse-inventory',
     module: 'warehouse',
     resource: 'inventory',

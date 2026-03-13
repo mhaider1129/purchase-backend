@@ -2,6 +2,27 @@ const pool = require('../config/db');
 
 const defaultResources = [
   {
+    resourceKey: 'feature.procureToPayLifecycle',
+    label: 'Procure-to-Pay Lifecycle',
+    description: 'Controls access to the procure-to-pay lifecycle overview page.',
+    permissions: ['procure-to-pay.lifecycle.view'],
+    requireAll: false,
+  },
+  {
+    resourceKey: 'feature.procureToPayReceipts',
+    label: 'Procure-to-Pay Goods Receipts',
+    description: 'Controls access to the procure-to-pay goods receipt entry page.',
+    permissions: ['procure-to-pay.receipts.manage'],
+    requireAll: false,
+  },
+  {
+    resourceKey: 'feature.procureToPayInvoices',
+    label: 'Procure-to-Pay Invoices',
+    description: 'Controls access to the procure-to-pay invoice entry page.',
+    permissions: ['procure-to-pay.invoices.manage'],
+    requireAll: false,
+  },
+  {
     resourceKey: 'feature.stockItemRequests',
     label: 'Stock Item Request Form',
     description: 'Controls access to the stock item request workflow.',

@@ -20,16 +20,19 @@ const insertGoodsReceipt = async (client, {
     [requestId, warehouseLocation, userId, receivedAt, notes, discrepancyNotes]
   );
 
+  const insertedItems = [];
+
   for (const item of items) {
     if (!item.item_name || Number(item.received_quantity) <= 0) {
       throw createHttpError(400, 'Each receipt item requires item_name and positive received_quantity');
     }
 
-    await client.query(
+    const insertedItem = await client.query(
       `INSERT INTO goods_receipt_items (
         goods_receipt_id, requested_item_id, item_name, ordered_quantity, received_quantity,
         damaged_quantity, short_quantity, unit_price, line_notes
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      RETURNING *`,
       [
         receiptRes.rows[0].id,
         item.requested_item_id || null,
@@ -42,9 +45,14 @@ const insertGoodsReceipt = async (client, {
         item.line_notes || null,
       ]
     );
+
+    insertedItems.push(insertedItem.rows[0]);
   }
 
-  return receiptRes.rows[0];
+  return {
+    ...receiptRes.rows[0],
+    items: insertedItems,
+  };
 };
 
 const insertSupplierInvoice = async (client, {

@@ -47,7 +47,7 @@ const ensureLifecycleRow = async (client, requestId, userId) => {
     `INSERT INTO procurement_lifecycle_states (request_id, procurement_state, created_by)
      VALUES ($1, $2, $3)
      ON CONFLICT (request_id) DO NOTHING`,
-    [requestId, LIFECYCLE_STATES.REQUEST_CREATED, userId || null]
+    [requestId, LIFECYCLE_STATES.DRAFT_PR, userId || null]
   );
 };
 
@@ -86,6 +86,7 @@ const createGoodsReceipt = async (req, res, next) => {
     requirePermission(req, 'procure-to-pay.receipts.manage', ['warehousekeeper', 'warehousemanager', 'scm', 'admin']);
     const requestId = Number(req.params.requestId);
     const {
+      purchase_order_id = null,
       warehouse_id,
       warehouse_location = null,
       received_at,
@@ -125,12 +126,28 @@ const createGoodsReceipt = async (req, res, next) => {
     const receipt = await insertGoodsReceipt(client, {
       requestId,
       userId: req.user.id,
+      purchaseOrderId: purchase_order_id,
       warehouseLocation: warehouse_location,
       receivedAt: received_at || null,
       notes,
       discrepancyNotes: discrepancy_notes,
       items,
     });
+
+
+    await client.query(
+      `INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, metadata, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        requestId,
+        purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST',
+        String(purchase_order_id || requestId),
+        'GOODS_RECEIPT_PO',
+        String(receipt.id),
+        JSON.stringify({ receipt_number: receipt.receipt_number }),
+        req.user.id,
+      ]
+    );
 
     const inventoryUpdates = [];
     const inventoryWarnings = [];
@@ -253,7 +270,7 @@ const createGoodsReceipt = async (req, res, next) => {
       });
     }
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.GOODS_RECEIVED, req.user.id, 'Goods receipt captured');
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.PO_PARTIALLY_RECEIVED, req.user.id, 'Goods receipt captured');
     await logFinanceAction(client, requestId, req.user.id, 'GOODS_RECEIPT_CREATED', {
       receipt_id: receipt.id,
       warehouse_id: targetWarehouseId,
@@ -313,6 +330,7 @@ const submitInvoice = async (req, res, next) => {
       extra_charges = 0,
       total_amount,
       currency = 'USD',
+      purchase_order_id = null,
       po_equivalent_number = null,
       receipt_id = null,
       attachment_metadata = null,
@@ -353,11 +371,26 @@ const submitInvoice = async (req, res, next) => {
       extraCharges: extra_charges,
       totalAmount: total_amount,
       currency,
+      purchaseOrderId: purchase_order_id,
       poEquivalentNumber: po_equivalent_number,
       receiptId: receipt_id,
       attachmentMetadata: attachment_metadata,
       items,
     });
+
+
+    await client.query(
+      `INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, metadata, created_by)
+       VALUES ($1,$2,$3,'AP_INVOICE',$4,$5,$6)`,
+      [
+        requestId,
+        receipt_id ? 'GOODS_RECEIPT_PO' : (purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST'),
+        String(receipt_id || purchase_order_id || requestId),
+        String(invoice.id),
+        JSON.stringify({ invoice_number: invoice.invoice_number }),
+        req.user.id,
+      ]
+    );
 
     const actualCommitment = await recordCommitment(client, {
       requestId,
@@ -381,8 +414,8 @@ const submitInvoice = async (req, res, next) => {
 
     const budgetSnapshot = await getBudgetSnapshot(client, budgetCheck.envelope.id);
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.INVOICE_RECEIVED, req.user.id, 'Invoice submitted');
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.INVOICE_MATCH_PENDING, req.user.id, 'Awaiting matching');
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.AP_INVOICE_SUBMITTED, req.user.id, 'Invoice submitted');
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_PENDING, req.user.id, 'Awaiting matching');
     await logFinanceAction(client, requestId, req.user.id, 'SUPPLIER_INVOICE_SUBMITTED', {
       supplier_invoice_id: invoice.id,
       budget_envelope_id: budgetCheck.envelope.id,
@@ -455,8 +488,8 @@ const runInvoiceMatch = async (req, res, next) => {
     );
 
     if (result.matched) {
-      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.INVOICE_MATCHED, req.user.id, 'Invoice matched', result);
-      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, req.user.id, 'Ready for finance review');
+      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'Invoice matched', result);
+      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'Ready for finance review');
     }
 
     await logFinanceAction(client, requestId, req.user.id, 'INVOICE_MATCH_EXECUTED', { invoice_match_result_id: saved.rows[0].id, ...result });
@@ -501,7 +534,7 @@ const approveMatchOverride = async (req, res, next) => {
       throw createHttpError(404, 'Match result not found');
     }
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, req.user.id, 'Mismatch override approved');
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'Mismatch override approved');
     await logFinanceAction(client, requestId, req.user.id, 'MISMATCH_OVERRIDE_APPROVED', { match_result_id: matchResultId, reason });
     await client.query('COMMIT');
     res.json({ message: 'Override approved', match_result: updated.rows[0] });
@@ -542,7 +575,7 @@ const verifyFinanceRecord = async (req, res, next) => {
       [requestId]
     );
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.FINANCE_VERIFIED, req.user.id, 'Finance verified');
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'Finance verified');
     await logFinanceAction(client, requestId, req.user.id, 'FINANCE_VERIFIED', {});
 
     await client.query('COMMIT');
@@ -593,7 +626,7 @@ const createApVoucher = async (req, res, next) => {
       );
     }
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.AP_VOUCHER_CREATED, req.user.id, 'AP voucher created');
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.AP_POSTED, req.user.id, 'AP voucher created');
     await logFinanceAction(client, requestId, req.user.id, 'AP_VOUCHER_CREATED', { ap_voucher_id: voucher.rows[0].id });
 
     await client.query('COMMIT');
@@ -623,7 +656,7 @@ const postToInternalLedger = async (req, res, next) => {
       [requestId, ap_voucher_id || null, posting_reference, liability_recognized_amount || 0, req.user.id]
     );
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.POSTED_TO_INTERNAL_LEDGER, req.user.id, 'Posted to internal ledger');
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.AP_POSTED, req.user.id, 'Posted to internal ledger');
     await logFinanceAction(client, requestId, req.user.id, 'POSTED_TO_INTERNAL_LEDGER', { finance_posting_id: posting.rows[0].id });
 
     await client.query('COMMIT');
@@ -708,13 +741,150 @@ const markPaid = async (req, res, next) => {
   }
 };
 
+
+const createPurchaseOrder = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['scm', 'procurementspecialist', 'admin']);
+    const requestId = Number(req.params.requestId);
+    const { supplier_id = null, supplier_name = null, expected_delivery_date = null, terms = null, items = [] } = req.body || {};
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+    await ensureLifecycleRow(client, requestId, req.user.id);
+
+    const poRes = await client.query(
+      `INSERT INTO purchase_orders (request_id, po_number, supplier_id, supplier_name, expected_delivery_date, terms, status, created_by)
+       VALUES ($1, CONCAT('PO-', $1, '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, $4, $5, 'PO_ISSUED', $6)
+       RETURNING *`,
+      [requestId, supplier_id, supplier_name, expected_delivery_date, terms, req.user.id]
+    );
+
+    const sourceItems = items.length ? items : (await client.query(`SELECT id AS requested_item_id, item_name, quantity, COALESCE(unit_cost,0) AS unit_price FROM requested_items WHERE request_id=$1`, [requestId])).rows;
+    for (const item of sourceItems) {
+      await client.query(
+        `INSERT INTO purchase_order_items (purchase_order_id, requested_item_id, item_name, quantity, unit_price)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [poRes.rows[0].id, item.requested_item_id || null, item.item_name, Number(item.quantity) || 0, Number(item.unit_price) || 0]
+      );
+    }
+
+    await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, created_by)
+      VALUES ($1,'PURCHASE_REQUEST',$1::text,'PURCHASE_ORDER',$2::text,$3)`, [requestId, poRes.rows[0].id, req.user.id]);
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.PO_ISSUED, req.user.id, 'Purchase order issued');
+    await logFinanceAction(client, requestId, req.user.id, 'PURCHASE_ORDER_CREATED', { purchase_order_id: poRes.rows[0].id });
+    await client.query('COMMIT');
+    res.status(201).json({ purchase_order: poRes.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally { client.release(); }
+};
+
+const listPurchaseOrders = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const requestId = Number(req.query.request_id || 0);
+    const { rows } = requestId
+      ? await pool.query(`SELECT * FROM purchase_orders WHERE request_id=$1 ORDER BY created_at DESC`, [requestId])
+      : await pool.query(`SELECT * FROM purchase_orders ORDER BY created_at DESC LIMIT 200`);
+    res.json({ data: rows });
+  } catch (error) { next(error); }
+};
+
+const getPurchaseOrderDetail = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const poId = Number(req.params.poId);
+    const [po, items, receipts, invoices] = await Promise.all([
+      pool.query(`SELECT * FROM purchase_orders WHERE id=$1`, [poId]),
+      pool.query(`SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id ASC`, [poId]),
+      pool.query(`SELECT * FROM goods_receipts WHERE purchase_order_id=$1 ORDER BY received_at DESC`, [poId]),
+      pool.query(`SELECT * FROM supplier_invoices WHERE purchase_order_id=$1 ORDER BY submitted_at DESC`, [poId]),
+    ]);
+    if (!po.rowCount) throw createHttpError(404, 'Purchase order not found');
+    res.json({ purchase_order: po.rows[0], items: items.rows, receipts: receipts.rows, invoices: invoices.rows });
+  } catch (error) { next(error); }
+};
+
+const postPayableFromInvoice = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'finance.verify', ['finance', 'financeapprover', 'admin']);
+    const invoiceId = Number(req.params.invoiceId);
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+    const inv = await client.query(`SELECT * FROM supplier_invoices WHERE id=$1 FOR UPDATE`, [invoiceId]);
+    if (!inv.rowCount) throw createHttpError(404, 'Invoice not found');
+    const invoice = inv.rows[0];
+    const payable = await client.query(`INSERT INTO ap_payables (request_id, supplier_invoice_id, supplier_name, invoice_total, open_balance, due_date, posted_by)
+      VALUES ($1,$2,$3,$4,$4,($5::date + INTERVAL '30 day')::date,$6) RETURNING *`,
+      [invoice.request_id, invoice.id, invoice.supplier, invoice.total_amount, invoice.invoice_date, req.user.id]);
+
+    await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, created_by)
+      VALUES ($1,'AP_INVOICE',$2::text,'ACCOUNTS_PAYABLE',$3::text,$4)`, [invoice.request_id, invoice.id, payable.rows[0].id, req.user.id]);
+    await transitionLifecycleState(client, invoice.request_id, LIFECYCLE_STATES.AP_POSTED, req.user.id, 'Invoice posted to AP');
+    await logFinanceAction(client, invoice.request_id, req.user.id, 'AP_PAYABLE_POSTED', { ap_payable_id: payable.rows[0].id });
+    await client.query('COMMIT');
+    res.status(201).json({ payable: payable.rows[0] });
+  } catch (error) { await client.query('ROLLBACK'); next(error);} finally { client.release(); }
+};
+
+const listAccountsPayable = async (req, res, next) => {
+  try {
+    await ensureProcureToPayTables();
+    const { rows } = await pool.query(`SELECT * FROM ap_payables ORDER BY posted_at DESC LIMIT 300`);
+    res.json({ data: rows });
+  } catch (error) { next(error); }
+};
+
+const recordPayablePayment = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'finance.payment.manage', ['finance', 'financeapprover', 'admin']);
+    const payableId = Number(req.params.payableId);
+    const { amount, payment_method = null, payment_reference = null, payment_date = null } = req.body || {};
+    const paidAmount = Number(amount);
+    if (!Number.isFinite(paidAmount) || paidAmount <= 0) throw createHttpError(400, 'Valid amount is required');
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+    const payRes = await client.query(`SELECT * FROM ap_payables WHERE id=$1 FOR UPDATE`, [payableId]);
+    if (!payRes.rowCount) throw createHttpError(404, 'Payable not found');
+    const payable = payRes.rows[0];
+    if (paidAmount > Number(payable.open_balance)) throw createHttpError(400, 'Amount exceeds open balance');
+    const payment = await client.query(`INSERT INTO payment_records (request_id, payment_status, payment_reference, payment_method, amount_paid, paid_by, paid_at)
+      VALUES ($1,'paid',$2,$3,$4,$5,COALESCE($6::timestamptz, NOW())) RETURNING *`,
+      [payable.request_id, payment_reference, payment_method, paidAmount, req.user.id, payment_date]);
+    await client.query(`INSERT INTO payment_allocations (payment_record_id, ap_payable_id, amount) VALUES ($1,$2,$3)`, [payment.rows[0].id, payableId, paidAmount]);
+
+    await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, metadata, created_by)
+      VALUES ($1,'ACCOUNTS_PAYABLE',$2::text,'PAYMENT',$3::text,$4,$5)`,
+      [payable.request_id, payableId, payment.rows[0].id, JSON.stringify({ amount: paidAmount }), req.user.id]);
+    const nextBal = Number(payable.open_balance) - paidAmount;
+    const status = nextBal <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+    await client.query(`UPDATE ap_payables SET open_balance=$2, payable_status=$3 WHERE id=$1`, [payableId, nextBal, status]);
+    await transitionLifecycleState(client, payable.request_id, nextBal <= 0 ? LIFECYCLE_STATES.PAID : LIFECYCLE_STATES.PARTIALLY_PAID, req.user.id, 'Payment allocation recorded');
+    await logFinanceAction(client, payable.request_id, req.user.id, 'PAYMENT_ALLOCATION_CREATED', { payable_id: payableId, amount: paidAmount });
+    await client.query('COMMIT');
+    res.status(201).json({ payment: payment.rows[0], open_balance: nextBal, payable_status: status });
+  } catch (error) { await client.query('ROLLBACK'); next(error);} finally { client.release(); }
+};
+
+const getDocumentFlow = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    await ensureProcureToPayTables();
+    const { rows } = await pool.query(`SELECT * FROM document_flow_links WHERE request_id=$1 ORDER BY created_at ASC`, [requestId]);
+    res.json({ data: rows });
+  } catch (error) { next(error); }
+};
+
 const getLifecycleDetail = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
     await ensureProcureToPayTables();
     await ensureFinanceCoreTables();
 
-    const [lifecycle, stateHistory, requestMeta, requestItems, receipts, invoices, matches, vouchers, postings, payments, actions, commitments, glPostings] = await Promise.all([
+    const [lifecycle, stateHistory, requestMeta, requestItems, purchaseOrders, receipts, invoices, matches, vouchers, postings, payables, payments, actions, flowLinks, commitments, glPostings] = await Promise.all([
       pool.query(`SELECT * FROM procurement_lifecycle_states WHERE request_id = $1`, [requestId]),
       pool.query(`SELECT * FROM procurement_state_history WHERE request_id = $1 ORDER BY changed_at DESC`, [requestId]),
       pool.query(
@@ -732,13 +902,16 @@ const getLifecycleDetail = async (req, res, next) => {
           ORDER BY id ASC`,
         [requestId]
       ),
+      pool.query(`SELECT * FROM purchase_orders WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM goods_receipts WHERE request_id = $1 ORDER BY received_at DESC`, [requestId]),
       pool.query(`SELECT * FROM supplier_invoices WHERE request_id = $1 ORDER BY submitted_at DESC`, [requestId]),
       pool.query(`SELECT * FROM invoice_match_results WHERE request_id = $1 ORDER BY matched_at DESC`, [requestId]),
       pool.query(`SELECT * FROM ap_vouchers WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM finance_postings WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
+      pool.query(`SELECT * FROM ap_payables WHERE request_id = $1 ORDER BY posted_at DESC`, [requestId]),
       pool.query(`SELECT * FROM payment_records WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM finance_action_history WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
+      pool.query(`SELECT * FROM document_flow_links WHERE request_id = $1 ORDER BY created_at ASC`, [requestId]),
       pool.query(`SELECT * FROM commitment_ledger WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM gl_postings WHERE request_id = $1 ORDER BY posted_at DESC`, [requestId]),
     ]);
@@ -748,13 +921,16 @@ const getLifecycleDetail = async (req, res, next) => {
       request: requestMeta.rows[0] || null,
       request_items: requestItems.rows,
       state_history: stateHistory.rows,
+      purchase_orders: purchaseOrders.rows,
       receipts: receipts.rows,
       invoices: invoices.rows,
       match_results: matches.rows,
       vouchers: vouchers.rows,
       postings: postings.rows,
+      payables: payables.rows,
       payments: payments.rows,
       finance_actions: actions.rows,
+      document_flow_links: flowLinks.rows,
       commitments: commitments.rows,
       gl_postings: glPostings.rows,
     });
@@ -765,11 +941,18 @@ const getLifecycleDetail = async (req, res, next) => {
 
 module.exports = {
   getLifecycleDetail,
+  createPurchaseOrder,
+  listPurchaseOrders,
+  getPurchaseOrderDetail,
   createGoodsReceipt,
   listReceiptsByRequest,
   submitInvoice,
   runInvoiceMatch,
   approveMatchOverride,
+  postPayableFromInvoice,
+  listAccountsPayable,
+  recordPayablePayment,
+  getDocumentFlow,
   createApVoucher,
   verifyFinanceRecord,
   postToInternalLedger,

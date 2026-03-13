@@ -3,6 +3,7 @@ const createHttpError = require('../utils/httpError');
 const insertGoodsReceipt = async (client, {
   requestId,
   userId,
+  purchaseOrderId = null,
   warehouseLocation = null,
   receivedAt = null,
   notes = null,
@@ -14,10 +15,10 @@ const insertGoodsReceipt = async (client, {
   }
 
   const receiptRes = await client.query(
-    `INSERT INTO goods_receipts (request_id, receipt_number, warehouse_location, received_by, received_at, notes, discrepancy_notes)
-     VALUES ($1, CONCAT('GR-', $1, '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, COALESCE($4::timestamptz, NOW()), $5, $6)
+    `INSERT INTO goods_receipts (request_id, purchase_order_id, receipt_number, warehouse_location, received_by, received_at, notes, discrepancy_notes)
+     VALUES ($1, $2, CONCAT('GR-', $1, '-', EXTRACT(EPOCH FROM NOW())::bigint), $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7)
      RETURNING *`,
-    [requestId, warehouseLocation, userId, receivedAt, notes, discrepancyNotes]
+    [requestId, purchaseOrderId, warehouseLocation, userId, receivedAt, notes, discrepancyNotes]
   );
 
   const insertedItems = [];
@@ -66,6 +67,7 @@ const insertSupplierInvoice = async (client, {
   extraCharges = 0,
   totalAmount,
   currency = 'USD',
+  purchaseOrderId = null,
   poEquivalentNumber = null,
   receiptId = null,
   attachmentMetadata = null,
@@ -78,9 +80,9 @@ const insertSupplierInvoice = async (client, {
   const invoiceRes = await client.query(
     `INSERT INTO supplier_invoices (
       request_id, supplier, invoice_number, invoice_date, subtotal_amount, tax_amount,
-      extra_charges, total_amount, currency, po_equivalent_number, receipt_id,
+      extra_charges, total_amount, currency, purchase_order_id, po_equivalent_number, receipt_id,
       attachment_metadata, submitted_by
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
     RETURNING *`,
     [
       requestId,
@@ -92,6 +94,7 @@ const insertSupplierInvoice = async (client, {
       extraCharges,
       totalAmount,
       currency,
+      purchaseOrderId,
       poEquivalentNumber,
       receiptId,
       attachmentMetadata ? JSON.stringify(attachmentMetadata) : null,

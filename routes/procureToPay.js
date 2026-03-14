@@ -43,6 +43,7 @@ router.get('/payments', listPayments);
 router.get('/document-flow', listDocumentFlow);
 
 router.get('/requests/:requestId/lifecycle', getLifecycleDetail);
+router.post('/purchase-orders', createPurchaseOrder);
 router.post('/requests/:requestId/purchase-orders', createPurchaseOrder);
 router.post('/requests/:requestId/receipts', createGoodsReceipt);
 router.get('/requests/:requestId/receipts', listReceiptsByRequest);

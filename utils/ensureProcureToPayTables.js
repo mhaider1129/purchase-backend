@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 
 let ensured = false;
+let ensureInFlight = null;
 
 const statements = [
   `CREATE TABLE IF NOT EXISTS public.procurement_lifecycle_states (
@@ -158,7 +159,7 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_finance_action_history_request_id ON public.finance_action_history(request_id)`,
   `CREATE TABLE IF NOT EXISTS public.purchase_orders (
     id BIGSERIAL PRIMARY KEY,
-    request_id INTEGER NOT NULL REFERENCES public.requests(id) ON DELETE CASCADE,
+    request_id INTEGER REFERENCES public.requests(id) ON DELETE CASCADE,
     po_number TEXT NOT NULL UNIQUE,
     supplier_id INTEGER REFERENCES public.suppliers(id),
     supplier_name TEXT,
@@ -171,6 +172,7 @@ const statements = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `ALTER TABLE public.purchase_orders ALTER COLUMN request_id DROP NOT NULL`,
   `CREATE TABLE IF NOT EXISTS public.purchase_order_items (
     id BIGSERIAL PRIMARY KEY,
     purchase_order_id BIGINT NOT NULL REFERENCES public.purchase_orders(id) ON DELETE CASCADE,
@@ -184,6 +186,7 @@ const statements = [
   )`,
   `ALTER TABLE public.goods_receipts ADD COLUMN IF NOT EXISTS purchase_order_id BIGINT REFERENCES public.purchase_orders(id)`,
   `ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS purchase_order_id BIGINT REFERENCES public.purchase_orders(id)`,
+  `ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES public.suppliers(id)`,
   `CREATE TABLE IF NOT EXISTS public.ap_payables (
     id BIGSERIAL PRIMARY KEY,
     request_id INTEGER NOT NULL REFERENCES public.requests(id) ON DELETE CASCADE,
@@ -215,24 +218,54 @@ const statements = [
     created_by INTEGER REFERENCES public.users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS public.non_po_receipt_approvals (
+    id BIGSERIAL PRIMARY KEY,
+    goods_receipt_id BIGINT NOT NULL REFERENCES public.goods_receipts(id) ON DELETE CASCADE,
+    request_id INTEGER NOT NULL REFERENCES public.requests(id) ON DELETE CASCADE,
+    approval_step TEXT NOT NULL,
+    approval_status TEXT NOT NULL DEFAULT 'PENDING',
+    assigned_role TEXT,
+    approved_by INTEGER REFERENCES public.users(id),
+    approved_at TIMESTAMPTZ,
+    comments TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (goods_receipt_id, approval_step)
+  )`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_orders_request_id ON public.purchase_orders(request_id)`,
   `CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po_id ON public.purchase_order_items(purchase_order_id)`,
   `CREATE INDEX IF NOT EXISTS idx_ap_payables_request_id ON public.ap_payables(request_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_document_flow_links_request_id ON public.document_flow_links(request_id)`
+  `CREATE INDEX IF NOT EXISTS idx_document_flow_links_request_id ON public.document_flow_links(request_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_non_po_receipt_approvals_receipt_id ON public.non_po_receipt_approvals(goods_receipt_id)`
 ];
 
 async function ensureProcureToPayTables(client = null) {
+  if (client) {
+    for (const statement of statements) {
+      await client.query(statement);
+    }
+    return;
+  }
+
   if (ensured && !client) {
     return;
   }
 
-  const runner = client || pool;
-  for (const statement of statements) {
-    await runner.query(statement);
+  if (ensureInFlight) {
+    await ensureInFlight;
+    return;
   }
 
-  if (!client) {
+  ensureInFlight = (async () => {
+    for (const statement of statements) {
+      await pool.query(statement);
+    }
     ensured = true;
+  })();
+
+  try {
+    await ensureInFlight;
+  } finally {
+    ensureInFlight = null;
   }
 }
 

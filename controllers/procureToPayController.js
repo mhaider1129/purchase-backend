@@ -11,6 +11,7 @@ const {
   canTransitionState,
 } = require('../services/procureToPayService');
 const { insertGoodsReceipt, insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
+const { getSupplierById, findOrCreateSupplierByName } = require('./suppliersController');
 const {
   assertBudgetCanCover,
   recordCommitment,
@@ -123,6 +124,26 @@ const createGoodsReceipt = async (req, res, next) => {
       throw createHttpError(400, 'A valid warehouse_id is required to update warehouse stock');
     }
 
+    if (purchase_order_id !== null && purchase_order_id !== undefined && purchase_order_id !== '') {
+      const purchaseOrderId = Number(purchase_order_id);
+      if (!Number.isInteger(purchaseOrderId) || purchaseOrderId <= 0) {
+        throw createHttpError(400, 'Invalid purchase_order_id');
+      }
+
+      const poResult = await client.query(
+        `SELECT id, request_id FROM purchase_orders WHERE id = $1 FOR UPDATE`,
+        [purchaseOrderId]
+      );
+
+      if (poResult.rowCount === 0) {
+        throw createHttpError(404, 'Purchase order not found');
+      }
+
+      if (Number(poResult.rows[0].request_id) !== requestId) {
+        throw createHttpError(400, 'purchase_order_id does not belong to the provided request');
+      }
+    }
+
     const receipt = await insertGoodsReceipt(client, {
       requestId,
       userId: req.user.id,
@@ -148,6 +169,24 @@ const createGoodsReceipt = async (req, res, next) => {
         req.user.id,
       ]
     );
+
+    let nonPoApprovalSteps = [];
+    if (!purchase_order_id) {
+      nonPoApprovalSteps = [
+        ['PROCUREMENT_REVIEW', 'procurementspecialist'],
+        ['FINANCE_REVIEW', 'financeapprover'],
+        ['WAREHOUSE_RELEASE', 'warehousemanager'],
+      ];
+
+      for (const [approvalStep, assignedRole] of nonPoApprovalSteps) {
+        await client.query(
+          `INSERT INTO non_po_receipt_approvals (goods_receipt_id, request_id, approval_step, assigned_role)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (goods_receipt_id, approval_step) DO NOTHING`,
+          [receipt.id, requestId, approvalStep, assignedRole]
+        );
+      }
+    }
 
     const inventoryUpdates = [];
     const inventoryWarnings = [];
@@ -270,13 +309,23 @@ const createGoodsReceipt = async (req, res, next) => {
       });
     }
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.PO_PARTIALLY_RECEIVED, req.user.id, 'Goods receipt captured');
+    await transitionLifecycleState(
+      client,
+      requestId,
+      LIFECYCLE_STATES.PO_PARTIALLY_RECEIVED,
+      req.user.id,
+      purchase_order_id ? 'Goods receipt captured' : 'Non-PO goods receipt captured and routed for additional approvals'
+    );
     await logFinanceAction(client, requestId, req.user.id, 'GOODS_RECEIPT_CREATED', {
       receipt_id: receipt.id,
       warehouse_id: targetWarehouseId,
       inventory_updates: inventoryUpdates,
       inventory_warnings: inventoryWarnings,
       encumbrance_commitment_id: commitmentEntry?.id || null,
+      non_po_approval_steps: nonPoApprovalSteps.map(([approvalStep, assignedRole]) => ({
+        approval_step: approvalStep,
+        assigned_role: assignedRole,
+      })),
     });
     await client.query('COMMIT');
 
@@ -287,6 +336,11 @@ const createGoodsReceipt = async (req, res, next) => {
       inventory_updates: inventoryUpdates,
       inventory_warnings: inventoryWarnings,
       encumbrance_commitment_id: commitmentEntry?.id || null,
+      non_po_approval_required: !purchase_order_id,
+      non_po_approval_steps: nonPoApprovalSteps.map(([approvalStep, assignedRole]) => ({
+        approval_step: approvalStep,
+        assigned_role: assignedRole,
+      })),
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -323,6 +377,7 @@ const submitInvoice = async (req, res, next) => {
     const requestId = Number(req.params.requestId);
     const {
       supplier,
+      supplier_id = null,
       invoice_number,
       invoice_date,
       subtotal_amount,
@@ -360,10 +415,21 @@ const submitInvoice = async (req, res, next) => {
       currency,
     });
 
+    let linkedSupplier = null;
+    if (supplier_id !== null && supplier_id !== undefined && supplier_id !== '') {
+      linkedSupplier = await getSupplierById(client, supplier_id);
+      if (!linkedSupplier) {
+        throw createHttpError(404, `Supplier with id ${supplier_id} was not found`);
+      }
+    } else if (supplier) {
+      linkedSupplier = await findOrCreateSupplierByName(client, supplier);
+    }
+
     const invoice = await insertSupplierInvoice(client, {
       requestId,
       userId: req.user.id,
-      supplier,
+      supplier: linkedSupplier?.name || supplier,
+      supplierId: linkedSupplier?.id || null,
       invoiceNumber: invoice_number,
       invoiceDate: invoice_date,
       subtotalAmount: subtotal_amount,
@@ -747,19 +813,36 @@ const createPurchaseOrder = async (req, res, next) => {
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['scm', 'procurementspecialist', 'admin']);
     const requestId = Number(req.params.requestId);
+    const requestIdOrNull = Number.isInteger(requestId) && requestId > 0 ? requestId : null;
     const { supplier_id = null, supplier_name = null, expected_delivery_date = null, terms = null, items = [] } = req.body || {};
     await client.query('BEGIN');
     await ensureProcureToPayTables(client);
-    await ensureLifecycleRow(client, requestId, req.user.id);
+    if (requestIdOrNull) {
+      await ensureLifecycleRow(client, requestIdOrNull, req.user.id);
+    }
+
+    let linkedSupplier = null;
+    if (supplier_id) {
+      linkedSupplier = await getSupplierById(client, supplier_id);
+      if (!linkedSupplier) {
+        throw createHttpError(404, `Supplier with id ${supplier_id} was not found`);
+      }
+    } else if (supplier_name) {
+      linkedSupplier = await findOrCreateSupplierByName(client, supplier_name);
+    }
 
     const poRes = await client.query(
       `INSERT INTO purchase_orders (request_id, po_number, supplier_id, supplier_name, expected_delivery_date, terms, status, created_by)
-       VALUES ($1, CONCAT('PO-', $1, '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, $4, $5, 'PO_ISSUED', $6)
+       VALUES ($1, CONCAT('PO-', COALESCE($1::text, 'DIRECT'), '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, $4, $5, 'PO_ISSUED', $6)
        RETURNING *`,
-      [requestId, supplier_id, supplier_name, expected_delivery_date, terms, req.user.id]
+      [requestIdOrNull, linkedSupplier?.id || null, linkedSupplier?.name || null, expected_delivery_date, terms, req.user.id]
     );
 
-    const sourceItems = items.length ? items : (await client.query(`SELECT id AS requested_item_id, item_name, quantity, COALESCE(unit_cost,0) AS unit_price FROM requested_items WHERE request_id=$1`, [requestId])).rows;
+    const sourceItems = items.length
+      ? items
+      : (requestIdOrNull
+        ? (await client.query(`SELECT id AS requested_item_id, item_name, quantity, COALESCE(unit_cost,0) AS unit_price FROM requested_items WHERE request_id=$1`, [requestIdOrNull])).rows
+        : []);
     for (const item of sourceItems) {
       await client.query(
         `INSERT INTO purchase_order_items (purchase_order_id, requested_item_id, item_name, quantity, unit_price)
@@ -768,10 +851,15 @@ const createPurchaseOrder = async (req, res, next) => {
       );
     }
 
-    await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, created_by)
-      VALUES ($1,'PURCHASE_REQUEST',$1::text,'PURCHASE_ORDER',$2::text,$3)`, [requestId, poRes.rows[0].id, req.user.id]);
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.PO_ISSUED, req.user.id, 'Purchase order issued');
-    await logFinanceAction(client, requestId, req.user.id, 'PURCHASE_ORDER_CREATED', { purchase_order_id: poRes.rows[0].id });
+    if (requestIdOrNull) {
+      await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, created_by)
+        VALUES ($1,'PURCHASE_REQUEST',$1::text,'PURCHASE_ORDER',$2::text,$3)`, [requestIdOrNull, poRes.rows[0].id, req.user.id]);
+      await transitionLifecycleState(client, requestIdOrNull, LIFECYCLE_STATES.PO_ISSUED, req.user.id, 'Purchase order issued');
+      await logFinanceAction(client, requestIdOrNull, req.user.id, 'PURCHASE_ORDER_CREATED', {
+        purchase_order_id: poRes.rows[0].id,
+        supplier_id: linkedSupplier?.id || null,
+      });
+    }
     await client.query('COMMIT');
     res.status(201).json({ purchase_order: poRes.rows[0] });
   } catch (error) {
@@ -916,14 +1004,19 @@ const listGoodsReceipts = async (req, res, next) => {
       `SELECT gr.*, po.po_number, po.supplier_name,
               CASE
                 WHEN po.id IS NULL THEN 'NO_PO'
-                WHEN COALESCE(SUM(poi.quantity), 0) <= COALESCE(SUM(poi.received_quantity), 0) THEN 'FULLY_RECEIVED'
+                WHEN COALESCE(poi_totals.ordered_quantity, 0) <= COALESCE(poi_totals.received_quantity, 0) THEN 'FULLY_RECEIVED'
                 ELSE 'PARTIAL'
               END AS status
        FROM goods_receipts gr
        LEFT JOIN purchase_orders po ON po.id = gr.purchase_order_id
-       LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
+       LEFT JOIN (
+         SELECT purchase_order_id,
+                COALESCE(SUM(quantity), 0) AS ordered_quantity,
+                COALESCE(SUM(received_quantity), 0) AS received_quantity
+         FROM purchase_order_items
+         GROUP BY purchase_order_id
+       ) poi_totals ON poi_totals.purchase_order_id = po.id
        ${whereClause}
-       GROUP BY gr.id, po.id
        ORDER BY gr.received_at DESC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values

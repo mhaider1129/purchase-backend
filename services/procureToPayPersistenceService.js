@@ -60,6 +60,7 @@ const insertSupplierInvoice = async (client, {
   requestId,
   userId,
   supplier,
+  supplierId = null,
   invoiceNumber,
   invoiceDate,
   subtotalAmount,
@@ -79,14 +80,15 @@ const insertSupplierInvoice = async (client, {
 
   const invoiceRes = await client.query(
     `INSERT INTO supplier_invoices (
-      request_id, supplier, invoice_number, invoice_date, subtotal_amount, tax_amount,
+      request_id, supplier, supplier_id, invoice_number, invoice_date, subtotal_amount, tax_amount,
       extra_charges, total_amount, currency, purchase_order_id, po_equivalent_number, receipt_id,
       attachment_metadata, submitted_by
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     RETURNING *`,
     [
       requestId,
       supplier,
+      supplierId,
       invoiceNumber,
       invoiceDate,
       subtotalAmount,

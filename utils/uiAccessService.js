@@ -238,11 +238,20 @@ const normalizePermissionList = (permissions) => {
   }
   const seen = new Set();
   const normalized = [];
+
+  const normalizePermissionCode = (permissionCode) =>
+    permissionCode
+      .toLowerCase()
+      .replace(/^reqquests\./, 'requests.')
+      .replace(/\.{2,}/g, '.')
+      .replace(/^\.+|\.+$/g, '');
+
   for (const permission of permissions) {
     if (typeof permission !== 'string') continue;
     const trimmed = permission.trim();
     if (!trimmed) continue;
-    const normalizedCode = trimmed.toLowerCase();
+    const normalizedCode = normalizePermissionCode(trimmed);
+    if (!normalizedCode) continue;
     if (seen.has(normalizedCode)) continue;
     seen.add(normalizedCode);
     normalized.push(normalizedCode);
@@ -292,8 +301,24 @@ const syncUiAccessResources = async () => {
     }
 
     const row = existing.rows[0];
-    const currentPermissions = normalizePermissionList(row.permissions);
+    const rawPermissions = Array.isArray(row.permissions) ? row.permissions.filter(Boolean) : [];
+    const currentPermissions = normalizePermissionList(rawPermissions);
     const currentRequireAll = Boolean(row.require_all);
+
+    if (
+      rawPermissions.length !== currentPermissions.length ||
+      rawPermissions.some((code, idx) => (code || '').trim().toLowerCase() !== currentPermissions[idx])
+    ) {
+      await pool.query(
+        `UPDATE ui_resource_permissions SET permissions = $2 WHERE resource_key = $1`,
+        [resourceKey, currentPermissions]
+      );
+      console.info(
+        `ℹ️ Normalized permission codes for UI resource '${resourceKey}' to ${
+          currentPermissions.join(', ') || 'none'
+        }.`
+      );
+    }
 
     const permissionsChanged =
       currentPermissions.length !== normalizedPermissions.length ||

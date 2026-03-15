@@ -172,6 +172,10 @@ const statements = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `ALTER TABLE public.purchase_orders ADD COLUMN IF NOT EXISTS supplier_name TEXT`,
+  `ALTER TABLE public.purchase_orders ADD COLUMN IF NOT EXISTS expected_delivery_date DATE`,
+  `ALTER TABLE public.purchase_orders ADD COLUMN IF NOT EXISTS terms TEXT`,
+  `ALTER TABLE public.purchase_orders ADD COLUMN IF NOT EXISTS issued_by INTEGER REFERENCES public.users(id)`,
   `ALTER TABLE public.purchase_orders ALTER COLUMN request_id DROP NOT NULL`,
   `CREATE TABLE IF NOT EXISTS public.purchase_order_items (
     id BIGSERIAL PRIMARY KEY,

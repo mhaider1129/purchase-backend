@@ -121,6 +121,12 @@ const ensurePurchaseOrderTables = async () => {
         await pool.query(
           `CREATE INDEX IF NOT EXISTS purchase_orders_rfx_id_idx ON purchase_orders(rfx_id)`
         );
+
+        await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS supplier_name TEXT`);
+        await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_delivery_date DATE`);
+        await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS terms TEXT`);
+        await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS issued_by INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+        await pool.query(`ALTER TABLE purchase_orders ALTER COLUMN request_id DROP NOT NULL`);
       } finally {
         purchaseOrdersEnsuringPromise = null;
         purchaseOrdersEnsured = true;

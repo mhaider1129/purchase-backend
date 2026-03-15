@@ -8,10 +8,12 @@ const {
   LIFECYCLE_STATES,
   MATCH_POLICIES,
   performInvoiceMatch,
-  canTransitionState,
 } = require('../services/procureToPayService');
 const { insertGoodsReceipt, insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
-const { getSupplierById, findOrCreateSupplierByName } = require('./suppliersController');
+const { ensureLifecycleRow, transitionLifecycleState } = require('../services/lifecycleTransitionService');
+const { resolveSupplierReference } = require('../services/supplierReferenceService');
+const { linkDocuments } = require('../services/documentFlowService');
+const { PAYABLE_STATUS, PAYMENT_STATUS } = require('../constants/statusCatalog');
 const {
   assertBudgetCanCover,
   recordCommitment,
@@ -40,44 +42,6 @@ const logFinanceAction = async (client, requestId, actorId, actionType, payload 
     `INSERT INTO audit_logs (action_type, actor_id, target_type, target_id, details, description)
      VALUES ($1, $2, 'request', $3, $4, $5)`,
     [actionType, actorId || null, requestId, JSON.stringify(payload), `${actionType} for request #${requestId}`]
-  );
-};
-
-const ensureLifecycleRow = async (client, requestId, userId) => {
-  await client.query(
-    `INSERT INTO procurement_lifecycle_states (request_id, procurement_state, created_by)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (request_id) DO NOTHING`,
-    [requestId, LIFECYCLE_STATES.DRAFT_PR, userId || null]
-  );
-};
-
-const transitionLifecycleState = async (client, requestId, toState, userId, reason = null, metadata = null) => {
-  const { rows } = await client.query(
-    `SELECT procurement_state FROM procurement_lifecycle_states WHERE request_id = $1`,
-    [requestId]
-  );
-  const fromState = rows[0]?.procurement_state || null;
-
-  if (fromState === toState) {
-    return;
-  }
-
-  if (!canTransitionState(fromState, toState)) {
-    throw createHttpError(400, `Invalid lifecycle transition from ${fromState || 'N/A'} to ${toState}`);
-  }
-
-  await client.query(
-    `UPDATE procurement_lifecycle_states
-     SET procurement_state = $2, last_transition_at = NOW(), updated_at = NOW()
-     WHERE request_id = $1`,
-    [requestId, toState]
-  );
-
-  await client.query(
-    `INSERT INTO procurement_state_history (request_id, from_state, to_state, changed_by, reason, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [requestId, fromState, toState, userId || null, reason, metadata ? JSON.stringify(metadata) : null]
   );
 };
 
@@ -156,19 +120,15 @@ const createGoodsReceipt = async (req, res, next) => {
     });
 
 
-    await client.query(
-      `INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, metadata, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [
-        requestId,
-        purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST',
-        String(purchase_order_id || requestId),
-        'GOODS_RECEIPT_PO',
-        String(receipt.id),
-        JSON.stringify({ receipt_number: receipt.receipt_number }),
-        req.user.id,
-      ]
-    );
+    await linkDocuments(client, {
+      requestId,
+      sourceType: purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST',
+      sourceId: purchase_order_id || requestId,
+      targetType: 'GOODS_RECEIPT_PO',
+      targetId: receipt.id,
+      metadata: { receipt_number: receipt.receipt_number },
+      createdBy: req.user.id,
+    });
 
     let nonPoApprovalSteps = [];
     if (!purchase_order_id) {
@@ -415,21 +375,17 @@ const submitInvoice = async (req, res, next) => {
       currency,
     });
 
-    let linkedSupplier = null;
-    if (supplier_id !== null && supplier_id !== undefined && supplier_id !== '') {
-      linkedSupplier = await getSupplierById(client, supplier_id);
-      if (!linkedSupplier) {
-        throw createHttpError(404, `Supplier with id ${supplier_id} was not found`);
-      }
-    } else if (supplier) {
-      linkedSupplier = await findOrCreateSupplierByName(client, supplier);
-    }
+    const supplierRef = await resolveSupplierReference(client, {
+      supplierId: supplier_id,
+      supplierName: supplier,
+      requireSupplier: true,
+    });
 
     const invoice = await insertSupplierInvoice(client, {
       requestId,
       userId: req.user.id,
-      supplier: linkedSupplier?.name || supplier,
-      supplierId: linkedSupplier?.id || null,
+      supplier: supplierRef.supplierName,
+      supplierId: supplierRef.supplierId,
       invoiceNumber: invoice_number,
       invoiceDate: invoice_date,
       subtotalAmount: subtotal_amount,
@@ -445,18 +401,15 @@ const submitInvoice = async (req, res, next) => {
     });
 
 
-    await client.query(
-      `INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, metadata, created_by)
-       VALUES ($1,$2,$3,'AP_INVOICE',$4,$5,$6)`,
-      [
-        requestId,
-        receipt_id ? 'GOODS_RECEIPT_PO' : (purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST'),
-        String(receipt_id || purchase_order_id || requestId),
-        String(invoice.id),
-        JSON.stringify({ invoice_number: invoice.invoice_number }),
-        req.user.id,
-      ]
-    );
+    await linkDocuments(client, {
+      requestId,
+      sourceType: receipt_id ? 'GOODS_RECEIPT_PO' : (purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST'),
+      sourceId: receipt_id || purchase_order_id || requestId,
+      targetType: 'AP_INVOICE',
+      targetId: invoice.id,
+      metadata: { invoice_number: invoice.invoice_number },
+      createdBy: req.user.id,
+    });
 
     const actualCommitment = await recordCommitment(client, {
       requestId,
@@ -747,9 +700,9 @@ const markPaymentPending = async (req, res, next) => {
 
     const payment = await client.query(
       `INSERT INTO payment_records (request_id, ap_voucher_id, payment_status, payment_reference)
-       VALUES ($1,$2,'payment_pending',$3)
+       VALUES ($1,$2,$4,$3)
        RETURNING *`,
-      [requestId, ap_voucher_id, payment_reference]
+      [requestId, ap_voucher_id, payment_reference, PAYMENT_STATUS.PENDING]
     );
 
     await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.PAYMENT_PENDING, req.user.id, 'Payment pending');
@@ -778,15 +731,15 @@ const markPaid = async (req, res, next) => {
 
     const updated = await client.query(
       `UPDATE payment_records
-       SET payment_status = 'paid',
-           amount_paid = $2,
-           payment_method = $3,
-           payment_reference = COALESCE($4, payment_reference),
+       SET payment_status = $2,
+           amount_paid = $3,
+           payment_method = $4,
+           payment_reference = COALESCE($5, payment_reference),
            paid_at = NOW(),
-           paid_by = $5
+           paid_by = $6
        WHERE id = $1
        RETURNING *`,
-      [paymentId, amount_paid || 0, payment_method, payment_reference, req.user.id]
+      [paymentId, PAYMENT_STATUS.PAID, amount_paid || 0, payment_method, payment_reference, req.user.id]
     );
 
     if (updated.rowCount === 0) {
@@ -821,21 +774,17 @@ const createPurchaseOrder = async (req, res, next) => {
       await ensureLifecycleRow(client, requestIdOrNull, req.user.id);
     }
 
-    let linkedSupplier = null;
-    if (supplier_id) {
-      linkedSupplier = await getSupplierById(client, supplier_id);
-      if (!linkedSupplier) {
-        throw createHttpError(404, `Supplier with id ${supplier_id} was not found`);
-      }
-    } else if (supplier_name) {
-      linkedSupplier = await findOrCreateSupplierByName(client, supplier_name);
-    }
+    const supplierRef = await resolveSupplierReference(client, {
+      supplierId: supplier_id,
+      supplierName: supplier_name,
+      requireSupplier: false,
+    });
 
     const poRes = await client.query(
       `INSERT INTO purchase_orders (request_id, po_number, supplier_id, supplier_name, expected_delivery_date, terms, status, created_by)
        VALUES ($1, CONCAT('PO-', COALESCE($1::text, 'DIRECT'), '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, $4, $5, 'PO_ISSUED', $6)
        RETURNING *`,
-      [requestIdOrNull, linkedSupplier?.id || null, linkedSupplier?.name || null, expected_delivery_date, terms, req.user.id]
+      [requestIdOrNull, supplierRef.supplierId, supplierRef.supplierName || null, expected_delivery_date, terms, req.user.id]
     );
 
     const sourceItems = items.length
@@ -852,12 +801,18 @@ const createPurchaseOrder = async (req, res, next) => {
     }
 
     if (requestIdOrNull) {
-      await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, created_by)
-        VALUES ($1,'PURCHASE_REQUEST',$1::text,'PURCHASE_ORDER',$2::text,$3)`, [requestIdOrNull, poRes.rows[0].id, req.user.id]);
+      await linkDocuments(client, {
+        requestId: requestIdOrNull,
+        sourceType: 'PURCHASE_REQUEST',
+        sourceId: requestIdOrNull,
+        targetType: 'PURCHASE_ORDER',
+        targetId: poRes.rows[0].id,
+        createdBy: req.user.id,
+      });
       await transitionLifecycleState(client, requestIdOrNull, LIFECYCLE_STATES.PO_ISSUED, req.user.id, 'Purchase order issued');
       await logFinanceAction(client, requestIdOrNull, req.user.id, 'PURCHASE_ORDER_CREATED', {
         purchase_order_id: poRes.rows[0].id,
-        supplier_id: linkedSupplier?.id || null,
+        supplier_id: supplierRef.supplierId,
       });
     }
     await client.query('COMMIT');
@@ -1132,8 +1087,14 @@ const postPayableFromInvoice = async (req, res, next) => {
       VALUES ($1,$2,$3,$4,$4,($5::date + INTERVAL '30 day')::date,$6) RETURNING *`,
       [invoice.request_id, invoice.id, invoice.supplier, invoice.total_amount, invoice.invoice_date, req.user.id]);
 
-    await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, created_by)
-      VALUES ($1,'AP_INVOICE',$2::text,'ACCOUNTS_PAYABLE',$3::text,$4)`, [invoice.request_id, invoice.id, payable.rows[0].id, req.user.id]);
+    await linkDocuments(client, {
+      requestId: invoice.request_id,
+      sourceType: 'AP_INVOICE',
+      sourceId: invoice.id,
+      targetType: 'ACCOUNTS_PAYABLE',
+      targetId: payable.rows[0].id,
+      createdBy: req.user.id,
+    });
     await transitionLifecycleState(client, invoice.request_id, LIFECYCLE_STATES.AP_POSTED, req.user.id, 'Invoice posted to AP');
     await logFinanceAction(client, invoice.request_id, req.user.id, 'AP_PAYABLE_POSTED', { ap_payable_id: payable.rows[0].id });
     await client.query('COMMIT');
@@ -1218,15 +1179,21 @@ const recordPayablePayment = async (req, res, next) => {
     const payable = payRes.rows[0];
     if (paidAmount > Number(payable.open_balance)) throw createHttpError(400, 'Amount exceeds open balance');
     const payment = await client.query(`INSERT INTO payment_records (request_id, payment_status, payment_reference, payment_method, amount_paid, paid_by, paid_at)
-      VALUES ($1,'paid',$2,$3,$4,$5,COALESCE($6::timestamptz, NOW())) RETURNING *`,
-      [payable.request_id, payment_reference, payment_method, paidAmount, req.user.id, payment_date]);
+      VALUES ($1,$7,$2,$3,$4,$5,COALESCE($6::timestamptz, NOW())) RETURNING *`,
+      [payable.request_id, payment_reference, payment_method, paidAmount, req.user.id, payment_date, PAYMENT_STATUS.PAID]);
     await client.query(`INSERT INTO payment_allocations (payment_record_id, ap_payable_id, amount) VALUES ($1,$2,$3)`, [payment.rows[0].id, payableId, paidAmount]);
 
-    await client.query(`INSERT INTO document_flow_links (request_id, source_document_type, source_document_id, target_document_type, target_document_id, metadata, created_by)
-      VALUES ($1,'ACCOUNTS_PAYABLE',$2::text,'PAYMENT',$3::text,$4,$5)`,
-      [payable.request_id, payableId, payment.rows[0].id, JSON.stringify({ amount: paidAmount }), req.user.id]);
+    await linkDocuments(client, {
+      requestId: payable.request_id,
+      sourceType: 'ACCOUNTS_PAYABLE',
+      sourceId: payableId,
+      targetType: 'PAYMENT',
+      targetId: payment.rows[0].id,
+      metadata: { amount: paidAmount },
+      createdBy: req.user.id,
+    });
     const nextBal = Number(payable.open_balance) - paidAmount;
-    const status = nextBal <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+    const status = nextBal <= 0 ? PAYABLE_STATUS.PAID : PAYABLE_STATUS.PARTIALLY_PAID;
     await client.query(`UPDATE ap_payables SET open_balance=$2, payable_status=$3 WHERE id=$1`, [payableId, nextBal, status]);
     await transitionLifecycleState(client, payable.request_id, nextBal <= 0 ? LIFECYCLE_STATES.PAID : LIFECYCLE_STATES.PARTIALLY_PAID, req.user.id, 'Payment allocation recorded');
     await logFinanceAction(client, payable.request_id, req.user.id, 'PAYMENT_ALLOCATION_CREATED', { payable_id: payableId, amount: paidAmount });
@@ -1292,7 +1259,7 @@ const getLifecycleDetail = async (req, res, next) => {
     await ensureProcureToPayTables();
     await ensureFinanceCoreTables();
 
-    const [lifecycle, stateHistory, requestMeta, requestItems, purchaseOrders, receipts, invoices, matches, vouchers, postings, payables, payments, actions, flowLinks, commitments, glPostings] = await Promise.all([
+    const [lifecycle, stateHistory, requestMeta, requestItems, purchaseOrders, receipts, invoices, matches, vouchers, postings, payables, payments, actions, flowLinks, commitments, glPostings, linkedInventory] = await Promise.all([
       pool.query(`SELECT * FROM procurement_lifecycle_states WHERE request_id = $1`, [requestId]),
       pool.query(`SELECT * FROM procurement_state_history WHERE request_id = $1 ORDER BY changed_at DESC`, [requestId]),
       pool.query(
@@ -1322,6 +1289,25 @@ const getLifecycleDetail = async (req, res, next) => {
       pool.query(`SELECT * FROM document_flow_links WHERE request_id = $1 ORDER BY created_at ASC`, [requestId]),
       pool.query(`SELECT * FROM commitment_ledger WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM gl_postings WHERE request_id = $1 ORDER BY posted_at DESC`, [requestId]),
+      pool.query(
+        `SELECT wsl.warehouse_id,
+                w.name AS warehouse_name,
+                wsl.stock_item_id,
+                wsl.item_name,
+                wsl.quantity,
+                wsl.updated_at
+           FROM warehouse_stock_levels wsl
+           JOIN requests r ON r.id = $1 AND r.supply_warehouse_id = wsl.warehouse_id
+           LEFT JOIN warehouses w ON w.id = wsl.warehouse_id
+          WHERE EXISTS (
+            SELECT 1
+              FROM requested_items ri
+             WHERE ri.request_id = $1
+               AND LOWER(ri.item_name) = LOWER(wsl.item_name)
+          )
+          ORDER BY wsl.item_name ASC`,
+        [requestId]
+      ),
     ]);
 
     res.json({
@@ -1341,6 +1327,7 @@ const getLifecycleDetail = async (req, res, next) => {
       document_flow_links: flowLinks.rows,
       commitments: commitments.rows,
       gl_postings: glPostings.rows,
+      linked_inventory: linkedInventory.rows,
     });
   } catch (error) {
     next(error);

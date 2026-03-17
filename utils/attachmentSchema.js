@@ -1,78 +1,26 @@
-const ATTACHMENTS_TABLE = 'attachments';
-const ATTACHMENTS_SCHEMA = 'public';
+const {
+  attachmentsHasColumn,
+  ensureAttachmentsColumn,
+  resetAttachmentColumnSupportCache,
+} = require('./attachmentsColumnSupport');
+
 const ITEM_ID_COLUMN = 'item_id';
 const ITEM_ID_INDEX = 'attachments_item_id_idx';
 
-let attachmentItemIdSupported = null;
-
 function resetAttachmentsItemIdSupportCache() {
-  attachmentItemIdSupported = null;
+  resetAttachmentColumnSupportCache(ITEM_ID_COLUMN);
 }
 
-function markItemIdSupport(value) {
-  attachmentItemIdSupported = value ? true : false;
+function attachmentsHasItemIdColumn(queryable) {
+  return attachmentsHasColumn(queryable, ITEM_ID_COLUMN);
 }
 
-async function attachmentsHasItemIdColumn(queryable) {
-  if (attachmentItemIdSupported === true) {
-    return true;
-  }
-
-  if (attachmentItemIdSupported === false) {
-    return false;
-  }
-
-  try {
-    const { rows } = await queryable.query(
-      `SELECT 1
-         FROM information_schema.columns
-        WHERE table_schema = $1
-          AND table_name = $2
-          AND column_name = $3
-        LIMIT 1`,
-      [ATTACHMENTS_SCHEMA, ATTACHMENTS_TABLE, ITEM_ID_COLUMN]
-    );
-    const supported = rows.length > 0;
-
-    markItemIdSupport(supported);
-
-    return supported;
-  } catch (err) {
-    console.error('⚠️ Failed to inspect attachments schema:', err.message);
-    attachmentItemIdSupported = true;
-  }
-
-  return true;
-}
-
-async function ensureAttachmentsItemIdColumn(queryable) {
-  const supported = await attachmentsHasItemIdColumn(queryable);
-
-  if (supported) {
-    return true;
-  }
-
-  try {
-    await queryable.query(
-      `ALTER TABLE ${ATTACHMENTS_SCHEMA}.${ATTACHMENTS_TABLE}
-         ADD COLUMN IF NOT EXISTS ${ITEM_ID_COLUMN} BIGINT
-         REFERENCES public.requested_items(id)
-         ON DELETE SET NULL`
-    );
-
-    await queryable.query(
-      `CREATE INDEX IF NOT EXISTS ${ITEM_ID_INDEX}
-         ON ${ATTACHMENTS_SCHEMA}.${ATTACHMENTS_TABLE} (${ITEM_ID_COLUMN})`
-    );
-
-    resetAttachmentsItemIdSupportCache();
-  } catch (err) {
-    console.error('⚠️ Failed to ensure attachments.item_id column:', err.message);
-    markItemIdSupport(false);
-    return false;
-  }
-
-  return attachmentsHasItemIdColumn(queryable);
+function ensureAttachmentsItemIdColumn(queryable) {
+  return ensureAttachmentsColumn(queryable, {
+    columnName: ITEM_ID_COLUMN,
+    referenceTable: 'requested_items',
+    indexName: ITEM_ID_INDEX,
+  });
 }
 
 const {
@@ -117,7 +65,7 @@ async function insertAttachment(queryable, { requestId = null, itemId = null, co
   const placeholders = columns.map((_, idx) => `$${idx + 1}`).join(', ');
 
   return queryable.query(
-    `INSERT INTO ${ATTACHMENTS_TABLE} (${columns.join(', ')}) VALUES (${placeholders}) RETURNING id`,
+    `INSERT INTO attachments (${columns.join(', ')}) VALUES (${placeholders}) RETURNING id`,
     values
   );
 }

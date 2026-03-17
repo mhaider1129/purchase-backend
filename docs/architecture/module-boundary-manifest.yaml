@@ -1,0 +1,137 @@
+version: 1
+architecture: modular-monolith
+modules:
+  master-data:
+    owns:
+      - suppliers
+      - stock_items
+      - departments
+      - sections
+      - warehouses
+      - projects
+    backend_routes:
+      - /api/suppliers
+      - /api/stock-items
+      - /api/departments
+      - /api/warehouses
+      - /api/projects
+    frontend_pages:
+      - SuppliersPage
+      - ItemMasterPage
+  request-approval:
+    owns:
+      - requests
+      - requested_items
+      - approvals
+      - approval_routes
+      - attachments
+    backend_routes:
+      - /api/requests
+      - /api/requested-items
+      - /api/approvals
+      - /api/approval-routes
+      - /api/attachments
+    frontend_pages:
+      - OpenRequestsPage
+      - AssignedRequestsPage
+      - ApprovalHistory
+  procurement-execution:
+    owns:
+      - purchase_orders
+      - purchase_order_items
+      - rfx_events
+      - contracts
+      - procurement_plan_items
+    backend_routes:
+      - /api/procure-to-pay/purchase-orders
+      - /api/rfx-portal
+      - /api/contracts
+      - /api/procurement-plans
+    frontend_pages:
+      - ProcureToPayPurchaseOrdersPage
+      - RfxPortalPage
+      - ContractsPage
+  receiving-warehouse-intake:
+    owns:
+      - goods_receipts
+      - goods_receipt_items
+      - warehouse_stock_levels
+      - warehouse_stock_movements
+      - warehouse_transfer_requests
+      - warehouse_supply_items
+    backend_routes:
+      - /api/procure-to-pay/requests/:requestId/receipts
+      - /api/warehouse-inventory
+      - /api/warehouse-transfers
+      - /api/warehouse-supply
+    frontend_pages:
+      - ProcureToPayGoodsReceiptsPage
+      - WarehouseInventoryPage
+      - WarehouseSupplyRequestsPage
+  finance-ap:
+    owns:
+      - supplier_invoices
+      - invoice_items
+      - invoice_match_results
+      - ap_vouchers
+      - ap_voucher_lines
+      - ap_payables
+      - payment_records
+      - payment_allocations
+    backend_routes:
+      - /api/procure-to-pay/requests/:requestId/invoices
+      - /api/procure-to-pay/invoice-matching-queue
+      - /api/procure-to-pay/accounts-payable
+      - /api/procure-to-pay/payments
+    frontend_pages:
+      - ProcureToPayInvoicesPage
+      - ProcureToPayMatchingPage
+      - ProcureToPayAccountsPayablePage
+      - ProcureToPayPaymentsPage
+  budget-control:
+    owns:
+      - budget_envelopes
+      - commitment_ledger
+      - gl_postings
+      - gl_posting_lines
+    backend_services:
+      - financeCoreService
+  asset-custody:
+    owns:
+      - custody_records
+      - custody_approvals
+    backend_routes:
+      - /api/custody
+    frontend_pages:
+      - custody/CustodyIssueForm
+      - custody/CustodyApprovals
+  supplier-performance:
+    owns:
+      - supplier_evaluations
+      - supplier_scorecards
+      - supplier_issues
+      - supplier_compliance
+    backend_routes:
+      - /api/supplier-evaluations
+      - /api/supplier-srm
+    frontend_pages:
+      - SupplierEvaluationsPage
+      - SupplierSrmPage
+  reporting-analytics:
+    owns:
+      - read_models_only
+    backend_routes:
+      - /api/dashboard
+      - /api/procure-to-pay/dashboard
+      - /api/procure-to-pay/document-flow
+    frontend_pages:
+      - Dashboard
+      - LifecycleAnalytics
+      - ProcureToPayDashboardPage
+      - ProcureToPayDocumentFlowPage
+cross_module_rules:
+  - "Module owner is the only writer of canonical object attributes."
+  - "Other modules can only store FK references + denormalized read fields."
+  - "All cross-module transitions must record document_flow_links entries."
+  - "Supplier identity must be canonicalized by supplier_id, not names."
+  - "Warehouse stock source-of-truth is warehouse_stock_levels/movements only."

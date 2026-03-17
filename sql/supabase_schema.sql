@@ -913,4 +913,117 @@ CREATE INDEX IF NOT EXISTS idx_monthly_dispensing_item ON public.monthly_dispens
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_monthly_dispensing_month_item_facility
   ON public.monthly_dispensing (month_start, item_name, COALESCE(facility_name, ''));
 
+-- ==========================================================
+-- Procure-to-Pay + Finance Core authorization and UI access
+-- ==========================================================
+
+-- 1) Ensure permission catalog includes procure-to-pay + finance controls.
+INSERT INTO public.permissions (code, name, description)
+VALUES
+  ('procure-to-pay.lifecycle.view', 'View procure-to-pay lifecycle', 'View lifecycle, receipts, invoices, matching, finance and payment data for requests.'),
+  ('procure-to-pay.receipts.manage', 'Manage goods receipts', 'Create and update goods receipt events including partial and discrepancy captures.'),
+  ('procure-to-pay.invoices.manage', 'Manage supplier invoices', 'Capture supplier invoices and invoice line details.'),
+  ('procure-to-pay.match.manage', 'Manage invoice matching', 'Run 2-way/3-way invoice matching and review mismatch details.'),
+  ('procure-to-pay.vouchers.manage', 'Manage AP vouchers', 'Create and update AP voucher records in procure-to-pay workflows.'),
+  ('procure-to-pay.payments.manage', 'Manage procure-to-pay payments', 'Track and update payment states for procure-to-pay workflows.'),
+  ('finance.verify', 'Verify finance records', 'Perform finance review and verification before posting.'),
+  ('finance.voucher.create', 'Create AP vouchers', 'Create AP voucher headers and lines within the internal finance module.'),
+  ('finance.post-ledger', 'Post to internal ledger', 'Post verified vouchers to the internal liability recognition state.'),
+  ('finance.payment.manage', 'Manage payment states', 'Mark payment pending and paid states for tracked liabilities.'),
+  ('finance.override-mismatch', 'Override invoice mismatches', 'Approve authorized mismatches with reason codes for audit.')
+ON CONFLICT (code) DO UPDATE
+SET
+  name = EXCLUDED.name,
+  description = EXCLUDED.description;
+
+-- 2) Grant these permissions to the expected roles when roles exist.
+WITH target_role_permissions AS (
+  SELECT role_name, permission_code
+  FROM (VALUES
+    ('scm', 'procure-to-pay.lifecycle.view'),
+    ('scm', 'procure-to-pay.receipts.manage'),
+    ('scm', 'procure-to-pay.invoices.manage'),
+    ('scm', 'procure-to-pay.match.manage'),
+    ('scm', 'procure-to-pay.vouchers.manage'),
+    ('scm', 'procure-to-pay.payments.manage'),
+    ('scm', 'finance.verify'),
+    ('scm', 'finance.voucher.create'),
+    ('scm', 'finance.post-ledger'),
+    ('scm', 'finance.payment.manage'),
+    ('scm', 'finance.override-mismatch'),
+    ('procurementspecialist', 'procure-to-pay.lifecycle.view'),
+    ('procurementspecialist', 'procure-to-pay.invoices.manage'),
+    ('procurementspecialist', 'procure-to-pay.match.manage'),
+    ('warehousekeeper', 'procure-to-pay.lifecycle.view'),
+    ('warehousekeeper', 'procure-to-pay.receipts.manage'),
+    ('warehousemanager', 'procure-to-pay.lifecycle.view'),
+    ('warehousemanager', 'procure-to-pay.receipts.manage'),
+    ('finance', 'procure-to-pay.lifecycle.view'),
+    ('finance', 'finance.verify'),
+    ('finance', 'finance.voucher.create'),
+    ('finance', 'finance.post-ledger'),
+    ('finance', 'finance.payment.manage'),
+    ('financeapprover', 'procure-to-pay.lifecycle.view'),
+    ('financeapprover', 'finance.verify'),
+    ('financeapprover', 'finance.override-mismatch'),
+    ('admin', 'procure-to-pay.lifecycle.view'),
+    ('admin', 'procure-to-pay.receipts.manage'),
+    ('admin', 'procure-to-pay.invoices.manage'),
+    ('admin', 'procure-to-pay.match.manage'),
+    ('admin', 'procure-to-pay.vouchers.manage'),
+    ('admin', 'procure-to-pay.payments.manage'),
+    ('admin', 'finance.verify'),
+    ('admin', 'finance.voucher.create'),
+    ('admin', 'finance.post-ledger'),
+    ('admin', 'finance.payment.manage'),
+    ('admin', 'finance.override-mismatch')
+  ) AS mappings(role_name, permission_code)
+), role_permission_ids AS (
+  SELECT r.id AS role_id, p.id AS permission_id
+  FROM target_role_permissions m
+  JOIN public.roles r ON LOWER(r.name) = LOWER(m.role_name)
+  JOIN public.permissions p ON LOWER(p.code) = LOWER(m.permission_code)
+)
+INSERT INTO public.role_permissions (role_id, permission_id)
+SELECT role_id, permission_id
+FROM role_permission_ids
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+-- 3) Seed interface access resources for new procure-to-pay frontend pages.
+INSERT INTO public.ui_resource_permissions (
+  resource_key,
+  label,
+  description,
+  permissions,
+  require_all
+)
+VALUES
+  (
+    'feature.procureToPayLifecycle',
+    'Procure-to-Pay Lifecycle',
+    'Controls access to the procure-to-pay lifecycle overview page.',
+    ARRAY['procure-to-pay.lifecycle.view'],
+    FALSE
+  ),
+  (
+    'feature.procureToPayReceipts',
+    'Procure-to-Pay Goods Receipts',
+    'Controls access to the procure-to-pay goods receipt entry page.',
+    ARRAY['procure-to-pay.receipts.manage'],
+    FALSE
+  ),
+  (
+    'feature.procureToPayInvoices',
+    'Procure-to-Pay Invoices',
+    'Controls access to the procure-to-pay invoice entry page.',
+    ARRAY['procure-to-pay.invoices.manage'],
+    FALSE
+  )
+ON CONFLICT (resource_key) DO UPDATE
+SET
+  label = EXCLUDED.label,
+  description = EXCLUDED.description,
+  permissions = EXCLUDED.permissions,
+  require_all = EXCLUDED.require_all;
+
 COMMIT;

@@ -780,11 +780,12 @@ const createPurchaseOrder = async (req, res, next) => {
       requireSupplier: false,
     });
 
+    const poStatus = requestIdOrNull ? 'PO_ISSUED' : 'PO_PENDING_APPROVAL';
     const poRes = await client.query(
       `INSERT INTO purchase_orders (request_id, po_number, supplier_id, supplier_name, expected_delivery_date, terms, status, created_by)
-       VALUES ($1, CONCAT('PO-', COALESCE($1::text, 'DIRECT'), '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, $4, $5, 'PO_ISSUED', $6)
+       VALUES ($1, CONCAT('PO-', COALESCE($1::text, 'DIRECT'), '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [requestIdOrNull, supplierRef.supplierId, supplierRef.supplierName || null, expected_delivery_date, terms, req.user.id]
+      [requestIdOrNull, supplierRef.supplierId, supplierRef.supplierName || null, expected_delivery_date, terms, poStatus, req.user.id]
     );
 
     const sourceItems = items.length
@@ -873,7 +874,20 @@ const listPurchaseOrders = async (req, res, next) => {
 
     values.push(safePageSize, (safePage - 1) * safePageSize);
     const { rows } = await pool.query(
-      `SELECT po.*, COALESCE(SUM(poi.quantity * poi.unit_price), 0) AS total_amount
+      `SELECT po.*, COALESCE(SUM(poi.quantity * poi.unit_price), 0) AS total_amount,
+              COALESCE(
+                json_agg(
+                  json_build_object(
+                    'id', poi.id,
+                    'item_name', poi.item_name,
+                    'quantity', poi.quantity,
+                    'unit_price', poi.unit_price,
+                    'line_total', (poi.quantity * poi.unit_price)
+                  )
+                  ORDER BY poi.id
+                ) FILTER (WHERE poi.id IS NOT NULL),
+                '[]'::json
+              ) AS items
        FROM purchase_orders po
        LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
        ${whereClause}
@@ -917,19 +931,28 @@ const getProcureToPayDashboard = async (req, res, next) => {
 const getPoSourceRequests = async (req, res, next) => {
   try {
     await ensureProcureToPayTables();
-    const { search = null } = req.query;
+    const { search = null, request_id: requestId = null } = req.query;
     const values = [];
-    let searchFilter = '';
+    const filters = [
+      `LOWER(r.status) = 'approved'`,
+      `NOT EXISTS (SELECT 1 FROM purchase_orders po WHERE po.request_id = r.id)`,
+    ];
+
     if (search) {
       values.push(`%${search}%`);
-      searchFilter = `AND (r.id::text ILIKE $${values.length} OR COALESCE(r.request_type, '') ILIKE $${values.length})`;
+      filters.push(`(r.id::text ILIKE $${values.length} OR COALESCE(r.request_type, '') ILIKE $${values.length})`);
     }
+
+    if (requestId) {
+      values.push(Number(requestId));
+      filters.push(`r.id = $${values.length}`);
+    }
+
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
       `SELECT r.id, r.request_type, r.status, r.created_at
        FROM requests r
-       WHERE LOWER(r.status) = 'approved'
-         AND NOT EXISTS (SELECT 1 FROM purchase_orders po WHERE po.request_id = r.id)
-         ${searchFilter}
+       ${whereClause}
        ORDER BY r.created_at DESC
        LIMIT 200`,
       values

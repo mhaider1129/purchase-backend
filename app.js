@@ -269,6 +269,7 @@ const procurementPlansRoutes = require('./routes/procurementPlans');
 const planningRoutes = require('./routes/planning');
 const stockItemsRoutes = require('./routes/stockItems');
 const stockItemRequestsRoutes = require('./routes/stockItemRequests');
+const itemMasterRoutes = require('./routes/itemMaster');
 const warehouseSupplyRoutes = require('./routes/warehouseSupply');
 const warehouseInventoryRoutes = require('./routes/warehouseInventory');
 const warehouseTransfersRoutes = require('./routes/warehouseTransfers');
@@ -320,6 +321,7 @@ apiRouter.use('/procurement-plans', authenticateUser, writeAuditTrail, procureme
 apiRouter.use('/planning', authenticateUser, writeAuditTrail, planningRoutes);
 apiRouter.use('/stock-items', authenticateUser, writeAuditTrail, stockItemsRoutes);
 apiRouter.use('/stock-item-requests', authenticateUser, writeAuditTrail, stockItemRequestsRoutes);
+apiRouter.use('/item-master', authenticateUser, writeAuditTrail, itemMasterRoutes);
 apiRouter.use('/warehouse-inventory', authenticateUser, writeAuditTrail, warehouseInventoryRoutes);
 apiRouter.use('/item-recalls', authenticateUser, writeAuditTrail, itemRecallsRoutes);
 apiRouter.use('/warehouse-supply', authenticateUser, writeAuditTrail, warehouseSupplyRoutes);

@@ -126,6 +126,12 @@ const CAPABILITY_MATRIX = [
     permissions: ['stock-requests.create', 'stock-requests.review'],
   },
   {
+    routePrefix: '/item-master',
+    module: 'master-data',
+    resource: 'item-master',
+    permissions: ['item-master.view', 'item-master.manage', 'item-master.approve'],
+  },
+  {
     routePrefix: '/item-recalls',
     module: 'quality',
     resource: 'item-recalls',

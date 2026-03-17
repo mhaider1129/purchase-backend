@@ -40,6 +40,9 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'requests.view-all',
     'requests.view-incomplete',
     'stock-requests.review',
+    'item-master.view',
+    'item-master.manage',
+    'item-master.approve',
     'users.manage',
     'warehouse.manage-supply',
     'warehouse.view-supply',
@@ -72,6 +75,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'procure-to-pay.lifecycle.view',
     'procure-to-pay.match.manage',
     'procure-to-pay.invoices.manage',
+    'item-master.view',
+    'item-master.manage',
   ],
   finance: [
     'procure-to-pay.lifecycle.view',
@@ -92,7 +97,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'risks.view',
     'rfx.manage',
   ],
-  medicaldevices: ['contracts.manage'],
+  medicaldevices: ['contracts.manage', 'item-master.view', 'item-master.approve'],
   audit: ['requests.view-incomplete', 'requests.view-audit'],
   coo: ['requests.view-incomplete', 'requests.view-audit'],
   cmo: ['requests.view-incomplete', 'requests.view-audit'],
@@ -175,6 +180,21 @@ const CORE_PERMISSION_DEFINITIONS = [
     code: 'risks.manage',
     name: 'Manage risks',
     description: 'Create and update entries in the risk register.',
+  },
+  {
+    code: 'item-master.view',
+    name: 'View item master',
+    description: 'Search and view item master records and approved item details.',
+  },
+  {
+    code: 'item-master.manage',
+    name: 'Manage item master records',
+    description: 'Create and update item master records, metadata, and attachments before approval.',
+  },
+  {
+    code: 'item-master.approve',
+    name: 'Approve item master records',
+    description: 'Validate and approve or reject item master records for activation.',
   },
 ];
 

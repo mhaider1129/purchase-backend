@@ -23,6 +23,37 @@ const normalizeNullableDate = (value) => {
   return date.toISOString().slice(0, 10);
 };
 
+const insertInventoryTransaction = async (client, payload) => {
+  const {
+    transactionType,
+    sourceLocation = null,
+    destinationLocation = null,
+    warehouseId = null,
+    departmentId = null,
+    sectionId = null,
+    batchId = null,
+    stockItemId,
+    quantity,
+    unitCost = null,
+    referenceDocument = null,
+    referenceRequestId = null,
+    referenceTransferId = null,
+    warehouseStockMovementId = null,
+    departmentStockMovementId = null,
+    notes = null,
+    createdBy = null,
+  } = payload;
+
+  await client.query(
+    `INSERT INTO inventory_transactions (
+      transaction_type, source_location, destination_location, warehouse_id, department_id, section_id,
+      batch_id, stock_item_id, quantity, unit_cost, reference_document, reference_request_id, reference_transfer_id,
+      warehouse_stock_movement_id, department_stock_movement_id, notes, created_by
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+    [transactionType, sourceLocation, destinationLocation, warehouseId, departmentId, sectionId, batchId, stockItemId, quantity, unitCost, referenceDocument, referenceRequestId, referenceTransferId, warehouseStockMovementId, departmentStockMovementId, notes, createdBy],
+  );
+};
+
 const issueWarehouseStock = async (req, res, next) => {
   const {
     stock_item_id: rawStockItemId,
@@ -237,10 +268,9 @@ const issueWarehouseStock = async (req, res, next) => {
             RETURNING id`,
             [departmentId, sectionId, batchRow.batch_id, stockItemId, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, consumed, req.user.id],
           );
-          departmentStockLevelId = insertDeptLevelRes.rows[0].id;
         }
 
-        await client.query(
+        const departmentMovementRes = await client.query(
           `INSERT INTO department_stock_movements (
             department_stock_level_id,
             direction,
@@ -252,11 +282,12 @@ const issueWarehouseStock = async (req, res, next) => {
             serial_number,
             notes,
             created_by
-          ) VALUES ($1, 'in', $2, $3, $4, $5, $6, $7, $8, $9)`,
+          ) VALUES ($1, 'in', $2, $3, $4, $5, $6, $7, $8, $9)
+          RETURNING id`,
           [departmentStockLevelId, consumed, warehouseId, batchRow.batch_id, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, itemNotes || null, req.user.id],
         );
 
-        await client.query(
+        const warehouseMovementRes = await client.query(
           `INSERT INTO warehouse_stock_movements (
               warehouse_id,
               stock_item_id,
@@ -271,9 +302,27 @@ const issueWarehouseStock = async (req, res, next) => {
               to_section_id,
               created_by,
               notes
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'out', $8, $9, $10, $11, $12)`,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'out', $8, $9, $10, $11, $12)
+            RETURNING id`,
           [warehouseId, stockItemId, batchRow.batch_id, itemName, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, consumed, departmentId, sectionId, req.user.id, itemNotes || null],
         );
+
+        await insertInventoryTransaction(client, {
+          transactionType: 'issue',
+          sourceLocation: `warehouse:${warehouseId}`,
+          destinationLocation: sectionId ? `department:${departmentId}:section:${sectionId}` : `department:${departmentId}`,
+          warehouseId,
+          departmentId,
+          sectionId,
+          batchId: batchRow.batch_id,
+          stockItemId,
+          quantity: consumed,
+          referenceDocument: 'warehouse_issue',
+          warehouseStockMovementId: warehouseMovementRes.rows[0].id,
+          departmentStockMovementId: departmentMovementRes.rows[0].id,
+          notes: itemNotes || null,
+          createdBy: req.user.id,
+        });
 
         remainingToIssue -= consumed;
       }
@@ -416,12 +465,26 @@ const addWarehouseStock = async (req, res, next) => {
 
     await recalculateAvailableQuantity(client, stockItemId);
 
-    await client.query(
+    const movementRes = await client.query(
       `INSERT INTO warehouse_stock_movements (
         warehouse_id, stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, direction, quantity, notes, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'in', $8, $9, $10)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'in', $8, $9, $10)
+      RETURNING id`,
       [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, notes || null, req.user.id],
     );
+    await insertInventoryTransaction(client, {
+      transactionType: 'receipt',
+      sourceLocation: null,
+      destinationLocation: `warehouse:${warehouseId}`,
+      warehouseId,
+      batchId,
+      stockItemId,
+      quantity,
+      referenceDocument: 'warehouse_stock_add',
+      warehouseStockMovementId: movementRes.rows[0].id,
+      notes: notes || null,
+      createdBy: req.user.id,
+    });
 
     await client.query('COMMIT');
 
@@ -571,6 +634,19 @@ const discardWarehouseStock = async (req, res, next) => {
         RETURNING id, warehouse_id, stock_item_id, item_name, lot_number, expiry_date, serial_number, direction, quantity, notes, created_at`,
       [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, destructionNotes, req.user.id],
     );
+    await insertInventoryTransaction(client, {
+      transactionType: 'adjustment',
+      sourceLocation: `warehouse:${warehouseId}`,
+      destinationLocation: null,
+      warehouseId,
+      batchId,
+      stockItemId,
+      quantity,
+      referenceDocument: 'warehouse_stock_discard',
+      warehouseStockMovementId: movementRes.rows[0].id,
+      notes: destructionNotes,
+      createdBy: req.user.id,
+    });
 
     await client.query('COMMIT');
 
@@ -670,10 +746,33 @@ const getWeeklyDepartmentStockingReport = async (req, res, next) => {
   }
 };
 
+const getInventoryTransactions = async (req, res, next) => {
+  if (!req.user?.hasPermission('warehouse.view-supply')) {
+    return next(createHttpError(403, 'You do not have permission to view inventory transactions'));
+  }
+  await ensureWarehouseInventoryTables();
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const { rows } = await pool.query(
+      `SELECT it.*, si.name AS stock_item_name
+       FROM inventory_transactions it
+       LEFT JOIN stock_items si ON si.id = it.stock_item_id
+       ORDER BY it.created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch inventory transactions:', err.message);
+    next(createHttpError(500, 'Failed to fetch inventory transactions'));
+  }
+};
+
 module.exports = {
   addWarehouseStock,
   discardWarehouseStock,
   getWeeklyDepartmentStockingReport,
   issueWarehouseStock,
   getWarehouseItems,
+  getInventoryTransactions,
 };

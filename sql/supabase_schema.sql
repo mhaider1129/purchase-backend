@@ -513,6 +513,105 @@ CREATE TABLE IF NOT EXISTS public.sections (
   CONSTRAINT sections_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id)
 );
 
+
+CREATE TABLE IF NOT EXISTS public.item_categories (
+  id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+  category_name text NOT NULL UNIQUE,
+  description text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT item_categories_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS public.item_uom (
+  id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+  uom_code text NOT NULL UNIQUE,
+  uom_name text NOT NULL UNIQUE,
+  description text,
+  is_base_uom boolean NOT NULL DEFAULT false,
+  created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT item_uom_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS public.item_manufacturers (
+  id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+  manufacturer_name text NOT NULL UNIQUE,
+  country_of_origin text,
+  contact_info jsonb NOT NULL DEFAULT '{}'::jsonb,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT item_manufacturers_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS public.item_brands (
+  id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+  brand_name text NOT NULL UNIQUE,
+  manufacturer_id integer,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT item_brands_pkey PRIMARY KEY (id),
+  CONSTRAINT item_brands_manufacturer_id_fkey FOREIGN KEY (manufacturer_id) REFERENCES public.item_manufacturers(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.item_master (
+  id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+  item_code text NOT NULL UNIQUE,
+  item_name text NOT NULL,
+  generic_name text,
+  category_id integer,
+  base_uom_id integer,
+  manufacturer_id integer,
+  brand_id integer,
+  description text,
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['draft'::text, 'active'::text, 'inactive'::text, 'archived'::text])),
+  created_by integer,
+  updated_by integer,
+  created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT item_master_pkey PRIMARY KEY (id),
+  CONSTRAINT item_master_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.item_categories(id) ON DELETE SET NULL,
+  CONSTRAINT item_master_base_uom_id_fkey FOREIGN KEY (base_uom_id) REFERENCES public.item_uom(id) ON DELETE SET NULL,
+  CONSTRAINT item_master_manufacturer_id_fkey FOREIGN KEY (manufacturer_id) REFERENCES public.item_manufacturers(id) ON DELETE SET NULL,
+  CONSTRAINT item_master_brand_id_fkey FOREIGN KEY (brand_id) REFERENCES public.item_brands(id) ON DELETE SET NULL,
+  CONSTRAINT item_master_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT item_master_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id)
+);
+
+CREATE TABLE IF NOT EXISTS public.item_variants (
+  id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+  item_master_id integer NOT NULL,
+  variant_code text UNIQUE,
+  variant_name text NOT NULL,
+  sku text UNIQUE,
+  variant_attributes jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'inactive'::text])),
+  created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT item_variants_pkey PRIMARY KEY (id),
+  CONSTRAINT item_variants_item_master_id_fkey FOREIGN KEY (item_master_id) REFERENCES public.item_master(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS public.item_conversion (
+  id integer NOT NULL GENERATED ALWAYS AS IDENTITY,
+  item_master_id integer,
+  from_uom_id integer NOT NULL,
+  to_uom_id integer NOT NULL,
+  conversion_factor numeric(18,6) NOT NULL CHECK (conversion_factor > 0::numeric),
+  is_bidirectional boolean NOT NULL DEFAULT true,
+  created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT item_conversion_pkey PRIMARY KEY (id),
+  CONSTRAINT item_conversion_unique UNIQUE (item_master_id, from_uom_id, to_uom_id),
+  CONSTRAINT item_conversion_item_master_id_fkey FOREIGN KEY (item_master_id) REFERENCES public.item_master(id) ON DELETE CASCADE,
+  CONSTRAINT item_conversion_from_uom_id_fkey FOREIGN KEY (from_uom_id) REFERENCES public.item_uom(id) ON DELETE CASCADE,
+  CONSTRAINT item_conversion_to_uom_id_fkey FOREIGN KEY (to_uom_id) REFERENCES public.item_uom(id) ON DELETE CASCADE,
+  CONSTRAINT item_conversion_uom_check CHECK (from_uom_id <> to_uom_id)
+);
+
 CREATE TABLE IF NOT EXISTS public.stock_item_requests (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   name text NOT NULL,
@@ -541,8 +640,12 @@ CREATE TABLE IF NOT EXISTS public.stock_items (
   created_by integer,
   sub_category text,
   available_quantity numeric,
+  item_master_id integer,
+  item_variant_id integer,
   CONSTRAINT stock_items_pkey PRIMARY KEY (id),
-  CONSTRAINT stock_items_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+  CONSTRAINT stock_items_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT stock_items_item_master_id_fkey FOREIGN KEY (item_master_id) REFERENCES public.item_master(id) ON DELETE SET NULL,
+  CONSTRAINT stock_items_item_variant_id_fkey FOREIGN KEY (item_variant_id) REFERENCES public.item_variants(id) ON DELETE SET NULL
 );
 
 -- Batch-level inventory to support multiple expiry dates and lot tracking
@@ -569,6 +672,10 @@ CREATE TABLE IF NOT EXISTS public.warehouse_item_batches (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouse_item_batches_unique_batch
   ON public.warehouse_item_batches (warehouse_id, stock_item_id, COALESCE(batch_number, ''), COALESCE(expiry_date, 'infinity'));
+
+CREATE INDEX IF NOT EXISTS idx_item_master_category ON public.item_master (category_id);
+CREATE INDEX IF NOT EXISTS idx_item_variants_master_id ON public.item_variants (item_master_id);
+CREATE INDEX IF NOT EXISTS idx_item_conversion_master_id ON public.item_conversion (item_master_id);
 
 -- Stock availability per warehouse
 CREATE TABLE IF NOT EXISTS public.warehouse_stock_levels (

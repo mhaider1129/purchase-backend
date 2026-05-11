@@ -12,6 +12,7 @@ CREATE SEQUENCE IF NOT EXISTS public.approval_routes_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.approvals_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.attachments_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.audit_logs_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.audit_registry_entries_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.contract_evaluations_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.contracts_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.custody_records_id_seq;
@@ -40,6 +41,7 @@ CREATE SEQUENCE IF NOT EXISTS public.warehouse_replenishment_policies_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.warehouse_replenishment_tasks_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.department_stock_levels_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.department_stock_movements_id_seq;
+CREATE SEQUENCE IF NOT EXISTS public.inventory_transactions_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.supplier_evaluations_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.technical_inspections_id_seq;
 CREATE SEQUENCE IF NOT EXISTS public.user_registration_requests_id_seq;
@@ -115,6 +117,32 @@ CREATE TABLE IF NOT EXISTS public.attachments (
   CONSTRAINT attachments_uploaded_by_fkey FOREIGN KEY (uploaded_by) REFERENCES public.users(id),
   CONSTRAINT attachments_item_id_fkey FOREIGN KEY (item_id) REFERENCES public.requested_items(id),
   CONSTRAINT attachments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+
+
+CREATE TABLE IF NOT EXISTS public.audit_registry_entries (
+  id bigint NOT NULL DEFAULT nextval('audit_registry_entries_id_seq'::regclass),
+  request_id integer NOT NULL,
+  requester_id integer NOT NULL,
+  requester_type text NOT NULL CHECK (requester_type = ANY (ARRAY['INDIVIDUAL'::text, 'COMMITTEE'::text])),
+  account_name text,
+  notes text,
+  required_before_payment text,
+  required_after_payment text,
+  audit_status text NOT NULL DEFAULT 'PENDING_AUDIT'::text CHECK (audit_status = ANY (ARRAY['PENDING_AUDIT'::text, 'ACTION_REQUIRED'::text, 'READY_FOR_FINANCE'::text, 'FINANCE_PROCESSING'::text, 'COMPLETED'::text])),
+  finance_issued_amount numeric(14,2) NOT NULL DEFAULT 0,
+  returned_amount numeric(14,2) NOT NULL DEFAULT 0,
+  currency text NOT NULL DEFAULT 'USD'::text,
+  completed_at timestamp with time zone,
+  created_by integer,
+  updated_by integer,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT audit_registry_entries_pkey PRIMARY KEY (id),
+  CONSTRAINT audit_registry_entries_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id) ON DELETE CASCADE,
+  CONSTRAINT audit_registry_entries_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
+  CONSTRAINT audit_registry_entries_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT audit_registry_entries_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id)
 );
 
 CREATE TABLE IF NOT EXISTS public.audit_logs (
@@ -649,6 +677,48 @@ CREATE TABLE IF NOT EXISTS public.department_stock_movements (
   CONSTRAINT department_stock_movements_reference_request_id_fkey FOREIGN KEY (reference_request_id) REFERENCES public.requests(id),
   CONSTRAINT department_stock_movements_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
 );
+
+-- Unified inventory transaction ledger for valuation and movement traceability
+CREATE TABLE IF NOT EXISTS public.inventory_transactions (
+  id integer NOT NULL DEFAULT nextval('inventory_transactions_id_seq'::regclass),
+  transaction_type text NOT NULL CHECK (transaction_type = ANY (ARRAY['warehouse'::text, 'department'::text, 'transfer'::text, 'receipt'::text, 'issue'::text, 'adjustment'::text, 'recall'::text])),
+  source_location text,
+  destination_location text,
+  warehouse_id integer,
+  department_id integer,
+  section_id integer,
+  batch_id integer,
+  stock_item_id integer NOT NULL,
+  quantity numeric NOT NULL,
+  unit_cost numeric,
+  reference_document text,
+  reference_request_id integer,
+  reference_transfer_id integer,
+  warehouse_stock_movement_id integer,
+  department_stock_movement_id integer,
+  notes text,
+  created_by integer,
+  created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT inventory_transactions_pkey PRIMARY KEY (id),
+  CONSTRAINT inventory_transactions_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT inventory_transactions_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
+  CONSTRAINT inventory_transactions_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
+  CONSTRAINT inventory_transactions_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.warehouse_item_batches(id),
+  CONSTRAINT inventory_transactions_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
+  CONSTRAINT inventory_transactions_reference_request_id_fkey FOREIGN KEY (reference_request_id) REFERENCES public.requests(id),
+  CONSTRAINT inventory_transactions_warehouse_movement_id_fkey FOREIGN KEY (warehouse_stock_movement_id) REFERENCES public.warehouse_stock_movements(id),
+  CONSTRAINT inventory_transactions_department_movement_id_fkey FOREIGN KEY (department_stock_movement_id) REFERENCES public.department_stock_movements(id),
+  CONSTRAINT inventory_transactions_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_transactions_type_created
+  ON public.inventory_transactions (transaction_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_inventory_transactions_item_batch
+  ON public.inventory_transactions (stock_item_id, batch_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_transactions_reference_request
+  ON public.inventory_transactions (reference_request_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_transactions_reference_transfer
+  ON public.inventory_transactions (reference_transfer_id);
 
 -- Replenishment policies for warehouse stock
 CREATE TABLE IF NOT EXISTS public.warehouse_replenishment_policies (

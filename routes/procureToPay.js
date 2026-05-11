@@ -12,6 +12,11 @@ const {
   getPoSourceRequests,
   getLifecycleDetail,
   createPurchaseOrder,
+  submitPurchaseOrderForApproval,
+  approvePurchaseOrder,
+  issuePurchaseOrder,
+  cancelPurchaseOrder,
+  closePurchaseOrder,
   listPurchaseOrders,
   listGoodsReceipts,
   listOpenPosForReceipt,
@@ -51,6 +56,11 @@ router.get('/document-flow', listDocumentFlow);
 router.get('/requests/:requestId/lifecycle', getLifecycleDetail);
 router.post('/purchase-orders', withDeprecation(createPurchaseOrder, 'Use POST /api/procure-to-pay/requests/:requestId/purchase-orders'));
 router.post('/requests/:requestId/purchase-orders', createPurchaseOrder);
+router.post('/purchase-orders/:poId/submit-approval', submitPurchaseOrderForApproval);
+router.post('/purchase-orders/:poId/approve', approvePurchaseOrder);
+router.post('/purchase-orders/:poId/issue', issuePurchaseOrder);
+router.post('/purchase-orders/:poId/cancel', cancelPurchaseOrder);
+router.post('/purchase-orders/:poId/close', closePurchaseOrder);
 router.post('/requests/:requestId/receipts', createGoodsReceipt);
 router.get('/requests/:requestId/receipts', listReceiptsByRequest);
 router.post('/requests/:requestId/invoices', submitInvoice);

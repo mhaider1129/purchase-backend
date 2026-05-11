@@ -3,6 +3,9 @@ const {
   MATCH_POLICIES,
   canTransitionState,
   LIFECYCLE_STATES,
+  derivePurchaseOrderStatus,
+  getPurchaseOrderStatusMetadata,
+  validatePurchaseOrderForIssuance,
 } = require('../services/procureToPayService');
 
 describe('procureToPayService', () => {
@@ -53,5 +56,32 @@ describe('procureToPayService', () => {
 
   test('void/reversal-like protection path', () => {
     expect(canTransitionState(LIFECYCLE_STATES.PAID, LIFECYCLE_STATES.CANCELLED)).toBe(false);
+  });
+
+  test('maps business and system PO statuses', () => {
+    expect(getPurchaseOrderStatusMetadata('PO_ISSUED')).toEqual(
+      expect.objectContaining({ business_status: 'Open', system_code: 'PO_ISSUED' })
+    );
+    expect(getPurchaseOrderStatusMetadata('PO_PARTIAL')).toEqual(
+      expect.objectContaining({ business_status: 'Partially Delivered', system_code: 'PO_PARTIAL' })
+    );
+  });
+
+  test('derives delivered and partial PO states from quantities', () => {
+    expect(derivePurchaseOrderStatus({ currentStatus: 'PO_ISSUED', orderedQuantity: 10, receivedQuantity: 4, issuedAt: new Date() })).toBe('PO_PARTIAL');
+    expect(derivePurchaseOrderStatus({ currentStatus: 'PO_ISSUED', orderedQuantity: 10, receivedQuantity: 10, issuedAt: new Date() })).toBe('PO_DELIVERED');
+  });
+
+  test('validates mandatory issuance fields', () => {
+    expect(validatePurchaseOrderForIssuance({ supplierName: 'ACME', items: [], deliveryDate: null })).toEqual(
+      expect.arrayContaining([
+        'At least one PO item is required',
+        'Delivery date is required',
+        'Delivery location is required',
+        'Budget / cost center is required',
+        'Tax terms are required',
+        'Payment terms are required',
+      ])
+    );
   });
 });

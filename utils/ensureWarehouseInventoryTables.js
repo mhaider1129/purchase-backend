@@ -44,6 +44,27 @@ const ensureWarehouseInventoryTables = async (client = pool) => {
           created_by INTEGER REFERENCES users(id),
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )`,
+        `CREATE TABLE IF NOT EXISTS public.inventory_transactions (
+          id SERIAL PRIMARY KEY,
+          transaction_type TEXT NOT NULL CHECK (transaction_type IN ('warehouse', 'department', 'transfer', 'receipt', 'issue', 'adjustment', 'recall')),
+          source_location TEXT,
+          destination_location TEXT,
+          warehouse_id INTEGER REFERENCES warehouses(id),
+          department_id INTEGER REFERENCES departments(id),
+          section_id INTEGER REFERENCES sections(id),
+          batch_id INTEGER REFERENCES warehouse_item_batches(id),
+          stock_item_id INTEGER NOT NULL REFERENCES stock_items(id),
+          quantity NUMERIC NOT NULL,
+          unit_cost NUMERIC,
+          reference_document TEXT,
+          reference_request_id INTEGER REFERENCES requests(id),
+          reference_transfer_id INTEGER,
+          warehouse_stock_movement_id INTEGER REFERENCES warehouse_stock_movements(id),
+          department_stock_movement_id INTEGER REFERENCES department_stock_movements(id),
+          notes TEXT,
+          created_by INTEGER REFERENCES users(id),
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )`,
         `ALTER TABLE public.warehouse_stock_movements ADD COLUMN IF NOT EXISTS reference_transfer_id INTEGER`,
         `ALTER TABLE public.warehouse_stock_movements ADD COLUMN IF NOT EXISTS to_section_id INTEGER REFERENCES sections(id)`,
         `ALTER TABLE public.warehouse_stock_levels ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES warehouse_item_batches(id)`,
@@ -59,6 +80,10 @@ const ensureWarehouseInventoryTables = async (client = pool) => {
         `CREATE INDEX IF NOT EXISTS idx_wsm_department ON public.warehouse_stock_movements(to_department_id)`,
         `CREATE INDEX IF NOT EXISTS idx_wsm_section ON public.warehouse_stock_movements(to_section_id)`,
         `CREATE INDEX IF NOT EXISTS idx_wsm_transfer ON public.warehouse_stock_movements(reference_transfer_id)`
+        ,`CREATE INDEX IF NOT EXISTS idx_itxn_type_created ON public.inventory_transactions(transaction_type, created_at)`
+        ,`CREATE INDEX IF NOT EXISTS idx_itxn_item_batch ON public.inventory_transactions(stock_item_id, batch_id)`
+        ,`CREATE INDEX IF NOT EXISTS idx_itxn_request ON public.inventory_transactions(reference_request_id)`
+        ,`CREATE INDEX IF NOT EXISTS idx_itxn_transfer ON public.inventory_transactions(reference_transfer_id)`
       ];
 
       for (const statement of statements) {

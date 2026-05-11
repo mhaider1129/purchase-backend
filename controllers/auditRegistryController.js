@@ -93,7 +93,7 @@ const getMyAuditRequests = async (req, res, next) => {
   try {
     await ensureAuditRegistryTable(client);
     const data = await client.query(
-      `SELECT are.*, r.status AS request_status, r.title AS request_title,
+      `SELECT are.*, r.status AS request_status, r.request_type AS request_title,
               (are.finance_issued_amount - are.returned_amount) AS remaining_amount
        FROM audit_registry_entries are
        JOIN requests r ON r.id = are.request_id

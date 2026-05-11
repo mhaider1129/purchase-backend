@@ -65,7 +65,7 @@ const attachUserFromToken = async (token) => {
     throw createHttpError(401, 'Unauthorized: User is deactivated');
   }
 
-  const { permissions = [] } = await getPermissionsForUserId(user.id);
+  const { permissions = [], dataScopes = {} } = await getPermissionsForUserId(user.id);
 
   const userContext = {
     id: user.id,
@@ -77,6 +77,7 @@ const attachUserFromToken = async (token) => {
     warehouse_id: user.warehouse_id,
     can_request_medication: user.can_request_medication,
     permissions,
+    data_scopes: dataScopes,
   };
 
   userContext.permissionSet = buildPermissionSet(permissions);
@@ -111,7 +112,11 @@ const authenticateUser = async (req, res, next) => {
       return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
     }
 
-    next(err);
+    if (err?.statusCode) {
+      return next(err);
+    }
+
+    next(createHttpError(500, 'Authentication middleware failed'));
   }
 };
 
@@ -132,7 +137,11 @@ const authenticateUserOptional = async (req, res, next) => {
       return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
     }
 
-    next(err);
+    if (err?.statusCode) {
+      return next(err);
+    }
+
+    next(createHttpError(500, 'Authentication middleware failed'));
   }
 };
 

@@ -234,6 +234,33 @@ const ensurePermissionTables = async () => {
       PRIMARY KEY (role_id, permission_id)
     )
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS data_scopes (
+      id SERIAL PRIMARY KEY,
+      code TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_data_scopes (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      data_scope_id INTEGER NOT NULL REFERENCES data_scopes(id) ON DELETE CASCADE,
+      scope_value TEXT NOT NULL,
+      PRIMARY KEY (user_id, data_scope_id, scope_value)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS role_data_scopes (
+      role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      data_scope_id INTEGER NOT NULL REFERENCES data_scopes(id) ON DELETE CASCADE,
+      scope_value TEXT NOT NULL,
+      PRIMARY KEY (role_id, data_scope_id, scope_value)
+    )
+  `);
 };
 
 const logMissingPermissionDefinitions = async (definitions = []) => {
@@ -337,14 +364,30 @@ const getPermissionsForUserId = async (userId) => {
   }
 
   const { role, permissions } = rows[0];
+
+  const scopeRes = await pool.query(
+    `SELECT ds.code,
+            COALESCE(ARRAY_AGG(DISTINCT uds.scope_value ORDER BY uds.scope_value) FILTER (WHERE uds.scope_value IS NOT NULL), '{}') AS values
+       FROM user_data_scopes uds
+       INNER JOIN data_scopes ds ON ds.id = uds.data_scope_id
+      WHERE uds.user_id = $1
+      GROUP BY ds.code`,
+    [userId]
+  );
+
+  const scopeRows = Array.isArray(scopeRes?.rows) ? scopeRes.rows : [];
+  const dataScopes = scopeRows.reduce((acc, row) => {
+    acc[row.code] = Array.isArray(row.values) ? row.values.filter(Boolean) : [];
+    return acc;
+  }, {});
   const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
 
   if (normalizedRole === 'admin') {
     const allPermissions = await getAllPermissionCodes();
-    return { permissions: allPermissions, role, found: true };
+    return { permissions: allPermissions, dataScopes, role, found: true };
   }
 
-  return { permissions: permissions || [], role, found: true };
+  return { permissions: permissions || [], dataScopes, role, found: true };
 };
 
 const buildPermissionSet = (permissions) => {

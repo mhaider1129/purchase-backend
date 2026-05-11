@@ -1,6 +1,7 @@
 const {
   assertBudgetCanCover,
   getBudgetSnapshot,
+  createJournalEntry,
 } = require('../services/financeCoreService');
 
 describe('financeCoreService', () => {
@@ -55,4 +56,29 @@ describe('financeCoreService', () => {
       })
     ).rejects.toMatchObject({ statusCode: 409 });
   });
+
+  test('createJournalEntry persists header and lines', async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ id: 99, journal_reference: 'x' }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+
+    const journal = await createJournalEntry(client, {
+      requestId: 10,
+      journalType: 'accrual',
+      sourceType: 'supplier_invoice',
+      sourceId: 'INV-1',
+      totalAmount: 120,
+      lines: [
+        { accountCode: '5000-PROC-EXP', debitAmount: 120 },
+        { accountCode: '2100-AP-ACCRUAL', creditAmount: 120 },
+      ],
+    });
+
+    expect(journal.id).toBe(99);
+    expect(client.query).toHaveBeenCalledTimes(3);
+  });
+
 });

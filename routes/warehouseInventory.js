@@ -6,11 +6,13 @@ const {
   getWeeklyDepartmentStockingReport,
   issueWarehouseStock,
   getWarehouseItems,
+  getInventoryTransactions,
 } = require('../controllers/warehouseInventoryController');
 
 router.post('/stock', addWarehouseStock);
 router.post('/stock/discard', discardWarehouseStock);
 router.post('/stock/issue', issueWarehouseStock);
+router.get('/transactions', getInventoryTransactions);
 router.get('/reports/weekly', getWeeklyDepartmentStockingReport);
 router.get('/:warehouseId/items', getWarehouseItems);
 

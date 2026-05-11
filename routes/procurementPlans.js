@@ -13,6 +13,7 @@ const {
   linkPlanItemRequests,
   linkPlanItemConsumptions,
   getPlanItemVariance,
+  getPlanIntegrationInsights,
 } = require('../controllers/procurement/plansController');
 
 router.use(authenticateUser);
@@ -22,6 +23,7 @@ router.get('/', getPlans);
 router.get('/request/:id', getPlanForRequest);
 router.post('/:id/items', createPlanItems);
 router.get('/:id/items/variance', getPlanItemVariance);
+router.get('/:id/integration-insights', getPlanIntegrationInsights);
 router.get('/:id/items', getPlanItems);
 router.post('/:id/items/:itemId/requests', linkPlanItemRequests);
 router.post('/:id/items/:itemId/consumptions', linkPlanItemConsumptions);

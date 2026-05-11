@@ -1143,7 +1143,7 @@ const createPurchaseOrder = async (req, res, next) => {
          FROM requests r
          LEFT JOIN warehouses w ON w.id = r.supply_warehouse_id
          WHERE r.id = $1
-         FOR UPDATE`,
+         FOR UPDATE OF r`,
         [requestIdOrNull]
       );
 

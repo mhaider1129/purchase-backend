@@ -192,7 +192,8 @@ app.use((req, res, next) => {
 
   next();
 });
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(
   morgan('combined', {
     skip: () => process.env.NODE_ENV === 'test',
@@ -290,6 +291,7 @@ const uiAccessRoutes = require('./routes/uiAccess');
 const notificationsRoutes = require('./routes/notifications');
 const dispensingRoutes = require('./routes/dispensing');
 const procureToPayRoutes = require('./routes/procureToPay');
+const auditRegistryRoutes = require('./routes/auditRegistry');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -342,6 +344,7 @@ apiRouter.use('/ui-access', authenticateUser, writeAuditTrail, uiAccessRoutes);
 apiRouter.use('/notifications', authenticateUser, writeAuditTrail, notificationsRoutes);
 apiRouter.use('/dispensing', authenticateUser, writeAuditTrail, dispensingRoutes);
 apiRouter.use('/procure-to-pay', authenticateUser, writeAuditTrail, procureToPayRoutes);
+apiRouter.use('/audit-registry', authenticateUser, writeAuditTrail, auditRegistryRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);

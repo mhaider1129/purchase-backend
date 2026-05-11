@@ -10,6 +10,19 @@ const parseQuantity = (value) => {
   return parsed;
 };
 
+const normalizeNullableText = (value) => {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : null;
+};
+
+const normalizeNullableDate = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+};
+
 const issueWarehouseStock = async (req, res, next) => {
   const {
     stock_item_id: rawStockItemId,
@@ -46,7 +59,7 @@ const issueWarehouseStock = async (req, res, next) => {
         },
       ];
 
-  const normalizedItems = [];
+    const normalizedItems = [];
   for (let i = 0; i < rawIssueItems.length; i += 1) {
     const entry = rawIssueItems[i] || {};
     const stockItemId = Number(entry.stock_item_id ?? entry.stockItemId);
@@ -62,6 +75,7 @@ const issueWarehouseStock = async (req, res, next) => {
       stockItemId,
       quantity,
       notes: entry.notes ?? notes ?? null,
+      pickingStrategy: String(entry.picking_strategy || req.body?.picking_strategy || 'fefo').toLowerCase(),
     });
   }
 
@@ -127,12 +141,23 @@ const issueWarehouseStock = async (req, res, next) => {
 
       const itemName = stockItemRes.rows[0].name;
 
+      const strategy = ['fefo', 'fifo'].includes(normalizedItems[i].pickingStrategy)
+        ? normalizedItems[i].pickingStrategy
+        : 'fefo';
+
       const balanceRes = await client.query(
-        `SELECT id, quantity
+        `SELECT id, batch_id, lot_number, expiry_date, serial_number, quantity
            FROM warehouse_stock_levels
-          WHERE warehouse_id = $1 AND stock_item_id = $2
+          WHERE warehouse_id = $1 AND stock_item_id = $2 AND quantity > 0
+          ORDER BY
+            CASE
+              WHEN $3 = 'fefo' THEN COALESCE(expiry_date, DATE '9999-12-31')
+              ELSE DATE '9999-12-31'
+            END ASC,
+            COALESCE(updated_at, CURRENT_TIMESTAMP) ASC,
+            id ASC
           FOR UPDATE`,
-        [warehouseId, stockItemId],
+        [warehouseId, stockItemId, strategy],
       );
 
       if (balanceRes.rowCount === 0) {
@@ -145,7 +170,7 @@ const issueWarehouseStock = async (req, res, next) => {
         );
       }
 
-      const currentQty = Number(balanceRes.rows[0].quantity) || 0;
+      const currentQty = balanceRes.rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
       if (currentQty < quantity) {
         await client.query('ROLLBACK');
         return next(
@@ -155,33 +180,113 @@ const issueWarehouseStock = async (req, res, next) => {
           ),
         );
       }
+      let remainingToIssue = quantity;
+      for (const batchRow of balanceRes.rows) {
+        if (remainingToIssue <= 0) break;
+        const availableInRow = Number(batchRow.quantity) || 0;
+        if (availableInRow <= 0) continue;
+        const consumed = Math.min(remainingToIssue, availableInRow);
+
+        await client.query(
+          `UPDATE warehouse_stock_levels
+              SET quantity = quantity - $2,
+                  updated_at = CURRENT_TIMESTAMP,
+                  updated_by = $3
+            WHERE id = $1`,
+          [batchRow.id, consumed, req.user.id],
+        );
+
+        const departmentLevelRes = await client.query(
+          `SELECT id, quantity
+             FROM department_stock_levels
+            WHERE department_id = $1
+              AND section_id IS NOT DISTINCT FROM $2
+              AND stock_item_id = $3
+              AND warehouse_batch_id IS NOT DISTINCT FROM $4
+              AND lot_number IS NOT DISTINCT FROM $5
+              AND expiry_date IS NOT DISTINCT FROM $6
+              AND serial_number IS NOT DISTINCT FROM $7
+            FOR UPDATE`,
+          [departmentId, sectionId, stockItemId, batchRow.batch_id, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number],
+        );
+
+        let departmentStockLevelId;
+        if (departmentLevelRes.rowCount > 0) {
+          departmentStockLevelId = departmentLevelRes.rows[0].id;
+          await client.query(
+            `UPDATE department_stock_levels
+                SET quantity = quantity + $2,
+                    updated_by = $3,
+                    updated_at = CURRENT_TIMESTAMP
+              WHERE id = $1`,
+            [departmentStockLevelId, consumed, req.user.id],
+          );
+        } else {
+          const insertDeptLevelRes = await client.query(
+            `INSERT INTO department_stock_levels (
+              department_id,
+              section_id,
+              warehouse_batch_id,
+              stock_item_id,
+              lot_number,
+              expiry_date,
+              serial_number,
+              quantity,
+              updated_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id`,
+            [departmentId, sectionId, batchRow.batch_id, stockItemId, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, consumed, req.user.id],
+          );
+          departmentStockLevelId = insertDeptLevelRes.rows[0].id;
+        }
+
+        await client.query(
+          `INSERT INTO department_stock_movements (
+            department_stock_level_id,
+            direction,
+            quantity,
+            source_warehouse_id,
+            source_batch_id,
+            lot_number,
+            expiry_date,
+            serial_number,
+            notes,
+            created_by
+          ) VALUES ($1, 'in', $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [departmentStockLevelId, consumed, warehouseId, batchRow.batch_id, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, itemNotes || null, req.user.id],
+        );
+
+        await client.query(
+          `INSERT INTO warehouse_stock_movements (
+              warehouse_id,
+              stock_item_id,
+              batch_id,
+              item_name,
+              lot_number,
+              expiry_date,
+              serial_number,
+              direction,
+              quantity,
+              to_department_id,
+              to_section_id,
+              created_by,
+              notes
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'out', $8, $9, $10, $11, $12)`,
+          [warehouseId, stockItemId, batchRow.batch_id, itemName, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, consumed, departmentId, sectionId, req.user.id, itemNotes || null],
+        );
+
+        remainingToIssue -= consumed;
+      }
 
       const updatedBalanceRes = await client.query(
-        `UPDATE warehouse_stock_levels
-            SET quantity = quantity - $3,
-                updated_at = CURRENT_TIMESTAMP,
-                updated_by = $4
+        `SELECT id, warehouse_id, stock_item_id, item_name, quantity, updated_at
+           FROM warehouse_stock_levels
           WHERE warehouse_id = $1 AND stock_item_id = $2
-          RETURNING id, warehouse_id, stock_item_id, item_name, quantity, updated_at`,
-        [warehouseId, stockItemId, quantity, req.user.id],
+          ORDER BY quantity DESC, id ASC`,
+        [warehouseId, stockItemId],
       );
 
       await recalculateAvailableQuantity(client, stockItemId);
-
-      await client.query(
-        `INSERT INTO warehouse_stock_movements (
-            warehouse_id,
-            stock_item_id,
-            item_name,
-            direction,
-            quantity,
-            to_department_id,
-            to_section_id,
-            created_by,
-            notes
-          ) VALUES ($1, $2, $3, 'out', $4, $5, $6, $7)`,
-        [warehouseId, stockItemId, itemName, quantity, departmentId, sectionId, req.user.id, itemNotes || null],
-      );
 
       balances.push(updatedBalanceRes.rows[0]);
     }
@@ -202,7 +307,16 @@ const issueWarehouseStock = async (req, res, next) => {
 };
 
 const addWarehouseStock = async (req, res, next) => {
-  const { stock_item_id: rawStockItemId, quantity: rawQuantity, notes, warehouse_id } = req.body || {};
+  const {
+    stock_item_id: rawStockItemId,
+    quantity: rawQuantity,
+    notes,
+    warehouse_id,
+    batch_id: rawBatchId,
+    lot_number: rawLotNumber,
+    expiry_date: rawExpiryDate,
+    serial_number: rawSerialNumber,
+  } = req.body || {};
 
   if (!req.user?.hasPermission('warehouse.manage-supply')) {
     return next(createHttpError(403, 'You do not have permission to manage warehouse stock'));
@@ -217,6 +331,14 @@ const addWarehouseStock = async (req, res, next) => {
   if (!Number.isFinite(quantity) || quantity <= 0) {
     return next(createHttpError(400, 'Quantity must be a positive number'));
   }
+
+  const batchId = rawBatchId === undefined || rawBatchId === null || rawBatchId === '' ? null : Number(rawBatchId);
+  if (batchId !== null && !Number.isInteger(batchId)) {
+    return next(createHttpError(400, 'batch_id must be an integer when provided'));
+  }
+  const lotNumber = normalizeNullableText(rawLotNumber);
+  const serialNumber = normalizeNullableText(rawSerialNumber);
+  const expiryDate = normalizeNullableDate(rawExpiryDate);
 
   await ensureWarehouseAssignments();
 
@@ -249,26 +371,56 @@ const addWarehouseStock = async (req, res, next) => {
 
     const itemName = stockItemRes.rows[0].name;
 
-    const balanceRes = await client.query(
-      `INSERT INTO warehouse_stock_levels (warehouse_id, stock_item_id, item_name, quantity, updated_by)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (warehouse_id, stock_item_id)
-       DO UPDATE SET
-         quantity = warehouse_stock_levels.quantity + EXCLUDED.quantity,
-         updated_by = EXCLUDED.updated_by,
-         updated_at = CURRENT_TIMESTAMP,
-         item_name = EXCLUDED.item_name
-       RETURNING id, warehouse_id, stock_item_id, item_name, quantity, updated_at`,
-      [warehouseId, stockItemId, itemName, quantity, req.user.id],
+    const existingLevelRes = await client.query(
+      `SELECT id
+         FROM warehouse_stock_levels
+        WHERE warehouse_id = $1
+          AND stock_item_id = $2
+          AND batch_id IS NOT DISTINCT FROM $3
+          AND lot_number IS NOT DISTINCT FROM $4
+          AND expiry_date IS NOT DISTINCT FROM $5
+          AND serial_number IS NOT DISTINCT FROM $6
+        FOR UPDATE`,
+      [warehouseId, stockItemId, batchId, lotNumber, expiryDate, serialNumber],
     );
+
+    let balanceRes;
+    if (existingLevelRes.rowCount > 0) {
+      balanceRes = await client.query(
+        `UPDATE warehouse_stock_levels
+            SET quantity = quantity + $2,
+                updated_by = $3,
+                updated_at = CURRENT_TIMESTAMP,
+                item_name = $4
+          WHERE id = $1
+          RETURNING id, warehouse_id, stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, quantity, updated_at`,
+        [existingLevelRes.rows[0].id, quantity, req.user.id, itemName],
+      );
+    } else {
+      balanceRes = await client.query(
+        `INSERT INTO warehouse_stock_levels (
+          warehouse_id,
+          stock_item_id,
+          batch_id,
+          item_name,
+          lot_number,
+          expiry_date,
+          serial_number,
+          quantity,
+          updated_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id, warehouse_id, stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, quantity, updated_at`,
+        [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, req.user.id],
+      );
+    }
 
     await recalculateAvailableQuantity(client, stockItemId);
 
     await client.query(
       `INSERT INTO warehouse_stock_movements (
-        warehouse_id, stock_item_id, item_name, direction, quantity, notes, created_by
-      ) VALUES ($1, $2, $3, 'in', $4, $5, $6)`,
-      [warehouseId, stockItemId, itemName, quantity, notes || null, req.user.id],
+        warehouse_id, stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, direction, quantity, notes, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'in', $8, $9, $10)`,
+      [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, notes || null, req.user.id],
     );
 
     await client.query('COMMIT');
@@ -287,7 +439,17 @@ const addWarehouseStock = async (req, res, next) => {
 };
 
 const discardWarehouseStock = async (req, res, next) => {
-  const { stock_item_id: rawStockItemId, quantity: rawQuantity, reason, notes, warehouse_id } = req.body || {};
+  const {
+    stock_item_id: rawStockItemId,
+    quantity: rawQuantity,
+    reason,
+    notes,
+    warehouse_id,
+    lot_number: rawLotNumber,
+    expiry_date: rawExpiryDate,
+    serial_number: rawSerialNumber,
+    batch_id: rawBatchId,
+  } = req.body || {};
 
   if (!req.user?.hasPermission('warehouse.manage-supply')) {
     return next(createHttpError(403, 'You do not have permission to adjust warehouse stock'));
@@ -302,6 +464,14 @@ const discardWarehouseStock = async (req, res, next) => {
   if (!Number.isFinite(quantity) || quantity <= 0) {
     return next(createHttpError(400, 'Quantity must be a positive number'));
   }
+
+  const batchId = rawBatchId === undefined || rawBatchId === null || rawBatchId === '' ? null : Number(rawBatchId);
+  if (batchId !== null && !Number.isInteger(batchId)) {
+    return next(createHttpError(400, 'batch_id must be an integer when provided'));
+  }
+  const lotNumber = normalizeNullableText(rawLotNumber);
+  const serialNumber = normalizeNullableText(rawSerialNumber);
+  const expiryDate = normalizeNullableDate(rawExpiryDate);
 
   const normalizedReason = String(reason || '').trim().toLowerCase();
   const allowedReasons = ['expired', 'damaged', 'other'];
@@ -336,11 +506,15 @@ const discardWarehouseStock = async (req, res, next) => {
     const itemName = stockItemRes.rows[0].name;
 
     const balanceRes = await client.query(
-      `SELECT id, quantity
+      `SELECT id, batch_id, lot_number, expiry_date, serial_number, quantity
          FROM warehouse_stock_levels
         WHERE warehouse_id = $1 AND stock_item_id = $2
+          AND batch_id IS NOT DISTINCT FROM $3
+          AND lot_number IS NOT DISTINCT FROM $4
+          AND expiry_date IS NOT DISTINCT FROM $5
+          AND serial_number IS NOT DISTINCT FROM $6
         FOR UPDATE`,
-      [warehouseId, stockItemId],
+      [warehouseId, stockItemId, batchId, lotNumber, expiryDate, serialNumber],
     );
 
     if (balanceRes.rowCount === 0) {
@@ -366,12 +540,12 @@ const discardWarehouseStock = async (req, res, next) => {
 
     const updatedBalanceRes = await client.query(
       `UPDATE warehouse_stock_levels
-          SET quantity = quantity - $3,
+          SET quantity = quantity - $2,
               updated_at = CURRENT_TIMESTAMP,
-              updated_by = $4
-        WHERE warehouse_id = $1 AND stock_item_id = $2
+              updated_by = $3
+        WHERE id = $1
         RETURNING id, warehouse_id, stock_item_id, item_name, quantity, updated_at`,
-      [warehouseId, stockItemId, quantity, req.user.id],
+      [balanceRes.rows[0].id, quantity, req.user.id],
     );
 
     await recalculateAvailableQuantity(client, stockItemId);
@@ -384,14 +558,18 @@ const discardWarehouseStock = async (req, res, next) => {
       `INSERT INTO warehouse_stock_movements (
           warehouse_id,
           stock_item_id,
+          batch_id,
           item_name,
+          lot_number,
+          expiry_date,
+          serial_number,
           direction,
           quantity,
           notes,
           created_by
-        ) VALUES ($1, $2, $3, 'out', $4, $5, $6)
-        RETURNING id, warehouse_id, stock_item_id, item_name, direction, quantity, notes, created_at`,
-      [warehouseId, stockItemId, itemName, quantity, destructionNotes, req.user.id],
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'out', $8, $9, $10)
+        RETURNING id, warehouse_id, stock_item_id, item_name, lot_number, expiry_date, serial_number, direction, quantity, notes, created_at`,
+      [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, destructionNotes, req.user.id],
     );
 
     await client.query('COMMIT');
@@ -423,10 +601,10 @@ const getWarehouseItems = async (req, res, next) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT stock_item_id, item_name, quantity
+      `SELECT stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, quantity
          FROM warehouse_stock_levels
         WHERE warehouse_id = $1
-        ORDER BY item_name`,
+        ORDER BY item_name, COALESCE(expiry_date, DATE '9999-12-31'), lot_number NULLS LAST`,
       [warehouseId],
     );
 

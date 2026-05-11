@@ -8,6 +8,9 @@ const {
   LIFECYCLE_STATES,
   MATCH_POLICIES,
   performInvoiceMatch,
+  derivePurchaseOrderStatus,
+  getPurchaseOrderStatusMetadata,
+  validatePurchaseOrderForIssuance,
 } = require('../services/procureToPayService');
 const { insertGoodsReceipt, insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
 const { ensureLifecycleRow, transitionLifecycleState } = require('../services/lifecycleTransitionService');
@@ -43,6 +46,31 @@ const logFinanceAction = async (client, requestId, actorId, actionType, payload 
      VALUES ($1, $2, 'request', $3, $4, $5)`,
     [actionType, actorId || null, requestId, JSON.stringify(payload), `${actionType} for request #${requestId}`]
   );
+};
+
+
+const annotatePurchaseOrder = (row) => {
+  if (!row) {
+    return row;
+  }
+
+  const resolvedStatus = derivePurchaseOrderStatus({
+    currentStatus: row.status,
+    orderedQuantity: row.ordered_quantity,
+    receivedQuantity: row.received_quantity,
+    approvedAt: row.approved_at,
+    issuedAt: row.issued_at || row.issue_event_at,
+    cancelledAt: row.cancelled_at,
+    closedAt: row.closed_at,
+  });
+  const statusMetadata = getPurchaseOrderStatusMetadata(resolvedStatus);
+
+  return {
+    ...row,
+    status: resolvedStatus,
+    business_status: statusMetadata?.business_status || resolvedStatus,
+    system_status_code: statusMetadata?.system_code || resolvedStatus,
+  };
 };
 
 const createGoodsReceipt = async (req, res, next) => {
@@ -152,6 +180,25 @@ const createGoodsReceipt = async (req, res, next) => {
     const inventoryWarnings = [];
 
     for (const receiptItem of receipt.items || []) {
+      if (purchase_order_id) {
+        const netPoQuantity =
+          (Number(receiptItem.received_quantity) || 0) -
+          (Number(receiptItem.damaged_quantity) || 0) -
+          (Number(receiptItem.short_quantity) || 0);
+
+        if (netPoQuantity > 0) {
+          await client.query(
+            `UPDATE purchase_order_items
+                SET received_quantity = received_quantity + $2
+              WHERE purchase_order_id = $1
+                AND (
+                  ($3::integer IS NOT NULL AND requested_item_id = $3)
+                  OR LOWER(item_name) = LOWER($4)
+                )`,
+            [purchase_order_id, netPoQuantity, receiptItem.requested_item_id || null, receiptItem.item_name]
+          );
+        }
+      }
       const receivedQuantity = Number(receiptItem.received_quantity) || 0;
       const damagedQuantity = Number(receiptItem.damaged_quantity) || 0;
       const shortQuantity = Number(receiptItem.short_quantity) || 0;
@@ -269,10 +316,37 @@ const createGoodsReceipt = async (req, res, next) => {
       });
     }
 
+    let nextReceiptLifecycleState = LIFECYCLE_STATES.PO_PARTIAL;
+    if (purchase_order_id) {
+      const poTotalsRes = await client.query(
+        `SELECT COALESCE(SUM(quantity), 0) AS ordered_quantity,
+                COALESCE(SUM(received_quantity), 0) AS received_quantity
+           FROM purchase_order_items
+          WHERE purchase_order_id = $1`,
+        [purchase_order_id]
+      );
+      const poTotals = poTotalsRes.rows[0] || {};
+      const derivedPoStatus = derivePurchaseOrderStatus({
+        currentStatus: 'PO_ISSUED',
+        orderedQuantity: poTotals.ordered_quantity,
+        receivedQuantity: poTotals.received_quantity,
+        issuedAt: new Date(),
+      });
+      nextReceiptLifecycleState = derivedPoStatus === 'PO_DELIVERED' ? LIFECYCLE_STATES.PO_DELIVERED : LIFECYCLE_STATES.PO_PARTIAL;
+
+      await client.query(
+        `UPDATE purchase_orders
+            SET status = $2,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [purchase_order_id, derivedPoStatus]
+      );
+    }
+
     await transitionLifecycleState(
       client,
       requestId,
-      LIFECYCLE_STATES.PO_PARTIALLY_RECEIVED,
+      nextReceiptLifecycleState,
       req.user.id,
       purchase_order_id ? 'Goods receipt captured' : 'Non-PO goods receipt captured and routed for additional approvals'
     );
@@ -761,17 +835,350 @@ const markPaid = async (req, res, next) => {
 };
 
 
+
+const submitPurchaseOrderForApproval = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
+    const poId = Number(req.params.poId);
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+
+    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
+    if (!poRes.rowCount) {
+      throw createHttpError(404, 'Purchase order not found');
+    }
+
+    const po = poRes.rows[0];
+    if (['PO_CANCELLED', 'PO_CLOSED', 'PO_ISSUED'].includes(po.status)) {
+      throw createHttpError(400, `Purchase order cannot be submitted for approval from status ${po.status}`);
+    }
+
+    const updated = await client.query(
+      `UPDATE purchase_orders
+          SET status = 'PO_PENDING_APPROVAL',
+              approval_required = TRUE,
+              approval_route = COALESCE($2, approval_route, 'PROCUREMENT_OFFICER,SCM_APPROVAL_AUTHORITY'),
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [poId, req.body?.approval_route || null]
+    );
+
+    if (po.request_id) {
+      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_PENDING_APPROVAL, req.user.id, 'Purchase order submitted for approval');
+      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_SUBMITTED_FOR_APPROVAL', { purchase_order_id: poId });
+    }
+
+    await client.query('COMMIT');
+    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
+const approvePurchaseOrder = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['procurementofficer', 'scm', 'admin']);
+    const poId = Number(req.params.poId);
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+
+    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
+    if (!poRes.rowCount) {
+      throw createHttpError(404, 'Purchase order not found');
+    }
+
+    const po = poRes.rows[0];
+    if (!['PO_PENDING_APPROVAL', 'PO_DRAFT', 'PO_APPROVED'].includes(po.status)) {
+      throw createHttpError(400, `Purchase order cannot be approved from status ${po.status}`);
+    }
+
+    const updated = await client.query(
+      `UPDATE purchase_orders
+          SET status = 'PO_APPROVED',
+              approval_required = TRUE,
+              approved_by = $2,
+              approved_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [poId, req.user.id]
+    );
+
+    if (po.request_id) {
+      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_APPROVED, req.user.id, 'Purchase order approved');
+      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_APPROVED', { purchase_order_id: poId });
+    }
+
+    await client.query('COMMIT');
+    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
+const issuePurchaseOrder = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
+    const poId = Number(req.params.poId);
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+
+    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
+    if (!poRes.rowCount) {
+      throw createHttpError(404, 'Purchase order not found');
+    }
+
+    const itemsRes = await client.query(`SELECT requested_item_id, item_name, quantity, unit_price FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id ASC`, [poId]);
+    const po = poRes.rows[0];
+    const validationErrors = validatePurchaseOrderForIssuance({
+      supplierId: po.supplier_id,
+      supplierName: po.supplier_name,
+      items: itemsRes.rows,
+      deliveryDate: po.expected_delivery_date,
+      deliveryLocation: po.delivery_location,
+      budgetCostCenter: po.budget_cost_center,
+      taxTerms: po.tax_terms,
+      paymentTerms: po.payment_terms || po.terms,
+    });
+
+    if (validationErrors.length > 0) {
+      throw createHttpError(400, `Purchase order cannot be issued: ${validationErrors.join('; ')}`);
+    }
+    if (po.approval_required && !po.approved_at) {
+      throw createHttpError(400, 'Purchase order must be approved before it can be issued');
+    }
+
+    const updated = await client.query(
+      `UPDATE purchase_orders
+          SET status = 'PO_ISSUED',
+              issue_event_at = NOW(),
+              issued_to_supplier_at = NOW(),
+              issued_by = $2,
+              issued_at = NOW(),
+              supplier_contact_email = COALESCE($3, supplier_contact_email),
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [poId, req.user.id, req.body?.supplier_contact_email || null]
+    );
+
+    if (po.request_id) {
+      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_ISSUED, req.user.id, 'Purchase order issued to supplier');
+      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_ISSUED', {
+        purchase_order_id: poId,
+        supplier_contact_email: req.body?.supplier_contact_email || po.supplier_contact_email || null,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
+const cancelPurchaseOrder = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
+    const poId = Number(req.params.poId);
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) {
+      throw createHttpError(400, 'Cancellation reason is required');
+    }
+
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
+    if (!poRes.rowCount) {
+      throw createHttpError(404, 'Purchase order not found');
+    }
+
+    const po = poRes.rows[0];
+    if (['PO_CLOSED', 'PO_CANCELLED'].includes(po.status)) {
+      throw createHttpError(400, `Purchase order is already ${po.status}`);
+    }
+
+    const updated = await client.query(
+      `UPDATE purchase_orders
+          SET status = 'PO_CANCELLED',
+              cancellation_reason = $2,
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [poId, reason]
+    );
+
+    if (po.request_id) {
+      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_CANCELLED, req.user.id, 'Purchase order cancelled', { reason });
+      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_CANCELLED', { purchase_order_id: poId, reason });
+    }
+
+    await client.query('COMMIT');
+    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
+const closePurchaseOrder = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
+    const poId = Number(req.params.poId);
+    const reason = String(req.body?.reason || '').trim();
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+
+    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
+    if (!poRes.rowCount) {
+      throw createHttpError(404, 'Purchase order not found');
+    }
+
+    const itemsRes = await client.query(
+      `SELECT COALESCE(SUM(quantity), 0) AS ordered_quantity,
+              COALESCE(SUM(received_quantity), 0) AS received_quantity
+         FROM purchase_order_items
+        WHERE purchase_order_id = $1`,
+      [poId]
+    );
+
+    const totals = itemsRes.rows[0] || {};
+    const derivedStatus = derivePurchaseOrderStatus({
+      currentStatus: poRes.rows[0].status,
+      orderedQuantity: totals.ordered_quantity,
+      receivedQuantity: totals.received_quantity,
+      approvedAt: poRes.rows[0].approved_at,
+      issuedAt: poRes.rows[0].issued_at || poRes.rows[0].issue_event_at,
+    });
+
+    if (derivedStatus !== 'PO_DELIVERED' && !reason) {
+      throw createHttpError(400, 'Reason is required to close a PO before full delivery');
+    }
+
+    const updated = await client.query(
+      `UPDATE purchase_orders
+          SET status = 'PO_CLOSED',
+              amendment_reason = COALESCE($2, amendment_reason),
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [poId, reason || null]
+    );
+
+    const po = poRes.rows[0];
+    if (po.request_id) {
+      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_CLOSED, req.user.id, 'Purchase order closed', reason ? { reason } : null);
+      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_CLOSED', { purchase_order_id: poId, reason: reason || null });
+    }
+
+    await client.query('COMMIT');
+    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
 const createPurchaseOrder = async (req, res, next) => {
   const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['scm', 'procurementspecialist', 'admin']);
     const requestId = Number(req.params.requestId);
     const requestIdOrNull = Number.isInteger(requestId) && requestId > 0 ? requestId : null;
-    const { supplier_id = null, supplier_name = null, expected_delivery_date = null, terms = null, items = [] } = req.body || {};
+    const {
+      supplier_id = null,
+      supplier_name = null,
+      expected_delivery_date = null,
+      delivery_location = null,
+      budget_cost_center = null,
+      tax_terms = null,
+      payment_terms = null,
+      terms = null,
+      supplier_contact_email = null,
+      contract_reference = null,
+      source_document_type = null,
+      source_document_id = null,
+      approval_required = null,
+      approval_route = null,
+      items = [],
+    } = req.body || {};
+
     await client.query('BEGIN');
     await ensureProcureToPayTables(client);
+    await ensureFinanceCoreTables(client);
     if (requestIdOrNull) {
       await ensureLifecycleRow(client, requestIdOrNull, req.user.id);
+    }
+
+    let requestMeta = null;
+    let requestItems = [];
+    let derivedContractReference = contract_reference || null;
+    let derivedDeliveryLocation = delivery_location || null;
+    let derivedBudgetCostCenter = budget_cost_center || null;
+    let sourceType = source_document_type || (requestIdOrNull ? 'PURCHASE_REQUEST' : 'MANUAL_PO');
+    let sourceId = source_document_id || (requestIdOrNull ? String(requestIdOrNull) : null);
+
+    if (requestIdOrNull) {
+      const requestRes = await client.query(
+        `SELECT r.id, r.department_id, r.project_id, r.supply_warehouse_id, w.name AS supply_warehouse_name
+         FROM requests r
+         LEFT JOIN warehouses w ON w.id = r.supply_warehouse_id
+         WHERE r.id = $1
+         FOR UPDATE`,
+        [requestIdOrNull]
+      );
+
+      if (requestRes.rowCount === 0) {
+        throw createHttpError(404, 'Request not found');
+      }
+
+      requestMeta = requestRes.rows[0];
+      requestItems = (
+        await client.query(
+          `SELECT ri.id AS requested_item_id,
+                  ri.item_name,
+                  ri.quantity,
+                  COALESCE(ri.unit_cost, 0) AS unit_price,
+                  rif.contract_id,
+                  c.reference_number AS contract_reference
+           FROM requested_items ri
+           LEFT JOIN requested_item_financials rif ON rif.requested_item_id = ri.id
+           LEFT JOIN contracts c ON c.id = rif.contract_id
+           WHERE ri.request_id = $1
+           ORDER BY ri.id ASC`,
+          [requestIdOrNull]
+        )
+      ).rows;
+
+      derivedContractReference = derivedContractReference || requestItems.find((item) => item.contract_reference)?.contract_reference || null;
+      derivedDeliveryLocation = derivedDeliveryLocation || requestMeta.supply_warehouse_name || null;
+
+      const budgetEnvelope = await resolveBudgetEnvelope(client, {
+        departmentId: requestMeta.department_id,
+        projectId: requestMeta.project_id || null,
+        currency: 'USD',
+      });
+      derivedBudgetCostCenter = derivedBudgetCostCenter || budgetEnvelope?.cost_center_code || budgetEnvelope?.cost_center_name || budgetEnvelope?.code || null;
+      sourceType = source_document_type || (derivedContractReference ? 'ACTIVE_CONTRACT' : 'PURCHASE_REQUEST');
     }
 
     const supplierRef = await resolveSupplierReference(client, {
@@ -780,44 +1187,142 @@ const createPurchaseOrder = async (req, res, next) => {
       requireSupplier: false,
     });
 
-    const poStatus = requestIdOrNull ? 'PO_ISSUED' : 'PO_PENDING_APPROVAL';
+    const sourceItems = items.length ? items : requestItems;
+    const normalizedItems = sourceItems.map((item) => ({
+      requested_item_id: item.requested_item_id || null,
+      item_name: item.item_name,
+      quantity: Number(item.quantity) || 0,
+      unit_price: Number(item.unit_price) || 0,
+    })).filter((item) => item.item_name && item.quantity > 0);
+
+    const requiresApproval = approval_required === null
+      ? !requestIdOrNull || normalizedItems.some((item) => item.unit_price * item.quantity >= 10000)
+      : Boolean(approval_required);
+
+    const validationErrors = validatePurchaseOrderForIssuance({
+      supplierId: supplierRef.supplierId,
+      supplierName: supplierRef.supplierName,
+      items: normalizedItems,
+      deliveryDate: expected_delivery_date,
+      deliveryLocation: derivedDeliveryLocation,
+      budgetCostCenter: derivedBudgetCostCenter,
+      taxTerms: tax_terms,
+      paymentTerms: payment_terms || terms,
+    });
+
+    if (validationErrors.length > 0) {
+      throw createHttpError(400, `Purchase order is missing mandatory data: ${validationErrors.join('; ')}`);
+    }
+
+    const poStatus = requiresApproval ? 'PO_PENDING_APPROVAL' : 'PO_ISSUED';
+    const approvalRouteValue = requiresApproval ? (approval_route || (requestIdOrNull ? 'PROCUREMENT_OFFICER,SCM_APPROVAL_AUTHORITY' : 'PROCUREMENT_OFFICER')) : null;
+    const approvedAt = requiresApproval ? null : new Date();
+    const issuedAt = requiresApproval ? null : new Date();
+
     const poRes = await client.query(
-      `INSERT INTO purchase_orders (request_id, po_number, supplier_id, supplier_name, expected_delivery_date, terms, status, created_by)
-       VALUES ($1, CONCAT('PO-', COALESCE($1::text, 'DIRECT'), '-', EXTRACT(EPOCH FROM NOW())::bigint), $2, $3, $4, $5, $6, $7)
+      `INSERT INTO purchase_orders (
+        request_id,
+        po_number,
+        supplier_id,
+        supplier_name,
+        source_document_type,
+        source_document_id,
+        contract_reference,
+        expected_delivery_date,
+        delivery_location,
+        budget_cost_center,
+        tax_terms,
+        payment_terms,
+        terms,
+        supplier_contact_email,
+        approval_required,
+        approval_route,
+        approved_by,
+        approved_at,
+        status,
+        issue_event_at,
+        issued_to_supplier_at,
+        created_by,
+        issued_by,
+        issued_at
+      )
+       VALUES (
+        $1,
+        CONCAT('PO-', COALESCE($1::text, 'DIRECT'), '-', EXTRACT(EPOCH FROM NOW())::bigint),
+        $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+      )
        RETURNING *`,
-      [requestIdOrNull, supplierRef.supplierId, supplierRef.supplierName || null, expected_delivery_date, terms, poStatus, req.user.id]
+      [
+        requestIdOrNull,
+        supplierRef.supplierId,
+        supplierRef.supplierName || null,
+        sourceType,
+        sourceId,
+        derivedContractReference,
+        expected_delivery_date,
+        derivedDeliveryLocation,
+        derivedBudgetCostCenter,
+        tax_terms,
+        payment_terms || terms,
+        terms,
+        supplier_contact_email,
+        requiresApproval,
+        approvalRouteValue,
+        requiresApproval ? null : req.user.id,
+        approvedAt,
+        poStatus,
+        issuedAt,
+        issuedAt,
+        req.user.id,
+        requiresApproval ? null : req.user.id,
+        issuedAt,
+      ]
     );
 
-    const sourceItems = items.length
-      ? items
-      : (requestIdOrNull
-        ? (await client.query(`SELECT id AS requested_item_id, item_name, quantity, COALESCE(unit_cost,0) AS unit_price FROM requested_items WHERE request_id=$1`, [requestIdOrNull])).rows
-        : []);
-    for (const item of sourceItems) {
+    for (const item of normalizedItems) {
       await client.query(
         `INSERT INTO purchase_order_items (purchase_order_id, requested_item_id, item_name, quantity, unit_price)
          VALUES ($1,$2,$3,$4,$5)`,
-        [poRes.rows[0].id, item.requested_item_id || null, item.item_name, Number(item.quantity) || 0, Number(item.unit_price) || 0]
+        [poRes.rows[0].id, item.requested_item_id, item.item_name, item.quantity, item.unit_price]
       );
     }
+
+    const createdPo = annotatePurchaseOrder(poRes.rows[0]);
 
     if (requestIdOrNull) {
       await linkDocuments(client, {
         requestId: requestIdOrNull,
-        sourceType: 'PURCHASE_REQUEST',
-        sourceId: requestIdOrNull,
+        sourceType: sourceType,
+        sourceId: sourceId || requestIdOrNull,
         targetType: 'PURCHASE_ORDER',
-        targetId: poRes.rows[0].id,
+        targetId: createdPo.id,
+        metadata: {
+          po_number: createdPo.po_number,
+          contract_reference: createdPo.contract_reference,
+        },
         createdBy: req.user.id,
       });
-      await transitionLifecycleState(client, requestIdOrNull, LIFECYCLE_STATES.PO_ISSUED, req.user.id, 'Purchase order issued');
+
+      const lifecycleTarget = requiresApproval ? LIFECYCLE_STATES.PO_PENDING_APPROVAL : LIFECYCLE_STATES.PO_ISSUED;
+      await transitionLifecycleState(client, requestIdOrNull, lifecycleTarget, req.user.id, requiresApproval ? 'Purchase order submitted for approval' : 'Purchase order issued');
       await logFinanceAction(client, requestIdOrNull, req.user.id, 'PURCHASE_ORDER_CREATED', {
-        purchase_order_id: poRes.rows[0].id,
+        purchase_order_id: createdPo.id,
         supplier_id: supplierRef.supplierId,
+        source_document_type: sourceType,
+        source_document_id: sourceId || requestIdOrNull,
+        contract_reference: createdPo.contract_reference,
+        approval_required: requiresApproval,
       });
     }
+
     await client.query('COMMIT');
-    res.status(201).json({ purchase_order: poRes.rows[0] });
+    res.status(201).json({
+      purchase_order: createdPo,
+      validation: {
+        mandatory_fields_complete: true,
+        approval_required: requiresApproval,
+      },
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -897,7 +1402,7 @@ const listPurchaseOrders = async (req, res, next) => {
       values
     );
 
-    res.json({ data: rows, pagination: { page: safePage, page_size: safePageSize, total: totalResult.rows[0].total } });
+    res.json({ data: rows.map(annotatePurchaseOrder), pagination: { page: safePage, page_size: safePageSize, total: totalResult.rows[0].total } });
   } catch (error) { next(error); }
 };
 
@@ -1092,7 +1597,7 @@ const getPurchaseOrderDetail = async (req, res, next) => {
       pool.query(`SELECT * FROM supplier_invoices WHERE purchase_order_id=$1 ORDER BY submitted_at DESC`, [poId]),
     ]);
     if (!po.rowCount) throw createHttpError(404, 'Purchase order not found');
-    res.json({ purchase_order: po.rows[0], items: items.rows, receipts: receipts.rows, invoices: invoices.rows });
+    res.json({ purchase_order: annotatePurchaseOrder(po.rows[0]), items: items.rows, receipts: receipts.rows, invoices: invoices.rows });
   } catch (error) { next(error); }
 };
 
@@ -1338,7 +1843,7 @@ const getLifecycleDetail = async (req, res, next) => {
       request: requestMeta.rows[0] || null,
       request_items: requestItems.rows,
       state_history: stateHistory.rows,
-      purchase_orders: purchaseOrders.rows,
+      purchase_orders: purchaseOrders.rows.map(annotatePurchaseOrder),
       receipts: receipts.rows,
       invoices: invoices.rows,
       match_results: matches.rows,
@@ -1362,6 +1867,11 @@ module.exports = {
   getPoSourceRequests,
   getLifecycleDetail,
   createPurchaseOrder,
+  submitPurchaseOrderForApproval,
+  approvePurchaseOrder,
+  issuePurchaseOrder,
+  cancelPurchaseOrder,
+  closePurchaseOrder,
   listPurchaseOrders,
   listGoodsReceipts,
   listOpenPosForReceipt,

@@ -71,6 +71,7 @@ router.get('/me', authenticateUser, async (req, res, next) => {
     res.json({
       ...result.rows[0],
       permissions: req.user.permissions || [],
+      data_scopes: req.user.data_scopes || {},
     });
   } catch (err) {
     next(createHttpError(500, 'Failed to fetch user'));

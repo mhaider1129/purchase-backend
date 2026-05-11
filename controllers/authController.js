@@ -48,7 +48,7 @@ const login = async (req, res, next) => {
       { expiresIn: TOKEN_TTL }
     );
 
-    const { permissions = [] } = await getPermissionsForUserId(user.id);
+    const { permissions = [], dataScopes = {} } = await getPermissionsForUserId(user.id);
 
     // 4. Send structured response
     res.json({
@@ -63,6 +63,7 @@ const login = async (req, res, next) => {
         institute_id: user.institute_id,
         section_id: user.section_id || null, // Optional field
         permissions,
+        data_scopes: dataScopes,
       }
     });
 

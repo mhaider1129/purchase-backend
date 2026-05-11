@@ -1787,7 +1787,7 @@ const getLifecycleDetail = async (req, res, next) => {
     await ensureProcureToPayTables();
     await ensureFinanceCoreTables();
 
-    const [lifecycle, stateHistory, requestMeta, requestItems, purchaseOrders, receipts, invoices, matches, vouchers, postings, payables, payments, actions, flowLinks, commitments, glPostings, linkedInventory] = await Promise.all([
+    const [lifecycle, stateHistory, requestMeta, requestItems, purchaseOrders, receipts, invoices, matches, vouchers, postings, payables, payments, actions, flowLinks, commitments, glPostings, journalEntries, linkedInventory] = await Promise.all([
       pool.query(`SELECT * FROM procurement_lifecycle_states WHERE request_id = $1`, [requestId]),
       pool.query(`SELECT * FROM procurement_state_history WHERE request_id = $1 ORDER BY changed_at DESC`, [requestId]),
       pool.query(
@@ -1817,6 +1817,7 @@ const getLifecycleDetail = async (req, res, next) => {
       pool.query(`SELECT * FROM document_flow_links WHERE request_id = $1 ORDER BY created_at ASC`, [requestId]),
       pool.query(`SELECT * FROM commitment_ledger WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
       pool.query(`SELECT * FROM gl_postings WHERE request_id = $1 ORDER BY posted_at DESC`, [requestId]),
+      pool.query(`SELECT * FROM journal_entries WHERE request_id = $1 ORDER BY posted_at DESC`, [requestId]),
       pool.query(
         `SELECT wsl.warehouse_id,
                 w.name AS warehouse_name,
@@ -1855,6 +1856,7 @@ const getLifecycleDetail = async (req, res, next) => {
       document_flow_links: flowLinks.rows,
       commitments: commitments.rows,
       gl_postings: glPostings.rows,
+      journal_entries: journalEntries.rows,
       linked_inventory: linkedInventory.rows,
     });
   } catch (error) {

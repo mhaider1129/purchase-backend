@@ -76,6 +76,7 @@ describe('authenticateUser middleware', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [
           { code: 'dashboard.view' },

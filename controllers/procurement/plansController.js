@@ -510,6 +510,110 @@ const getPlanItemVariance = async (req, res, next) => {
   }
 };
 
+
+const getPlanIntegrationInsights = async (req, res, next) => {
+  const { id } = req.params;
+  const planId = parseInt(id, 10);
+
+  if (!Number.isInteger(planId)) {
+    return next(createHttpError(400, 'Plan id must be a valid number'));
+  }
+
+  try {
+    await ensureProcurementPlanTables();
+    const { rows } = await pool.query(
+      `WITH plan_items AS (
+         SELECT ppi.id, ppi.plan_id, ppi.stock_item_id, ppi.item_name, ppi.planned_quantity,
+                ppi.needed_by_date, pp.department_id
+         FROM procurement_plan_items ppi
+         JOIN procurement_plans pp ON pp.id = ppi.plan_id
+         WHERE ppi.plan_id = $1
+       ),
+       request_history AS (
+         SELECT pi.id AS plan_item_id,
+                COALESCE(SUM(CASE WHEN r.created_at >= (CURRENT_DATE - INTERVAL '365 days') THEN pir.quantity ELSE 0 END), 0) AS requested_qty_12m,
+                COALESCE(SUM(CASE WHEN r.created_at >= (CURRENT_DATE - INTERVAL '90 days') THEN pir.quantity ELSE 0 END), 0) AS requested_qty_90d
+         FROM plan_items pi
+         LEFT JOIN procurement_plan_item_requests pir ON pir.plan_item_id = pi.id
+         LEFT JOIN requests r ON r.id = pir.request_id
+         GROUP BY pi.id
+       ),
+       seasonal AS (
+         SELECT pi.id AS plan_item_id,
+                COALESCE(AVG(CASE WHEN EXTRACT(MONTH FROM md.month_start) IN (EXTRACT(MONTH FROM CURRENT_DATE), EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '1 month'), EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '2 month')) THEN md.quantity END), 0) AS seasonal_avg_next_3m,
+                COALESCE(AVG(md.quantity), 0) AS monthly_avg
+         FROM plan_items pi
+         LEFT JOIN monthly_dispensing md ON LOWER(md.item_name) = LOWER(pi.item_name)
+           AND md.month_start >= date_trunc('month', CURRENT_DATE) - INTERVAL '24 months'
+         GROUP BY pi.id
+       ),
+       replenishment AS (
+         SELECT pi.id AS plan_item_id,
+                COALESCE(AVG(wrp.reorder_point), 0) AS reorder_point,
+                COALESCE(AVG(wrp.safety_stock), 0) AS safety_stock,
+                COALESCE(AVG(wrp.lead_time_days), 0) AS lead_time_days
+         FROM plan_items pi
+         LEFT JOIN warehouse_replenishment_policies wrp
+           ON wrp.stock_item_id = pi.stock_item_id AND wrp.is_active = true
+         GROUP BY pi.id
+       )
+       SELECT
+         pi.id AS plan_item_id,
+         pi.stock_item_id,
+         pi.item_name,
+         pi.planned_quantity,
+         pi.needed_by_date,
+         rh.requested_qty_12m,
+         rh.requested_qty_90d,
+         s.monthly_avg AS consumption_monthly_avg,
+         s.seasonal_avg_next_3m,
+         r.reorder_point,
+         r.safety_stock,
+         r.lead_time_days,
+         (rh.requested_qty_12m / 12.0) AS demand_monthly_avg,
+         GREATEST(0, r.reorder_point + r.safety_stock - pi.planned_quantity) AS reorder_gap,
+         CASE
+           WHEN s.monthly_avg > 0 THEN ROUND((s.seasonal_avg_next_3m / s.monthly_avg)::numeric, 3)
+           ELSE 1
+         END AS seasonal_index,
+         ROUND((rh.requested_qty_90d / 90.0 * COALESCE(NULLIF(r.lead_time_days, 0), 14))::numeric, 2) AS lead_time_demand,
+         ROUND((pi.planned_quantity - (rh.requested_qty_12m / 12.0))::numeric, 2) AS plan_vs_demand_gap
+       FROM plan_items pi
+       LEFT JOIN request_history rh ON rh.plan_item_id = pi.id
+       LEFT JOIN seasonal s ON s.plan_item_id = pi.id
+       LEFT JOIN replenishment r ON r.plan_item_id = pi.id
+       ORDER BY pi.id`,
+      [planId]
+    );
+
+    const items = rows.map(row => ({
+      ...row,
+      recommended_actions: [
+        row.reorder_gap > 0 ? 'Increase planned quantity to cover reorder point and safety stock.' : null,
+        row.lead_time_days > 0 ? `Start sourcing at least ${Math.ceil(Number(row.lead_time_days))} days before need-by date.` : null,
+        Number(row.seasonal_index) > 1.1 ? 'Apply seasonal uplift for upcoming months.' : null,
+        Number(row.plan_vs_demand_gap) < 0 ? 'Current plan trails average demand; review budget allocation.' : null,
+      ].filter(Boolean),
+    }));
+
+    res.json({
+      plan_id: planId,
+      generated_at: new Date().toISOString(),
+      integration_dimensions: [
+        'consumption_history',
+        'reorder_engine',
+        'demand_planning',
+        'supplier_lead_time',
+        'seasonal_usage',
+      ],
+      items,
+    });
+  } catch (err) {
+    console.error('Failed to build procurement planning integration insights:', err);
+    next(createHttpError(500, 'Failed to build procurement planning integration insights'));
+  }
+};
+
 module.exports = {
   uploadPlan,
   getPlans,
@@ -521,4 +625,5 @@ module.exports = {
   linkPlanItemRequests,
   linkPlanItemConsumptions,
   getPlanItemVariance,
+  getPlanIntegrationInsights,
 };

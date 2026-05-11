@@ -1,4 +1,3 @@
-
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureSupplierEvaluationsTable } = require('./supplierEvaluationsController');
@@ -22,10 +21,30 @@ const ensureSuppliersTable = async () => {
             name TEXT NOT NULL,
             contact_email TEXT,
             contact_phone TEXT,
+            supplier_type TEXT,
+            tax_number TEXT,
+            bank_info JSONB,
+            currency TEXT,
+            payment_terms TEXT,
+            lead_time_days INTEGER,
+            credit_limit NUMERIC(18,2),
+            status TEXT,
+            country TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
         `);
+
+
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_type TEXT`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tax_number TEXT`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS bank_info JSONB`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS currency TEXT`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS lead_time_days INTEGER`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(18,2)`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS status TEXT`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS country TEXT`);
 
         await pool.query(`
           CREATE UNIQUE INDEX IF NOT EXISTS suppliers_name_ci_idx
@@ -51,7 +70,7 @@ const getSupplierById = async (client, supplierId) => {
   await ensureSuppliersTable();
   const executor = client || pool;
   const { rows } = await executor.query(
-    `SELECT id, name, contact_email, contact_phone, created_at, updated_at
+    `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
        FROM suppliers
       WHERE id = $1
       LIMIT 1`,
@@ -71,7 +90,7 @@ const findOrCreateSupplierByName = async (client, name) => {
   const executor = client || pool;
 
   const existing = await executor.query(
-    `SELECT id, name, contact_email, contact_phone, created_at, updated_at
+    `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
        FROM suppliers
       WHERE LOWER(name) = LOWER($1)
       LIMIT 1`,
@@ -86,7 +105,7 @@ const findOrCreateSupplierByName = async (client, name) => {
     const inserted = await executor.query(
       `INSERT INTO suppliers (name)
          VALUES ($1)
-         RETURNING id, name, contact_email, contact_phone, created_at, updated_at`,
+         RETURNING id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at`,
       [sanitizedName]
     );
 
@@ -94,7 +113,7 @@ const findOrCreateSupplierByName = async (client, name) => {
   } catch (err) {
     if (err?.code === '23505') {
       const retry = await executor.query(
-        `SELECT id, name, contact_email, contact_phone, created_at, updated_at
+        `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
            FROM suppliers
           WHERE LOWER(name) = LOWER($1)
           LIMIT 1`,
@@ -114,7 +133,7 @@ const listSuppliers = async (req, res, next) => {
   try {
     await ensureSuppliersTable();
     const { rows } = await pool.query(
-      `SELECT id, name, contact_email, contact_phone, created_at, updated_at
+      `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
          FROM suppliers
         ORDER BY LOWER(name) ASC`
     );
@@ -137,23 +156,51 @@ const createSupplier = async (req, res, next) => {
   const name = normalizeText(req.body?.name);
   const contactEmail = normalizeText(req.body?.contact_email) || null;
   const contactPhone = normalizeText(req.body?.contact_phone) || null;
+  const supplierType = normalizeText(req.body?.supplier_type) || null;
+  const taxNumber = normalizeText(req.body?.tax_number) || null;
+  const bankInfo = req.body?.bank_info ?? null;
+  const currency = normalizeText(req.body?.currency) || null;
+  const paymentTerms = normalizeText(req.body?.payment_terms) || null;
+  const leadTimeDaysRaw = req.body?.lead_time_days;
+  const leadTimeDays = leadTimeDaysRaw === undefined || leadTimeDaysRaw === null || leadTimeDaysRaw === '' ? null : Number(leadTimeDaysRaw);
+  const creditLimitRaw = req.body?.credit_limit;
+  const creditLimit = creditLimitRaw === undefined || creditLimitRaw === null || creditLimitRaw === '' ? null : Number(creditLimitRaw);
+  const status = normalizeText(req.body?.status) || null;
+  const country = normalizeText(req.body?.country) || null;
 
   if (!name) {
     return next(createHttpError(400, 'Supplier name is required'));
   }
 
+  if (leadTimeDays !== null && (!Number.isInteger(leadTimeDays) || leadTimeDays < 0)) {
+    return next(createHttpError(400, 'lead_time_days must be a non-negative integer'));
+  }
+
+  if (creditLimit !== null && Number.isNaN(creditLimit)) {
+    return next(createHttpError(400, 'credit_limit must be a valid number'));
+  }
+
   try {
     const supplier = await findOrCreateSupplierByName(pool, name);
 
-    if (contactEmail || contactPhone) {
+    if (contactEmail || contactPhone || supplierType || taxNumber || bankInfo || currency || paymentTerms || leadTimeDays !== null || creditLimit !== null || status || country) {
       const updated = await pool.query(
         `UPDATE suppliers
             SET contact_email = COALESCE($1, contact_email),
                 contact_phone = COALESCE($2, contact_phone),
+                supplier_type = COALESCE($3, supplier_type),
+                tax_number = COALESCE($4, tax_number),
+                bank_info = COALESCE($5, bank_info),
+                currency = COALESCE($6, currency),
+                payment_terms = COALESCE($7, payment_terms),
+                lead_time_days = COALESCE($8, lead_time_days),
+                credit_limit = COALESCE($9, credit_limit),
+                status = COALESCE($10, status),
+                country = COALESCE($11, country),
                 updated_at = NOW()
-          WHERE id = $3
-        RETURNING id, name, contact_email, contact_phone, created_at, updated_at`,
-        [contactEmail, contactPhone, supplier.id]
+          WHERE id = $12
+        RETURNING id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at`,
+        [contactEmail, contactPhone, supplierType, taxNumber, bankInfo, currency, paymentTerms, leadTimeDays, creditLimit, status, country, supplier.id]
       );
 
       return res.status(201).json(updated.rows[0]);
@@ -212,6 +259,60 @@ const updateSupplier = async (req, res, next) => {
       values.push(normalizeText(req.body.contact_phone) || null);
     }
 
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'supplier_type')) {
+      updates.push(`supplier_type = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.supplier_type) || null);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'tax_number')) {
+      updates.push(`tax_number = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.tax_number) || null);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'bank_info')) {
+      updates.push(`bank_info = $${updates.length + 1}`);
+      values.push(req.body.bank_info ?? null);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'currency')) {
+      updates.push(`currency = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.currency) || null);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'payment_terms')) {
+      updates.push(`payment_terms = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.payment_terms) || null);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'lead_time_days')) {
+      const leadTimeDays = req.body.lead_time_days;
+      if (leadTimeDays !== null && leadTimeDays !== '' && (!Number.isInteger(Number(leadTimeDays)) || Number(leadTimeDays) < 0)) {
+        return next(createHttpError(400, 'lead_time_days must be a non-negative integer'));
+      }
+      updates.push(`lead_time_days = $${updates.length + 1}`);
+      values.push(leadTimeDays === '' ? null : (leadTimeDays === null ? null : Number(leadTimeDays)));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'credit_limit')) {
+      const creditLimit = req.body.credit_limit;
+      if (creditLimit !== null && creditLimit !== '' && Number.isNaN(Number(creditLimit))) {
+        return next(createHttpError(400, 'credit_limit must be a valid number'));
+      }
+      updates.push(`credit_limit = $${updates.length + 1}`);
+      values.push(creditLimit === '' ? null : (creditLimit === null ? null : Number(creditLimit)));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'status')) {
+      updates.push(`status = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.status) || null);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'country')) {
+      updates.push(`country = $${updates.length + 1}`);
+      values.push(normalizeText(req.body.country) || null);
+    }
+
     if (updates.length === 0) {
       return res.json(existing);
     }
@@ -222,7 +323,7 @@ const updateSupplier = async (req, res, next) => {
     const query = `UPDATE suppliers
                       SET ${updates.join(', ')}
                     WHERE id = $${values.length}
-                RETURNING id, name, contact_email, contact_phone, created_at, updated_at`;
+                RETURNING id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at`;
 
     const { rows } = await pool.query(query, values);
 
@@ -295,16 +396,23 @@ const getSuppliersDashboard = async (req, res, next) => {
                s.name,
                s.contact_email,
                s.contact_phone,
+               s.supplier_type,
+               s.currency,
+               s.payment_terms,
+               s.lead_time_days,
+               s.credit_limit,
+               s.status,
+               s.country,
                MAX(se.evaluation_date) AS last_evaluation_date,
                COUNT(se.id) AS evaluation_count
           FROM suppliers s
      LEFT JOIN supplier_evaluations se ON LOWER(se.supplier_name) = LOWER(s.name)
-      GROUP BY s.id, s.name, s.contact_email, s.contact_phone
+      GROUP BY s.id, s.name, s.contact_email, s.contact_phone, s.supplier_type, s.currency, s.payment_terms, s.lead_time_days, s.credit_limit, s.status, s.country
       ORDER BY last_evaluation_date DESC NULLS LAST, s.name ASC
          LIMIT 12
       `),
       pool.query(`
-        SELECT id, name, contact_email, contact_phone, created_at
+        SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at
           FROM suppliers
       ORDER BY created_at DESC
          LIMIT 8

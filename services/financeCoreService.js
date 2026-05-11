@@ -154,6 +154,70 @@ const recordCommitment = async (client, {
   return rows[0];
 };
 
+
+const createJournalEntry = async (client, {
+  requestId = null,
+  journalType,
+  sourceType,
+  sourceId = null,
+  referencePrefix = 'JRNL',
+  currency = 'USD',
+  totalAmount,
+  actorId = null,
+  lines = [],
+}) => {
+  const normalizedAmount = Number(totalAmount) || 0;
+  if (normalizedAmount <= 0) {
+    return null;
+  }
+
+  const journalReference = `${referencePrefix}-${requestId || 'GEN'}-${Date.now()}`;
+  const journalRes = await client.query(
+    `INSERT INTO journal_entries (
+      request_id,
+      journal_type,
+      source_type,
+      source_id,
+      journal_reference,
+      entry_status,
+      currency,
+      total_amount,
+      posted_by
+    ) VALUES ($1,$2,$3,$4,$5,'posted',$6,$7,$8)
+    RETURNING *`,
+    [requestId, journalType, sourceType, sourceId ? String(sourceId) : null, journalReference, currency, normalizedAmount, actorId]
+  );
+
+  const journalEntry = journalRes.rows[0];
+
+  if (lines.length > 0) {
+    for (const [index, line] of lines.entries()) {
+      await client.query(
+        `INSERT INTO journal_entry_lines (
+          journal_entry_id,
+          line_no,
+          account_code,
+          cost_center_id,
+          debit_amount,
+          credit_amount,
+          description
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          journalEntry.id,
+          index + 1,
+          line.accountCode,
+          line.costCenterId ?? null,
+          line.debitAmount ?? 0,
+          line.creditAmount ?? 0,
+          line.description ?? null,
+        ]
+      );
+    }
+  }
+
+  return journalEntry;
+};
+
 const postProcureToPayAccrual = async (client, {
   requestId,
   sourceId,
@@ -167,10 +231,38 @@ const postProcureToPayAccrual = async (client, {
     return null;
   }
 
+  const journalEntry = await createJournalEntry(client, {
+    requestId,
+    journalType: 'accrual',
+    sourceType: 'supplier_invoice',
+    sourceId,
+    referencePrefix: 'JRNL-P2P',
+    currency,
+    totalAmount: normalizedAmount,
+    actorId,
+    lines: [
+      {
+        accountCode: '5000-PROC-EXP',
+        costCenterId,
+        debitAmount: normalizedAmount,
+        creditAmount: 0,
+        description: 'Procurement expense recognition',
+      },
+      {
+        accountCode: '2100-AP-ACCRUAL',
+        costCenterId,
+        debitAmount: 0,
+        creditAmount: normalizedAmount,
+        description: 'Accounts payable accrual',
+      },
+    ],
+  });
+
   const postingReference = `GL-P2P-${requestId}-${Date.now()}`;
   const postingRes = await client.query(
     `INSERT INTO gl_postings (
       request_id,
+      journal_entry_id,
       source_type,
       source_id,
       posting_reference,
@@ -178,9 +270,9 @@ const postProcureToPayAccrual = async (client, {
       currency,
       total_amount,
       posted_by
-    ) VALUES ($1, 'supplier_invoice', $2, $3, 'posted', $4, $5, $6)
+    ) VALUES ($1, $2, 'supplier_invoice', $3, $4, 'posted', $5, $6, $7)
     RETURNING *`,
-    [requestId, String(sourceId), postingReference, currency, normalizedAmount, actorId]
+    [requestId, journalEntry?.id || null, String(sourceId), postingReference, currency, normalizedAmount, actorId]
   );
 
   const postingId = postingRes.rows[0].id;
@@ -200,7 +292,7 @@ const postProcureToPayAccrual = async (client, {
     [postingId, costCenterId, normalizedAmount]
   );
 
-  return postingRes.rows[0];
+  return { posting: postingRes.rows[0], journalEntry };
 };
 
 module.exports = {
@@ -208,5 +300,6 @@ module.exports = {
   getBudgetSnapshot,
   assertBudgetCanCover,
   recordCommitment,
+  createJournalEntry,
   postProcureToPayAccrual,
 };

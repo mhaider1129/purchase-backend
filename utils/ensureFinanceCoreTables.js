@@ -36,6 +36,7 @@ const statements = [
   `CREATE TABLE IF NOT EXISTS public.commitment_ledger (
     id BIGSERIAL PRIMARY KEY,
     request_id INTEGER NOT NULL REFERENCES public.requests(id) ON DELETE CASCADE,
+    journal_entry_id BIGINT REFERENCES public.journal_entries(id) ON DELETE SET NULL,
     budget_envelope_id BIGINT NOT NULL REFERENCES public.budget_envelopes(id) ON DELETE CASCADE,
     stage TEXT NOT NULL CHECK (stage IN ('reservation', 'encumbrance', 'actual')),
     amount NUMERIC(14,2) NOT NULL,
@@ -46,9 +47,36 @@ const statements = [
     actor_id INTEGER REFERENCES public.users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS public.journal_entries (
+    id BIGSERIAL PRIMARY KEY,
+    request_id INTEGER REFERENCES public.requests(id) ON DELETE SET NULL,
+    journal_type TEXT NOT NULL CHECK (journal_type IN ('ap_voucher', 'payment', 'adjustment', 'accrual', 'manual')),
+    source_type TEXT NOT NULL,
+    source_id TEXT,
+    journal_reference TEXT NOT NULL UNIQUE,
+    entry_status TEXT NOT NULL DEFAULT 'posted',
+    currency TEXT NOT NULL DEFAULT 'USD',
+    total_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+    posted_by INTEGER REFERENCES public.users(id),
+    posted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS public.journal_entry_lines (
+    id BIGSERIAL PRIMARY KEY,
+    journal_entry_id BIGINT NOT NULL REFERENCES public.journal_entries(id) ON DELETE CASCADE,
+    line_no INTEGER NOT NULL,
+    account_code TEXT NOT NULL,
+    cost_center_id INTEGER REFERENCES public.finance_cost_centers(id),
+    debit_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+    credit_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (journal_entry_id, line_no)
+  )`,
   `CREATE TABLE IF NOT EXISTS public.gl_postings (
     id BIGSERIAL PRIMARY KEY,
     request_id INTEGER NOT NULL REFERENCES public.requests(id) ON DELETE CASCADE,
+    journal_entry_id BIGINT REFERENCES public.journal_entries(id) ON DELETE SET NULL,
     source_type TEXT NOT NULL,
     source_id TEXT,
     posting_reference TEXT NOT NULL UNIQUE,
@@ -73,6 +101,9 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_budget_envelopes_dept_proj ON public.budget_envelopes(department_id, project_id, fiscal_year)`,
   `CREATE INDEX IF NOT EXISTS idx_commitment_ledger_request ON public.commitment_ledger(request_id, stage)`,
   `CREATE INDEX IF NOT EXISTS idx_commitment_ledger_budget ON public.commitment_ledger(budget_envelope_id, stage)`,
+  `CREATE INDEX IF NOT EXISTS idx_journal_entries_request ON public.journal_entries(request_id, posted_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_journal_entries_source ON public.journal_entries(source_type, source_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_journal_entry_lines_entry ON public.journal_entry_lines(journal_entry_id)`,
   `CREATE INDEX IF NOT EXISTS idx_gl_postings_request ON public.gl_postings(request_id, posted_at)`,
   `CREATE INDEX IF NOT EXISTS idx_gl_posting_lines_posting ON public.gl_posting_lines(gl_posting_id)`,
 ];

@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 
 // ✅ Allowed extensions
-const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.docx', '.xlsx'];
+const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.xlsx'];
 
 // 🧠 Storage configuration (in-memory so we can forward to Supabase or other remote storage)
 const storage = multer.memoryStorage();

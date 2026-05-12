@@ -54,14 +54,14 @@ CREATE TABLE public.ap_vouchers (
   CONSTRAINT ap_vouchers_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.approval_logs (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('approval_logs_id_seq'::regclass),
   approval_id integer,
   request_id integer,
   approver_id integer,
   action character varying,
   comments text,
-  timestamp timestamp without time zone DEFAULT now(),
-  created_at timestamp without time zone DEFAULT now(),
+  timestamp timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT approval_logs_pkey PRIMARY KEY (id),
   CONSTRAINT approval_logs_approval_id_fkey FOREIGN KEY (approval_id) REFERENCES public.approvals(id),
   CONSTRAINT approval_logs_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
@@ -89,7 +89,7 @@ CREATE TABLE public.approval_route_versions (
   CONSTRAINT approval_route_versions_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.approval_routes (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('approval_routes_id_seq'::regclass),
   request_type character varying NOT NULL,
   department_type character varying NOT NULL,
   approval_level integer NOT NULL,
@@ -99,7 +99,7 @@ CREATE TABLE public.approval_routes (
   CONSTRAINT approval_routes_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.approvals (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('approvals_id_seq'::regclass),
   request_id integer,
   approver_id integer,
   approval_level integer,
@@ -115,12 +115,12 @@ CREATE TABLE public.approvals (
   CONSTRAINT approvals_approver_id_fkey FOREIGN KEY (approver_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.attachments (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('attachments_id_seq'::regclass),
   request_id integer,
   file_name text NOT NULL,
   file_path text NOT NULL,
   uploaded_by integer,
-  uploaded_at timestamp without time zone DEFAULT now(),
+  uploaded_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   item_id bigint,
   contract_id bigint,
   CONSTRAINT attachments_pkey PRIMARY KEY (id),
@@ -231,18 +231,18 @@ CREATE TABLE public.contracts (
   contract_value numeric,
   status text NOT NULL DEFAULT 'active'::text,
   description text,
-  delivery_terms text,
-  warranty_terms text,
-  performance_management text,
   created_by integer,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  delivery_terms text,
+  warranty_terms text,
+  performance_management text,
   end_user_department_id integer,
   contract_manager_id integer,
   technical_department_ids jsonb,
   supplier_id integer,
   source_request_id integer,
-  amount_paid numeric DEFAULT '0'::numeric,
+  amount_paid numeric DEFAULT 0,
   signing_date date,
   contract_type text,
   CONSTRAINT contracts_pkey PRIMARY KEY (id),
@@ -253,7 +253,7 @@ CREATE TABLE public.contracts (
   CONSTRAINT contracts_source_request_id_fkey FOREIGN KEY (source_request_id) REFERENCES public.requests(id)
 );
 CREATE TABLE public.custody_records (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('custody_records_id_seq'::regclass),
   item_name text NOT NULL,
   quantity integer NOT NULL CHECK (quantity > 0),
   description text,
@@ -323,9 +323,9 @@ CREATE TABLE public.department_stock_movements (
   CONSTRAINT department_stock_movements_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.departments (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('departments_id_seq'::regclass),
   name character varying NOT NULL,
-  type character varying NOT NULL CHECK (type::text = ANY (ARRAY['Medical'::text, 'Operational'::text])),
+  type character varying NOT NULL CHECK (type::text = ANY (ARRAY['Medical'::character varying::text, 'Operational'::character varying::text])),
   institute_id integer,
   CONSTRAINT departments_pkey PRIMARY KEY (id),
   CONSTRAINT departments_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
@@ -343,21 +343,6 @@ CREATE TABLE public.document_flow_links (
   CONSTRAINT document_flow_links_pkey PRIMARY KEY (id),
   CONSTRAINT document_flow_links_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT document_flow_links_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
-);
-CREATE TABLE public.employee_tasks (
-  id integer NOT NULL DEFAULT nextval('employee_tasks_id_seq'::regclass),
-  title text NOT NULL,
-  description text,
-  assigned_to integer NOT NULL,
-  assigned_by integer NOT NULL,
-  status text NOT NULL DEFAULT 'pending'::text,
-  employee_update text,
-  assigned_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  completed_at timestamp with time zone,
-  CONSTRAINT employee_tasks_pkey PRIMARY KEY (id),
-  CONSTRAINT employee_tasks_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
-  CONSTRAINT employee_tasks_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.evaluation_criteria (
   id integer NOT NULL DEFAULT nextval('evaluation_criteria_id_seq'::regclass),
@@ -704,6 +689,10 @@ CREATE TABLE public.item_recalls (
   ncr_reference text,
   capa_reference text,
   final_report text,
+  lot_number text,
+  quarantine_active boolean DEFAULT false,
+  quarantine_reason text,
+  quarantine_started_at timestamp with time zone,
   CONSTRAINT item_recalls_pkey PRIMARY KEY (id),
   CONSTRAINT item_recalls_item_id_fkey FOREIGN KEY (item_id) REFERENCES public.stock_items(id),
   CONSTRAINT item_recalls_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
@@ -734,10 +723,10 @@ CREATE TABLE public.item_variants (
   CONSTRAINT item_variants_item_master_id_fkey FOREIGN KEY (item_master_id) REFERENCES public.item_master(id)
 );
 CREATE TABLE public.maintenance_stock (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('maintenance_stock_id_seq'::regclass),
   item_name text NOT NULL UNIQUE,
   quantity integer NOT NULL DEFAULT 0,
-  updated_at timestamp without time zone DEFAULT now(),
+  updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT maintenance_stock_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.monthly_dispensing (
@@ -754,7 +743,7 @@ CREATE TABLE public.monthly_dispensing (
   CONSTRAINT monthly_dispensing_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.non_po_receipt_approvals (
-  id bigint NOT NULL DEFAULT nextval('non_po_receipt_approvals_id_seq1'::regclass),
+  id bigint NOT NULL DEFAULT nextval('non_po_receipt_approvals_id_seq'::regclass),
   goods_receipt_id bigint NOT NULL,
   request_id integer NOT NULL,
   approval_step text NOT NULL,
@@ -837,9 +826,9 @@ CREATE TABLE public.procurement_plan_item_consumptions (
   quantity numeric NOT NULL,
   created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT procurement_plan_item_consumptions_pkey PRIMARY KEY (id),
-  CONSTRAINT procurement_plan_item_consumptions_plan_item_id_fkey FOREIGN KEY (plan_item_id) REFERENCES public.procurement_plan_items(id),
   CONSTRAINT procurement_plan_item_consumptions_warehouse_stock_movement_id_ FOREIGN KEY (warehouse_stock_movement_id) REFERENCES public.warehouse_stock_movements(id),
-  CONSTRAINT procurement_plan_item_consumptions_department_stock_movement_id FOREIGN KEY (department_stock_movement_id) REFERENCES public.department_stock_movements(id)
+  CONSTRAINT procurement_plan_item_consumptions_department_stock_movement_id FOREIGN KEY (department_stock_movement_id) REFERENCES public.department_stock_movements(id),
+  CONSTRAINT procurement_plan_item_consumptions_plan_item_id_fkey FOREIGN KEY (plan_item_id) REFERENCES public.procurement_plan_items(id)
 );
 CREATE TABLE public.procurement_plan_item_requests (
   id integer NOT NULL DEFAULT nextval('procurement_plan_item_requests_id_seq'::regclass),
@@ -873,12 +862,12 @@ CREATE TABLE public.procurement_plan_items (
   CONSTRAINT procurement_plan_items_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id)
 );
 CREATE TABLE public.procurement_plans (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('procurement_plans_id_seq'::regclass),
   department_id integer,
   plan_year integer NOT NULL,
   file_name character varying,
   file_path text,
-  created_at timestamp without time zone DEFAULT now(),
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT procurement_plans_pkey PRIMARY KEY (id),
   CONSTRAINT procurement_plans_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id)
 );
@@ -920,7 +909,7 @@ CREATE TABLE public.purchase_order_items (
 );
 CREATE TABLE public.purchase_orders (
   id bigint NOT NULL DEFAULT nextval('purchase_orders_id_seq'::regclass),
-  request_id integer,
+  request_id integer NOT NULL,
   rfx_id integer,
   rfx_response_id integer,
   supplier_id integer,
@@ -934,16 +923,15 @@ CREATE TABLE public.purchase_orders (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   supplier_name text,
-  expected_delivery_date date,
-  terms text,
-  issued_by integer,
   source_document_type text NOT NULL DEFAULT 'PURCHASE_REQUEST'::text,
   source_document_id text,
   contract_reference text,
+  expected_delivery_date date,
   delivery_location text,
   budget_cost_center text,
   tax_terms text,
   payment_terms text,
+  terms text,
   supplier_contact_email text,
   approval_required boolean NOT NULL DEFAULT false,
   approval_route text,
@@ -954,22 +942,23 @@ CREATE TABLE public.purchase_orders (
   cancellation_reason text,
   amendment_reason text,
   last_amended_at timestamp with time zone,
+  issued_by integer,
   CONSTRAINT purchase_orders_pkey PRIMARY KEY (id),
   CONSTRAINT purchase_orders_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT purchase_orders_rfx_id_fkey FOREIGN KEY (rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT purchase_orders_rfx_response_id_fkey FOREIGN KEY (rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT purchase_orders_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT purchase_orders_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
-  CONSTRAINT purchase_orders_issued_by_fkey FOREIGN KEY (issued_by) REFERENCES public.users(id),
-  CONSTRAINT purchase_orders_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id)
+  CONSTRAINT purchase_orders_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id),
+  CONSTRAINT purchase_orders_issued_by_fkey FOREIGN KEY (issued_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.request_logs (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('request_logs_id_seq'::regclass),
   request_id integer,
   action character varying NOT NULL,
   actor_id integer,
   comments text,
-  timestamp timestamp without time zone DEFAULT now(),
+  timestamp timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT request_logs_pkey PRIMARY KEY (id),
   CONSTRAINT request_logs_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT request_logs_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.users(id)
@@ -997,7 +986,7 @@ CREATE TABLE public.requested_item_financials (
   CONSTRAINT requested_item_financials_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
 CREATE TABLE public.requested_items (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('requested_items_id_seq'::regclass),
   request_id integer,
   item_name character varying NOT NULL,
   quantity integer NOT NULL,
@@ -1006,7 +995,7 @@ CREATE TABLE public.requested_items (
   intended_use text,
   specs text,
   device_info jsonb,
-  purchase_type character varying CHECK (purchase_type::text = ANY (ARRAY['First Time'::text, 'Replacement'::text, 'Addition'::text])),
+  purchase_type character varying CHECK (purchase_type::text = ANY (ARRAY['First Time'::character varying, 'Replacement'::character varying, 'Addition'::character varying]::text[])),
   approval_status character varying DEFAULT 'Pending'::character varying,
   total_cost bigint,
   procurement_status character varying DEFAULT 'pending'::character varying,
@@ -1030,17 +1019,17 @@ CREATE TABLE public.requested_items (
   CONSTRAINT requested_items_procurement_updated_by_fkey FOREIGN KEY (procurement_updated_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.requests (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
-  request_type character varying NOT NULL CHECK (request_type::text = ANY (ARRAY['Stock'::text, 'Non-Stock'::text, 'Medical Device'::text, 'Medication'::text, 'IT Item'::text, 'Maintenance'::text, 'Warehouse Supply'::text])),
+  id integer NOT NULL DEFAULT nextval('requests_id_seq'::regclass),
+  request_type character varying NOT NULL CHECK (request_type::text = ANY (ARRAY['Stock'::character varying::text, 'Non-Stock'::character varying::text, 'Medical Device'::character varying::text, 'Medication'::character varying::text, 'IT Item'::character varying::text, 'Maintenance'::character varying::text, 'Warehouse Supply'::character varying::text, 'Printing Logbook'::character varying::text])),
   requester_id integer,
   department_id integer,
   status character varying DEFAULT 'Submitted'::character varying,
   justification text,
   estimated_cost bigint,
-  created_at timestamp without time zone DEFAULT now(),
-  updated_at timestamp without time zone DEFAULT now(),
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   assigned_to integer,
-  request_domain character varying DEFAULT 'operational'::character varying CHECK (request_domain::text = ANY (ARRAY['medical'::text, 'operational'::text])),
+  request_domain character varying DEFAULT 'operational'::character varying CHECK (request_domain::text = ANY (ARRAY['medical'::character varying, 'operational'::character varying]::text[])),
   is_urgent boolean DEFAULT false,
   maintenance_ref_number text,
   initiated_by_technician_id integer,
@@ -1060,16 +1049,16 @@ CREATE TABLE public.requests (
   po_issued_at timestamp with time zone,
   institute_id integer,
   CONSTRAINT requests_pkey PRIMARY KEY (id),
+  CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
+  CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
+  CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
+  CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
+  CONSTRAINT requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
   CONSTRAINT requests_awarded_supplier_id_fkey FOREIGN KEY (awarded_supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
-  CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
-  CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
-  CONSTRAINT requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
-  CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
-  CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
   CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
 );
@@ -1101,10 +1090,10 @@ CREATE TABLE public.rfx_responses (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   request_id integer,
   CONSTRAINT rfx_responses_pkey PRIMARY KEY (id),
-  CONSTRAINT rfx_responses_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
-  CONSTRAINT rfx_responses_rfx_id_fkey FOREIGN KEY (rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT rfx_responses_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
-  CONSTRAINT rfx_responses_submitted_by_fkey FOREIGN KEY (submitted_by) REFERENCES public.users(id)
+  CONSTRAINT rfx_responses_submitted_by_fkey FOREIGN KEY (submitted_by) REFERENCES public.users(id),
+  CONSTRAINT rfx_responses_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
+  CONSTRAINT rfx_responses_rfx_id_fkey FOREIGN KEY (rfx_id) REFERENCES public.rfx_events(id)
 );
 CREATE TABLE public.risk_register (
   id integer NOT NULL DEFAULT nextval('risk_register_id_seq'::regclass),
@@ -1146,12 +1135,12 @@ CREATE TABLE public.role_permissions (
   CONSTRAINT role_permissions_permission_id_fkey FOREIGN KEY (permission_id) REFERENCES public.permissions(id)
 );
 CREATE TABLE public.roles (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('roles_id_seq'::regclass),
   name character varying NOT NULL UNIQUE,
   CONSTRAINT roles_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.sections (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('sections_id_seq'::regclass),
   name character varying NOT NULL,
   department_id integer,
   CONSTRAINT sections_pkey PRIMARY KEY (id),
@@ -1172,23 +1161,19 @@ CREATE TABLE public.stock_item_requests (
   CONSTRAINT stock_item_requests_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.stock_items (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('stock_items_id_seq'::regclass),
   name text NOT NULL,
   brand text,
   cost numeric,
   description text,
-  created_at timestamp without time zone DEFAULT now(),
-  updated_at timestamp without time zone DEFAULT now(),
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   category character varying,
   unit text,
   created_by integer,
   sub_category text,
   available_quantity numeric,
-  item_master_id integer,
-  item_variant_id integer,
   CONSTRAINT stock_items_pkey PRIMARY KEY (id),
-  CONSTRAINT stock_items_item_master_id_fkey FOREIGN KEY (item_master_id) REFERENCES public.item_master(id),
-  CONSTRAINT stock_items_item_variant_id_fkey FOREIGN KEY (item_variant_id) REFERENCES public.item_variants(id),
   CONSTRAINT stock_items_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.supplier_compliance_artifacts (
@@ -1240,12 +1225,7 @@ CREATE TABLE public.supplier_evaluations (
   delivery_score numeric,
   cost_score numeric,
   compliance_score numeric,
-  otif_score numeric,
-  corrective_actions_score numeric,
-  esg_compliance_score numeric,
   overall_score numeric NOT NULL,
-  weighted_overall_score numeric,
-  kpi_weights jsonb,
   strengths text,
   weaknesses text,
   action_items text,
@@ -1253,6 +1233,11 @@ CREATE TABLE public.supplier_evaluations (
   evaluator_name text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  otif_score numeric,
+  corrective_actions_score numeric,
+  esg_compliance_score numeric,
+  weighted_overall_score numeric,
+  kpi_weights jsonb,
   criteria_responses jsonb,
   scheduled_annually boolean NOT NULL DEFAULT true,
   travel_required boolean DEFAULT false,
@@ -1286,12 +1271,10 @@ CREATE TABLE public.supplier_invoices (
   submitted_by integer,
   submitted_at timestamp with time zone NOT NULL DEFAULT now(),
   purchase_order_id bigint,
-  supplier_id integer,
   CONSTRAINT supplier_invoices_pkey PRIMARY KEY (id),
   CONSTRAINT supplier_invoices_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT supplier_invoices_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES public.goods_receipts(id),
   CONSTRAINT supplier_invoices_submitted_by_fkey FOREIGN KEY (submitted_by) REFERENCES public.users(id),
-  CONSTRAINT supplier_invoices_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT supplier_invoices_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id)
 );
 CREATE TABLE public.supplier_issues (
@@ -1371,15 +1354,6 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  supplier_type text,
-  tax_number text,
-  bank_info jsonb,
-  currency text,
-  payment_terms text,
-  lead_time_days integer,
-  credit_limit numeric,
-  status text,
-  country text,
   CONSTRAINT suppliers_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.technical_inspections (
@@ -1438,7 +1412,7 @@ CREATE TABLE public.user_permissions (
   CONSTRAINT user_permissions_permission_id_fkey FOREIGN KEY (permission_id) REFERENCES public.permissions(id)
 );
 CREATE TABLE public.user_registration_requests (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('user_registration_requests_id_seq'::regclass),
   name text NOT NULL,
   email text NOT NULL,
   password_hash text NOT NULL,
@@ -1460,23 +1434,23 @@ CREATE TABLE public.user_registration_requests (
   CONSTRAINT user_registration_requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 CREATE TABLE public.users (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('users_id_seq'::regclass),
   name character varying NOT NULL,
   email character varying NOT NULL UNIQUE,
   password character varying NOT NULL,
   role character varying NOT NULL,
   department_id integer,
   section_id integer,
-  created_at timestamp without time zone DEFAULT now(),
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   is_active boolean DEFAULT true,
   can_request_medication boolean DEFAULT false,
   employee_id text,
   warehouse_id integer,
   institute_id integer,
   CONSTRAINT users_pkey PRIMARY KEY (id),
-  CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT users_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
+  CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id)
 );
 CREATE TABLE public.warehouse_item_batches (
@@ -1546,9 +1520,9 @@ CREATE TABLE public.warehouse_stock_levels (
   expiry_date date,
   serial_number text,
   CONSTRAINT warehouse_stock_levels_pkey PRIMARY KEY (id),
-  CONSTRAINT warehouse_stock_levels_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT warehouse_stock_levels_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
   CONSTRAINT warehouse_stock_levels_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id),
+  CONSTRAINT warehouse_stock_levels_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT warehouse_stock_levels_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.warehouse_item_batches(id)
 );
 CREATE TABLE public.warehouse_stock_movements (
@@ -1563,20 +1537,20 @@ CREATE TABLE public.warehouse_stock_movements (
   notes text,
   created_by integer,
   created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-  to_section_id integer,
   batch_id integer,
+  to_section_id integer,
   lot_number text,
   expiry_date date,
   serial_number text,
   reference_transfer_id integer,
   CONSTRAINT warehouse_stock_movements_pkey PRIMARY KEY (id),
-  CONSTRAINT warehouse_stock_movements_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
-  CONSTRAINT warehouse_stock_movements_to_section_id_fkey FOREIGN KEY (to_section_id) REFERENCES public.sections(id),
-  CONSTRAINT warehouse_stock_movements_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.warehouse_item_batches(id),
   CONSTRAINT warehouse_stock_movements_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
   CONSTRAINT warehouse_stock_movements_reference_request_id_fkey FOREIGN KEY (reference_request_id) REFERENCES public.requests(id),
   CONSTRAINT warehouse_stock_movements_to_department_id_fkey FOREIGN KEY (to_department_id) REFERENCES public.departments(id),
-  CONSTRAINT warehouse_stock_movements_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+  CONSTRAINT warehouse_stock_movements_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT warehouse_stock_movements_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT warehouse_stock_movements_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.warehouse_item_batches(id),
+  CONSTRAINT warehouse_stock_movements_to_section_id_fkey FOREIGN KEY (to_section_id) REFERENCES public.sections(id)
 );
 CREATE TABLE public.warehouse_supplied_items (
   id integer NOT NULL DEFAULT nextval('warehouse_supplied_items_id_seq'::regclass),
@@ -1606,22 +1580,17 @@ CREATE TABLE public.warehouse_supplied_items (
   CONSTRAINT warehouse_supplied_items_received_by_fkey FOREIGN KEY (received_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.warehouse_supply_items (
-  id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id integer NOT NULL DEFAULT nextval('warehouse_supply_items_id_seq'::regclass),
   request_id integer,
   item_name text NOT NULL,
   quantity integer NOT NULL,
-  created_at timestamp without time zone DEFAULT now(),
+  created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   requested_item_id smallint,
-  approval_status text DEFAULT 'Pending'::text,
-  approval_comments text,
-  approved_at timestamp with time zone,
-  updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-  approved_by integer,
   CONSTRAINT warehouse_supply_items_pkey PRIMARY KEY (id),
   CONSTRAINT warehouse_supply_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id)
 );
 CREATE TABLE public.warehouse_supply_templates (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  id bigint NOT NULL DEFAULT nextval('warehouse_supply_templates_id_seq'::regclass),
   template_name text NOT NULL UNIQUE,
   items jsonb NOT NULL,
   inserted_at timestamp with time zone DEFAULT now(),
@@ -1672,6 +1641,6 @@ CREATE TABLE public.warehouses (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   institute_id integer,
   CONSTRAINT warehouses_pkey PRIMARY KEY (id),
-  CONSTRAINT warehouses_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
-  CONSTRAINT warehouses_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id)
+  CONSTRAINT warehouses_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
+  CONSTRAINT warehouses_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );

@@ -460,7 +460,7 @@ CREATE INDEX IF NOT EXISTS requested_item_financials_contract_idx ON public.requ
 
 CREATE TABLE IF NOT EXISTS public.requests (
   id integer NOT NULL DEFAULT nextval('requests_id_seq'::regclass),
-  request_type character varying NOT NULL CHECK (request_type::text = ANY (ARRAY['Stock'::character varying, 'Non-Stock'::character varying, 'Medical Device'::character varying, 'Medication'::character varying, 'IT Item'::character varying, 'Maintenance'::character varying, 'Warehouse Supply'::character varying]::text[])),
+  request_type character varying NOT NULL CHECK (request_type::text = ANY (ARRAY['Stock'::character varying, 'Non-Stock'::character varying, 'Medical Device'::character varying, 'Medication'::character varying, 'IT Item'::character varying, 'Maintenance'::character varying, 'Warehouse Supply'::character varying, 'Printing Logbook'::character varying]::text[])),
   requester_id integer,
   department_id integer,
   institute_id integer NOT NULL,

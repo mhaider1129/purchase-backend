@@ -5,6 +5,7 @@ const router = express.Router();
 const { authenticateUser } = require('../middleware/authMiddleware');
 const {
   handleApprovalDecision,
+  handleEmailApprovalAction,
   getApprovalDetailsForRequest,
   getApprovalSummary,
   updateApprovalItems,
@@ -22,6 +23,7 @@ router.get('/request/:request_id/approvals', authenticateUser, getApprovalDetail
 // ✅ PATCH /api/approvals/:id/decision
 // → Submit an approval or rejection for a specific approval entry
 router.patch('/:id/decision', authenticateUser, handleApprovalDecision);
+router.get('/email-action', handleEmailApprovalAction);
 
 // ⏸️ PATCH /api/approvals/:id/hold
 // → Place an approval on hold or resume it

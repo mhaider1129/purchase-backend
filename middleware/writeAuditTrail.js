@@ -1,5 +1,6 @@
 const pool = require('../config/db');
-const { WRITE_METHODS, resolveCapability } = require('../config/capabilityMatrix');
+const { WRITE_METHODS } = require('../config/capabilityMatrix');
+const { resolveCapability } = require('../utils/capabilityPolicyService');
 
 const SENSITIVE_KEYS = ['password', 'token', 'secret', 'authorization', 'apiKey', 'accessKey'];
 let auditTableReadyPromise;
@@ -63,7 +64,7 @@ const writeAuditTrail = (req, res, next) => {
     try {
       await ensureAuditTable();
 
-      const capability = resolveCapability(req.originalUrl, req.method);
+      const capability = await resolveCapability(req.originalUrl, req.method);
       const actorId = Number.isInteger(req.user?.id) ? req.user.id : null;
       const actorRole = req.user?.role || null;
       const requestPath = req.originalUrl?.split('?')[0] || req.path || '';

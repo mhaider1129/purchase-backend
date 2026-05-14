@@ -9,6 +9,7 @@ const reassignPendingApprovals = require('./controllers/utils/reassignPendingApp
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
 const { syncPermissionCatalog } = require('./utils/permissionService');
 const { syncUiAccessResources } = require('./utils/uiAccessService');
+const { syncCapabilityPolicies } = require('./utils/capabilityPolicyService');
 const ensureWarehouseAssignments = require('./utils/ensureWarehouseAssignments');
 const { loadEnvironmentConfig } = require('./config/environment');
 const { writeAuditTrail } = require('./middleware/writeAuditTrail');
@@ -34,6 +35,10 @@ syncPermissionCatalog()
 syncUiAccessResources()
   .then(() => log('info', 'ui_access_resources_synchronized'))
   .catch(err => log('error', 'ui_access_resource_sync_failed', { error: err.message }));
+
+syncCapabilityPolicies()
+  .then(() => log('info', 'capability_policies_synchronized'))
+  .catch(err => log('error', 'capability_policies_sync_failed', { error: err.message }));
 
 ensureWarehouseAssignments()
   .then(() => log('info', 'warehouse_assignment_columns_ensured'))
@@ -288,10 +293,12 @@ const contractEvaluationsRouter = require('./routes/contractEvaluations');
 const riskManagementRoutes = require('./routes/riskManagement');
 const rfxPortalRoutes = require('./routes/rfxPortal');
 const uiAccessRoutes = require('./routes/uiAccess');
+const capabilityPoliciesRoutes = require('./routes/capabilityPolicies');
 const notificationsRoutes = require('./routes/notifications');
 const dispensingRoutes = require('./routes/dispensing');
 const procureToPayRoutes = require('./routes/procureToPay');
 const auditRegistryRoutes = require('./routes/auditRegistry');
+const tasksRoutes = require('./routes/tasks');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -341,10 +348,12 @@ apiRouter.use('/contract-evaluations', authenticateUser, writeAuditTrail, contra
 apiRouter.use('/risk-management', authenticateUser, writeAuditTrail, riskManagementRoutes);
 apiRouter.use('/rfx-portal', authenticateUserOptional, writeAuditTrail, rfxPortalRoutes);
 apiRouter.use('/ui-access', authenticateUser, writeAuditTrail, uiAccessRoutes);
+apiRouter.use('/capability-policies', authenticateUser, writeAuditTrail, capabilityPoliciesRoutes);
 apiRouter.use('/notifications', authenticateUser, writeAuditTrail, notificationsRoutes);
 apiRouter.use('/dispensing', authenticateUser, writeAuditTrail, dispensingRoutes);
 apiRouter.use('/procure-to-pay', authenticateUser, writeAuditTrail, procureToPayRoutes);
 apiRouter.use('/audit-registry', authenticateUser, writeAuditTrail, auditRegistryRoutes);
+apiRouter.use('/tasks', authenticateUser, writeAuditTrail, tasksRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);

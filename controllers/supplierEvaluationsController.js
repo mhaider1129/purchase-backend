@@ -1410,6 +1410,193 @@ const updateSupplierEvaluation = async (req, res, next) => {
   }
 };
 
+
+const normalizeCriteriaCode = (value) => {
+  const normalized = sanitizeText(value)
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || null;
+};
+
+const parseCriteriaComponents = (components) => {
+  if (!Array.isArray(components) || components.length === 0) {
+    throw createHttpError(400, 'components must be a non-empty array');
+  }
+
+  const sanitized = components
+    .map((component) => sanitizeText(component))
+    .filter(Boolean);
+
+  if (sanitized.length === 0) {
+    throw createHttpError(400, 'components must include at least one valid value');
+  }
+
+  return sanitized;
+};
+
+const parseAssignmentConfig = (assignmentConfig) => {
+  if (assignmentConfig === undefined) {
+    return null;
+  }
+
+  if (assignmentConfig === null) {
+    return null;
+  }
+
+  if (typeof assignmentConfig !== 'object' || Array.isArray(assignmentConfig)) {
+    throw createHttpError(400, 'assignment_config must be an object when provided');
+  }
+
+  return assignmentConfig;
+};
+
+const listSupplierEvaluationCriteria = async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, code, name, role, components, assignment_config, created_at
+         FROM evaluation_criteria
+        ORDER BY created_at ASC, id ASC`
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to list supplier evaluation criteria:', err);
+    next(createHttpError(500, 'Failed to list supplier evaluation criteria'));
+  }
+};
+
+const createSupplierEvaluationCriteria = async (req, res, next) => {
+  if (!canManageSupplierEvaluations(req)) {
+    return next(createHttpError(403, 'Insufficient permissions'));
+  }
+
+  try {
+    const name = sanitizeText(req.body?.name);
+    const role = sanitizeText(req.body?.role);
+
+    if (!name) {
+      throw createHttpError(400, 'name is required');
+    }
+
+    if (!role) {
+      throw createHttpError(400, 'role is required');
+    }
+
+    const code = normalizeCriteriaCode(req.body?.code || name);
+    if (!code) {
+      throw createHttpError(400, 'code is required');
+    }
+
+    const components = parseCriteriaComponents(req.body?.components);
+    const assignmentConfig = parseAssignmentConfig(req.body?.assignment_config);
+
+    const { rows } = await pool.query(
+      `INSERT INTO evaluation_criteria (code, name, role, components, assignment_config)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, code, name, role, components, assignment_config, created_at`,
+      [code, name, role, JSON.stringify(components), assignmentConfig ? JSON.stringify(assignmentConfig) : null]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return next(createHttpError(409, 'A criteria template with this code already exists'));
+    }
+    if (err.statusCode) {
+      return next(err);
+    }
+    console.error('❌ Failed to create supplier evaluation criteria:', err);
+    next(createHttpError(500, 'Failed to create supplier evaluation criteria'));
+  }
+};
+
+const updateSupplierEvaluationCriteria = async (req, res, next) => {
+  if (!canManageSupplierEvaluations(req)) {
+    return next(createHttpError(403, 'Insufficient permissions'));
+  }
+
+  const criteriaId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(criteriaId)) {
+    return next(createHttpError(400, 'Invalid criteria id'));
+  }
+
+  try {
+    const existing = await pool.query('SELECT id, code, name, role, components, assignment_config, created_at FROM evaluation_criteria WHERE id = $1', [criteriaId]);
+    if (existing.rowCount === 0) {
+      return next(createHttpError(404, 'Criteria template not found'));
+    }
+
+    const current = existing.rows[0];
+    const nextName = req.body?.name !== undefined ? sanitizeText(req.body.name) : current.name;
+    const nextRole = req.body?.role !== undefined ? sanitizeText(req.body.role) : current.role;
+    const nextCode = req.body?.code !== undefined ? normalizeCriteriaCode(req.body.code) : current.code;
+
+    if (!nextName) {
+      throw createHttpError(400, 'name cannot be empty');
+    }
+    if (!nextRole) {
+      throw createHttpError(400, 'role cannot be empty');
+    }
+    if (!nextCode) {
+      throw createHttpError(400, 'code cannot be empty');
+    }
+
+    const nextComponents = req.body?.components !== undefined
+      ? parseCriteriaComponents(req.body.components)
+      : current.components;
+
+    const nextAssignmentConfig = req.body?.assignment_config !== undefined
+      ? parseAssignmentConfig(req.body.assignment_config)
+      : current.assignment_config;
+
+    const { rows } = await pool.query(
+      `UPDATE evaluation_criteria
+          SET code = $1,
+              name = $2,
+              role = $3,
+              components = $4,
+              assignment_config = $5
+        WHERE id = $6
+      RETURNING id, code, name, role, components, assignment_config, created_at`,
+      [nextCode, nextName, nextRole, JSON.stringify(nextComponents), nextAssignmentConfig ? JSON.stringify(nextAssignmentConfig) : null, criteriaId]
+    );
+
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return next(createHttpError(409, 'A criteria template with this code already exists'));
+    }
+    if (err.statusCode) {
+      return next(err);
+    }
+    console.error('❌ Failed to update supplier evaluation criteria:', err);
+    next(createHttpError(500, 'Failed to update supplier evaluation criteria'));
+  }
+};
+
+const deleteSupplierEvaluationCriteria = async (req, res, next) => {
+  if (!canManageSupplierEvaluations(req)) {
+    return next(createHttpError(403, 'Insufficient permissions'));
+  }
+
+  const criteriaId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(criteriaId)) {
+    return next(createHttpError(400, 'Invalid criteria id'));
+  }
+
+  try {
+    const { rowCount } = await pool.query('DELETE FROM evaluation_criteria WHERE id = $1', [criteriaId]);
+    if (rowCount === 0) {
+      return next(createHttpError(404, 'Criteria template not found'));
+    }
+    res.status(204).send();
+  } catch (err) {
+    console.error('❌ Failed to delete supplier evaluation criteria:', err);
+    next(createHttpError(500, 'Failed to delete supplier evaluation criteria'));
+  }
+};
+
 const deleteSupplierEvaluation = async (req, res, next) => {
   if (!canManageSupplierEvaluations(req)) {
     return next(createHttpError(403, 'Insufficient permissions'));
@@ -1452,6 +1639,10 @@ module.exports = {
   createSupplierEvaluation,
   updateSupplierEvaluation,
   deleteSupplierEvaluation,
+  listSupplierEvaluationCriteria,
+  createSupplierEvaluationCriteria,
+  updateSupplierEvaluationCriteria,
+  deleteSupplierEvaluationCriteria,
   // Exported for testing purposes
   _internal: {
     parseScoreValue,

@@ -3,6 +3,17 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 
 const DEFAULT_HISTORY_MONTHS = 12;
+const DEFAULT_PLANNING_SETTINGS = {
+  forecast_horizon_months: 6,
+  forecast_window_size: 3,
+  safety_lead_time_days: 14,
+  safety_review_period_days: 7,
+  demand_history_days: 120,
+  demand_history_months: 12,
+  safety_history_days: 180,
+  mrp_horizon_days: 84,
+  mrp_bucket_days: 7,
+};
 
 const zTable = [
   { level: 0.80, z: 0.84 },
@@ -168,20 +179,51 @@ async function fetchDailyDemand(itemName, days = 120) {
   return rows.map(row => ({ day: row.bucket_date, quantity: Number(row.quantity) || 0 }));
 }
 
+async function ensurePlanningSettingsTable() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS planning_settings (
+    id BIGSERIAL PRIMARY KEY,
+    warehouse_id BIGINT NULL,
+    forecast_horizon_months INTEGER NOT NULL DEFAULT 6,
+    forecast_window_size INTEGER NOT NULL DEFAULT 3,
+    safety_lead_time_days INTEGER NOT NULL DEFAULT 14,
+    safety_review_period_days INTEGER NOT NULL DEFAULT 7,
+    demand_history_days INTEGER NOT NULL DEFAULT 120,
+    demand_history_months INTEGER NOT NULL DEFAULT 12,
+    safety_history_days INTEGER NOT NULL DEFAULT 180,
+    mrp_horizon_days INTEGER NOT NULL DEFAULT 84,
+    mrp_bucket_days INTEGER NOT NULL DEFAULT 7,
+    updated_by BIGINT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`);
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS planning_settings_warehouse_key ON planning_settings ((COALESCE(warehouse_id, -1)))');
+}
+
+async function getPlanningSettings(warehouseId = null) {
+  await ensurePlanningSettingsTable();
+  const { rows } = await pool.query(
+    `SELECT * FROM planning_settings WHERE COALESCE(warehouse_id, -1) = COALESCE($1::BIGINT, -1) LIMIT 1`,
+    [warehouseId || null],
+  );
+  return { ...DEFAULT_PLANNING_SETTINGS, ...(rows[0] || {}) };
+}
+
 const getDemandForecast = async (req, res, next) => {
-  const { item_name: itemName, method = 'moving_average', horizon_months: horizonMonths = 6, window_size: windowSize = 3, sop_adjustments: sopAdjustments = [] } = req.body;
+  const { item_name: itemName, warehouse_id: warehouseId = null, method = 'moving_average', horizon_months: providedHorizonMonths, window_size: providedWindowSize, sop_adjustments: sopAdjustments = [] } = req.body;
 
   if (!itemName) {
     return next(createHttpError(400, 'item_name is required'));
   }
 
-  const horizon = Number(horizonMonths);
-  if (Number.isNaN(horizon) || horizon <= 0) {
-    return next(createHttpError(400, 'horizon_months must be a positive number'));
-  }
-
   try {
-    const { history, source: historySource } = await fetchMonthlyDemand(itemName, DEFAULT_HISTORY_MONTHS);
+    const settings = await getPlanningSettings(warehouseId);
+    const horizonMonths = providedHorizonMonths ?? settings.forecast_horizon_months;
+    const windowSize = providedWindowSize ?? settings.forecast_window_size;
+    const { history, source: historySource } = await fetchMonthlyDemand(itemName, settings.demand_history_months || DEFAULT_HISTORY_MONTHS);
+    const horizon = Number(horizonMonths);
+    if (Number.isNaN(horizon) || horizon <= 0) {
+      return next(createHttpError(400, 'horizon_months must be a positive number'));
+    }
     let forecast;
 
     if (method === 'linear_trend') {
@@ -214,8 +256,6 @@ const calculateSafetyStock = async (req, res, next) => {
   const {
     item_name: itemName,
     service_level: rawServiceLevel = 0.95,
-    lead_time_days: leadTimeDays = 14,
-    review_period_days: reviewPeriodDays = 7,
     on_hand = 0,
     on_order = 0,
   } = req.body;
@@ -225,7 +265,10 @@ const calculateSafetyStock = async (req, res, next) => {
   }
 
   try {
-    const dailyDemand = await fetchDailyDemand(itemName, 180);
+    const settings = await getPlanningSettings(req.body.warehouse_id || null);
+    const leadTimeDays = req.body.lead_time_days ?? settings.safety_lead_time_days;
+    const reviewPeriodDays = req.body.review_period_days ?? settings.safety_review_period_days;
+    const dailyDemand = await fetchDailyDemand(itemName, settings.safety_history_days || 180);
     const dailyValues = dailyDemand.map(entry => entry.quantity);
     const avgDaily = mean(dailyValues);
     const stdDaily = std(dailyValues);
@@ -338,13 +381,16 @@ function scheduleMrp(item) {
 }
 
 const runMrp = async (req, res, next) => {
-  const { items = [], horizon_days: horizonDays = 84, bucket_days: bucketDays = 7 } = req.body;
+  const { items = [], warehouse_id: warehouseId = null, horizon_days: providedHorizonDays, bucket_days: providedBucketDays } = req.body;
 
   if (!Array.isArray(items) || !items.length) {
     return next(createHttpError(400, 'items array is required'));
   }
 
   try {
+    const settings = await getPlanningSettings(warehouseId);
+    const horizonDays = providedHorizonDays ?? settings.mrp_horizon_days;
+    const bucketDays = providedBucketDays ?? settings.mrp_bucket_days;
     const plans = items.map(item => scheduleMrp({ ...item, horizon_days: horizonDays, bucket_days: bucketDays }));
     const plannedOrders = plans.flatMap(plan => plan.planned_orders);
 
@@ -507,6 +553,47 @@ module.exports = {
   getDemandForecast,
   calculateSafetyStock,
   runMrp,
+  getPlanningDefaults: async (req, res, next) => {
+    try {
+      const warehouseId = req.query.warehouse_id ? Number(req.query.warehouse_id) : null;
+      const settings = await getPlanningSettings(Number.isNaN(warehouseId) ? null : warehouseId);
+      res.json({ settings });
+    } catch (err) {
+      console.error('❌ Failed to fetch planning defaults:', err);
+      next(createHttpError(500, 'Failed to fetch planning defaults'));
+    }
+  },
+  savePlanningDefaults: async (req, res, next) => {
+    try {
+      await ensurePlanningSettingsTable();
+      const warehouseId = req.body.warehouse_id ?? null;
+      const merged = { ...DEFAULT_PLANNING_SETTINGS, ...req.body };
+      const { rows } = await pool.query(
+        `INSERT INTO planning_settings (
+          warehouse_id, forecast_horizon_months, forecast_window_size, safety_lead_time_days, safety_review_period_days,
+          demand_history_days, demand_history_months, safety_history_days, mrp_horizon_days, mrp_bucket_days, updated_by
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT ((COALESCE(warehouse_id, -1))) DO UPDATE SET
+          forecast_horizon_months = EXCLUDED.forecast_horizon_months,
+          forecast_window_size = EXCLUDED.forecast_window_size,
+          safety_lead_time_days = EXCLUDED.safety_lead_time_days,
+          safety_review_period_days = EXCLUDED.safety_review_period_days,
+          demand_history_days = EXCLUDED.demand_history_days,
+          demand_history_months = EXCLUDED.demand_history_months,
+          safety_history_days = EXCLUDED.safety_history_days,
+          mrp_horizon_days = EXCLUDED.mrp_horizon_days,
+          mrp_bucket_days = EXCLUDED.mrp_bucket_days,
+          updated_by = EXCLUDED.updated_by,
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING *`,
+        [warehouseId, merged.forecast_horizon_months, merged.forecast_window_size, merged.safety_lead_time_days, merged.safety_review_period_days, merged.demand_history_days, merged.demand_history_months, merged.safety_history_days, merged.mrp_horizon_days, merged.mrp_bucket_days, req.user?.id || null],
+      );
+      res.json({ settings: rows[0] });
+    } catch (err) {
+      console.error('❌ Failed to save planning defaults:', err);
+      next(createHttpError(500, 'Failed to save planning defaults'));
+    }
+  },
   saveReplenishmentPolicy,
   runReplenishmentPlanner,
 };

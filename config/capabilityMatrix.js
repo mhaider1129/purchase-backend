@@ -174,5 +174,6 @@ const resolveCapability = (path = '', method = 'GET') => {
 module.exports = {
   CAPABILITY_MATRIX,
   WRITE_METHODS,
+  normalizePath,
   resolveCapability,
 };

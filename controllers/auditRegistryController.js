@@ -1,6 +1,14 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 
+const AUDIT_STATUSES = {
+  COO_REVIEW_PENDING: 'COO_REVIEW_PENDING',
+  AUDIT_REVIEW_PENDING: 'AUDIT_REVIEW_PENDING',
+  ACTION_REQUIRED: 'ACTION_REQUIRED',
+  REGISTERED: 'REGISTERED',
+  CLOSED: 'CLOSED',
+};
+
 const ensureAuditRegistryTable = async client => {
   await client.query(`
     CREATE TABLE IF NOT EXISTS public.audit_registry_entries (
@@ -12,7 +20,7 @@ const ensureAuditRegistryTable = async client => {
       notes TEXT,
       required_before_payment TEXT,
       required_after_payment TEXT,
-      audit_status TEXT NOT NULL DEFAULT 'PENDING_AUDIT' CHECK (audit_status IN ('PENDING_AUDIT','ACTION_REQUIRED','READY_FOR_FINANCE','FINANCE_PROCESSING','COMPLETED')),
+      audit_status TEXT NOT NULL DEFAULT 'COO_REVIEW_PENDING' CHECK (audit_status IN ('COO_REVIEW_PENDING','AUDIT_REVIEW_PENDING','ACTION_REQUIRED','REGISTERED','CLOSED')),
       finance_issued_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
       returned_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
       currency TEXT NOT NULL DEFAULT 'USD',
@@ -26,10 +34,46 @@ const ensureAuditRegistryTable = async client => {
 };
 
 const assertValidStatus = status => {
-  const statuses = new Set(['PENDING_AUDIT', 'ACTION_REQUIRED', 'READY_FOR_FINANCE', 'FINANCE_PROCESSING', 'COMPLETED']);
+  const statuses = new Set(Object.values(AUDIT_STATUSES));
   if (!statuses.has(status)) {
     throw createHttpError(400, 'Invalid audit status');
   }
+};
+
+const normalizeRole = role => String(role || '').trim().toUpperCase();
+
+const assertWorkflowTransitionAllowed = ({ currentStatus, nextStatus, role, requesterId, actorId }) => {
+  const isRequester = requesterId === actorId;
+  if (currentStatus === nextStatus) return;
+
+  if (currentStatus === AUDIT_STATUSES.COO_REVIEW_PENDING && nextStatus === AUDIT_STATUSES.AUDIT_REVIEW_PENDING) {
+    if (role !== 'COO') throw createHttpError(403, 'Only COO can approve this request for audit review');
+    return;
+  }
+
+  if (currentStatus === AUDIT_STATUSES.AUDIT_REVIEW_PENDING && nextStatus === AUDIT_STATUSES.REGISTERED) {
+    if (role !== 'AUDIT') throw createHttpError(403, 'Only Audit can approve and register this request');
+    return;
+  }
+
+  if (currentStatus === AUDIT_STATUSES.REGISTERED && nextStatus === AUDIT_STATUSES.CLOSED) {
+    if (role !== 'AUDIT') throw createHttpError(403, 'Only Audit can close this registry');
+    return;
+  }
+
+  if (nextStatus === AUDIT_STATUSES.ACTION_REQUIRED) {
+    if (role !== 'AUDIT') throw createHttpError(403, 'Only Audit can set required actions for the user');
+    return;
+  }
+
+  if (currentStatus === AUDIT_STATUSES.ACTION_REQUIRED && nextStatus === AUDIT_STATUSES.REGISTERED) {
+    if (!isRequester && role !== 'AUDIT') {
+      throw createHttpError(403, 'Only the requester or Audit can mark requirements as fulfilled');
+    }
+    return;
+  }
+
+  throw createHttpError(400, `Invalid workflow transition from ${currentStatus} to ${nextStatus}`);
 };
 
 const createAuditEntry = async (req, res, next) => {
@@ -44,13 +88,21 @@ const createAuditEntry = async (req, res, next) => {
       notes = null,
       required_before_payment = null,
       required_after_payment = null,
-      audit_status = 'PENDING_AUDIT',
+      audit_status = AUDIT_STATUSES.COO_REVIEW_PENDING,
       finance_issued_amount = 0,
       returned_amount = 0,
       currency = 'USD',
     } = req.body;
 
-    assertValidStatus(audit_status);
+    const normalizedRole = normalizeRole(req.user.role);
+    const normalizedStatus = String(audit_status || AUDIT_STATUSES.COO_REVIEW_PENDING).toUpperCase();
+    assertValidStatus(normalizedStatus);
+    if (normalizedRole !== 'REQUESTER' && normalizedRole !== 'USER' && normalizedRole !== 'INDIVIDUAL') {
+      throw createHttpError(403, 'Only a requester can submit a new finance registry request');
+    }
+    if (normalizedStatus !== AUDIT_STATUSES.COO_REVIEW_PENDING) {
+      throw createHttpError(400, 'New registry requests must start in COO_REVIEW_PENDING status');
+    }
     await client.query('BEGIN');
     await ensureAuditRegistryTable(client);
 
@@ -70,7 +122,7 @@ const createAuditEntry = async (req, res, next) => {
         notes,
         required_before_payment,
         required_after_payment,
-        audit_status,
+        normalizedStatus,
         Number(finance_issued_amount) || 0,
         Number(returned_amount) || 0,
         currency,
@@ -121,8 +173,20 @@ const updateAuditEntry = async (req, res, next) => {
     if (!current.rowCount) throw createHttpError(404, 'Audit entry not found');
 
     const row = current.rows[0];
-    const nextStatus = req.body.audit_status || row.audit_status;
+    const nextStatus = String(req.body.audit_status || row.audit_status).toUpperCase();
+    const normalizedRole = normalizeRole(req.user.role);
     assertValidStatus(nextStatus);
+    assertWorkflowTransitionAllowed({
+      currentStatus: row.audit_status,
+      nextStatus,
+      role: normalizedRole,
+      requesterId: row.requester_id,
+      actorId: req.user.id,
+    });
+
+    if (nextStatus === AUDIT_STATUSES.CLOSED && (Number(req.body.returned_amount) || row.returned_amount) < row.finance_issued_amount) {
+      throw createHttpError(400, 'Returned amount must cover the registered amount before closing');
+    }
 
     const updated = await client.query(
       `UPDATE audit_registry_entries

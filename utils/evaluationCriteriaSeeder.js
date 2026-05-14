@@ -124,10 +124,7 @@ const ensureEvaluationCriteriaTable = async () => {
       await pool.query(
         `INSERT INTO evaluation_criteria (code, name, role, components)
          VALUES ($1, $2, $3, $4)
-         ON CONFLICT (code) DO UPDATE
-           SET name = EXCLUDED.name,
-               role = EXCLUDED.role,
-               components = EXCLUDED.components`,
+         ON CONFLICT (code) DO NOTHING`,
         [normalizedCode, criteria.name, criteria.role, componentsJson]
       );
     }

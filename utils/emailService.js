@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 require('dotenv').config();
 
 let transporter = null;
@@ -116,6 +117,39 @@ const getEmailFooter = () => {
   return { text, html };
 };
 
+
+const EMAIL_ACTION_SECRET = process.env.EMAIL_ACTION_SECRET || process.env.JWT_SECRET || 'email-action-secret';
+const EMAIL_ACTION_TTL_SECONDS = Number.parseInt(process.env.EMAIL_ACTION_TTL_SECONDS || '172800', 10);
+
+const createApprovalActionToken = ({ approvalId, action, approverId }) => {
+  const exp = Math.floor(Date.now() / 1000) + EMAIL_ACTION_TTL_SECONDS;
+  const payload = `${approvalId}:${action}:${approverId}:${exp}`;
+  const signature = crypto.createHmac('sha256', EMAIL_ACTION_SECRET).update(payload).digest('hex');
+  return Buffer.from(`${payload}:${signature}`).toString('base64url');
+};
+
+const verifyApprovalActionToken = token => {
+  const decoded = Buffer.from(String(token), 'base64url').toString('utf8');
+  const [approvalId, action, approverId, exp, signature] = decoded.split(':');
+  if (!approvalId || !action || !approverId || !exp || !signature) return null;
+  if (!['Approved', 'Rejected'].includes(action)) return null;
+  const payload = `${approvalId}:${action}:${approverId}:${exp}`;
+  const expected = crypto.createHmac('sha256', EMAIL_ACTION_SECRET).update(payload).digest('hex');
+  if (expected !== signature) return null;
+  if (Number(exp) < Math.floor(Date.now() / 1000)) return null;
+  return { approvalId: Number(approvalId), action, approverId: Number(approverId) };
+};
+
+const buildApprovalActionLinks = ({ approvalId, approverId }) => {
+  const backendBase = (process.env.APP_URL || process.env.BACKEND_URL || 'http://localhost:5000').replace(/\/$/, '');
+  const approvedToken = createApprovalActionToken({ approvalId, action: 'Approved', approverId });
+  const rejectedToken = createApprovalActionToken({ approvalId, action: 'Rejected', approverId });
+  return {
+    approveUrl: `${backendBase}/api/approvals/email-action?token=${approvedToken}`,
+    rejectUrl: `${backendBase}/api/approvals/email-action?token=${rejectedToken}`,
+  };
+};
+
 const sendEmail = async (to, subject, message, options = {}) => {
   const recipients = normalizeRecipients(to);
 
@@ -207,10 +241,14 @@ const sendEmail = async (to, subject, message, options = {}) => {
 
 module.exports = {
   sendEmail,
+  buildApprovalActionLinks,
+  verifyApprovalActionToken,
   _private: {
     normalizeRecipients,
     convertTextToHtml,
     normalizeDocumentation,
     getEmailFooter,
+    buildApprovalActionLinks,
+    verifyApprovalActionToken,
   },
 };

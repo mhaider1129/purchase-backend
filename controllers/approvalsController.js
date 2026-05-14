@@ -1,6 +1,6 @@
 // src/controllers/approvalsController.js
 const pool = require('../config/db');
-const { sendEmail } = require('../utils/emailService');
+const { sendEmail, buildApprovalActionLinks, verifyApprovalActionToken } = require('../utils/emailService');
 const { createNotifications } = require('../utils/notificationService');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
@@ -391,6 +391,7 @@ const handleApprovalDecision = async (req, res, next) => {
           );
           const nextEmail = emailRes.rows[0]?.email;
           const nextMessage = `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.`;
+          const actionLinks = nextApproverId ? buildApprovalActionLinks({ approvalId: nextId, approverId: nextApproverId }) : null;
 
           if (nextApproverId) {
             enqueueNotification({
@@ -408,10 +409,13 @@ const handleApprovalDecision = async (req, res, next) => {
           }
 
           if (nextEmail) {
+            const actionMessage = actionLinks
+              ? `${nextMessage}\n\nQuick actions:\nApprove: ${actionLinks.approveUrl}\nReject: ${actionLinks.rejectUrl}\n\nIf you prefer, you can still log in to review the full details before deciding.`
+              : `${nextMessage}\nPlease log in to review the details.`;
             await sendEmail(
               nextEmail,
               'Purchase Request Needs Your Review',
-              `${nextMessage}\nPlease log in to review the details.`,
+              actionMessage,
             );
           }
         }
@@ -1162,8 +1166,46 @@ const getApprovalSummary = async (req, res, next) => {
   }
 };
 
+
+const handleEmailApprovalAction = async (req, res, next) => {
+  try {
+    const token = req.query?.token || req.body?.token;
+    const tokenPayload = verifyApprovalActionToken(token);
+    if (!tokenPayload) {
+      return next(createHttpError(400, 'Invalid or expired email approval token'));
+    }
+
+    const { rows } = await pool.query(
+      `SELECT u.id, u.role, u.department_id
+         FROM approvals a
+         JOIN users u ON u.id = a.approver_id
+        WHERE a.id = $1 AND a.approver_id = $2`,
+      [tokenPayload.approvalId, tokenPayload.approverId],
+    );
+
+    const approver = rows[0];
+    if (!approver) {
+      return next(createHttpError(404, 'Approval or approver not found for token'));
+    }
+
+    req.params = { ...(req.params || {}), id: String(tokenPayload.approvalId) };
+    req.body = { ...(req.body || {}), status: tokenPayload.action, comments: 'Decision captured from email action link.' };
+    req.user = {
+      id: approver.id,
+      role: approver.role,
+      department_id: approver.department_id,
+      hasPermission: () => false,
+    };
+
+    return handleApprovalDecision(req, res, next);
+  } catch (error) {
+    return next(error);
+  }
+};
+
 module.exports = {
   handleApprovalDecision,
+  handleEmailApprovalAction,
   getApprovalSummary,
   getApprovalDetailsForRequest,
   setApprovalHoldStatus,

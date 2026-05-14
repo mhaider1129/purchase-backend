@@ -1,6 +1,32 @@
 //controllers/dashboardController.js
 const pool = require('../config/db');
 
+const WORKLOAD_DEFAULTS = {
+  pendingStatuses: ['Pending', 'On Hold'],
+  approvedStatus: 'Approved',
+  completionWindowDays: 30,
+};
+
+const parseCsv = (value) => String(value || '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const getWorkloadFilters = (query = {}) => {
+  const pendingStatuses = parseCsv(query.pending_statuses);
+  const approvedStatus = String(query.approved_status || WORKLOAD_DEFAULTS.approvedStatus).trim() || WORKLOAD_DEFAULTS.approvedStatus;
+  const completionWindowDays = Number.parseInt(query.completion_window_days, 10);
+
+  return {
+    pendingStatuses: pendingStatuses.length ? pendingStatuses : WORKLOAD_DEFAULTS.pendingStatuses,
+    approvedStatus,
+    completionWindowDays:
+      Number.isFinite(completionWindowDays) && completionWindowDays > 0
+        ? Math.min(completionWindowDays, 365)
+        : WORKLOAD_DEFAULTS.completionWindowDays,
+  };
+};
+
 const getDashboardSummary = async (req, res) => {
   try {
     const [
@@ -289,38 +315,39 @@ const getWorkloadAnalysis = async (req, res) => {
   }
 
   try {
+    const filters = getWorkloadFilters(req.query);
     const [backlogSummaryRes, userWorkloadRes, levelBacklogRes, departmentBacklogRes, completionTrendRes] =
       await Promise.all([
         pool.query(`
           SELECT
-            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS active_pending,
+            COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS active_pending,
             COUNT(*) FILTER (WHERE a.status = 'On Hold' AND a.is_active = TRUE) AS on_hold,
-            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_pending,
+            COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_pending,
             AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400)
-              FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS avg_age_days
+              FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS avg_age_days
           FROM approvals a
           JOIN requests r ON a.request_id = r.id
-        `),
+        `, [filters.pendingStatuses]),
         pool.query(`
           SELECT
             a.approver_id,
             COALESCE(u.name, 'Unassigned') AS approver_name,
             COALESCE(u.role, 'Unknown') AS role,
             COALESCE(d.name, 'Unassigned') AS department,
-            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS pending_count,
+            COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS pending_count,
             COUNT(*) FILTER (WHERE a.status = 'On Hold' AND a.is_active = TRUE) AS on_hold_count,
-            COUNT(*) FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_count,
+            COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_count,
             AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400)
-              FILTER (WHERE a.status IN ('Pending', 'On Hold') AND a.is_active = TRUE) AS avg_age_days
+              FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS avg_age_days
           FROM approvals a
           LEFT JOIN users u ON a.approver_id = u.id
           JOIN requests r ON a.request_id = r.id
           LEFT JOIN departments d ON r.department_id = d.id
           WHERE a.is_active = TRUE
-            AND a.status IN ('Pending', 'On Hold')
+            AND a.status = ANY($1)
           GROUP BY a.approver_id, approver_name, role, department
           ORDER BY pending_count DESC, urgent_count DESC
-        `),
+        `, [filters.pendingStatuses]),
         pool.query(`
           SELECT
             a.approval_level,
@@ -330,10 +357,10 @@ const getWorkloadAnalysis = async (req, res) => {
           FROM approvals a
           JOIN requests r ON a.request_id = r.id
           WHERE a.is_active = TRUE
-            AND a.status IN ('Pending', 'On Hold')
+            AND a.status = ANY($1)
           GROUP BY a.approval_level
           ORDER BY a.approval_level
-        `),
+        `, [filters.pendingStatuses]),
         pool.query(`
           SELECT
             COALESCE(d.name, 'Unassigned') AS department,
@@ -344,20 +371,20 @@ const getWorkloadAnalysis = async (req, res) => {
           JOIN requests r ON a.request_id = r.id
           LEFT JOIN departments d ON r.department_id = d.id
           WHERE a.is_active = TRUE
-            AND a.status IN ('Pending', 'On Hold')
+            AND a.status = ANY($1)
           GROUP BY department
           ORDER BY pending_count DESC
-        `),
+        `, [filters.pendingStatuses]),
         pool.query(`
           SELECT
             TO_CHAR(DATE_TRUNC('day', a.approved_at), 'YYYY-MM-DD') AS day,
             COUNT(*) AS approvals_completed
           FROM approvals a
-          WHERE a.status = 'Approved'
-            AND a.approved_at >= (CURRENT_DATE - INTERVAL '29 days')
+          WHERE a.status = $1
+            AND a.approved_at >= (CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day')
           GROUP BY day
           ORDER BY day
-        `),
+        `, [filters.approvedStatus, filters.completionWindowDays]),
       ]);
 
     const summary = backlogSummaryRes.rows[0] || {};
@@ -389,6 +416,7 @@ const getWorkloadAnalysis = async (req, res) => {
         urgent_count: Number(row.urgent_count || 0),
         avg_age_days: parseFloat(row.avg_age_days) || 0,
       })),
+      filters,
       completions_trend: completionTrendRes.rows.map((row) => ({
         day: row.day,
         approvals_completed: Number(row.approvals_completed || 0),

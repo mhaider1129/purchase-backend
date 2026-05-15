@@ -3,7 +3,7 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { applyDefaultRolePermissions } = require('../utils/permissionService');
 
-const ensureInstituteMatch = async (client, instituteId, { departmentId, sectionId, warehouseId }) => {
+const ensureInstituteMatch = async (client, instituteId, { departmentId, warehouseId }) => {
   if (!Number.isInteger(instituteId)) {
     return;
   }
@@ -19,24 +19,6 @@ const ensureInstituteMatch = async (client, instituteId, { departmentId, section
     }
     if (departmentInstituteId !== instituteId) {
       throw createHttpError(403, 'Department is outside your institute');
-    }
-  }
-
-
-  if (Number.isInteger(sectionId)) {
-    const { rows } = await client.query(
-      `SELECT s.institute_id, s.department_id, d.institute_id AS department_institute_id
-         FROM sections s
-         LEFT JOIN departments d ON d.id = s.department_id
-        WHERE s.id = $1`,
-      [sectionId]
-    );
-    const sectionInstituteId = rows[0]?.institute_id;
-    if (!Number.isInteger(sectionInstituteId)) {
-      throw createHttpError(400, 'Section not found');
-    }
-    if (sectionInstituteId !== instituteId) {
-      throw createHttpError(403, 'Section is outside your institute');
     }
   }
 
@@ -122,9 +104,6 @@ const assignUser = async (req, res, next) => {
     if (Number.isNaN(departmentId)) {
       return next(createHttpError(400, 'Invalid department ID'));
     }
-    if (departmentId <= 0) {
-      departmentId = null;
-    }
   }
 
   let sectionId = null;
@@ -133,9 +112,6 @@ const assignUser = async (req, res, next) => {
     if (Number.isNaN(sectionId)) {
       return next(createHttpError(400, 'Invalid section ID'));
     }
-    if (sectionId <= 0) {
-      sectionId = null;
-    }
   }
 
   let warehouseId = null;
@@ -143,9 +119,6 @@ const assignUser = async (req, res, next) => {
     warehouseId = parseInt(warehouse_id, 10);
     if (Number.isNaN(warehouseId)) {
       return next(createHttpError(400, 'Invalid warehouse ID'));
-    }
-    if (warehouseId <= 0) {
-      warehouseId = null;
     }
   }
 
@@ -169,7 +142,6 @@ const assignUser = async (req, res, next) => {
   try {
     await ensureInstituteMatch(pool, req.user?.institute_id, {
       departmentId,
-      sectionId,
       warehouseId,
     });
 
@@ -234,45 +206,23 @@ const assignUser = async (req, res, next) => {
       }
     }
 
-    const canRequestMedicationColumnRes = await pool.query(
-      `SELECT EXISTS (
-        SELECT 1
-          FROM information_schema.columns
-         WHERE table_schema = 'public'
-           AND table_name = 'users'
-           AND column_name = 'can_request_medication'
-      ) AS exists`
+    const result = await pool.query(
+      `UPDATE users
+         SET role = $1,
+             department_id = $2,
+             section_id = $3,
+             warehouse_id = $4,
+             can_request_medication = COALESCE($5::BOOLEAN, can_request_medication)
+       WHERE id = $6 RETURNING id`,
+      [
+        targetRoleName,
+        departmentId,
+        sectionId,
+        warehouseId,
+        shouldUpdateMedication ? parsedMedicationValue : null,
+        userId,
+      ]
     );
-
-    const hasCanRequestMedicationColumn = canRequestMedicationColumnRes.rows[0]?.exists === true;
-
-    const updateSql = hasCanRequestMedicationColumn
-      ? `UPDATE users
-           SET role = $1,
-               department_id = $2,
-               section_id = $3,
-               warehouse_id = $4,
-               can_request_medication = COALESCE($5::BOOLEAN, can_request_medication)
-         WHERE id = $6 RETURNING id`
-      : `UPDATE users
-           SET role = $1,
-               department_id = $2,
-               section_id = $3,
-               warehouse_id = $4
-         WHERE id = $5 RETURNING id`;
-
-    const updateParams = hasCanRequestMedicationColumn
-      ? [
-          targetRoleName,
-          departmentId,
-          sectionId,
-          warehouseId,
-          shouldUpdateMedication ? parsedMedicationValue : null,
-          userId,
-        ]
-      : [targetRoleName, departmentId, sectionId, warehouseId, userId];
-
-    const result = await pool.query(updateSql, updateParams);
 
     if (result.rowCount === 0) {
       return next(createHttpError(404, 'User not found'));
@@ -287,16 +237,7 @@ const assignUser = async (req, res, next) => {
     res.json({ success: true });
   } catch (err) {
     console.error('❌ Failed to assign user:', err);
-
-    if (err?.code === '23503') {
-      return next(createHttpError(400, 'Invalid department, section, or warehouse assignment'));
-    }
-
-    if (err?.code === '42703') {
-      return next(createHttpError(500, 'User assignment is blocked by an incomplete database migration'));
-    }
-
-    return next(err.statusCode ? err : createHttpError(500, 'Failed to assign user'));
+    next(createHttpError(500, 'Failed to assign user'));
   }
 };
 

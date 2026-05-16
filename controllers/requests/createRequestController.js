@@ -9,6 +9,11 @@ const {
 const ensureWarehouseAssignments = require("../../utils/ensureWarehouseAssignments");
 const ensureWarehouseInventoryTables = require("../../utils/ensureWarehouseInventoryTables");
 
+const hasWarehouseAssignment = (value) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0;
+};
+
 const assignApprover = async (
   client,
   role,
@@ -264,12 +269,12 @@ const createRequest = async (req, res, next) => {
     return next(createHttpError(400, "User is not linked to an institute"));
   }
 
-  const userRole = (req.user.role || "").toLowerCase().replace(/_/g, "");
-  const warehouseRoles = ["warehousekeeper", "warehousemanager"];
-
-  if (request_type === "Stock" && !warehouseRoles.includes(userRole)) {
+  if (request_type === "Stock" && !hasWarehouseAssignment(req.user?.warehouse_id)) {
     return next(
-      createHttpError(403, "Only warehouse staff can submit stock requests"),
+      createHttpError(
+        403,
+        "Only users linked to a warehouse can submit stock requests",
+      ),
     );
   }
 

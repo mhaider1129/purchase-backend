@@ -185,16 +185,21 @@ const assignUser = async (req, res, next) => {
       if (!normalizedRole) {
         return next(createHttpError(400, 'Role cannot be empty'));
       }
-      if (roleNameFromId && roleNameFromId !== normalizedRole) {
+      if (roleNameFromId && roleNameFromId.trim().toLowerCase() !== normalizedRole.toLowerCase()) {
         return next(createHttpError(400, 'Provided role does not match the supplied role ID'));
       }
       if (!roleNameFromId) {
-        const roleRes = await pool.query('SELECT id FROM roles WHERE name = $1', [normalizedRole]);
+        const roleRes = await pool.query(
+          'SELECT name FROM roles WHERE LOWER(TRIM(name)) = LOWER($1) LIMIT 1',
+          [normalizedRole]
+        );
         if (roleRes.rowCount === 0) {
           return next(createHttpError(400, 'Invalid role specified'));
         }
+        targetRoleName = roleRes.rows[0].name;
+      } else {
+        targetRoleName = roleNameFromId;
       }
-      targetRoleName = normalizedRole;
     }
 
     const roleChanged = roleProvided && targetRoleName !== existingUser.role;

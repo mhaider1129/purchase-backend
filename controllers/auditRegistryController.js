@@ -94,11 +94,10 @@ const createAuditEntry = async (req, res, next) => {
       currency = 'USD',
     } = req.body;
 
-    const normalizedRole = normalizeRole(req.user.role);
     const normalizedStatus = String(audit_status || AUDIT_STATUSES.COO_REVIEW_PENDING).toUpperCase();
     assertValidStatus(normalizedStatus);
-    if (normalizedRole !== 'REQUESTER' && normalizedRole !== 'USER' && normalizedRole !== 'INDIVIDUAL') {
-      throw createHttpError(403, 'Only a requester can submit a new finance registry request');
+    if (!req.user?.hasAnyPermission?.(['requests.view-audit', 'requests.view-all', 'requests.manage'])) {
+      throw createHttpError(403, 'You do not have permission to submit a finance registry request');
     }
     if (normalizedStatus !== AUDIT_STATUSES.COO_REVIEW_PENDING) {
       throw createHttpError(400, 'New registry requests must start in COO_REVIEW_PENDING status');
@@ -174,7 +173,6 @@ const updateAuditEntry = async (req, res, next) => {
 
     const row = current.rows[0];
     const nextStatus = String(req.body.audit_status || row.audit_status).toUpperCase();
-    const normalizedRole = normalizeRole(req.user.role);
     assertValidStatus(nextStatus);
     assertWorkflowTransitionAllowed({
       currentStatus: row.audit_status,

@@ -179,7 +179,7 @@ const defaultResources = [
     resourceKey: 'feature.auditRequests',
     label: 'Audit Requests',
     description: 'Allows access to the audit review workspace.',
-    permissions: ['requests.view-all'],
+    permissions: ['requests.view-audit'],
     requireAll: false,
   },
   {

@@ -762,13 +762,13 @@ const markRequestAsCompleted = async (req, res, next) => {
       : `Request ${id} completed`;
     const requesterMessage = hasPendingInspections
       ? `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been finalized by procurement and is awaiting technical inspection before you can mark items as received.`
-      : `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement.`;
+      : `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement. Items are purchased and awaiting your receipt confirmation in My Closed Requests.`;
 
     notificationEntries.push({
       userId: requestRow.requester_id,
       title: requesterTitle,
       message: requesterMessage,
-      link: `/requests/${id}`,
+      link: '/closed-requests',
       metadata: {
         requestId: id,
         requestType: requestRow.request_type,

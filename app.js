@@ -7,6 +7,7 @@ const os = require('os');
 const morgan = require('morgan');
 const reassignPendingApprovals = require('./controllers/utils/reassignPendingApprovals');
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
+const remindPendingReceipts = require('./controllers/utils/remindPendingReceipts');
 const { syncPermissionCatalog } = require('./utils/permissionService');
 const { syncUiAccessResources } = require('./utils/uiAccessService');
 const { syncCapabilityPolicies } = require('./utils/capabilityPolicyService');
@@ -394,9 +395,13 @@ const startServer = (port = process.env.PORT || 5000, host = process.env.HOST ||
       await reassignPendingApprovals();
       log('info', 'pending_approvals_reassigned_on_startup');
       await remindPendingApprovals();
+      await remindPendingReceipts();
       setInterval(() => {
         remindPendingApprovals().catch(err =>
           log('error', 'reminder_job_failed', { error: err.message })
+        );
+        remindPendingReceipts().catch(err =>
+          log('error', 'receipt_reminder_job_failed', { error: err.message })
         );
       }, 24 * 60 * 60 * 1000); // daily
     } catch (err) {

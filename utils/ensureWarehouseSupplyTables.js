@@ -26,7 +26,11 @@ const ensureWarehouseSupplyTables = async (client = pool) => {
       supplied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE INDEX IF NOT EXISTS idx_wsi_request_id ON public.warehouse_supply_items(request_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_wsup_request_id ON public.warehouse_supplied_items(request_id)`
+    `CREATE INDEX IF NOT EXISTS idx_wsup_request_id ON public.warehouse_supplied_items(request_id)`,
+
+    `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES warehouse_item_batches(id)`,
+    `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS lot_number TEXT`,
+    `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS expiry_date DATE`,
   ];
 
   for (const statement of statements) {

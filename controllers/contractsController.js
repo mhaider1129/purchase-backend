@@ -2,6 +2,7 @@ const fs = require('fs/promises');
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureContractEvaluationsTable } = require('./contractEvaluationsController');
+const { ensureEvaluationCriteriaTable } = require('../utils/evaluationCriteriaSeeder');
 const {
   ensureSuppliersTable,
   findOrCreateSupplierByName,
@@ -1470,46 +1471,75 @@ const createContract = async (req, res, next) => {
       ]
     );
 
-    const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
-    const contract = serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null);
-    await ensureContractEvaluationsTable();
-    const { rows: criteria } = await client.query('SELECT * FROM evaluation_criteria');
-    for (const criterion of criteria) {
-      const evaluators = await determineEvaluatorsForCriterion({ client, criterion, contract });
-      if (!evaluators.length) {
-        continue;
-      }
-
-      const evaluationTemplate = buildEvaluationTemplate(criterion);
-      for (const evaluator of evaluators) {
-        await client.query(
-          `INSERT INTO contract_evaluations (
-             contract_id,
-             evaluator_id,
-             evaluation_criteria,
-             criterion_id,
-             criterion_name,
-             criterion_role,
-             criterion_code
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            contract.id,
-            evaluator.id,
-            evaluationTemplate,
-            evaluationTemplate.criterionId,
-            evaluationTemplate.criterionName,
-            evaluationTemplate.criterionRole,
-            evaluationTemplate.criterionCode,
-          ]
-        );
-      }
+    let supplierCompliance = null;
+    try {
+      const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
+      supplierCompliance = complianceMap.get(rows[0].supplier_id) || null;
+    } catch (complianceErr) {
+      console.warn(
+        '⚠️ Unable to resolve supplier compliance for contract creation response:',
+        complianceErr?.message || complianceErr
+      );
     }
-    await recordContractLog(client, {
-      contractId: contract.id,
-      action: 'contract_created',
-      actorId: req.user?.id || null,
-      details: { status: contract.status },
-    });
+    const contract = serializeContract(rows[0], supplierCompliance);
+
+    await client.query('SAVEPOINT contract_evaluation_bootstrap');
+    try {
+      await ensureEvaluationCriteriaTable();
+      await ensureContractEvaluationsTable();
+      const { rows: criteria } = await client.query('SELECT * FROM evaluation_criteria');
+      for (const criterion of criteria) {
+        const evaluators = await determineEvaluatorsForCriterion({ client, criterion, contract });
+        if (!evaluators.length) {
+          continue;
+        }
+
+        const evaluationTemplate = buildEvaluationTemplate(criterion);
+        for (const evaluator of evaluators) {
+          await client.query(
+            `INSERT INTO contract_evaluations (
+               contract_id,
+               evaluator_id,
+               evaluation_criteria,
+               criterion_id,
+               criterion_name,
+               criterion_role,
+               criterion_code
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              contract.id,
+              evaluator.id,
+              evaluationTemplate,
+              evaluationTemplate.criterionId,
+              evaluationTemplate.criterionName,
+              evaluationTemplate.criterionRole,
+              evaluationTemplate.criterionCode,
+            ]
+          );
+        }
+      }
+      await client.query('RELEASE SAVEPOINT contract_evaluation_bootstrap');
+    } catch (evaluationBootstrapErr) {
+      await client.query('ROLLBACK TO SAVEPOINT contract_evaluation_bootstrap');
+      await client.query('RELEASE SAVEPOINT contract_evaluation_bootstrap');
+      console.warn(
+        '⚠️ Contract created without auto-generated evaluation assignments:',
+        evaluationBootstrapErr?.message || evaluationBootstrapErr
+      );
+    }
+    try {
+      await recordContractLog(client, {
+        contractId: contract.id,
+        action: 'contract_created',
+        actorId: req.user?.id || null,
+        details: { status: contract.status },
+      });
+    } catch (contractLogErr) {
+      console.warn(
+        '⚠️ Failed to write contract_created log entry:',
+        contractLogErr?.message || contractLogErr
+      );
+    }
 
     await client.query('COMMIT');
     res.status(201).json(contract);

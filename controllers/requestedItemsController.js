@@ -539,7 +539,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
     await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
-      `SELECT * FROM public.requested_items WHERE id = $1`,
+      `SELECT * FROM public.requested_items WHERE id = $1 FOR UPDATE`,
       [item_id]
     );
 
@@ -549,6 +549,17 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
     }
 
     const item = itemRes.rows[0];
+
+    const currentReceivedQuantity = Number(item.received_quantity || 0);
+    if (purchased_quantity < currentReceivedQuantity) {
+      await client.query('ROLLBACK');
+      return next(
+        createHttpError(
+          400,
+          `Purchased quantity cannot be lower than already received quantity (${currentReceivedQuantity})`,
+        ),
+      );
+    }
 
     await client.query(
       `UPDATE public.requested_items

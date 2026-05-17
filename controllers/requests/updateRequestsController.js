@@ -236,6 +236,7 @@ const updateApprovalStatus = async (req, res, next) => {
     );
 
     const { request_type, department_id } = requestRow;
+    let activeApproversToNotify = [];
 
     let effectiveEstimatedCost = Number(requestRow.estimated_cost) || 0;
 
@@ -374,9 +375,30 @@ const updateApprovalStatus = async (req, res, next) => {
 
       if (nextPendingApprovals.length > 0) {
         await client.query(
-          `UPDATE approvals SET is_active = true WHERE id = $1`,
-          [nextPendingApprovals[0].id],
+          `UPDATE approvals SET is_active = true
+            WHERE request_id = $1
+              AND status = 'Pending'
+              AND approval_level = (
+                SELECT approval_level
+                  FROM approvals
+                 WHERE id = $2
+              )`,
+          [request_id, nextPendingApprovals[0].id],
         );
+
+        const { rows: activePendingApprovals } = await client.query(
+          `SELECT a.approver_id,
+                  u.email AS approver_email
+             FROM approvals a
+             LEFT JOIN users u ON u.id = a.approver_id
+            WHERE a.request_id = $1
+              AND a.status = 'Pending'
+              AND a.is_active = true
+            ORDER BY a.approval_level ASC, a.id ASC`,
+          [request_id],
+        );
+
+        activeApproversToNotify = activePendingApprovals.filter((approval) => approval?.approver_id);
       } else {
         await client.query(`UPDATE requests SET status = 'Approved' WHERE id = $1`, [request_id]);
 
@@ -418,6 +440,46 @@ const updateApprovalStatus = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+
+    if (decision === 'Approved' && activeApproversToNotify.length > 0) {
+      const message = `The ${request_type} request with ID ${request_id} is ready for your approval.`;
+
+      try {
+        await createNotifications(
+          activeApproversToNotify.map((approval) => ({
+            userId: approval.approver_id,
+            title: 'Purchase Request Awaiting Approval',
+            message,
+            link: `/requests/${request_id}`,
+            metadata: {
+              requestId: request_id,
+              requestType: request_type,
+              action: 'approval_required',
+            },
+          })),
+        );
+      } catch (notifyErr) {
+        console.error('⚠️ Failed to create notification for next approvers:', notifyErr);
+      }
+
+      const uniqueApproverEmails = [...new Set(
+        activeApproversToNotify.map((approval) => approval.approver_email).filter(Boolean),
+      )];
+
+      for (const approverEmail of uniqueApproverEmails) {
+        try {
+          await sendEmail(
+            approverEmail,
+            'New Purchase Request Awaiting Approval',
+            `${message}
+Please log in to the system to take action.`,
+          );
+        } catch (emailErr) {
+          console.error('⚠️ Failed to email one of the next approvers:', emailErr);
+        }
+      }
+    }
+
     res.json({ message: `✅ Request ${decision.toLowerCase()} successfully` });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -872,8 +934,8 @@ const updateRequestCost = async (req, res, next) => {
     return next(createHttpError(403, 'You do not have permission to update request costs'));
   }
 
-  if (!estimated_cost || isNaN(estimated_cost) || Number(estimated_cost) <= 0) {
-    return next(createHttpError(400, 'Valid estimated_cost is required and must be > 0'));
+  if (estimated_cost === undefined || estimated_cost === null || estimated_cost === '' || isNaN(estimated_cost) || Number(estimated_cost) < 0) {
+    return next(createHttpError(400, 'Valid estimated_cost is required and must be >= 0'));
   }
 
   const client = await pool.connect();
@@ -1397,7 +1459,7 @@ const reassignMaintenanceRequestToRequester = async (req, res, next) => {
 
 const markRequestAsReceived = async (req, res, next) => {
   const { id } = req.params;
-  const { item_id } = req.body || {};
+  const { item_id, received_quantity } = req.body || {};
   const { id: user_id } = req.user;
 
   const client = await pool.connect();
@@ -1444,7 +1506,7 @@ const markRequestAsReceived = async (req, res, next) => {
     }
 
     const itemsRes = await client.query(
-      `SELECT id, item_name, is_received, purchased_quantity, quantity
+      `SELECT id, item_name, is_received, purchased_quantity, quantity, received_quantity
          FROM public.requested_items
         WHERE request_id = $1
         FOR UPDATE`,
@@ -1477,8 +1539,57 @@ const markRequestAsReceived = async (req, res, next) => {
     }
 
     let inventoryUpdate = null;
+    const requestedReceiveQuantity =
+      received_quantity === undefined || received_quantity === null
+        ? null
+        : Number(received_quantity);
+    if (requestedReceiveQuantity !== null) {
+      if (!Number.isFinite(requestedReceiveQuantity) || requestedReceiveQuantity <= 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(400, 'received_quantity must be a positive number'));
+      }
+    }
 
-    if (!item.is_received) {
+    const purchasedQuantity = Number(item.purchased_quantity ?? item.quantity ?? 0);
+    const currentReceived = Number(item.received_quantity || 0);
+    const remainingReceivable = Math.max(purchasedQuantity - currentReceived, 0);
+    const quantityToReceive = requestedReceiveQuantity ?? remainingReceivable;
+    const safeQuantityToReceive = Math.min(quantityToReceive, remainingReceivable);
+
+    if (safeQuantityToReceive > 0) {
+      const newReceivedQuantity = Number((currentReceived + safeQuantityToReceive).toFixed(2));
+      const isFullyReceived = newReceivedQuantity >= purchasedQuantity && purchasedQuantity > 0;
+      await client.query(
+        `UPDATE public.requested_items
+         SET is_received = $3,
+             received_quantity = $4,
+             received_by = $1,
+             received_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [user_id, targetItemId, isFullyReceived, newReceivedQuantity]
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Item Marked as Received', $2, $3)`,
+        [
+          id,
+          user_id,
+          `Item '${item.item_name}' received quantity ${safeQuantityToReceive} (total received: ${newReceivedQuantity}/${purchasedQuantity}) by requester`,
+        ]
+      );
+
+      if (normalizedRequestType === 'stock') {
+        const warehouseId = req.user?.warehouse_id;
+        inventoryUpdate = await addReceivedStockToWarehouse(client, {
+          warehouseId,
+          requestId: id,
+          itemName: item.item_name,
+          quantity: safeQuantityToReceive,
+          userId: user_id,
+        });
+      }
+    } else if (remainingReceivable <= 0 && !item.is_received) {
       await client.query(
         `UPDATE public.requested_items
          SET is_received = TRUE,
@@ -1487,24 +1598,6 @@ const markRequestAsReceived = async (req, res, next) => {
          WHERE id = $2`,
         [user_id, targetItemId]
       );
-
-      await client.query(
-        `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, 'Item Marked as Received', $2, $3)`,
-        [id, user_id, `Item '${item.item_name}' marked as received by requester`]
-      );
-
-      if (normalizedRequestType === 'stock') {
-        const warehouseId = req.user?.warehouse_id;
-        const receivedQuantity = item.purchased_quantity ?? item.quantity;
-        inventoryUpdate = await addReceivedStockToWarehouse(client, {
-          warehouseId,
-          requestId: id,
-          itemName: item.item_name,
-          quantity: receivedQuantity,
-          userId: user_id,
-        });
-      }
     }
 
     const remainingRes = await client.query(

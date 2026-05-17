@@ -344,6 +344,21 @@ CREATE TABLE public.document_flow_links (
   CONSTRAINT document_flow_links_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT document_flow_links_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
 );
+CREATE TABLE public.employee_tasks (
+  id integer NOT NULL DEFAULT nextval('employee_tasks_id_seq'::regclass),
+  title text NOT NULL,
+  description text,
+  assigned_to integer NOT NULL,
+  assigned_by integer NOT NULL,
+  status text NOT NULL DEFAULT 'pending'::text,
+  employee_update text,
+  assigned_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  completed_at timestamp with time zone,
+  CONSTRAINT employee_tasks_pkey PRIMARY KEY (id),
+  CONSTRAINT employee_tasks_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
+  CONSTRAINT employee_tasks_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES public.users(id)
+);
 CREATE TABLE public.evaluation_criteria (
   id integer NOT NULL DEFAULT nextval('evaluation_criteria_id_seq'::regclass),
   name text NOT NULL,
@@ -909,7 +924,7 @@ CREATE TABLE public.purchase_order_items (
 );
 CREATE TABLE public.purchase_orders (
   id bigint NOT NULL DEFAULT nextval('purchase_orders_id_seq'::regclass),
-  request_id integer NOT NULL,
+  request_id integer,
   rfx_id integer,
   rfx_response_id integer,
   supplier_id integer,
@@ -1048,19 +1063,21 @@ CREATE TABLE public.requests (
   awarded_at timestamp with time zone,
   po_issued_at timestamp with time zone,
   institute_id integer,
+  receipt_prompt_sent_at timestamp with time zone,
+  auto_received_at timestamp with time zone,
   CONSTRAINT requests_pkey PRIMARY KEY (id),
   CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
   CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
   CONSTRAINT requests_awarded_supplier_id_fkey FOREIGN KEY (awarded_supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
-  CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
+  CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id)
 );
 CREATE TABLE public.rfx_events (
   id integer NOT NULL DEFAULT nextval('rfx_events_id_seq'::regclass),
@@ -1138,6 +1155,14 @@ CREATE TABLE public.roles (
   id integer NOT NULL DEFAULT nextval('roles_id_seq'::regclass),
   name character varying NOT NULL UNIQUE,
   CONSTRAINT roles_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.route_capability_policies (
+  route_prefix text NOT NULL,
+  module text NOT NULL,
+  resource text NOT NULL,
+  permissions ARRAY NOT NULL DEFAULT '{}'::text[],
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT route_capability_policies_pkey PRIMARY KEY (route_prefix)
 );
 CREATE TABLE public.sections (
   id integer NOT NULL DEFAULT nextval('sections_id_seq'::regclass),
@@ -1271,7 +1296,9 @@ CREATE TABLE public.supplier_invoices (
   submitted_by integer,
   submitted_at timestamp with time zone NOT NULL DEFAULT now(),
   purchase_order_id bigint,
+  supplier_id integer,
   CONSTRAINT supplier_invoices_pkey PRIMARY KEY (id),
+  CONSTRAINT supplier_invoices_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT supplier_invoices_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT supplier_invoices_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES public.goods_receipts(id),
   CONSTRAINT supplier_invoices_submitted_by_fkey FOREIGN KEY (submitted_by) REFERENCES public.users(id),
@@ -1354,6 +1381,15 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  supplier_type text,
+  tax_number text,
+  bank_info jsonb,
+  currency text,
+  payment_terms text,
+  lead_time_days integer,
+  credit_limit numeric,
+  status text,
+  country text,
   CONSTRAINT suppliers_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.technical_inspections (
@@ -1450,8 +1486,8 @@ CREATE TABLE public.users (
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT users_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
-  CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
-  CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id)
+  CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 CREATE TABLE public.warehouse_item_batches (
   id integer NOT NULL DEFAULT nextval('warehouse_item_batches_id_seq'::regclass),

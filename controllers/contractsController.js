@@ -393,11 +393,19 @@ const getEvaluationCandidates = async (req, res, next) => {
   let client;
   try {
     await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
     client = await pool.connect();
 
     const contractResult = await client.query(
       `SELECT id, title, vendor, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
               delivery_terms, warranty_terms, performance_management,
+              commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+              change_management_terms, termination_exit_terms, alert_rules,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -479,6 +487,7 @@ const ensureContractsTable = (() => {
   let requestForeignKeyEnsured = false;
   let amountPaidColumnEnsured = false;
   let signingDateColumnEnsured = false;
+  let contractSectionsColumnsEnsured = false;
   let ensuringPromise = null;
 
   const ensureTableStructure = async () => {
@@ -498,6 +507,40 @@ const ensureContractsTable = (() => {
         delivery_terms TEXT,
         warranty_terms TEXT,
         performance_management TEXT,
+        commercial_terms TEXT,
+        compliance_legal_terms TEXT,
+        financial_payment_control TEXT,
+        risk_dispute_management TEXT,
+        digital_attachments_tracking TEXT,
+        institute TEXT,
+        contract_category TEXT,
+        renewal_type TEXT,
+        renewal_notice_days INTEGER,
+        contract_owner TEXT,
+        currency TEXT,
+        estimated_contract_value NUMERIC(14,2),
+        actual_consumed_value NUMERIC(14,2),
+        first_party TEXT,
+        second_party TEXT,
+        authorized_signatory TEXT,
+        vendor_contact_person TEXT,
+        vendor_contact_email TEXT,
+        vendor_contact_phone TEXT,
+        vendor_tax_id TEXT,
+        vendor_address TEXT,
+        scope_summary TEXT,
+        deliverables TEXT,
+        technical_specifications TEXT,
+        service_coverage TEXT,
+        exclusions TEXT,
+        sla_requirements TEXT,
+        payment_terms_details TEXT,
+        delivery_logistics_details TEXT,
+        sla_details TEXT,
+        penalties_incentives TEXT,
+        change_management_terms TEXT,
+        termination_exit_terms TEXT,
+        alert_rules TEXT,
         supplier_id INTEGER,
         source_request_id INTEGER,
         end_user_department_id INTEGER,
@@ -572,6 +615,52 @@ const ensureContractsTable = (() => {
     `);
 
     linkageColumnsEnsured = true;
+  };
+
+  const ensureContractSectionColumns = async () => {
+    if (contractSectionsColumnsEnsured) {
+      return;
+    }
+
+    await pool.query(`
+      ALTER TABLE contracts
+        ADD COLUMN IF NOT EXISTS commercial_terms TEXT,
+        ADD COLUMN IF NOT EXISTS compliance_legal_terms TEXT,
+        ADD COLUMN IF NOT EXISTS financial_payment_control TEXT,
+        ADD COLUMN IF NOT EXISTS risk_dispute_management TEXT,
+        ADD COLUMN IF NOT EXISTS digital_attachments_tracking TEXT,
+        ADD COLUMN IF NOT EXISTS institute TEXT,
+        ADD COLUMN IF NOT EXISTS contract_category TEXT,
+        ADD COLUMN IF NOT EXISTS renewal_type TEXT,
+        ADD COLUMN IF NOT EXISTS renewal_notice_days INTEGER,
+        ADD COLUMN IF NOT EXISTS contract_owner TEXT,
+        ADD COLUMN IF NOT EXISTS currency TEXT,
+        ADD COLUMN IF NOT EXISTS estimated_contract_value NUMERIC(14,2),
+        ADD COLUMN IF NOT EXISTS actual_consumed_value NUMERIC(14,2),
+        ADD COLUMN IF NOT EXISTS first_party TEXT,
+        ADD COLUMN IF NOT EXISTS second_party TEXT,
+        ADD COLUMN IF NOT EXISTS authorized_signatory TEXT,
+        ADD COLUMN IF NOT EXISTS vendor_contact_person TEXT,
+        ADD COLUMN IF NOT EXISTS vendor_contact_email TEXT,
+        ADD COLUMN IF NOT EXISTS vendor_contact_phone TEXT,
+        ADD COLUMN IF NOT EXISTS vendor_tax_id TEXT,
+        ADD COLUMN IF NOT EXISTS vendor_address TEXT,
+        ADD COLUMN IF NOT EXISTS scope_summary TEXT,
+        ADD COLUMN IF NOT EXISTS deliverables TEXT,
+        ADD COLUMN IF NOT EXISTS technical_specifications TEXT,
+        ADD COLUMN IF NOT EXISTS service_coverage TEXT,
+        ADD COLUMN IF NOT EXISTS exclusions TEXT,
+        ADD COLUMN IF NOT EXISTS sla_requirements TEXT,
+        ADD COLUMN IF NOT EXISTS payment_terms_details TEXT,
+        ADD COLUMN IF NOT EXISTS delivery_logistics_details TEXT,
+        ADD COLUMN IF NOT EXISTS sla_details TEXT,
+        ADD COLUMN IF NOT EXISTS penalties_incentives TEXT,
+        ADD COLUMN IF NOT EXISTS change_management_terms TEXT,
+        ADD COLUMN IF NOT EXISTS termination_exit_terms TEXT,
+        ADD COLUMN IF NOT EXISTS alert_rules TEXT
+    `);
+
+    contractSectionsColumnsEnsured = true;
   };
 
   const ensureReferenceNumberIndex = async () => {
@@ -727,6 +816,7 @@ const ensureContractsTable = (() => {
       assignmentColumnsEnsured &&
       amountPaidColumnEnsured &&
       signingDateColumnEnsured &&
+      contractSectionsColumnsEnsured &&
       endUserForeignKeyEnsured &&
       contractManagerForeignKeyEnsured &&
       linkageColumnsEnsured &&
@@ -758,6 +848,10 @@ const ensureContractsTable = (() => {
 
           if (!linkageColumnsEnsured) {
             await ensureLinkageColumns();
+          }
+
+          if (!contractSectionsColumnsEnsured) {
+            await ensureContractSectionColumns();
           }
 
           await ensureReferenceNumberIndex();
@@ -793,6 +887,79 @@ const ensureContractsTable = (() => {
     await ensuringPromise;
   };
 })();
+
+const ensureContractsPhaseTwoTables = (() => {
+  let ensured = false;
+  let ensuringPromise = null;
+
+  return async () => {
+    if (ensured) return;
+    if (!ensuringPromise) {
+      ensuringPromise = (async () => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contract_amendments (
+            id SERIAL PRIMARY KEY,
+            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            amendment_number INTEGER NOT NULL,
+            amendment_date DATE,
+            change_summary TEXT,
+            revised_value NUMERIC(14,2),
+            revised_expiry DATE,
+            approved_by INTEGER,
+            snapshot JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contract_alerts (
+            id SERIAL PRIMARY KEY,
+            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            alert_type TEXT NOT NULL,
+            threshold_value TEXT,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            last_triggered_at TIMESTAMPTZ,
+            metadata JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contract_approvals (
+            id SERIAL PRIMARY KEY,
+            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            stage TEXT NOT NULL,
+            reviewer_id INTEGER,
+            decision TEXT,
+            comments TEXT,
+            decided_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contract_logs (
+            id SERIAL PRIMARY KEY,
+            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            actor_id INTEGER,
+            details JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+        ensured = true;
+      })().finally(() => {
+        ensuringPromise = null;
+      });
+    }
+    await ensuringPromise;
+  };
+})();
+
+const recordContractLog = async (client, { contractId, action, actorId = null, details = null }) => {
+  await client.query(
+    `INSERT INTO contract_logs (contract_id, action, actor_id, details)
+     VALUES ($1, $2, $3, $4)`,
+    [contractId, action, actorId, details ? JSON.stringify(details) : null]
+  );
+};
 
 const normalizeStatus = (value) => {
   const status = normalizeText(value).toLowerCase();
@@ -940,6 +1107,44 @@ const serializeContract = (row, compliance = null) => {
     delivery_terms: row.delivery_terms,
     warranty_terms: row.warranty_terms,
     performance_management: row.performance_management,
+    commercial_terms: row.commercial_terms,
+    compliance_legal_terms: row.compliance_legal_terms,
+    financial_payment_control: row.financial_payment_control,
+    risk_dispute_management: row.risk_dispute_management,
+    digital_attachments_tracking: row.digital_attachments_tracking,
+    institute: row.institute,
+    contract_category: row.contract_category,
+    renewal_type: row.renewal_type,
+    renewal_notice_days: row.renewal_notice_days,
+    contract_owner: row.contract_owner,
+    currency: row.currency,
+    estimated_contract_value: row.estimated_contract_value === null ? null : Number(row.estimated_contract_value),
+    actual_consumed_value: row.actual_consumed_value === null ? null : Number(row.actual_consumed_value),
+    remaining_balance:
+      row.estimated_contract_value === null || row.actual_consumed_value === null
+        ? null
+        : Number(row.estimated_contract_value) - Number(row.actual_consumed_value),
+    first_party: row.first_party,
+    second_party: row.second_party,
+    authorized_signatory: row.authorized_signatory,
+    vendor_contact_person: row.vendor_contact_person,
+    vendor_contact_email: row.vendor_contact_email,
+    vendor_contact_phone: row.vendor_contact_phone,
+    vendor_tax_id: row.vendor_tax_id,
+    vendor_address: row.vendor_address,
+    scope_summary: row.scope_summary,
+    deliverables: row.deliverables,
+    technical_specifications: row.technical_specifications,
+    service_coverage: row.service_coverage,
+    exclusions: row.exclusions,
+    sla_requirements: row.sla_requirements,
+    payment_terms_details: row.payment_terms_details,
+    delivery_logistics_details: row.delivery_logistics_details,
+    sla_details: row.sla_details,
+    penalties_incentives: row.penalties_incentives,
+    change_management_terms: row.change_management_terms,
+    termination_exit_terms: row.termination_exit_terms,
+    alert_rules: row.alert_rules,
     end_user_department_id: endUserDepartmentId,
     contract_manager_id: contractManagerId,
     technical_department_ids: technicalDepartmentIds,
@@ -955,6 +1160,7 @@ const serializeContract = (row, compliance = null) => {
 const listContracts = async (req, res, next) => {
   try {
     await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
 
     const filters = [];
     const values = [];
@@ -986,6 +1192,13 @@ const listContracts = async (req, res, next) => {
     const { rows } = await pool.query(
       `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date,
               contract_value, amount_paid, status, description, delivery_terms, warranty_terms, performance_management,
+              commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+              change_management_terms, termination_exit_terms, alert_rules,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -1026,6 +1239,13 @@ const getContractById = async (req, res, next) => {
     const { rows } = await pool.query(
       `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date,
               contract_value, amount_paid, status, description, delivery_terms, warranty_terms, performance_management,
+              commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+              change_management_terms, termination_exit_terms, alert_rules,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -1037,6 +1257,10 @@ const getContractById = async (req, res, next) => {
     if (rows.length === 0) {
       return next(createHttpError(404, 'Contract not found'));
     }
+    await pool.query(
+      `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
+      [contractId, 'contract_archived', req.user?.id || null, null]
+    );
 
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
     res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
@@ -1058,6 +1282,37 @@ const createContract = async (req, res, next) => {
   const deliveryTerms = normalizeText(req.body?.delivery_terms) || null;
   const warrantyTerms = normalizeText(req.body?.warranty_terms) || null;
   const performanceManagement = normalizeText(req.body?.performance_management) || null;
+  const commercialTerms = normalizeText(req.body?.commercial_terms) || null;
+  const complianceLegalTerms = normalizeText(req.body?.compliance_legal_terms) || null;
+  const financialPaymentControl = normalizeText(req.body?.financial_payment_control) || null;
+  const riskDisputeManagement = normalizeText(req.body?.risk_dispute_management) || null;
+  const digitalAttachmentsTracking = normalizeText(req.body?.digital_attachments_tracking) || null;
+  const institute = normalizeText(req.body?.institute) || null;
+  const contractCategory = normalizeText(req.body?.contract_category) || null;
+  const renewalType = normalizeText(req.body?.renewal_type) || null;
+  const contractOwner = normalizeText(req.body?.contract_owner) || null;
+  const currency = normalizeText(req.body?.currency) || null;
+  const firstParty = normalizeText(req.body?.first_party) || null;
+  const secondParty = normalizeText(req.body?.second_party) || null;
+  const authorizedSignatory = normalizeText(req.body?.authorized_signatory) || null;
+  const vendorContactPerson = normalizeText(req.body?.vendor_contact_person) || null;
+  const vendorContactEmail = normalizeText(req.body?.vendor_contact_email) || null;
+  const vendorContactPhone = normalizeText(req.body?.vendor_contact_phone) || null;
+  const vendorTaxId = normalizeText(req.body?.vendor_tax_id) || null;
+  const vendorAddress = normalizeText(req.body?.vendor_address) || null;
+  const scopeSummary = normalizeText(req.body?.scope_summary) || null;
+  const deliverables = normalizeText(req.body?.deliverables) || null;
+  const technicalSpecifications = normalizeText(req.body?.technical_specifications) || null;
+  const serviceCoverage = normalizeText(req.body?.service_coverage) || null;
+  const exclusions = normalizeText(req.body?.exclusions) || null;
+  const slaRequirements = normalizeText(req.body?.sla_requirements) || null;
+  const paymentTermsDetails = normalizeText(req.body?.payment_terms_details) || null;
+  const deliveryLogisticsDetails = normalizeText(req.body?.delivery_logistics_details) || null;
+  const slaDetails = normalizeText(req.body?.sla_details) || null;
+  const penaltiesIncentives = normalizeText(req.body?.penalties_incentives) || null;
+  const changeManagementTerms = normalizeText(req.body?.change_management_terms) || null;
+  const terminationExitTerms = normalizeText(req.body?.termination_exit_terms) || null;
+  const alertRules = normalizeText(req.body?.alert_rules) || null;
   const rawStatus = req.body?.status || 'active';
 
   if (!title) {
@@ -1082,6 +1337,9 @@ const createContract = async (req, res, next) => {
   let technicalDepartmentIds = [];
   let supplierId = null;
   let sourceRequestId = null;
+  let renewalNoticeDays = null;
+  let estimatedContractValue = null;
+  let actualConsumedValue = null;
   try {
     startDate = parseISODate(req.body?.start_date, 'start_date');
     signingDate = parseISODate(req.body?.signing_date, 'signing_date');
@@ -1093,6 +1351,9 @@ const createContract = async (req, res, next) => {
     technicalDepartmentIds = normalizeIdArray(req.body?.technical_department_ids);
     supplierId = parseOptionalInteger(req.body?.supplier_id, 'supplier_id');
     sourceRequestId = parseOptionalInteger(req.body?.source_request_id, 'source_request_id');
+    renewalNoticeDays = parseOptionalInteger(req.body?.renewal_notice_days, 'renewal_notice_days');
+    estimatedContractValue = parseContractValue(req.body?.estimated_contract_value);
+    actualConsumedValue = parseContractValue(req.body?.actual_consumed_value);
 
     if (
       typeof contractValue === 'number' &&
@@ -1123,17 +1384,32 @@ const createContract = async (req, res, next) => {
   try {
     await client.query('BEGIN');
     await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
 
     const supplier = await resolveSupplier(client, { supplierId, vendorName: vendor });
     await assertRequestExists(client, sourceRequestId);
     const { rows } = await client.query(
       `INSERT INTO contracts (
          title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
-         delivery_terms, warranty_terms, performance_management, created_by,
-         end_user_department_id, contract_manager_id, technical_department_ids
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         delivery_terms, warranty_terms, performance_management, commercial_terms, compliance_legal_terms,
+         financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+         institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+         estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+         vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+         scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+         payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+         change_management_terms, termination_exit_terms, alert_rules,
+         created_by, end_user_department_id, contract_manager_id, technical_department_ids
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57)
        RETURNING id, title, vendor, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
-                 delivery_terms, warranty_terms, performance_management,
+                 delivery_terms, warranty_terms, performance_management, commercial_terms, compliance_legal_terms,
+                 financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+                 institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+                 estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+                 vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+                 scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+                 payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+                 change_management_terms, termination_exit_terms, alert_rules,
                  supplier_id, source_request_id,
                  end_user_department_id, contract_manager_id, technical_department_ids,
                  created_by, created_at, updated_at`,
@@ -1153,6 +1429,40 @@ const createContract = async (req, res, next) => {
         deliveryTerms,
         warrantyTerms,
         performanceManagement,
+        commercialTerms,
+        complianceLegalTerms,
+        financialPaymentControl,
+        riskDisputeManagement,
+        digitalAttachmentsTracking,
+        institute,
+        contractCategory,
+        renewalType,
+        renewalNoticeDays,
+        contractOwner,
+        currency,
+        estimatedContractValue,
+        actualConsumedValue,
+        firstParty,
+        secondParty,
+        authorizedSignatory,
+        vendorContactPerson,
+        vendorContactEmail,
+        vendorContactPhone,
+        vendorTaxId,
+        vendorAddress,
+        scopeSummary,
+        deliverables,
+        technicalSpecifications,
+        serviceCoverage,
+        exclusions,
+        slaRequirements,
+        paymentTermsDetails,
+        deliveryLogisticsDetails,
+        slaDetails,
+        penaltiesIncentives,
+        changeManagementTerms,
+        terminationExitTerms,
+        alertRules,
         req.user?.id || null,
         endUserDepartmentId,
         contractManagerId,
@@ -1194,6 +1504,12 @@ const createContract = async (req, res, next) => {
         );
       }
     }
+    await recordContractLog(client, {
+      contractId: contract.id,
+      action: 'contract_created',
+      actorId: req.user?.id || null,
+      details: { status: contract.status },
+    });
 
     await client.query('COMMIT');
     res.status(201).json(contract);
@@ -1224,6 +1540,7 @@ const updateContract = async (req, res, next) => {
 
   try {
     await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
     const current = await client.query(
       `SELECT id, start_date, signing_date, end_date, vendor, supplier_id, source_request_id, contract_value, amount_paid
          FROM contracts
@@ -1267,6 +1584,69 @@ const updateContract = async (req, res, next) => {
       req.body?.warranty_terms !== undefined ? normalizeText(req.body.warranty_terms) || null : undefined;
     const performanceManagement =
       req.body?.performance_management !== undefined ? normalizeText(req.body.performance_management) || null : undefined;
+    const commercialTerms =
+      req.body?.commercial_terms !== undefined ? normalizeText(req.body.commercial_terms) || null : undefined;
+    const complianceLegalTerms =
+      req.body?.compliance_legal_terms !== undefined ? normalizeText(req.body.compliance_legal_terms) || null : undefined;
+    const financialPaymentControl =
+      req.body?.financial_payment_control !== undefined ? normalizeText(req.body.financial_payment_control) || null : undefined;
+    const riskDisputeManagement =
+      req.body?.risk_dispute_management !== undefined ? normalizeText(req.body.risk_dispute_management) || null : undefined;
+    const digitalAttachmentsTracking =
+      req.body?.digital_attachments_tracking !== undefined ? normalizeText(req.body.digital_attachments_tracking) || null : undefined;
+    const institute =
+      req.body?.institute !== undefined ? normalizeText(req.body.institute) || null : undefined;
+    const contractCategory =
+      req.body?.contract_category !== undefined ? normalizeText(req.body.contract_category) || null : undefined;
+    const renewalType =
+      req.body?.renewal_type !== undefined ? normalizeText(req.body.renewal_type) || null : undefined;
+    const contractOwner =
+      req.body?.contract_owner !== undefined ? normalizeText(req.body.contract_owner) || null : undefined;
+    const currency =
+      req.body?.currency !== undefined ? normalizeText(req.body.currency) || null : undefined;
+    const firstParty =
+      req.body?.first_party !== undefined ? normalizeText(req.body.first_party) || null : undefined;
+    const secondParty =
+      req.body?.second_party !== undefined ? normalizeText(req.body.second_party) || null : undefined;
+    const authorizedSignatory =
+      req.body?.authorized_signatory !== undefined ? normalizeText(req.body.authorized_signatory) || null : undefined;
+    const vendorContactPerson =
+      req.body?.vendor_contact_person !== undefined ? normalizeText(req.body.vendor_contact_person) || null : undefined;
+    const vendorContactEmail =
+      req.body?.vendor_contact_email !== undefined ? normalizeText(req.body.vendor_contact_email) || null : undefined;
+    const vendorContactPhone =
+      req.body?.vendor_contact_phone !== undefined ? normalizeText(req.body.vendor_contact_phone) || null : undefined;
+    const vendorTaxId =
+      req.body?.vendor_tax_id !== undefined ? normalizeText(req.body.vendor_tax_id) || null : undefined;
+    const vendorAddress =
+      req.body?.vendor_address !== undefined ? normalizeText(req.body.vendor_address) || null : undefined;
+    const scopeSummary =
+      req.body?.scope_summary !== undefined ? normalizeText(req.body.scope_summary) || null : undefined;
+    const deliverables =
+      req.body?.deliverables !== undefined ? normalizeText(req.body.deliverables) || null : undefined;
+    const technicalSpecifications =
+      req.body?.technical_specifications !== undefined ? normalizeText(req.body.technical_specifications) || null : undefined;
+    const serviceCoverage =
+      req.body?.service_coverage !== undefined ? normalizeText(req.body.service_coverage) || null : undefined;
+    const exclusions =
+      req.body?.exclusions !== undefined ? normalizeText(req.body.exclusions) || null : undefined;
+    const slaRequirements =
+      req.body?.sla_requirements !== undefined ? normalizeText(req.body.sla_requirements) || null : undefined;
+    const paymentTermsDetails =
+      req.body?.payment_terms_details !== undefined ? normalizeText(req.body.payment_terms_details) || null : undefined;
+    const deliveryLogisticsDetails =
+      req.body?.delivery_logistics_details !== undefined ? normalizeText(req.body.delivery_logistics_details) || null : undefined;
+    const slaDetails =
+      req.body?.sla_details !== undefined ? normalizeText(req.body.sla_details) || null : undefined;
+    const penaltiesIncentives =
+      req.body?.penalties_incentives !== undefined ? normalizeText(req.body.penalties_incentives) || null : undefined;
+    const changeManagementTerms =
+      req.body?.change_management_terms !== undefined ? normalizeText(req.body.change_management_terms) || null : undefined;
+    const terminationExitTerms =
+      req.body?.termination_exit_terms !== undefined ? normalizeText(req.body.termination_exit_terms) || null : undefined;
+    const alertRules =
+      req.body?.alert_rules !== undefined ? normalizeText(req.body.alert_rules) || null : undefined;
+
 
     if (title !== undefined) {
       if (!title) {
@@ -1298,6 +1678,59 @@ const updateContract = async (req, res, next) => {
     if (performanceManagement !== undefined) {
       pushAssignment('performance_management', performanceManagement);
     }
+    if (commercialTerms !== undefined) {
+      pushAssignment('commercial_terms', commercialTerms);
+    }
+    if (complianceLegalTerms !== undefined) {
+      pushAssignment('compliance_legal_terms', complianceLegalTerms);
+    }
+    if (financialPaymentControl !== undefined) {
+      pushAssignment('financial_payment_control', financialPaymentControl);
+    }
+    if (riskDisputeManagement !== undefined) {
+      pushAssignment('risk_dispute_management', riskDisputeManagement);
+    }
+    if (digitalAttachmentsTracking !== undefined) {
+      pushAssignment('digital_attachments_tracking', digitalAttachmentsTracking);
+    }
+
+
+    if (institute !== undefined) pushAssignment('institute', institute);
+    if (contractCategory !== undefined) pushAssignment('contract_category', contractCategory);
+    if (renewalType !== undefined) pushAssignment('renewal_type', renewalType);
+    if (req.body?.renewal_notice_days !== undefined) {
+      pushAssignment('renewal_notice_days', parseOptionalInteger(req.body.renewal_notice_days, 'renewal_notice_days'));
+    }
+    if (contractOwner !== undefined) pushAssignment('contract_owner', contractOwner);
+    if (currency !== undefined) pushAssignment('currency', currency);
+    if (req.body?.estimated_contract_value !== undefined) {
+      pushAssignment('estimated_contract_value', parseContractValue(req.body.estimated_contract_value));
+    }
+    if (req.body?.actual_consumed_value !== undefined) {
+      pushAssignment('actual_consumed_value', parseContractValue(req.body.actual_consumed_value));
+    }
+    if (firstParty !== undefined) pushAssignment('first_party', firstParty);
+    if (secondParty !== undefined) pushAssignment('second_party', secondParty);
+    if (authorizedSignatory !== undefined) pushAssignment('authorized_signatory', authorizedSignatory);
+    if (vendorContactPerson !== undefined) pushAssignment('vendor_contact_person', vendorContactPerson);
+    if (vendorContactEmail !== undefined) pushAssignment('vendor_contact_email', vendorContactEmail);
+    if (vendorContactPhone !== undefined) pushAssignment('vendor_contact_phone', vendorContactPhone);
+    if (vendorTaxId !== undefined) pushAssignment('vendor_tax_id', vendorTaxId);
+    if (vendorAddress !== undefined) pushAssignment('vendor_address', vendorAddress);
+    if (scopeSummary !== undefined) pushAssignment('scope_summary', scopeSummary);
+    if (deliverables !== undefined) pushAssignment('deliverables', deliverables);
+    if (technicalSpecifications !== undefined) pushAssignment('technical_specifications', technicalSpecifications);
+    if (serviceCoverage !== undefined) pushAssignment('service_coverage', serviceCoverage);
+    if (exclusions !== undefined) pushAssignment('exclusions', exclusions);
+    if (slaRequirements !== undefined) pushAssignment('sla_requirements', slaRequirements);
+    if (paymentTermsDetails !== undefined) pushAssignment('payment_terms_details', paymentTermsDetails);
+    if (deliveryLogisticsDetails !== undefined) pushAssignment('delivery_logistics_details', deliveryLogisticsDetails);
+    if (slaDetails !== undefined) pushAssignment('sla_details', slaDetails);
+    if (penaltiesIncentives !== undefined) pushAssignment('penalties_incentives', penaltiesIncentives);
+    if (changeManagementTerms !== undefined) pushAssignment('change_management_terms', changeManagementTerms);
+    if (terminationExitTerms !== undefined) pushAssignment('termination_exit_terms', terminationExitTerms);
+    if (alertRules !== undefined) pushAssignment('alert_rules', alertRules);
+
 
     if (req.body?.end_user_department_id !== undefined) {
       const parsedDepartment = parseOptionalInteger(req.body.end_user_department_id, 'end_user_department_id');
@@ -1436,10 +1869,23 @@ const updateContract = async (req, res, next) => {
         WHERE id = $${values.length + 1}
         RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
                   delivery_terms, warranty_terms, performance_management,
+                  commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+              change_management_terms, termination_exit_terms, alert_rules,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [...values, contractId]
     );
+    await recordContractLog(client, {
+      contractId,
+      action: 'contract_updated',
+      actorId: req.user?.id || null,
+      details: null,
+    });
 
     await client.query('COMMIT');
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
@@ -1471,12 +1917,20 @@ const archiveContract = async (req, res, next) => {
 
   try {
     await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
     const { rows } = await pool.query(
       `UPDATE contracts
           SET status = 'archived', updated_at = NOW()
         WHERE id = $1
         RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
                   delivery_terms, warranty_terms, performance_management,
+                  commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+              change_management_terms, termination_exit_terms, alert_rules,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [contractId]
@@ -1485,6 +1939,10 @@ const archiveContract = async (req, res, next) => {
     if (rows.length === 0) {
       return next(createHttpError(404, 'Contract not found'));
     }
+    await pool.query(
+      `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
+      [contractId, 'contract_archived', req.user?.id || null, null]
+    );
 
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
     res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
@@ -1703,6 +2161,7 @@ const renewContract = async (req, res, next) => {
 
   try {
     await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
 
     const { rows } = await pool.query(
       `UPDATE contracts
@@ -1715,6 +2174,13 @@ const renewContract = async (req, res, next) => {
         WHERE id = $6
         RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
                   delivery_terms, warranty_terms, performance_management,
+                  commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+              change_management_terms, termination_exit_terms, alert_rules,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [nextStart, nextEnd, nextStatus, parsedValue, parsedPaid, contractId]
@@ -1723,6 +2189,14 @@ const renewContract = async (req, res, next) => {
     if (rows.length === 0) {
       return next(createHttpError(404, 'Contract not found'));
     }
+    await pool.query(
+      `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
+      [contractId, 'contract_renewed', req.user?.id || null, null]
+    );
+    await pool.query(
+      `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
+      [contractId, 'contract_unarchived', req.user?.id || null, null]
+    );
 
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
     res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
@@ -1744,6 +2218,7 @@ const unarchiveContract = async (req, res, next) => {
 
   try {
     await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
     const { rows } = await pool.query(
       `UPDATE contracts
           SET status = 'active',
@@ -1751,6 +2226,13 @@ const unarchiveContract = async (req, res, next) => {
         WHERE id = $1
         RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
                   delivery_terms, warranty_terms, performance_management,
+                  commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
+              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
+              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
+              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
+              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
+              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
+              change_management_terms, termination_exit_terms, alert_rules,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [contractId]
@@ -1759,6 +2241,10 @@ const unarchiveContract = async (req, res, next) => {
     if (rows.length === 0) {
       return next(createHttpError(404, 'Contract not found'));
     }
+    await pool.query(
+      `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
+      [contractId, 'contract_unarchived', req.user?.id || null, null]
+    );
 
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
     res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
@@ -1803,6 +2289,12 @@ const deleteContract = async (req, res, next) => {
     );
 
     await client.query('BEGIN');
+    await recordContractLog(client, {
+      contractId,
+      action: 'contract_deleted',
+      actorId: req.user?.id || null,
+      details: null,
+    });
 
     await client.query('DELETE FROM contract_evaluations WHERE contract_id = $1', [contractId]);
     await client.query('DELETE FROM attachments WHERE contract_id = $1', [contractId]);
@@ -1826,6 +2318,78 @@ const deleteContract = async (req, res, next) => {
   }
 };
 
+const listContractAmendments = async (req, res, next) => {
+  const contractId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  try {
+    await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
+    const { rows } = await pool.query(
+      `SELECT id, contract_id, amendment_number, amendment_date, change_summary, revised_value, revised_expiry, approved_by, snapshot, created_at
+         FROM contract_amendments
+        WHERE contract_id = $1
+        ORDER BY amendment_number DESC, created_at DESC`,
+      [contractId]
+    );
+    res.json(rows);
+  } catch (err) {
+    next(createHttpError(500, 'Failed to list contract amendments'));
+  }
+};
+
+const createContractAmendment = async (req, res, next) => {
+  const contractId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  const client = await pool.connect();
+  try {
+    await ensureContractsTable();
+    await ensureContractsPhaseTwoTables();
+    const { rows: contractRows } = await client.query('SELECT * FROM contracts WHERE id = $1', [contractId]);
+    if (!contractRows.length) return next(createHttpError(404, 'Contract not found'));
+    const contract = contractRows[0];
+    const { rows: numRows } = await client.query(
+      'SELECT COALESCE(MAX(amendment_number),0)+1 AS next_number FROM contract_amendments WHERE contract_id = $1',
+      [contractId]
+    );
+    const nextNumber = Number(numRows[0].next_number);
+    const revisedValue = req.body?.revised_value === undefined ? null : parseContractValue(req.body.revised_value);
+    const revisedExpiry = parseISODate(req.body?.revised_expiry, 'revised_expiry');
+    const changeSummary = normalizeText(req.body?.change_summary) || null;
+    const amendmentDate = parseISODate(req.body?.amendment_date, 'amendment_date') || new Date().toISOString().slice(0, 10);
+
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO contract_amendments
+       (contract_id, amendment_number, amendment_date, change_summary, revised_value, revised_expiry, approved_by, snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING *`,
+      [contractId, nextNumber, amendmentDate, changeSummary, revisedValue, revisedExpiry, req.user?.id || null, JSON.stringify(contract)]
+    );
+    if (revisedValue !== null || revisedExpiry) {
+      const updates = ['updated_at = NOW()'];
+      const vals = [];
+      if (revisedValue !== null) {
+        vals.push(revisedValue);
+        updates.push(`contract_value = $${vals.length}`);
+      }
+      if (revisedExpiry) {
+        vals.push(revisedExpiry);
+        updates.push(`end_date = $${vals.length}`);
+      }
+      vals.push(contractId);
+      await client.query(`UPDATE contracts SET ${updates.join(', ')} WHERE id = $${vals.length}`, vals);
+    }
+    await recordContractLog(client, { contractId, action: 'contract_amended', actorId: req.user?.id || null, details: { amendment_number: nextNumber } });
+    await client.query('COMMIT');
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(createHttpError(500, 'Failed to create contract amendment'));
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   listContracts,
   getContractById,
@@ -1840,4 +2404,6 @@ module.exports = {
   uploadContractAttachment,
   deleteContractAttachment,
   getEvaluationCandidates,
+  listContractAmendments,
+  createContractAmendment,
 };

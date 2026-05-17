@@ -608,9 +608,10 @@ const createRequest = async (req, res, next) => {
               u.email AS approver_email
          FROM approvals a
          LEFT JOIN users u ON u.id = a.approver_id
-        WHERE a.request_id = $1 AND a.status = 'Pending'
-        ORDER BY a.approval_level ASC
-        LIMIT 1`,
+        WHERE a.request_id = $1
+          AND a.status = 'Pending'
+          AND a.is_active = TRUE
+        ORDER BY a.approval_level ASC, a.id ASC`,
       [request.id],
     );
 
@@ -677,13 +678,14 @@ const createRequest = async (req, res, next) => {
     }
 
     const nextApproval = pendingApprovals[0] || null;
+    const approversToNotify = pendingApprovals.filter((approval) => approval?.approver_id);
 
-    if (nextApproval?.approver_id) {
+    if (approversToNotify.length > 0) {
       const message = `The ${request_type} request with ID ${request.id} is ready for your approval.`;
       try {
-        await createNotifications([
-          {
-            userId: nextApproval.approver_id,
+        await createNotifications(
+          approversToNotify.map((approval) => ({
+            userId: approval.approver_id,
             title: 'Purchase Request Awaiting Approval',
             message,
             link: `/requests/${request.id}`,
@@ -692,21 +694,26 @@ const createRequest = async (req, res, next) => {
               requestType: request_type,
               action: 'approval_required',
             },
-          },
-        ]);
+          })),
+        );
       } catch (notifyErr) {
-        console.error('⚠️ Failed to create notification for next approver:', notifyErr);
+        console.error('⚠️ Failed to create notification for next approvers:', notifyErr);
       }
 
-      if (nextApproval.approver_email) {
+      const uniqueApproverEmails = [...new Set(
+        approversToNotify.map((approval) => approval.approver_email).filter(Boolean),
+      )];
+
+      for (const approverEmail of uniqueApproverEmails) {
         try {
           await sendEmail(
-            nextApproval.approver_email,
+            approverEmail,
             'New Purchase Request Awaiting Approval',
-            `${message}\nPlease log in to the system to take action.`,
+            `${message}
+Please log in to the system to take action.`,
           );
         } catch (emailErr) {
-          console.error('⚠️ Failed to email next approver:', emailErr);
+          console.error('⚠️ Failed to email one of the next approvers:', emailErr);
         }
       }
     }

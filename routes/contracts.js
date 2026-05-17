@@ -13,6 +13,8 @@ const {
   uploadContractAttachment,
   deleteContractAttachment,
   getEvaluationCandidates,
+  listContractAmendments,
+  createContractAmendment,
 } = require('../controllers/contractsController');
 
 const router = express.Router();
@@ -25,6 +27,8 @@ router.patch('/:id', updateContract);
 router.patch('/:id/archive', archiveContract);
 router.patch('/:id/unarchive', unarchiveContract);
 router.post('/:id/renew', renewContract);
+router.get('/:id/amendments', listContractAmendments);
+router.post('/:id/amendments', createContractAmendment);
 router.delete('/:id', deleteContract);
 
 router.get('/:contractId/attachments', getContractAttachments);

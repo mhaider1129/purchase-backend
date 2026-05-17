@@ -697,7 +697,8 @@ const getAssignedRequests = async (req, res) => {
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
-       WHERE r.assigned_to = $1 AND r.status != 'completed'
+       WHERE r.assigned_to = $1
+         AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received')
        ORDER BY r.created_at DESC`,
       [userId],
     );

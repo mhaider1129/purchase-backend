@@ -1908,15 +1908,21 @@ const updateContract = async (req, res, next) => {
       pushAssignment('source_request_id', sourceRequestId);
     }
 
-    const needsSupplierResolution = supplierProvided || vendor !== undefined;
+    const currentVendor = normalizeText(existing.vendor);
+    const nextVendor = vendor !== undefined ? vendor : currentVendor;
+    const vendorChanged = vendor !== undefined && nextVendor !== currentVendor;
+
+    const needsSupplierResolution = supplierProvided || vendorChanged;
     if (needsSupplierResolution) {
       const supplier = await resolveSupplier(client, {
         supplierId: supplierProvided ? supplierId : null,
-        vendorName: vendor !== undefined ? vendor : existing.vendor,
+        vendorName: nextVendor,
       });
       const vendorNameToPersist = vendor !== undefined ? vendor : supplier.name;
       pushAssignment('vendor', vendorNameToPersist);
       pushAssignment('supplier_id', supplier.id);
+    } else if (vendor !== undefined) {
+      pushAssignment('vendor', vendor);
     }
 
     if (assignments.length === 0) {

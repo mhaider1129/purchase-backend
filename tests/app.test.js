@@ -96,6 +96,34 @@ describe('Express app', () => {
     );
   });
 
+  it('exposes auth routes under the api prefix', async () => {
+    const rootResponse = await makeRequest(baseUrl, '/auth/login', { method: 'POST' });
+    const apiResponse = await makeRequest(baseUrl, '/api/auth/login', { method: 'POST' });
+    const doubleApiResponse = await makeRequest(baseUrl, '/api/api/auth/login', { method: 'POST' });
+
+    expect(apiResponse.status).toBe(rootResponse.status);
+    expect(apiResponse.body.message).toBe(rootResponse.body.message);
+    expect(doubleApiResponse.status).toBe(rootResponse.status);
+    expect(doubleApiResponse.body.message).toBe(rootResponse.body.message);
+  });
+
+  it('supports root aliases for protected routes when proxies strip the api prefix', async () => {
+    const routePairs = [
+      ['/api/users/me', '/users/me'],
+      ['/api/ui-access', '/ui-access'],
+      ['/api/notifications?unreadOnly=true&limit=50', '/notifications?unreadOnly=true&limit=50'],
+    ];
+
+    for (const [apiPath, rootAliasPath] of routePairs) {
+      const apiResponse = await makeRequest(baseUrl, apiPath);
+      const aliasResponse = await makeRequest(baseUrl, rootAliasPath);
+
+      expect(aliasResponse.status).toBe(apiResponse.status);
+      expect(aliasResponse.body.message).toBe(apiResponse.body.message);
+      expect(aliasResponse.body.requestId).toEqual(expect.any(String));
+    }
+  });
+
   it('returns JSON 404 response for unknown routes', async () => {
     const { status, body } = await makeRequest(baseUrl, '/not-found');
 

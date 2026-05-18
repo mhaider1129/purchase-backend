@@ -1,5 +1,6 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
+const ensureProjectsTable = require('../../utils/ensureProjectsTable');
 const { sendEmail } = require('../../utils/emailService');
 const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
@@ -972,6 +973,7 @@ const updateRequestCost = async (req, res, next) => {
 };
 
 const updateRequestBeforeApproval = async (req, res, next) => {
+  await ensureProjectsTable();
   const requestId = Number(req.params.id);
   let { items, justification } = req.body;
   const projectIdInput = req.body?.project_id;

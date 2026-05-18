@@ -12,6 +12,7 @@ const { syncPermissionCatalog } = require('./utils/permissionService');
 const { syncUiAccessResources } = require('./utils/uiAccessService');
 const { syncCapabilityPolicies } = require('./utils/capabilityPolicyService');
 const ensureWarehouseAssignments = require('./utils/ensureWarehouseAssignments');
+const ensureProjectsTable = require('./utils/ensureProjectsTable');
 const { loadEnvironmentConfig } = require('./config/environment');
 const { writeAuditTrail } = require('./middleware/writeAuditTrail');
 const {
@@ -44,6 +45,10 @@ syncCapabilityPolicies()
 ensureWarehouseAssignments()
   .then(() => log('info', 'warehouse_assignment_columns_ensured'))
   .catch(err => log('error', 'warehouse_assignment_ensure_failed', { error: err.message }));
+
+ensureProjectsTable()
+  .then(() => log('info', 'project_tables_ensured'))
+  .catch(err => log('error', 'project_table_ensure_failed', { error: err.message }));
 
 function getLANIP() {
   const interfaces = os.networkInterfaces();
@@ -317,56 +322,64 @@ app.use('/api/api/auth', authRoutes);
 // =========================
 // 🔒 Protected Routes
 // =========================
-apiRouter.use('/files', authenticateUser, writeAuditTrail, filesRoutes);
-apiRouter.use('/requests', authenticateUser, writeAuditTrail, requestsRoutes);
-apiRouter.use('/requested-items', authenticateUser, writeAuditTrail, requestedItemsRoutes);
-apiRouter.use('/approvals', authenticateUser, writeAuditTrail, approvalsRoutes);
-apiRouter.use('/audit-log', authenticateUser, writeAuditTrail, auditLogRoutes);
-apiRouter.use('/attachments', authenticateUser, writeAuditTrail, attachmentsRoutes);
-apiRouter.use('/admin-tools', authenticateUser, writeAuditTrail, adminToolsRoutes);
-apiRouter.use('/users', authenticateUser, writeAuditTrail, usersRoutes);
-apiRouter.use('/dashboard', authenticateUser, writeAuditTrail, dashboardRoutes);
-apiRouter.use('/departments', authenticateUser, writeAuditTrail, departmentsRoutes);
-apiRouter.use('/warehouses', authenticateUser, writeAuditTrail, warehousesRoutes);
-apiRouter.use('/roles', authenticateUser, writeAuditTrail, rolesRoutes);
-apiRouter.use('/permissions', authenticateUser, writeAuditTrail, permissionsRouter);
-apiRouter.use('/maintenance-stock', authenticateUser, writeAuditTrail, maintenanceStockRoutes);
-apiRouter.use('/procurement-plans', authenticateUser, writeAuditTrail, procurementPlansRoutes);
-apiRouter.use('/planning', authenticateUser, writeAuditTrail, planningRoutes);
-apiRouter.use('/stock-items', authenticateUser, writeAuditTrail, stockItemsRoutes);
-apiRouter.use('/stock-item-requests', authenticateUser, writeAuditTrail, stockItemRequestsRoutes);
-apiRouter.use('/item-master', authenticateUser, writeAuditTrail, itemMasterRoutes);
-apiRouter.use('/warehouse-inventory', authenticateUser, writeAuditTrail, warehouseInventoryRoutes);
-apiRouter.use('/item-recalls', authenticateUser, writeAuditTrail, itemRecallsRoutes);
-apiRouter.use('/warehouse-supply', authenticateUser, writeAuditTrail, warehouseSupplyRoutes);
-apiRouter.use('/warehouse-transfers', authenticateUser, writeAuditTrail, warehouseTransfersRoutes);
-apiRouter.use('/approval-routes', authenticateUser, writeAuditTrail, approvalRoutesRoutes);
-apiRouter.use('/warehouse-supply-templates', authenticateUser, writeAuditTrail, warehouseSupplyTemplatesRoutes);
-apiRouter.use('/projects', authenticateUser, writeAuditTrail, projectsRoutes);
-apiRouter.use('/custody', authenticateUser, writeAuditTrail, custodyRoutes);
-apiRouter.use('/contracts', authenticateUser, writeAuditTrail, contractsRoutes);
-apiRouter.use('/suppliers', authenticateUser, writeAuditTrail, suppliersRoutes);
-apiRouter.use('/supplier-evaluations', authenticateUser, writeAuditTrail, supplierEvaluationsRoutes);
-apiRouter.use('/supplier-srm', authenticateUser, writeAuditTrail, supplierSrmRoutes);
-apiRouter.use('/technical-inspections', authenticateUser, writeAuditTrail, technicalInspectionsRoutes);
-apiRouter.use('/contract-evaluations', authenticateUser, writeAuditTrail, contractEvaluationsRouter);
-apiRouter.use('/risk-management', authenticateUser, writeAuditTrail, riskManagementRoutes);
-apiRouter.use('/rfx-portal', authenticateUserOptional, writeAuditTrail, rfxPortalRoutes);
-apiRouter.use('/ui-access', authenticateUser, writeAuditTrail, uiAccessRoutes);
-apiRouter.use('/capability-policies', authenticateUser, writeAuditTrail, capabilityPoliciesRoutes);
-apiRouter.use('/notifications', authenticateUser, writeAuditTrail, notificationsRoutes);
-apiRouter.use('/dispensing', authenticateUser, writeAuditTrail, dispensingRoutes);
-apiRouter.use('/procure-to-pay', authenticateUser, writeAuditTrail, procureToPayRoutes);
-apiRouter.use('/audit-registry', authenticateUser, writeAuditTrail, auditRegistryRoutes);
-apiRouter.use('/tasks', authenticateUser, writeAuditTrail, tasksRoutes);
+const protectedApiRoutes = [
+  { path: '/files', router: filesRoutes },
+  { path: '/requests', router: requestsRoutes },
+  { path: '/requested-items', router: requestedItemsRoutes },
+  { path: '/approvals', router: approvalsRoutes },
+  { path: '/audit-log', router: auditLogRoutes },
+  { path: '/attachments', router: attachmentsRoutes },
+  { path: '/admin-tools', router: adminToolsRoutes },
+  { path: '/users', router: usersRoutes },
+  { path: '/dashboard', router: dashboardRoutes },
+  { path: '/departments', router: departmentsRoutes },
+  { path: '/warehouses', router: warehousesRoutes },
+  { path: '/roles', router: rolesRoutes },
+  { path: '/permissions', router: permissionsRouter },
+  { path: '/maintenance-stock', router: maintenanceStockRoutes },
+  { path: '/procurement-plans', router: procurementPlansRoutes },
+  { path: '/planning', router: planningRoutes },
+  { path: '/stock-items', router: stockItemsRoutes },
+  { path: '/stock-item-requests', router: stockItemRequestsRoutes },
+  { path: '/item-master', router: itemMasterRoutes },
+  { path: '/warehouse-inventory', router: warehouseInventoryRoutes },
+  { path: '/item-recalls', router: itemRecallsRoutes },
+  { path: '/warehouse-supply', router: warehouseSupplyRoutes },
+  { path: '/warehouse-transfers', router: warehouseTransfersRoutes },
+  { path: '/approval-routes', router: approvalRoutesRoutes },
+  { path: '/warehouse-supply-templates', router: warehouseSupplyTemplatesRoutes },
+  { path: '/projects', router: projectsRoutes },
+  { path: '/custody', router: custodyRoutes },
+  { path: '/contracts', router: contractsRoutes },
+  { path: '/suppliers', router: suppliersRoutes },
+  { path: '/supplier-evaluations', router: supplierEvaluationsRoutes },
+  { path: '/supplier-srm', router: supplierSrmRoutes },
+  { path: '/technical-inspections', router: technicalInspectionsRoutes },
+  { path: '/contract-evaluations', router: contractEvaluationsRouter },
+  { path: '/risk-management', router: riskManagementRoutes },
+  { path: '/rfx-portal', router: rfxPortalRoutes, authenticate: authenticateUserOptional },
+  { path: '/ui-access', router: uiAccessRoutes },
+  { path: '/capability-policies', router: capabilityPoliciesRoutes },
+  { path: '/notifications', router: notificationsRoutes },
+  { path: '/dispensing', router: dispensingRoutes },
+  { path: '/procure-to-pay', router: procureToPayRoutes },
+  { path: '/audit-registry', router: auditRegistryRoutes },
+  { path: '/tasks', router: tasksRoutes },
+];
+
+const mountApiRoutes = router => {
+  protectedApiRoutes.forEach(({ path: routePath, router: routeHandler, authenticate = authenticateUser }) => {
+    router.use(routePath, authenticate, writeAuditTrail, routeHandler);
+  });
+};
+
+mountApiRoutes(apiRouter);
 
 // Mount the API router
 app.use('/api', apiRouter);
 app.use('/api/api', apiRouter); // Alias for malformed client requests
-app.use('/users', authenticateUser, writeAuditTrail, usersRoutes); // Backward-compat alias for proxies that strip /api
-app.use('/ui-access', authenticateUser, writeAuditTrail, uiAccessRoutes); // Backward-compat alias for proxies that strip /api
-app.use('/notifications', authenticateUser, writeAuditTrail, notificationsRoutes); // Backward-compat alias for proxies that strip /api
-app.use('/requests', authenticateUser, writeAuditTrail, requestsRoutes); // Backward-compat alias for clients hitting /requests
+mountApiRoutes(app); // Backward-compat aliases for proxies that strip /api
+app.use('/projects', authenticateUser, writeAuditTrail, projectsRoutes); // Backward-compat alias for clients hitting /projects
 
 // =========================
 // 🛠️ Utility Routes

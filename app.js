@@ -309,6 +309,10 @@ const errorHandler = require('./middleware/errorHandler');
 // =========================
 app.use('/auth', authLimiter);
 app.use('/auth', authRoutes);
+app.use('/api/auth', authLimiter);
+app.use('/api/auth', authRoutes);
+app.use('/api/api/auth', authLimiter);
+app.use('/api/api/auth', authRoutes);
 
 // =========================
 // 🔒 Protected Routes
@@ -359,6 +363,9 @@ apiRouter.use('/tasks', authenticateUser, writeAuditTrail, tasksRoutes);
 // Mount the API router
 app.use('/api', apiRouter);
 app.use('/api/api', apiRouter); // Alias for malformed client requests
+app.use('/users', authenticateUser, writeAuditTrail, usersRoutes); // Backward-compat alias for proxies that strip /api
+app.use('/ui-access', authenticateUser, writeAuditTrail, uiAccessRoutes); // Backward-compat alias for proxies that strip /api
+app.use('/notifications', authenticateUser, writeAuditTrail, notificationsRoutes); // Backward-compat alias for proxies that strip /api
 app.use('/requests', authenticateUser, writeAuditTrail, requestsRoutes); // Backward-compat alias for clients hitting /requests
 
 // =========================

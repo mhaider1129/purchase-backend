@@ -6,12 +6,19 @@ const bucketInitializationState = new Map();
 
 function getStorageConfiguration() {
   const url = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const anonKey = process.env.SUPABASE_ANON_KEY || '';
+  const key = serviceRoleKey || anonKey;
   const bucket = process.env.SUPABASE_STORAGE_BUCKET || 'attachments';
   const prefix = process.env.SUPABASE_STORAGE_PREFIX || 'attachments';
 
-  return { url, key, bucket, prefix };
+  return {
+    url,
+    key,
+    bucket,
+    prefix,
+    hasServiceRoleKey: Boolean(serviceRoleKey),
+  };
 }
 
 function createStorageError(message, code) {
@@ -113,6 +120,13 @@ async function ensureBucketExists(bucket, config = getStorageConfiguration()) {
       'Supabase storage bucket name is not configured',
       'SUPABASE_BUCKET_INVALID'
     );
+  }
+
+  // Bucket inspection/creation is an admin operation. If deployments only
+  // provide an anon key, skip that preflight and let the object upload use
+  // normal storage policies instead of failing before the upload is attempted.
+  if (!config.hasServiceRoleKey) {
+    return;
   }
 
   const state = bucketInitializationState.get(bucket);

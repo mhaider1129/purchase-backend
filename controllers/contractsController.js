@@ -1548,7 +1548,54 @@ const createContract = async (req, res, next) => {
     if (err?.code === '23505') {
       return next(createHttpError(409, 'A contract with this reference number already exists'));
     }
-    console.error('❌ Failed to create contract:', err);
+    if (err?.code === '23503') {
+      const constraint = String(err?.constraint || '');
+      if (constraint.includes('source_request_id')) {
+        return next(createHttpError(404, `Request #${sourceRequestId} was not found`));
+      }
+      if (constraint.includes('supplier_id')) {
+        return next(createHttpError(404, 'The selected supplier was not found'));
+      }
+      if (constraint.includes('end_user_department_id')) {
+        return next(createHttpError(404, 'The selected end-user department was not found'));
+      }
+      if (constraint.includes('contract_manager_id')) {
+        return next(createHttpError(404, 'The selected contract manager was not found'));
+      }
+      return next(createHttpError(400, 'One or more related records for this contract are missing'));
+    }
+    if (err?.code === '22P02') {
+      return next(createHttpError(400, 'Contract payload contains invalid value types'));
+    }
+    if (err?.code === '23502') {
+      return next(createHttpError(400, 'A required contract field is missing'));
+    }
+    if (err?.code === '22001') {
+      return next(createHttpError(400, 'One or more contract fields exceed allowed length'));
+    }
+    if (err?.code === '22007' || err?.code === '22008') {
+      return next(createHttpError(400, 'Contract payload contains an invalid date value'));
+    }
+    if (err?.code === '42P01') {
+      return next(
+        createHttpError(
+          503,
+          'Contract setup is incomplete. Please run backend database setup and try again.'
+        )
+      );
+    }
+    if (typeof err?.code === 'string' && (err.code.startsWith('22') || err.code.startsWith('23'))) {
+      return next(createHttpError(400, 'Contract payload failed database validation checks'));
+    }
+    if (err?.statusCode) {
+      return next(err);
+    }
+    console.error('❌ Failed to create contract:', {
+      message: err?.message,
+      code: err?.code,
+      constraint: err?.constraint,
+      detail: err?.detail,
+    });
     next(createHttpError(500, 'Failed to create contract'));
   } finally {
     client.release();

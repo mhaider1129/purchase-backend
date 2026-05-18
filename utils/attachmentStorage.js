@@ -29,6 +29,22 @@ function buildLocalFileName(originalName) {
   return `${timestamp}-${base || "attachment"}`;
 }
 
+function isLocalFallbackEnabled() {
+  return ["true", "1", "yes"].includes(
+    String(process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED || "").trim().toLowerCase(),
+  );
+}
+
+function createSharedStorageUploadError(err) {
+  const error = new Error(
+    "Failed to upload attachment to shared storage. Please check Supabase storage configuration and try again.",
+  );
+  error.code = "ATTACHMENT_SHARED_STORAGE_UPLOAD_FAILED";
+  error.statusCode = 502;
+  error.cause = err;
+  return error;
+}
+
 async function storeLocally({ file, segments }) {
   const relativeDirSegments = ["uploads", ...segments];
   const absoluteDirPath = path.join(UPLOADS_DIR, ...segments);
@@ -56,8 +72,22 @@ async function storeAttachmentFile({ file, requestId = null, itemId = null, cont
     return storeLocally({ file, segments });
   }
 
-  const result = await uploadBuffer({ file, segments });
-  return { ...result, storage: "supabase" };
+  try {
+    const result = await uploadBuffer({ file, segments });
+    return { ...result, storage: "supabase" };
+  } catch (err) {
+    if (isLocalFallbackEnabled()) {
+      console.warn(
+        `⚠️ Failed to store attachment in Supabase; falling back to local filesystem storage: ${err.message}`,
+      );
+      return storeLocally({ file, segments });
+    }
+
+    console.error(
+      `❌ Failed to store attachment in shared Supabase storage: ${err.message}`,
+    );
+    throw createSharedStorageUploadError(err);
+  }
 }
 
 module.exports = {
@@ -65,4 +95,5 @@ module.exports = {
   buildSegments,
   sanitizeSegment,
   buildLocalFileName,
+  isLocalFallbackEnabled,
 };

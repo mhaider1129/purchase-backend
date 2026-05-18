@@ -1,13 +1,23 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const ensureProjectsTable = require('../utils/ensureProjectsTable');
 
 const normalizeName = (name = '') => name.trim();
+
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const normalizeProjectId = (value) => {
+  const candidate = typeof value === 'string' ? value.trim() : '';
+  return uuidPattern.test(candidate) ? candidate : null;
+};
 
 const canManageProjects = (req) =>
   Boolean(req.user?.hasPermission && req.user.hasPermission('projects.manage'));
 
 const getProjects = async (req, res, next) => {
   try {
+    await ensureProjectsTable();
     const { rows } = await pool.query(
       `SELECT id, name, is_active, created_at
          FROM projects
@@ -34,6 +44,7 @@ const createProject = async (req, res, next) => {
   }
 
   try {
+    await ensureProjectsTable();
     const existing = await pool.query(
       `SELECT id FROM projects WHERE LOWER(name) = LOWER($1) LIMIT 1`,
       [name]
@@ -63,6 +74,7 @@ const getAllProjects = async (req, res, next) => {
   }
 
   try {
+    await ensureProjectsTable();
     const { rows } = await pool.query(
       `SELECT id, name, is_active, created_at
          FROM projects
@@ -80,13 +92,14 @@ const deactivateProject = async (req, res, next) => {
     return next(createHttpError(403, 'Only SCM or Admin can deactivate projects'));
   }
 
-  const projectId = Number.parseInt(req.params.id, 10);
+  const projectId = normalizeProjectId(req.params.id);
 
-  if (!Number.isInteger(projectId)) {
+  if (!projectId) {
     return next(createHttpError(400, 'Invalid project ID'));
   }
 
   try {
+    await ensureProjectsTable();
     const existing = await pool.query(
       `SELECT id, name, is_active, created_at
          FROM projects

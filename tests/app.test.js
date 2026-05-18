@@ -108,14 +108,53 @@ describe('Express app', () => {
   });
 
   it('supports root aliases for protected routes when proxies strip the api prefix', async () => {
-    const routePairs = [
-      ['/api/users/me', '/users/me'],
-      ['/api/ui-access', '/ui-access'],
-      ['/api/notifications?unreadOnly=true&limit=50', '/notifications?unreadOnly=true&limit=50'],
+    const rootAliasPaths = [
+      '/files',
+      '/requests',
+      '/requested-items',
+      '/approvals',
+      '/audit-log',
+      '/attachments',
+      '/admin-tools',
+      '/users',
+      '/dashboard',
+      '/departments',
+      '/warehouses',
+      '/roles',
+      '/permissions',
+      '/maintenance-stock',
+      '/procurement-plans',
+      '/planning',
+      '/stock-items',
+      '/stock-item-requests',
+      '/item-master',
+      '/warehouse-inventory',
+      '/item-recalls',
+      '/warehouse-supply',
+      '/warehouse-transfers',
+      '/approval-routes',
+      '/warehouse-supply-templates',
+      '/projects',
+      '/custody',
+      '/contracts',
+      '/suppliers',
+      '/supplier-evaluations',
+      '/supplier-srm',
+      '/technical-inspections',
+      '/contract-evaluations',
+      '/risk-management',
+      '/ui-access',
+      '/capability-policies',
+      '/notifications',
+      '/dispensing',
+      '/procure-to-pay',
+      '/audit-registry',
+      '/tasks',
+      ['/api/audit-registry/my-requests', '/audit-registry/my-requests'],
     ];
 
-    for (const [apiPath, rootAliasPath] of routePairs) {
-      const apiResponse = await makeRequest(baseUrl, apiPath);
+    for (const rootAliasPath of rootAliasPaths) {
+      const apiResponse = await makeRequest(baseUrl, `/api${rootAliasPath}`);
       const aliasResponse = await makeRequest(baseUrl, rootAliasPath);
 
       expect(aliasResponse.status).toBe(apiResponse.status);

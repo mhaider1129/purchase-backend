@@ -8,6 +8,7 @@ const {
 } = require("./saveRequestAttachments");
 const ensureWarehouseAssignments = require("../../utils/ensureWarehouseAssignments");
 const ensureWarehouseInventoryTables = require("../../utils/ensureWarehouseInventoryTables");
+const ensureProjectsTable = require("../../utils/ensureProjectsTable");
 
 const hasWarehouseAssignment = (value) => {
   const parsed = Number(value);
@@ -80,6 +81,7 @@ const assignApprover = async (
 const createRequest = async (req, res, next) => {
   let { request_type, justification, items } = req.body;
   await ensureWarehouseAssignments();
+  await ensureProjectsTable();
 
   const rawProjectId = req.body?.project_id;
   let projectId = null;

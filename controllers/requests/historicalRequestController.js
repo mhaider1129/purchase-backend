@@ -1,5 +1,6 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
+const ensureProjectsTable = require('../../utils/ensureProjectsTable');
 
 const parseBoolean = (value) => {
   if (typeof value === 'string') {
@@ -74,6 +75,7 @@ const sanitizeItems = (items) => {
 };
 
 const insertHistoricalRequest = async (req, res, next) => {
+  await ensureProjectsTable();
   let { items } = req.body;
   const requestType = typeof req.body.request_type === 'string'
     ? req.body.request_type.trim()

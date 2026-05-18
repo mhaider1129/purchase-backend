@@ -959,11 +959,26 @@ const ensureContractsPhaseTwoTables = (() => {
 })();
 
 const recordContractLog = async (client, { contractId, action, actorId = null, details = null }) => {
-  await client.query(
-    `INSERT INTO contract_logs (contract_id, action, actor_id, details)
-     VALUES ($1, $2, $3, $4)`,
-    [contractId, action, actorId, details ? JSON.stringify(details) : null]
-  );
+  const values = [contractId, action, actorId, details ? JSON.stringify(details) : null];
+  try {
+    await client.query(
+      `INSERT INTO contract_logs (contract_id, action, actor_id, details)
+       VALUES ($1, $2, $3, $4)`,
+      values
+    );
+  } catch (err) {
+    const isDuplicatePrimaryKey = err?.code === '23505' && err?.constraint === 'contract_logs_pkey';
+    if (!isDuplicatePrimaryKey) {
+      throw err;
+    }
+
+    await client.query(`SELECT setval('contract_logs_id_seq', COALESCE((SELECT MAX(id) FROM contract_logs), 0) + 1, false)`);
+    await client.query(
+      `INSERT INTO contract_logs (contract_id, action, actor_id, details)
+       VALUES ($1, $2, $3, $4)`,
+      values
+    );
+  }
 };
 
 const normalizeStatus = (value) => {

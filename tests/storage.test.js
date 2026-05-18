@@ -54,7 +54,10 @@ describe('Supabase storage configuration utilities', () => {
 
     const storage = require('../utils/storage');
     expect(storage.isStorageConfigured()).toBe(true);
-    expect(storage.getStorageConfiguration().key).toBe('anon-key');
+    expect(storage.getStorageConfiguration()).toMatchObject({
+      key: 'anon-key',
+      hasServiceRoleKey: false,
+    });
   });
 
   it('reflects runtime environment changes without reloading the module', () => {
@@ -78,6 +81,38 @@ describe('Supabase storage configuration utilities', () => {
     expect(key.startsWith('attachments/prefix/')).toBe(true);
     expect(key).toContain('request-1');
     expect(key.endsWith('.pdf')).toBe(true);
+  });
+
+  it('skips bucket administration checks when only the anon key is configured', async () => {
+    process.env.SUPABASE_URL = 'https://anon.supabase.co';
+    process.env.SUPABASE_ANON_KEY = 'anon-key';
+
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '',
+    });
+
+    global.fetch = fetchMock;
+
+    const storage = require('../utils/storage');
+    const result = await storage.uploadBuffer({
+      file: { originalname: 'doc.txt', buffer: Buffer.from('hello'), mimetype: 'text/plain' },
+    });
+
+    expect(result.bucket).toBe('attachments');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toMatch(
+      /https:\/\/anon\.supabase\.co\/storage\/v1\/object\/attachments\//
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer anon-key',
+        apikey: 'anon-key',
+      }),
+    });
   });
 
   it('creates the configured bucket automatically when it is missing', async () => {

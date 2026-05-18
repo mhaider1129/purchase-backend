@@ -945,6 +945,10 @@ const ensureContractsPhaseTwoTables = (() => {
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
         `);
+        await pool.query(`CREATE SEQUENCE IF NOT EXISTS contract_logs_id_seq`);
+        await pool.query(`ALTER SEQUENCE contract_logs_id_seq OWNED BY contract_logs.id`);
+        await pool.query(`ALTER TABLE contract_logs ALTER COLUMN id SET DEFAULT nextval('contract_logs_id_seq'::regclass)`);
+        await pool.query(`SELECT setval('contract_logs_id_seq', COALESCE((SELECT MAX(id) FROM contract_logs), 0) + 1, false)`);
         ensured = true;
       })().finally(() => {
         ensuringPromise = null;

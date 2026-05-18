@@ -359,6 +359,7 @@ apiRouter.use('/tasks', authenticateUser, writeAuditTrail, tasksRoutes);
 // Mount the API router
 app.use('/api', apiRouter);
 app.use('/api/api', apiRouter); // Alias for malformed client requests
+app.use('/requests', authenticateUser, writeAuditTrail, requestsRoutes); // Backward-compat alias for clients hitting /requests
 
 // =========================
 // 🛠️ Utility Routes

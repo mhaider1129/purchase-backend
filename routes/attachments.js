@@ -25,6 +25,7 @@ const {
 } = require('../utils/attachmentPaths');
 const { removeObject, isStorageConfigured, buildObjectDownloadRequest } = require('../utils/storage');
 const { storeAttachmentFile } = require('../utils/attachmentStorage');
+const { getUploadedFile, describeUploadPayload } = require('../utils/uploadedFile');
 const sanitize = require('sanitize-filename');
 
 // 🔧 Local error helper
@@ -38,8 +39,8 @@ async function uploadAttachmentToStorage({ file, requestId, itemId, contractId }
   return storeAttachmentFile({ file, requestId, itemId, contractId });
 }
 
-function respondStorageError(next, err) {
-  console.error('❌ Upload error:', err.message);
+function respondStorageError(req, next, err) {
+  console.error('❌ Upload error:', err.message, '| upload payload:', JSON.stringify(describeUploadPayload(req)));
   if (err.code === 'SUPABASE_NOT_CONFIGURED') {
     return next(
       createHttpError(
@@ -155,11 +156,14 @@ function streamRemoteAttachment({ objectKey, res, fallbackFilename, next }) {
 }
 
 // 📥 Upload a file to a specific item
-router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req, res, next) => {
+router.post('/item/:itemId', authenticateUser, upload.any(), async (req, res, next) => {
   const { itemId } = req.params;
-  const file = req.file;
+  const file = getUploadedFile(req);
 
-  if (!file) return next(createHttpError(400, 'No file uploaded'));
+  if (!file) {
+    console.warn('⚠️ Upload request missing file. Payload:', JSON.stringify(describeUploadPayload(req)));
+    return next(createHttpError(400, 'No file uploaded'));
+  }
 
   try {
     await ensureAttachmentsItemIdColumn(pool);
@@ -207,7 +211,7 @@ router.post('/item/:itemId', authenticateUser, upload.single('file'), async (req
       attachmentId: saved.rows[0].id
     });
   } catch (err) {
-    respondStorageError(next, err);
+    respondStorageError(req, next, err);
   }
 });
 
@@ -344,11 +348,14 @@ router.get('/download/:filename', authenticateUser, (req, res, next) => {
 });
 
 // 📥 Upload a file to a request
-router.post('/:requestId', authenticateUser, upload.single('file'), async (req, res, next) => {
+router.post('/:requestId', authenticateUser, upload.any(), async (req, res, next) => {
   const { requestId } = req.params;
-  const file = req.file;
+  const file = getUploadedFile(req);
 
-  if (!file) return next(createHttpError(400, 'No file uploaded'));
+  if (!file) {
+    console.warn('⚠️ Upload request missing file. Payload:', JSON.stringify(describeUploadPayload(req)));
+    return next(createHttpError(400, 'No file uploaded'));
+  }
 
   try {
     const { objectKey } = await uploadAttachmentToStorage({
@@ -370,7 +377,7 @@ router.post('/:requestId', authenticateUser, upload.single('file'), async (req, 
       attachmentId: saved.rows[0].id
     });
   } catch (err) {
-    respondStorageError(next, err);
+    respondStorageError(req, next, err);
   }
 });
 

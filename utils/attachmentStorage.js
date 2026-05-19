@@ -30,9 +30,13 @@ function buildLocalFileName(originalName) {
 }
 
 function isLocalFallbackEnabled() {
-  return ["true", "1", "yes"].includes(
-    String(process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED || "").trim().toLowerCase(),
-  );
+  const rawValue = String(process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED || '').trim().toLowerCase();
+
+  if (!rawValue) {
+    return process.env.NODE_ENV !== 'production';
+  }
+
+  return ['true', '1', 'yes'].includes(rawValue);
 }
 
 function createSharedStorageUploadError(err) {

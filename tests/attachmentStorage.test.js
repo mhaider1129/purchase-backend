@@ -55,7 +55,8 @@ describe('attachmentStorage helper', () => {
     expect(result.objectKey).toMatch(/^uploads\//);
   });
 
-  it('returns a shared-storage error when Supabase upload fails by default', async () => {
+  it('returns a shared-storage error when Supabase upload fails and local fallback is explicitly disabled', async () => {
+    process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED = 'false';
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     uploadBuffer.mockRejectedValueOnce(new Error('bucket policy blocked'));
     const file = { originalname: 'fallback.pdf', buffer: Buffer.from('data') };
@@ -98,11 +99,18 @@ describe('attachmentStorage helper', () => {
     warnSpy.mockRestore();
   });
 
-  it('only enables local fallback for explicit truthy values', () => {
-    expect(isLocalFallbackEnabled()).toBe(false);
+  it('enables local fallback by default outside production and supports explicit overrides', () => {
+    process.env.NODE_ENV = 'development';
+    expect(isLocalFallbackEnabled()).toBe(true);
+
     process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED = 'yes';
     expect(isLocalFallbackEnabled()).toBe(true);
+
     process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED = 'false';
+    expect(isLocalFallbackEnabled()).toBe(false);
+
+    process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED = '';
+    process.env.NODE_ENV = 'production';
     expect(isLocalFallbackEnabled()).toBe(false);
   });
 

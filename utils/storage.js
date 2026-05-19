@@ -18,6 +18,7 @@ function getStorageConfiguration() {
     bucket,
     prefix,
     hasServiceRoleKey: Boolean(serviceRoleKey),
+    usesAnonKeyOnly: Boolean(!serviceRoleKey && anonKey),
   };
 }
 
@@ -45,6 +46,12 @@ function ensureConfigured(config = getStorageConfiguration()) {
     throw createStorageError(
       'Supabase service role key (or anon key) is not configured',
       'SUPABASE_NOT_CONFIGURED'
+    );
+  }
+
+  if (config.usesAnonKeyOnly) {
+    console.warn(
+      '⚠️ Supabase storage is configured with SUPABASE_ANON_KEY only. Uploads to private buckets can fail unless storage INSERT policies explicitly allow anon access.'
     );
   }
 }

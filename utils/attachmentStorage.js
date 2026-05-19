@@ -33,7 +33,7 @@ function isLocalFallbackEnabled() {
   const rawValue = String(process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED || '').trim().toLowerCase();
 
   if (!rawValue) {
-    return process.env.NODE_ENV !== 'production';
+    return false;
   }
 
   return ['true', '1', 'yes'].includes(rawValue);

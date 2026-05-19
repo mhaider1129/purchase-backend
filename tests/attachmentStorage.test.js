@@ -99,9 +99,9 @@ describe('attachmentStorage helper', () => {
     warnSpy.mockRestore();
   });
 
-  it('enables local fallback by default outside production and supports explicit overrides', () => {
+  it('keeps local fallback disabled by default and supports explicit overrides', () => {
     process.env.NODE_ENV = 'development';
-    expect(isLocalFallbackEnabled()).toBe(true);
+    expect(isLocalFallbackEnabled()).toBe(false);
 
     process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED = 'yes';
     expect(isLocalFallbackEnabled()).toBe(true);

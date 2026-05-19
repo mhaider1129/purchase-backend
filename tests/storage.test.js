@@ -8,6 +8,8 @@ describe('Supabase storage configuration utilities', () => {
     process.env = { ...ORIGINAL_ENV };
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.SUPABASE_SERVICE_KEY;
+    delete process.env.SUPABASE_KEY;
     delete process.env.SUPABASE_ANON_KEY;
     delete process.env.SUPABASE_STORAGE_BUCKET;
     delete process.env.SUPABASE_STORAGE_PREFIX;
@@ -46,6 +48,20 @@ describe('Supabase storage configuration utilities', () => {
       prefix: 'custom/prefix',
     });
     expect(storage.isStorageConfigured()).toBe(true);
+  });
+
+
+  it('accepts legacy service key env aliases when service role key is absent', () => {
+    process.env.SUPABASE_URL = 'https://legacy.supabase.co';
+    process.env.SUPABASE_SERVICE_KEY = 'legacy-service-key';
+
+    const storage = require('../utils/storage');
+    expect(storage.isStorageConfigured()).toBe(true);
+    expect(storage.getStorageConfiguration()).toMatchObject({
+      key: 'legacy-service-key',
+      hasServiceRoleKey: true,
+      usesAnonKeyOnly: false,
+    });
   });
 
   it('uses anon key when service role key is absent', () => {

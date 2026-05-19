@@ -6,7 +6,11 @@ const bucketInitializationState = new Map();
 
 function getStorageConfiguration() {
   const url = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_KEY ||
+    '';
   const anonKey = process.env.SUPABASE_ANON_KEY || '';
   const key = serviceRoleKey || anonKey;
   const bucket = process.env.SUPABASE_STORAGE_BUCKET || 'attachments';

@@ -2060,6 +2060,7 @@ const {
   insertAttachment,
 } = require('../utils/attachmentSchema');
 const { storeAttachmentFile } = require('../utils/attachmentStorage');
+const { getUploadedFile, describeUploadPayload } = require('../utils/uploadedFile');
 const { serializeAttachment } = require('../utils/attachmentPaths');
 
 const removeStoredAttachmentFile = async storedPath => {
@@ -2115,9 +2116,12 @@ const getContractAttachments = async (req, res, next) => {
 
 const uploadContractAttachment = async (req, res, next) => {
   const { contractId } = req.params;
-  const file = req.file;
+  const file = getUploadedFile(req);
 
-  if (!file) return next(createHttpError(400, 'No file uploaded'));
+  if (!file) {
+    console.warn('⚠️ Contract upload request missing file. Payload:', JSON.stringify(describeUploadPayload(req)));
+    return next(createHttpError(400, 'No file uploaded'));
+  }
 
   try {
     await ensureAttachmentsContractIdColumn(pool);
@@ -2153,7 +2157,7 @@ const uploadContractAttachment = async (req, res, next) => {
       attachmentId: saved.rows[0].id
     });
   } catch (err) {
-    console.error('❌ Upload error:', err.message);
+    console.error('❌ Upload error:', err.message, '| upload payload:', JSON.stringify(describeUploadPayload(req)));
     if (err.code === 'SUPABASE_NOT_CONFIGURED') {
       return next(
         createHttpError(

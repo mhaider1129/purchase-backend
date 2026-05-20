@@ -218,6 +218,8 @@ const createCustodyRecord = async (req, res, next) => {
 const getPendingCustodyApprovals = async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const role = normalizeRole(req.user?.role);
+    const isScmApprover = role === 'scm' || role === 'admin';
     const { rows } = await pool.query(
       `SELECT cr.*, 
               issuer.name AS issued_by_name,
@@ -225,6 +227,7 @@ const getPendingCustodyApprovals = async (req, res, next) => {
               dept.name AS custodian_department_name,
               hod.name AS hod_name,
               CASE
+                WHEN $2 = TRUE AND cr.user_approval_status = 'Pending' THEN 'scm'
                 WHEN cr.custodian_user_id = $1 AND cr.user_approval_status = 'Pending' THEN 'custodian'
                 WHEN cr.hod_user_id = $1 AND cr.hod_approval_status = 'Pending' THEN 'hod'
                 ELSE NULL
@@ -234,10 +237,11 @@ const getPendingCustodyApprovals = async (req, res, next) => {
          LEFT JOIN users custodian ON custodian.id = cr.custodian_user_id
          LEFT JOIN departments dept ON dept.id = cr.custodian_department_id
          LEFT JOIN users hod ON hod.id = cr.hod_user_id
-        WHERE (cr.custodian_user_id = $1 AND cr.user_approval_status = 'Pending')
+        WHERE ($2 = TRUE AND cr.user_approval_status = 'Pending')
+           OR (cr.custodian_user_id = $1 AND cr.user_approval_status = 'Pending')
            OR (cr.hod_user_id = $1 AND cr.hod_approval_status = 'Pending')
         ORDER BY cr.created_at DESC`,
-      [userId],
+      [userId, isScmApprover],
     );
 
     res.json(rows);
@@ -304,9 +308,13 @@ const actOnCustodyRecord = async (req, res, next) => {
 
     const record = rows[0];
     const actingUserId = req.user.id;
+    const actingRole = normalizeRole(req.user?.role);
+    const isScmApprover = actingRole === 'scm' || actingRole === 'admin';
 
     let actorRole = null;
-    if (record.custodian_user_id === actingUserId && record.user_approval_status === 'Pending') {
+    if (isScmApprover && record.user_approval_status === 'Pending') {
+      actorRole = 'scm';
+    } else if (record.custodian_user_id === actingUserId && record.user_approval_status === 'Pending') {
       actorRole = 'custodian';
     } else if (record.hod_user_id === actingUserId && record.hod_approval_status === 'Pending') {
       actorRole = 'hod';
@@ -323,7 +331,7 @@ const actOnCustodyRecord = async (req, res, next) => {
     const values = [];
     let paramIndex = 1;
 
-    if (actorRole === 'custodian') {
+    if (actorRole === 'custodian' || actorRole === 'scm') {
       userStatus = finalDecision;
       setClauses.push(`user_approval_status = $${paramIndex++}`);
       values.push(finalDecision);

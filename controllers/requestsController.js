@@ -33,6 +33,7 @@ const {
   updateRequestBeforeApproval,
   approveMaintenanceRequest,
   reassignMaintenanceRequestToRequester,
+  deleteRequestCompletely,
 } = require('./requests/updateRequestsController');
 
 const {
@@ -63,6 +64,7 @@ module.exports = {
   getPendingMaintenanceApprovals,
   approveMaintenanceRequest,
   reassignMaintenanceRequestToRequester,
+  deleteRequestCompletely,
   getRequestLogs,
   markRequestAsCompleted,
   markRequestAsReceived,

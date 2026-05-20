@@ -1,5 +1,6 @@
 const express = require('express');
 const upload = require('../middleware/upload');
+const { authenticateUser } = require('../middleware/authMiddleware');
 const {
   listContracts,
   getContractById,
@@ -32,7 +33,7 @@ router.post('/:id/amendments', createContractAmendment);
 router.delete('/:id', deleteContract);
 
 router.get('/:contractId/attachments', getContractAttachments);
-router.post('/:contractId/attachments', upload.any(), uploadContractAttachment);
+router.post('/:contractId/attachments', authenticateUser, upload.any(), uploadContractAttachment);
 router.delete('/:contractId/attachments/:attachmentId', deleteContractAttachment);
 
 module.exports = router;

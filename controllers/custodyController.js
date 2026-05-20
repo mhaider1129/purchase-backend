@@ -19,18 +19,10 @@ const normalizeCustodyType = (value = '') => {
   throw createHttpError(400, 'Custody type must be personal or departmental');
 };
 
-const computeOverallStatus = (userStatus, hodStatus) => {
-  if ([userStatus, hodStatus].includes('Rejected')) {
-    return 'Rejected';
-  }
+const hasRejectedStatus = (userStatus, hodStatus) => [userStatus, hodStatus].includes('Rejected');
 
-  const normalized = [userStatus, hodStatus];
-  const allApproved = normalized.every((status) =>
-    ['Approved', 'NotRequired'].includes(status),
-  );
-
-  return allApproved ? 'Approved' : 'Pending';
-};
+const arePriorApprovalsComplete = (userStatus, hodStatus) =>
+  [userStatus, hodStatus].every((status) => ['Approved', 'NotRequired'].includes(status));
 
 const findHodForDepartment = async (client, departmentId) => {
   if (!departmentId) return null;
@@ -161,7 +153,7 @@ const createCustodyRecord = async (req, res, next) => {
 
     const userApprovalStatus = targetCustodianUserId ? 'Pending' : 'NotRequired';
     const hodApprovalStatus = hodUserId ? 'Pending' : 'NotRequired';
-    const overallStatus = computeOverallStatus(userApprovalStatus, hodApprovalStatus);
+    const overallStatus = hasRejectedStatus(userApprovalStatus, hodApprovalStatus) ? 'Rejected' : 'Pending';
 
     const insertValues = [
       item_name.trim(),
@@ -227,9 +219,14 @@ const getPendingCustodyApprovals = async (req, res, next) => {
               dept.name AS custodian_department_name,
               hod.name AS hod_name,
               CASE
-                WHEN $2 = TRUE AND cr.user_approval_status = 'Pending' THEN 'scm'
                 WHEN cr.custodian_user_id = $1 AND cr.user_approval_status = 'Pending' THEN 'custodian'
-                WHEN cr.hod_user_id = $1 AND cr.hod_approval_status = 'Pending' THEN 'hod'
+                WHEN cr.hod_user_id = $1
+                  AND cr.user_approval_status IN ('Approved', 'NotRequired')
+                  AND cr.hod_approval_status = 'Pending' THEN 'hod'
+                WHEN $2 = TRUE
+                  AND cr.user_approval_status IN ('Approved', 'NotRequired')
+                  AND cr.hod_approval_status IN ('Approved', 'NotRequired')
+                  AND cr.status = 'Pending' THEN 'scm'
                 ELSE NULL
               END AS pending_role
          FROM custody_records cr
@@ -237,9 +234,14 @@ const getPendingCustodyApprovals = async (req, res, next) => {
          LEFT JOIN users custodian ON custodian.id = cr.custodian_user_id
          LEFT JOIN departments dept ON dept.id = cr.custodian_department_id
          LEFT JOIN users hod ON hod.id = cr.hod_user_id
-        WHERE ($2 = TRUE AND cr.user_approval_status = 'Pending')
-           OR (cr.custodian_user_id = $1 AND cr.user_approval_status = 'Pending')
-           OR (cr.hod_user_id = $1 AND cr.hod_approval_status = 'Pending')
+        WHERE (cr.custodian_user_id = $1 AND cr.user_approval_status = 'Pending')
+           OR (cr.hod_user_id = $1
+               AND cr.user_approval_status IN ('Approved', 'NotRequired')
+               AND cr.hod_approval_status = 'Pending')
+           OR ($2 = TRUE
+               AND cr.user_approval_status IN ('Approved', 'NotRequired')
+               AND cr.hod_approval_status IN ('Approved', 'NotRequired')
+               AND cr.status = 'Pending')
         ORDER BY cr.created_at DESC`,
       [userId, isScmApprover],
     );
@@ -312,12 +314,16 @@ const actOnCustodyRecord = async (req, res, next) => {
     const isScmApprover = actingRole === 'scm' || actingRole === 'admin';
 
     let actorRole = null;
-    if (isScmApprover && record.user_approval_status === 'Pending') {
-      actorRole = 'scm';
-    } else if (record.custodian_user_id === actingUserId && record.user_approval_status === 'Pending') {
+    if (record.custodian_user_id === actingUserId && record.user_approval_status === 'Pending') {
       actorRole = 'custodian';
-    } else if (record.hod_user_id === actingUserId && record.hod_approval_status === 'Pending') {
+    } else if (record.hod_user_id === actingUserId
+      && ['Approved', 'NotRequired'].includes(record.user_approval_status)
+      && record.hod_approval_status === 'Pending') {
       actorRole = 'hod';
+    } else if (isScmApprover
+      && arePriorApprovalsComplete(record.user_approval_status, record.hod_approval_status)
+      && record.status === 'Pending') {
+      actorRole = 'scm';
     }
 
     if (!actorRole) {
@@ -331,7 +337,7 @@ const actOnCustodyRecord = async (req, res, next) => {
     const values = [];
     let paramIndex = 1;
 
-    if (actorRole === 'custodian' || actorRole === 'scm') {
+    if (actorRole === 'custodian') {
       userStatus = finalDecision;
       setClauses.push(`user_approval_status = $${paramIndex++}`);
       values.push(finalDecision);
@@ -345,10 +351,13 @@ const actOnCustodyRecord = async (req, res, next) => {
       setClauses.push('hod_approved_at = NOW()');
     }
 
-    const overallStatus =
-      finalDecision === 'Rejected'
-        ? 'Rejected'
-        : computeOverallStatus(userStatus, hodStatus);
+    const overallStatus = finalDecision === 'Rejected'
+      ? 'Rejected'
+      : actorRole === 'scm'
+        ? 'Approved'
+        : hasRejectedStatus(userStatus, hodStatus)
+          ? 'Rejected'
+          : 'Pending';
 
     setClauses.push(`status = $${paramIndex++}`);
     values.push(overallStatus);

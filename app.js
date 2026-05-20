@@ -305,6 +305,7 @@ const dispensingRoutes = require('./routes/dispensing');
 const procureToPayRoutes = require('./routes/procureToPay');
 const auditRegistryRoutes = require('./routes/auditRegistry');
 const tasksRoutes = require('./routes/tasks');
+const budgetControlRoutes = require('./routes/budgetControl');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -365,6 +366,7 @@ const protectedApiRoutes = [
   { path: '/procure-to-pay', router: procureToPayRoutes },
   { path: '/audit-registry', router: auditRegistryRoutes },
   { path: '/tasks', router: tasksRoutes },
+  { path: '/budget-control', router: budgetControlRoutes },
 ];
 
 const mountApiRoutes = router => {

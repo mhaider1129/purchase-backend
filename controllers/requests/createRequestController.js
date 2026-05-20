@@ -9,6 +9,11 @@ const {
 const ensureWarehouseAssignments = require("../../utils/ensureWarehouseAssignments");
 const ensureWarehouseInventoryTables = require("../../utils/ensureWarehouseInventoryTables");
 const ensureProjectsTable = require("../../utils/ensureProjectsTable");
+const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
+const {
+  assertBudgetCanCover,
+  recordCommitment,
+} = require("../../services/financeCoreService");
 
 const hasWarehouseAssignment = (value) => {
   const parsed = Number(value);
@@ -23,6 +28,7 @@ const assignApprover = async (
   requestType,
   level,
   requestDomain = null,
+  preferredWarehouseId = null,
 ) => {
   const globalRoles = ["CMO", "COO", "SCM", "CEO", "CFO"];
   const normalizedRole = role?.trim().toLowerCase();
@@ -80,6 +86,23 @@ const assignApprover = async (
   }
 
   if (normalizedRole === "warehousemanager") {
+    const parsedWarehouseId = Number(preferredWarehouseId);
+    if (Number.isInteger(parsedWarehouseId) && parsedWarehouseId > 0) {
+      const managerByWarehouseRes = await client.query(
+        `SELECT u.department_id
+           FROM users u
+          WHERE u.is_active = TRUE
+            AND LOWER(u.role) = 'warehousemanager'
+            AND u.warehouse_id = $1
+          ORDER BY u.id
+          LIMIT 1`,
+        [parsedWarehouseId],
+      );
+      if (managerByWarehouseRes.rows[0]?.department_id) {
+        targetDepartmentId = managerByWarehouseRes.rows[0].department_id;
+      }
+    }
+
     const normalizedDomain = requestDomain?.toLowerCase();
     const normalizedRequestType = requestType?.toLowerCase();
     const requiresOperationalWarehouseManager =
@@ -90,7 +113,7 @@ const assignApprover = async (
       ? "operational"
       : normalizedDomain || fallbackDomain;
 
-    if (domainForManager) {
+    if (domainForManager && !preferredWarehouseId) {
       const managerRes = await client.query(
         `SELECT d.id
            FROM departments d
@@ -497,6 +520,28 @@ const createRequest = async (req, res, next) => {
         "❌ Failed to retrieve request ID after insertion",
       );
 
+    if (estimatedCost > 0) {
+      await ensureFinanceCoreTables(client);
+      const budgetCheck = await assertBudgetCanCover(client, {
+        departmentId: department_id,
+        projectId: projectId || null,
+        amount: estimatedCost,
+        currency: 'USD',
+      });
+
+      await recordCommitment(client, {
+        requestId: request.id,
+        budgetEnvelopeId: budgetCheck.envelope.id,
+        stage: 'reservation',
+        amount: estimatedCost,
+        currency: 'USD',
+        sourceType: 'purchase_request',
+        sourceId: String(request.id),
+        notes: `Budget reservation from purchase request ${request.id}`,
+        actorId: req.user.id,
+      });
+    }
+
     const itemIdMap = [];
     for (let idx = 0; idx < items.length; idx++) {
       const {
@@ -638,6 +683,7 @@ const createRequest = async (req, res, next) => {
           request_type,
           approval_level,
           requestDomain,
+          warehouse_id ?? null,
         );
       }
     }

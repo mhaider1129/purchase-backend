@@ -73,6 +73,10 @@ const normalizeRoutePayload = (payload = {}) => {
     role,
     min_amount: minAmount,
     max_amount: maxAmount,
+    warehouse_id:
+      payload.warehouse_id === undefined || payload.warehouse_id === null || payload.warehouse_id === ''
+        ? null
+        : parsePositiveInteger(payload.warehouse_id, 'Warehouse'),
   };
 };
 
@@ -233,6 +237,7 @@ const findMatchingRouteRoles = (routes, scenario) => {
     .map(route => ({
       approval_level: route.approval_level,
       role: route.role,
+      warehouse_id: route.warehouse_id ?? null,
     }));
 };
 

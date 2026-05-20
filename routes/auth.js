@@ -247,6 +247,38 @@ router.post('/login', async (req, res) => {
   }
 });
 
+
+// ============================
+// 🔒 POST /auth/verify-password
+// ============================
+router.post('/verify-password', authenticateUser, async (req, res) => {
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ success: false, message: 'Password is required' });
+  }
+
+  try {
+    const userResult = await pool.query('SELECT password FROM users WHERE id = $1', [req.user.id]);
+
+    if (userResult.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const user = userResult.rows[0];
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, message: 'Password is incorrect' });
+    }
+
+    return res.status(200).json({ success: true, message: 'Password verified' });
+  } catch (err) {
+    console.error('❌ Password verification error:', err);
+    return res.status(500).json({ success: false, message: 'Server error while verifying password' });
+  }
+});
+
 // ============================
 // 📝 POST /auth/register-request (Public)
 // ============================

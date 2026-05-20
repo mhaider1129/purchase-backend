@@ -55,6 +55,30 @@ const assignApprover = async (
     targetDepartmentId = itDepartmentRes.rows[0]?.id || departmentId;
   }
 
+  if (normalizedRole === "maintenance department hod") {
+    roleToAssign = "HOD";
+    const maintenanceDepartmentRes = await client.query(
+      `SELECT d.id
+         FROM departments d
+         JOIN users u ON u.department_id = d.id
+        WHERE LOWER(u.role) = 'hod'
+          AND u.is_active = TRUE
+          AND (
+            LOWER(d.name) = 'maintenance'
+            OR LOWER(d.name) LIKE 'maintenance %'
+            OR LOWER(d.name) LIKE '% maintenance%'
+          )
+        ORDER BY
+          CASE
+            WHEN LOWER(d.name) = 'maintenance' THEN 0
+            ELSE 1
+          END,
+          d.id
+        LIMIT 1`,
+    );
+    targetDepartmentId = maintenanceDepartmentRes.rows[0]?.id || departmentId;
+  }
+
   if (normalizedRole === "warehousemanager") {
     const normalizedDomain = requestDomain?.toLowerCase();
     const normalizedRequestType = requestType?.toLowerCase();
@@ -563,28 +587,6 @@ const createRequest = async (req, res, next) => {
       departmentType: domainForChain,
       amount: estimatedCost,
     });
-
-    if (request_type === "Maintenance") {
-      const normalized = routes.map((route) => ({
-        ...route,
-        normalizedRole: route.role?.trim().toLowerCase() || "",
-      }));
-      const requesterRoute = normalized.find((route) => route.normalizedRole === "requester");
-      const warehouseManagerRoute = normalized.find((route) => route.normalizedRole === "warehousemanager");
-      const departmentHodRoute = normalized.find((route) => route.normalizedRole === "hod");
-      const remainingRoutes = normalized.filter(
-        (route) => !["requester", "warehousemanager", "hod"].includes(route.normalizedRole),
-      );
-
-      let level = 1;
-      routes = [];
-      if (warehouseManagerRoute) routes.push({ role: warehouseManagerRoute.role, approval_level: level++ });
-      if (requesterRoute) routes.push({ role: requesterRoute.role, approval_level: level++ });
-      if (departmentHodRoute) routes.push({ role: departmentHodRoute.role, approval_level: level++ });
-      for (const route of remainingRoutes) {
-        routes.push({ role: route.role, approval_level: level++ });
-      }
-    }
 
     if (!routes.length) {
       console.warn(

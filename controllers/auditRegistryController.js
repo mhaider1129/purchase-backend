@@ -13,7 +13,7 @@ const ensureAuditRegistryTable = async client => {
   await client.query(`
     CREATE TABLE IF NOT EXISTS public.audit_registry_entries (
       id BIGSERIAL PRIMARY KEY,
-      request_id INTEGER NOT NULL REFERENCES public.requests(id) ON DELETE CASCADE,
+      request_id INTEGER REFERENCES public.requests(id) ON DELETE SET NULL,
       requester_id INTEGER NOT NULL REFERENCES public.users(id),
       requester_type TEXT NOT NULL CHECK (requester_type IN ('INDIVIDUAL','COMMITTEE')),
       account_name TEXT,
@@ -30,6 +30,19 @@ const ensureAuditRegistryTable = async client => {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+  await client.query('ALTER TABLE public.audit_registry_entries ALTER COLUMN request_id DROP NOT NULL');
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'audit_registry_entries_request_id_fkey'
+      ) THEN
+        ALTER TABLE public.audit_registry_entries
+          ADD CONSTRAINT audit_registry_entries_request_id_fkey
+          FOREIGN KEY (request_id) REFERENCES public.requests(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
   `);
 };
 
@@ -79,8 +92,9 @@ const assertWorkflowTransitionAllowed = ({ currentStatus, nextStatus, role, requ
 const createAuditEntry = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const requestId = Number(req.params.requestId);
-    if (!Number.isInteger(requestId) || requestId <= 0) throw createHttpError(400, 'Invalid request id');
+    const rawRequestId = req.params.requestId ?? req.body.request_id ?? null;
+    const requestId = rawRequestId === null || rawRequestId === '' ? null : Number(rawRequestId);
+    if (requestId !== null && (!Number.isInteger(requestId) || requestId <= 0)) throw createHttpError(400, 'Invalid request id');
 
     const {
       requester_type = 'INDIVIDUAL',
@@ -105,8 +119,12 @@ const createAuditEntry = async (req, res, next) => {
     await client.query('BEGIN');
     await ensureAuditRegistryTable(client);
 
-    const requestRes = await client.query('SELECT requester_id FROM requests WHERE id = $1', [requestId]);
-    if (!requestRes.rowCount) throw createHttpError(404, 'Request not found');
+    let requesterId = req.user.id;
+    if (requestId !== null) {
+      const requestRes = await client.query('SELECT requester_id FROM requests WHERE id = $1', [requestId]);
+      if (!requestRes.rowCount) throw createHttpError(404, 'Request not found');
+      requesterId = requestRes.rows[0].requester_id;
+    }
 
     const entry = await client.query(
       `INSERT INTO audit_registry_entries
@@ -115,7 +133,7 @@ const createAuditEntry = async (req, res, next) => {
       RETURNING *, (finance_issued_amount - returned_amount) AS remaining_amount`,
       [
         requestId,
-        requestRes.rows[0].requester_id,
+        requesterId,
         String(requester_type).toUpperCase(),
         account_name,
         notes,
@@ -151,7 +169,7 @@ const getMyAuditRequests = async (req, res, next) => {
       `SELECT are.*, r.status AS request_status, r.request_type AS request_title,
               (are.finance_issued_amount - are.returned_amount) AS remaining_amount
        FROM audit_registry_entries are
-       JOIN requests r ON r.id = are.request_id
+       LEFT JOIN requests r ON r.id = are.request_id
        WHERE
          are.requester_id = $1
          OR ($2::boolean = true AND are.audit_status = 'COO_REVIEW_PENDING')

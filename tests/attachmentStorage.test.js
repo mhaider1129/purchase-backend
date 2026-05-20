@@ -99,9 +99,9 @@ describe('attachmentStorage helper', () => {
     warnSpy.mockRestore();
   });
 
-  it('keeps local fallback disabled by default and supports explicit overrides', () => {
+  it('keeps local fallback enabled by default and supports explicit overrides', () => {
     process.env.NODE_ENV = 'development';
-    expect(isLocalFallbackEnabled()).toBe(false);
+    expect(isLocalFallbackEnabled()).toBe(true);
 
     process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED = 'yes';
     expect(isLocalFallbackEnabled()).toBe(true);
@@ -111,7 +111,7 @@ describe('attachmentStorage helper', () => {
 
     process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED = '';
     process.env.NODE_ENV = 'production';
-    expect(isLocalFallbackEnabled()).toBe(false);
+    expect(isLocalFallbackEnabled()).toBe(true);
   });
 
   it('throws when the incoming file buffer is empty', async () => {

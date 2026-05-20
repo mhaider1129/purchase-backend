@@ -33,6 +33,10 @@ function isLocalFallbackEnabled() {
   const rawValue = String(process.env.ATTACHMENT_LOCAL_FALLBACK_ENABLED || '').trim().toLowerCase();
 
   if (!rawValue) {
+    return true;
+  }
+
+  if (['false', '0', 'no'].includes(rawValue)) {
     return false;
   }
 

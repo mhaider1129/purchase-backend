@@ -7,6 +7,20 @@ const { storeAttachmentFile } = require("../../utils/attachmentStorage");
 const { isStorageConfigured } = require("../../utils/storage");
 
 const ITEM_FIELD_PREFIX = "item_";
+const REQUEST_ATTACHMENT_FIELDS = new Set([
+  "attachments",
+  "attachment",
+  "attachments[]",
+  "files",
+  "files[]",
+]);
+
+const ITEM_ATTACHMENT_PATTERNS = [
+  /^item_(\d+)$/i,
+  /^item_(\d+)_attachments?$/i,
+  /^itemAttachments[_\[]?(\d+)\]?$/i,
+  /^items\[(\d+)\]\[attachments?\]$/i,
+];
 
 function groupUploadedFiles(files = []) {
   const requestFiles = [];
@@ -15,15 +29,31 @@ function groupUploadedFiles(files = []) {
   for (const file of files) {
     if (!file?.fieldname) continue;
 
-    if (file.fieldname === "attachments") {
+    if (REQUEST_ATTACHMENT_FIELDS.has(file.fieldname)) {
       requestFiles.push(file);
       continue;
     }
 
-    if (!file.fieldname.startsWith(ITEM_FIELD_PREFIX)) continue;
+    let idx = null;
 
-    const idx = parseInt(file.fieldname.slice(ITEM_FIELD_PREFIX.length), 10);
-    if (Number.isNaN(idx)) continue;
+    if (file.fieldname.startsWith(ITEM_FIELD_PREFIX)) {
+      const parsed = parseInt(file.fieldname.slice(ITEM_FIELD_PREFIX.length), 10);
+      if (!Number.isNaN(parsed)) {
+        idx = parsed;
+      }
+    }
+
+    if (idx === null) {
+      for (const pattern of ITEM_ATTACHMENT_PATTERNS) {
+        const match = file.fieldname.match(pattern);
+        if (match) {
+          idx = parseInt(match[1], 10);
+          break;
+        }
+      }
+    }
+
+    if (idx === null || Number.isNaN(idx)) continue;
 
     if (!itemFiles[idx]) {
       itemFiles[idx] = [];

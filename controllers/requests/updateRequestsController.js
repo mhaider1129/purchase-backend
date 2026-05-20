@@ -491,6 +491,73 @@ Please log in to the system to take action.`,
   }
 };
 
+const quoteIdent = (value) => `"${String(value).replace(/"/g, '""')}"`;
+
+const deleteRequestCompletely = async (req, res, next) => {
+  if (!req.user?.hasPermission('requests.manage')) {
+    return next(createHttpError(403, 'Only SCM or Admin can delete requests'));
+  }
+
+  const requestId = Number(req.params.id);
+  if (!Number.isInteger(requestId) || requestId <= 0) {
+    return next(createHttpError(400, 'Invalid request id'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const requestCheck = await client.query(
+      `SELECT id FROM requests WHERE id = $1 FOR UPDATE`,
+      [requestId],
+    );
+    if (requestCheck.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const fkRes = await client.query(
+      `SELECT
+         child_ns.nspname AS schema_name,
+         child_tbl.relname AS table_name,
+         child_col.attname AS column_name,
+         child_col.attnotnull AS is_not_null
+       FROM pg_constraint con
+       JOIN pg_class parent_tbl ON parent_tbl.oid = con.confrelid
+       JOIN pg_namespace parent_ns ON parent_ns.oid = parent_tbl.relnamespace
+       JOIN pg_class child_tbl ON child_tbl.oid = con.conrelid
+       JOIN pg_namespace child_ns ON child_ns.oid = child_tbl.relnamespace
+       JOIN pg_attribute child_col
+         ON child_col.attrelid = con.conrelid
+        AND child_col.attnum = con.conkey[1]
+       WHERE con.contype = 'f'
+         AND parent_ns.nspname = 'public'
+         AND parent_tbl.relname = 'requests'
+         AND array_length(con.conkey, 1) = 1
+         AND child_tbl.relname <> 'requests'`,
+    );
+
+    for (const fk of fkRes.rows) {
+      const tableRef = `${quoteIdent(fk.schema_name)}.${quoteIdent(fk.table_name)}`;
+      const columnRef = quoteIdent(fk.column_name);
+      if (fk.is_not_null) {
+        await client.query(`DELETE FROM ${tableRef} WHERE ${columnRef} = $1`, [requestId]);
+      } else {
+        await client.query(`UPDATE ${tableRef} SET ${columnRef} = NULL WHERE ${columnRef} = $1`, [requestId]);
+      }
+    }
+
+    await client.query(`DELETE FROM requests WHERE id = $1`, [requestId]);
+    await client.query('COMMIT');
+    return res.json({ message: 'Request and related data deleted successfully.', request_id: requestId });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    return next(createHttpError(500, err?.message || 'Failed to delete request'));
+  } finally {
+    client.release();
+  }
+};
+
 const requestHodApproval = async (req, res, next) => {
   const normalizedRole = (req.user?.role || '').toUpperCase();
   if (normalizedRole !== 'SCM') {
@@ -1666,4 +1733,5 @@ module.exports = {
   updateRequestBeforeApproval,
   approveMaintenanceRequest,
   reassignMaintenanceRequestToRequester,
+  deleteRequestCompletely,
 };

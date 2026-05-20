@@ -34,6 +34,7 @@ const {
   markRequestAsReceived,
   updateRequestCost,
   updateRequestBeforeApproval,
+  deleteRequestCompletely,
   getClosedRequests,
   getAuditApprovedRejectedRequests,
   insertHistoricalRequest,
@@ -75,6 +76,7 @@ router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.put('/:id/cost', authenticateUser, updateRequestCost);
 router.put('/:id/edit', upload.any(), updateRequestBeforeApproval);
+router.delete('/:id/hard-delete', deleteRequestCompletely);
 
 
 // ==========================

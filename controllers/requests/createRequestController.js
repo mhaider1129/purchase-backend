@@ -25,8 +25,35 @@ const assignApprover = async (
   requestDomain = null,
 ) => {
   const globalRoles = ["CMO", "COO", "SCM", "CEO", "CFO"];
-  const normalizedRole = role?.toLowerCase();
+  const normalizedRole = role?.trim().toLowerCase();
   let targetDepartmentId = departmentId;
+  let roleToAssign = role;
+
+  if (normalizedRole === "it department hod") {
+    roleToAssign = "HOD";
+    const itDepartmentRes = await client.query(
+      `SELECT d.id
+         FROM departments d
+         JOIN users u ON u.department_id = d.id
+        WHERE LOWER(u.role) = 'hod'
+          AND u.is_active = TRUE
+          AND (
+            LOWER(d.name) = 'it'
+            OR LOWER(d.name) = 'information technology'
+            OR LOWER(d.name) LIKE 'it %'
+            OR LOWER(d.name) LIKE '% information technology%'
+          )
+        ORDER BY
+          CASE
+            WHEN LOWER(d.name) = 'it' THEN 0
+            WHEN LOWER(d.name) = 'information technology' THEN 1
+            ELSE 2
+          END,
+          d.id
+        LIMIT 1`,
+    );
+    targetDepartmentId = itDepartmentRes.rows[0]?.id || departmentId;
+  }
 
   if (normalizedRole === "warehousemanager") {
     const normalizedDomain = requestDomain?.toLowerCase();
@@ -55,12 +82,12 @@ const assignApprover = async (
     }
   }
 
-  const normalizedRoleUpper = role?.toUpperCase() || "";
+  const normalizedRoleUpper = roleToAssign?.toUpperCase() || "";
   const isGlobalRole = globalRoles.includes(normalizedRoleUpper);
   const query = isGlobalRole
     ? `SELECT id, email FROM users WHERE role = $1 AND is_active = true LIMIT 1`
     : `SELECT id, email FROM users WHERE role = $1 AND department_id = $2 AND is_active = true LIMIT 1`;
-  const values = isGlobalRole ? [role] : [role, targetDepartmentId];
+  const values = isGlobalRole ? [roleToAssign] : [roleToAssign, targetDepartmentId];
   const result = await client.query(query, values);
 
   const approverId = result.rows[0]?.id || null;
@@ -294,15 +321,12 @@ const createRequest = async (req, res, next) => {
     }
   }
 
-  const requester_id = req.user.id;
+  let requester_id = req.user.id;
   const department_id = req.body.target_department_id || req.user.department_id;
   const institute_id = req.user.institute_id;
   const section_id = req.body.target_section_id || req.user.section_id || null;
 
-  const rawTempRequester =
-    req.body.temporary_requester_name ?? req.body.temporaryRequesterName ?? '';
-  const temporaryRequesterName =
-    typeof rawTempRequester === 'string' ? rawTempRequester.trim() : '';
+  let temporaryRequesterName = '';
 
   let maintenance_ref_number = null;
   let initiated_by_technician_id = null;
@@ -319,14 +343,33 @@ const createRequest = async (req, res, next) => {
     maintenance_ref_number = req.body.maintenance_ref_number || null;
     initiated_by_technician_id = req.user.id;
 
-    if (!temporaryRequesterName) {
-      return next(
-        createHttpError(
-          400,
-          "Provide the name of the department requester for this maintenance submission",
-        ),
-      );
+    const selectedRequesterId = Number.parseInt(req.body.target_requester_id, 10);
+    if (!Number.isInteger(selectedRequesterId)) {
+      return next(createHttpError(400, "Select a requester for this maintenance request"));
     }
+
+    const requesterFilterValues = [selectedRequesterId, department_id];
+    let requesterSectionCondition = '';
+    if (section_id) {
+      requesterFilterValues.push(section_id);
+      requesterSectionCondition = 'AND u.section_id = $3';
+    }
+
+    const requesterLookup = await pool.query(
+      `SELECT u.id
+         FROM users u
+        WHERE u.id = $1
+          AND u.department_id = $2
+          ${requesterSectionCondition}
+          AND u.is_active = TRUE
+          AND LOWER(TRIM(u.role)) = 'requester'
+        LIMIT 1`,
+      requesterFilterValues,
+    );
+    if (requesterLookup.rowCount === 0) {
+      return next(createHttpError(400, "Selected requester is invalid for the selected department/section"));
+    }
+    requester_id = selectedRequesterId;
   }
 
   const itemNames = items.map((i) => i.item_name.toLowerCase());
@@ -514,12 +557,34 @@ const createRequest = async (req, res, next) => {
       requestDomain ||
       "operational";
 
-    const routes = await fetchApprovalRoutes({
+    let routes = await fetchApprovalRoutes({
       client,
       requestType: request_type,
       departmentType: domainForChain,
       amount: estimatedCost,
     });
+
+    if (request_type === "Maintenance") {
+      const normalized = routes.map((route) => ({
+        ...route,
+        normalizedRole: route.role?.trim().toLowerCase() || "",
+      }));
+      const requesterRoute = normalized.find((route) => route.normalizedRole === "requester");
+      const warehouseManagerRoute = normalized.find((route) => route.normalizedRole === "warehousemanager");
+      const departmentHodRoute = normalized.find((route) => route.normalizedRole === "hod");
+      const remainingRoutes = normalized.filter(
+        (route) => !["requester", "warehousemanager", "hod"].includes(route.normalizedRole),
+      );
+
+      let level = 1;
+      routes = [];
+      if (warehouseManagerRoute) routes.push({ role: warehouseManagerRoute.role, approval_level: level++ });
+      if (requesterRoute) routes.push({ role: requesterRoute.role, approval_level: level++ });
+      if (departmentHodRoute) routes.push({ role: departmentHodRoute.role, approval_level: level++ });
+      for (const route of remainingRoutes) {
+        routes.push({ role: route.role, approval_level: level++ });
+      }
+    }
 
     if (!routes.length) {
       console.warn(

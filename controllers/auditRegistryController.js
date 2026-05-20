@@ -143,14 +143,21 @@ const getMyAuditRequests = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await ensureAuditRegistryTable(client);
+    const role = normalizeRole(req.user?.role);
+    const isCooReviewer = role === 'COO';
+    const isAuditReviewer = role === 'AUDIT';
+
     const data = await client.query(
       `SELECT are.*, r.status AS request_status, r.request_type AS request_title,
               (are.finance_issued_amount - are.returned_amount) AS remaining_amount
        FROM audit_registry_entries are
        JOIN requests r ON r.id = are.request_id
-       WHERE are.requester_id = $1
+       WHERE
+         are.requester_id = $1
+         OR ($2::boolean = true AND are.audit_status = 'COO_REVIEW_PENDING')
+         OR ($3::boolean = true AND are.audit_status IN ('AUDIT_REVIEW_PENDING','ACTION_REQUIRED','REGISTERED'))
        ORDER BY are.created_at DESC`,
-      [req.user.id]
+      [req.user.id, isCooReviewer, isAuditReviewer]
     );
     res.json(data.rows);
   } catch (error) {
@@ -174,6 +181,7 @@ const updateAuditEntry = async (req, res, next) => {
     const row = current.rows[0];
     const nextStatus = String(req.body.audit_status || row.audit_status).toUpperCase();
     assertValidStatus(nextStatus);
+    const normalizedRole = normalizeRole(req.user?.role);
     assertWorkflowTransitionAllowed({
       currentStatus: row.audit_status,
       nextStatus,

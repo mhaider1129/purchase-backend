@@ -342,7 +342,7 @@ const handleApprovalDecision = async (req, res, next) => {
                 );
               }
             } else {
-              for (const { role, approval_level } of routeDefinitions) {
+              for (const { role, approval_level, warehouse_id } of routeDefinitions) {
                 if (approval_level <= approval.approval_level) {
                   continue;
                 }
@@ -363,6 +363,7 @@ const handleApprovalDecision = async (req, res, next) => {
                   request.request_type,
                   approval_level,
                   routeDomain,
+                  warehouse_id ?? null,
                 );
               }
             }

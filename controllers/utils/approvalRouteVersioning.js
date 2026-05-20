@@ -31,6 +31,10 @@ const ensureApprovalRouteVersioning = async client => {
       max_amount BIGINT DEFAULT ${DEFAULT_MAX_AMOUNT}
     )
   `);
+  await runner.query(`
+    ALTER TABLE approval_route_rules
+    ADD COLUMN IF NOT EXISTS warehouse_id INTEGER REFERENCES warehouses(id) ON DELETE SET NULL
+  `);
 
   await runner.query(
     'CREATE INDEX IF NOT EXISTS approval_route_rules_lookup_idx ON approval_route_rules (version_id, request_type, department_type, approval_level)'
@@ -52,9 +56,9 @@ const ensureApprovalRouteVersioning = async client => {
   const baselineVersionId = insertedVersion[0].id;
   await runner.query(
     `INSERT INTO approval_route_rules
-      (version_id, request_type, department_type, approval_level, role, min_amount, max_amount)
+      (version_id, request_type, department_type, approval_level, role, min_amount, max_amount, warehouse_id)
      SELECT $1, request_type, department_type, approval_level, role,
-            COALESCE(min_amount, $2), COALESCE(max_amount, $3)
+            COALESCE(min_amount, $2), COALESCE(max_amount, $3), NULL
        FROM approval_routes`,
     [baselineVersionId, DEFAULT_MIN_AMOUNT, DEFAULT_MAX_AMOUNT],
   );
@@ -75,7 +79,7 @@ const getActiveVersion = async client => {
 const listRoutesForVersion = async (client, versionId) => {
   const runner = getRunner(client);
   const { rows } = await runner.query(
-    `SELECT id, request_type, department_type, approval_level, role, min_amount, max_amount
+    `SELECT id, request_type, department_type, approval_level, role, min_amount, max_amount, warehouse_id
        FROM approval_route_rules
       WHERE version_id = $1
       ORDER BY request_type, department_type, approval_level, id`,
@@ -91,6 +95,7 @@ const normalizeForStorage = route => ({
   role: route.role,
   min_amount: route.min_amount ?? DEFAULT_MIN_AMOUNT,
   max_amount: route.max_amount ?? DEFAULT_MAX_AMOUNT,
+  warehouse_id: route.warehouse_id ? Number(route.warehouse_id) : null,
 });
 
 const createVersionFromRoutes = async (
@@ -117,8 +122,8 @@ const createVersionFromRoutes = async (
   for (const route of routes.map(normalizeForStorage)) {
     await runner.query(
       `INSERT INTO approval_route_rules
-        (version_id, request_type, department_type, approval_level, role, min_amount, max_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        (version_id, request_type, department_type, approval_level, role, min_amount, max_amount, warehouse_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         version.id,
         route.request_type,
@@ -127,6 +132,7 @@ const createVersionFromRoutes = async (
         route.role,
         route.min_amount,
         route.max_amount,
+        route.warehouse_id,
       ],
     );
   }

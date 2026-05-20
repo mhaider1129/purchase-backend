@@ -52,7 +52,7 @@ const fetchApprovalRoutes = async ({
   }
 
   const { rows } = await runner.query(
-    `SELECT id, request_type, department_type, approval_level, role, min_amount, max_amount
+    `SELECT id, request_type, department_type, approval_level, role, min_amount, max_amount, warehouse_id
        FROM approval_route_rules
       WHERE version_id = $1
         AND request_type = $2

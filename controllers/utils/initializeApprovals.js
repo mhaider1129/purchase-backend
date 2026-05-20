@@ -99,6 +99,7 @@ const initializeApprovals = async (request_id, externalClient = null) => {
           request.request_type,
           route.approval_level,
           routeDomain,
+          route.warehouse_id ?? null,
         );
       }
     }

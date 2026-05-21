@@ -291,6 +291,8 @@ const projectsRoutes = require('./routes/projects');
 const custodyRoutes = require('./routes/custody');
 const itemRecallsRoutes = require('./routes/itemRecalls');
 const contractsRoutes = require('./routes/contracts');
+const contractTemplatesRoutes = require('./routes/contractTemplates');
+const contractClausesRoutes = require('./routes/contractClauses');
 const suppliersRoutes = require('./routes/suppliers');
 const supplierEvaluationsRoutes = require('./routes/supplierEvaluations');
 const supplierSrmRoutes = require('./routes/supplierSrm');
@@ -352,6 +354,8 @@ const protectedApiRoutes = [
   { path: '/projects', router: projectsRoutes },
   { path: '/custody', router: custodyRoutes },
   { path: '/contracts', router: contractsRoutes },
+  { path: '/contract-templates', router: contractTemplatesRoutes },
+  { path: '/contract-clauses', router: contractClausesRoutes },
   { path: '/suppliers', router: suppliersRoutes },
   { path: '/supplier-evaluations', router: supplierEvaluationsRoutes },
   { path: '/supplier-srm', router: supplierSrmRoutes },

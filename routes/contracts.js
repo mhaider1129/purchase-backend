@@ -28,6 +28,7 @@ const {
   getContractConsumption,
   getContractRisk,
 } = require('../controllers/contractsController');
+const { getContractHealth, listObligations, createObligation, updateObligation, deleteObligation, updateContractGovernanceFields, listContractPayments, createContractPayment } = require('../controllers/contractGovernanceController');
 
 const router = express.Router();
 
@@ -50,6 +51,14 @@ router.get('/:id/document-checklist', getDocumentChecklist);
 router.patch('/:id/document-checklist/:documentId', updateDocumentChecklist);
 router.get('/:id/consumption', getContractConsumption);
 router.get('/:id/risk', getContractRisk);
+router.get('/:id/health', getContractHealth);
+router.patch('/:id/governance', updateContractGovernanceFields);
+router.get('/:id/obligations', listObligations);
+router.post('/:id/obligations', createObligation);
+router.patch('/:id/obligations/:obligationId', updateObligation);
+router.delete('/:id/obligations/:obligationId', deleteObligation);
+router.get('/:id/payments', listContractPayments);
+router.post('/:id/payments', createContractPayment);
 router.get('/:id/amendments', listContractAmendments);
 router.post('/:id/amendments', createContractAmendment);
 router.delete('/:id', deleteContract);

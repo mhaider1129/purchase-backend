@@ -76,7 +76,9 @@ CREATE TABLE public.approval_route_rules (
   role character varying NOT NULL,
   min_amount bigint DEFAULT 0,
   max_amount bigint DEFAULT 999999999,
+  warehouse_id integer,
   CONSTRAINT approval_route_rules_pkey PRIMARY KEY (id),
+  CONSTRAINT approval_route_rules_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT approval_route_rules_version_id_fkey FOREIGN KEY (version_id) REFERENCES public.approval_route_versions(id)
 );
 CREATE TABLE public.approval_route_versions (
@@ -153,7 +155,7 @@ CREATE TABLE public.audit_registry_entries (
   notes text,
   required_before_payment text,
   required_after_payment text,
-  audit_status text NOT NULL DEFAULT 'PENDING_AUDIT'::text CHECK (audit_status = ANY (ARRAY['PENDING_AUDIT'::text, 'ACTION_REQUIRED'::text, 'READY_FOR_FINANCE'::text, 'FINANCE_PROCESSING'::text, 'COMPLETED'::text])),
+  audit_status text NOT NULL DEFAULT 'COO_REVIEW_PENDING'::text CHECK (audit_status = ANY (ARRAY['COO_REVIEW_PENDING'::text, 'AUDIT_REVIEW_PENDING'::text, 'ACTION_REQUIRED'::text, 'REGISTERED'::text, 'CLOSED'::text])),
   finance_issued_amount numeric NOT NULL DEFAULT 0,
   returned_amount numeric NOT NULL DEFAULT 0,
   currency text NOT NULL DEFAULT 'USD'::text,
@@ -201,6 +203,73 @@ CREATE TABLE public.commitment_ledger (
   CONSTRAINT commitment_ledger_budget_envelope_id_fkey FOREIGN KEY (budget_envelope_id) REFERENCES public.budget_envelopes(id),
   CONSTRAINT commitment_ledger_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.contract_alerts (
+  id integer NOT NULL DEFAULT nextval('contract_alerts_id_seq'::regclass),
+  contract_id integer NOT NULL,
+  alert_type text NOT NULL,
+  threshold_value text,
+  is_active boolean NOT NULL DEFAULT true,
+  last_triggered_at timestamp with time zone,
+  metadata jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_alerts_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_alerts_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_amendments (
+  id integer NOT NULL DEFAULT nextval('contract_amendments_id_seq'::regclass),
+  contract_id integer NOT NULL,
+  amendment_number integer NOT NULL,
+  amendment_date date,
+  change_summary text,
+  revised_value numeric,
+  revised_expiry date,
+  approved_by integer,
+  snapshot jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_amendments_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_amendments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_approvals (
+  id integer NOT NULL DEFAULT nextval('contract_approvals_id_seq'::regclass),
+  contract_id integer NOT NULL,
+  stage text NOT NULL,
+  reviewer_id integer,
+  decision text,
+  comments text,
+  decided_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  workflow_level integer NOT NULL DEFAULT 1,
+  is_active_level boolean NOT NULL DEFAULT false,
+  reviewer_role text,
+  assigned_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_approvals_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_approvals_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_clause_assignments (
+  id bigint NOT NULL DEFAULT nextval('contract_clause_assignments_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  clause_id bigint NOT NULL,
+  custom_override_content text,
+  sort_order integer NOT NULL DEFAULT 1,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_clause_assignments_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_clause_assignments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_clause_assignments_clause_id_fkey FOREIGN KEY (clause_id) REFERENCES public.contract_clauses(id)
+);
+CREATE TABLE public.contract_clauses (
+  id bigint NOT NULL DEFAULT nextval('contract_clauses_id_seq'::regclass),
+  clause_type text,
+  clause_title text NOT NULL,
+  clause_content text NOT NULL,
+  clause_version integer NOT NULL DEFAULT 1,
+  language text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_clauses_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.contract_evaluations (
   id integer NOT NULL DEFAULT nextval('contract_evaluations_id_seq'::regclass),
   contract_id integer NOT NULL,
@@ -220,6 +289,116 @@ CREATE TABLE public.contract_evaluations (
   CONSTRAINT contract_evaluations_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
   CONSTRAINT contract_evaluations_evaluator_id_fkey FOREIGN KEY (evaluator_id) REFERENCES public.users(id),
   CONSTRAINT contract_evaluations_criterion_id_fkey FOREIGN KEY (criterion_id) REFERENCES public.evaluation_criteria(id)
+);
+CREATE TABLE public.contract_legal_reviews (
+  id bigint NOT NULL DEFAULT nextval('contract_legal_reviews_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  reviewer_id bigint,
+  legal_risk_level text,
+  flagged_clauses jsonb,
+  approved_clauses jsonb,
+  comments text,
+  governing_law text,
+  jurisdiction text,
+  approved boolean,
+  reviewed_at timestamp with time zone,
+  CONSTRAINT contract_legal_reviews_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_legal_reviews_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_logs (
+  id integer NOT NULL DEFAULT nextval('contract_logs_id_seq'::regclass),
+  contract_id integer NOT NULL,
+  action text NOT NULL,
+  actor_id integer,
+  details jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_logs_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_negotiations (
+  id bigint NOT NULL DEFAULT nextval('contract_negotiations_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  negotiation_round integer NOT NULL,
+  discussion_summary text,
+  requested_changes jsonb,
+  approved_changes jsonb,
+  rejected_changes jsonb,
+  negotiated_value numeric,
+  negotiated_terms jsonb,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_negotiations_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_negotiations_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_obligations (
+  id bigint NOT NULL DEFAULT nextval('contract_obligations_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  obligation_type text,
+  title text NOT NULL,
+  description text,
+  responsible_party text,
+  due_date date,
+  status text NOT NULL DEFAULT 'Pending'::text CHECK (status = ANY (ARRAY['Pending'::text, 'Completed'::text, 'Overdue'::text, 'Cancelled'::text])),
+  completion_notes text,
+  completed_at timestamp with time zone,
+  proof_attachment_id bigint,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_obligations_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_obligations_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_payments (
+  id bigint NOT NULL DEFAULT nextval('contract_payments_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  amount numeric NOT NULL CHECK (amount > 0::numeric),
+  currency text,
+  payment_date timestamp with time zone NOT NULL,
+  notes text,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_payments_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_payments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_sla_events (
+  id bigint NOT NULL DEFAULT nextval('contract_sla_events_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  event_type text,
+  response_time_minutes integer,
+  resolution_time_minutes integer,
+  target_response_minutes integer,
+  target_resolution_minutes integer,
+  breached boolean NOT NULL DEFAULT false,
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_sla_events_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_sla_events_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_templates (
+  id bigint NOT NULL DEFAULT nextval('contract_templates_id_seq'::regclass),
+  template_name text NOT NULL,
+  contract_category text,
+  contract_type text,
+  default_currency text,
+  default_sections jsonb,
+  default_clauses jsonb,
+  default_alert_rules jsonb,
+  is_active boolean NOT NULL DEFAULT true,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_templates_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.contract_versions (
+  id bigint NOT NULL DEFAULT nextval('contract_versions_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  version_number integer NOT NULL,
+  snapshot jsonb NOT NULL,
+  change_summary text,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_versions_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_versions_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
 CREATE TABLE public.contracts (
   id integer NOT NULL DEFAULT nextval('contracts_id_seq'::regclass),
@@ -245,6 +424,45 @@ CREATE TABLE public.contracts (
   amount_paid numeric DEFAULT 0,
   signing_date date,
   contract_type text,
+  compliance_legal_terms text,
+  financial_payment_control text,
+  risk_dispute_management text,
+  digital_attachments_tracking text,
+  institute text,
+  contract_category text,
+  renewal_type text,
+  renewal_notice_days integer,
+  currency text,
+  first_party text,
+  second_party text,
+  authorized_signatory text,
+  vendor_contact_person text,
+  vendor_contact_email text,
+  vendor_contact_phone text,
+  vendor_tax_id text,
+  vendor_address text,
+  scope_summary text,
+  deliverables text,
+  technical_specifications text,
+  service_coverage text,
+  exclusions text,
+  sla_requirements text,
+  payment_terms_details text,
+  delivery_logistics_details text,
+  sla_details text,
+  penalties_incentives text,
+  change_management_terms text,
+  termination_exit_terms text,
+  alert_rules text,
+  is_framework_agreement boolean NOT NULL DEFAULT false,
+  framework_ceiling_value numeric,
+  framework_remaining_balance numeric,
+  framework_start_date date,
+  framework_end_date date,
+  procurement_method text CHECK (procurement_method IS NULL OR (procurement_method = ANY (ARRAY['RFQ'::text, 'Tender'::text, 'Direct Purchase'::text, 'Emergency Purchase'::text, 'Framework Agreement'::text, 'Sole Source'::text, 'Annual Bid'::text]))),
+  reserve_budget_on_activation boolean NOT NULL DEFAULT false,
+  committed_value numeric,
+  block_overspend boolean NOT NULL DEFAULT false,
   CONSTRAINT contracts_pkey PRIMARY KEY (id),
   CONSTRAINT contracts_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
   CONSTRAINT contracts_end_user_department_id_fkey FOREIGN KEY (end_user_department_id) REFERENCES public.departments(id),
@@ -737,6 +955,34 @@ CREATE TABLE public.item_variants (
   CONSTRAINT item_variants_pkey PRIMARY KEY (id),
   CONSTRAINT item_variants_item_master_id_fkey FOREIGN KEY (item_master_id) REFERENCES public.item_master(id)
 );
+CREATE TABLE public.journal_entries (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  request_id integer NOT NULL,
+  journal_number text NOT NULL UNIQUE,
+  source_type text,
+  source_id text,
+  entry_status text NOT NULL DEFAULT 'draft'::text,
+  posted_at timestamp with time zone,
+  created_by integer,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT journal_entries_pkey PRIMARY KEY (id),
+  CONSTRAINT journal_entries_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
+  CONSTRAINT journal_entries_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
+CREATE TABLE public.journal_entry_lines (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  journal_entry_id bigint NOT NULL,
+  line_number integer NOT NULL,
+  account_code text,
+  description text NOT NULL,
+  debit_amount numeric NOT NULL DEFAULT 0,
+  credit_amount numeric NOT NULL DEFAULT 0,
+  reference_type text,
+  reference_id text,
+  CONSTRAINT journal_entry_lines_pkey PRIMARY KEY (id),
+  CONSTRAINT journal_entry_lines_journal_entry_id_fkey FOREIGN KEY (journal_entry_id) REFERENCES public.journal_entries(id)
+);
 CREATE TABLE public.maintenance_stock (
   id integer NOT NULL DEFAULT nextval('maintenance_stock_id_seq'::regclass),
   item_name text NOT NULL UNIQUE,
@@ -817,6 +1063,23 @@ CREATE TABLE public.permissions (
   name text NOT NULL,
   description text,
   CONSTRAINT permissions_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.planning_settings (
+  id bigint NOT NULL DEFAULT nextval('planning_settings_id_seq'::regclass),
+  warehouse_id bigint,
+  forecast_horizon_months integer NOT NULL DEFAULT 6,
+  forecast_window_size integer NOT NULL DEFAULT 3,
+  safety_lead_time_days integer NOT NULL DEFAULT 14,
+  safety_review_period_days integer NOT NULL DEFAULT 7,
+  demand_history_days integer NOT NULL DEFAULT 120,
+  demand_history_months integer NOT NULL DEFAULT 12,
+  safety_history_days integer NOT NULL DEFAULT 180,
+  mrp_horizon_days integer NOT NULL DEFAULT 84,
+  mrp_bucket_days integer NOT NULL DEFAULT 7,
+  updated_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT planning_settings_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.procurement_lifecycle_states (
   id integer NOT NULL DEFAULT nextval('procurement_lifecycle_states_id_seq'::regclass),
@@ -1028,6 +1291,7 @@ CREATE TABLE public.requested_items (
   received_by integer,
   received_at timestamp with time zone,
   po_issuance_method text,
+  received_quantity numeric NOT NULL DEFAULT 0,
   CONSTRAINT requested_items_pkey PRIMARY KEY (id),
   CONSTRAINT requested_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT requested_items_marked_by_fkey FOREIGN KEY (marked_by) REFERENCES public.users(id),
@@ -1070,8 +1334,8 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
   CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
   CONSTRAINT requests_awarded_supplier_id_fkey FOREIGN KEY (awarded_supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
@@ -1603,6 +1867,8 @@ CREATE TABLE public.warehouse_supplied_items (
   supplied_from_stock_level_id integer,
   received_by integer,
   received_at timestamp with time zone,
+  lot_number text,
+  expiry_date date,
   CONSTRAINT warehouse_supplied_items_pkey PRIMARY KEY (id),
   CONSTRAINT warehouse_supplied_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT warehouse_supplied_items_item_id_fkey FOREIGN KEY (item_id) REFERENCES public.warehouse_supply_items(id),

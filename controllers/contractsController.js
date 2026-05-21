@@ -14,18 +14,27 @@ const { removeObject } = require('../utils/storage');
 
 const CONTRACT_STATUSES = [
   'draft',
-  'legal-review',
-  'technical-review',
-  'finance-review',
-  'scm-review',
-  'ceo-coo-approval',
-  'signed',
+  'under_review',
+  'legal_review',
+  'finance_review',
+  'technical_review',
+  'pending_signature',
   'active',
-  'on-hold',
+  'expiring',
   'expired',
+  'renewed',
   'terminated',
   'archived',
 ];
+const LEGACY_STATUS_MAP = {
+  'legal-review': 'legal_review',
+  'technical-review': 'technical_review',
+  'finance-review': 'finance_review',
+  signed: 'pending_signature',
+  'on-hold': 'under_review',
+  'scm-review': 'under_review',
+  'ceo-coo-approval': 'under_review',
+};
 
 const CRITERION_CODES = {
   CONTRACT_COMPLIANCE: 'contract_compliance',
@@ -949,8 +958,46 @@ const ensureContractsPhaseTwoTables = (() => {
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS workflow_level INTEGER NOT NULL DEFAULT 1`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS is_active_level BOOLEAN NOT NULL DEFAULT FALSE`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS reviewer_role TEXT`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS approval_level INTEGER NOT NULL DEFAULT 1`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'Pending'`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT FALSE`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contract_items (
+            id SERIAL PRIMARY KEY,
+            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            item_id INTEGER,
+            item_name TEXT NOT NULL,
+            generic_name TEXT,
+            brand_name TEXT,
+            unit TEXT,
+            contracted_price NUMERIC(14,2),
+            currency TEXT,
+            minimum_order_quantity NUMERIC(14,2),
+            lead_time_days INTEGER,
+            warranty_terms TEXT,
+            price_valid_from DATE,
+            price_valid_to DATE,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS contract_required_documents (
+            id SERIAL PRIMARY KEY,
+            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            document_type TEXT NOT NULL,
+            is_uploaded BOOLEAN NOT NULL DEFAULT FALSE,
+            attachment_id INTEGER,
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(contract_id, document_type)
+          )
+        `);
         await pool.query(`
           CREATE TABLE IF NOT EXISTS contract_logs (
             id SERIAL PRIMARY KEY,
@@ -998,7 +1045,8 @@ const recordContractLog = async (client, { contractId, action, actorId = null, d
 };
 
 const normalizeStatus = (value) => {
-  const status = normalizeText(value).toLowerCase();
+  const raw = normalizeText(value).toLowerCase();
+  const status = LEGACY_STATUS_MAP[raw] || raw;
   return CONTRACT_STATUSES.includes(status) ? status : null;
 };
 
@@ -1295,7 +1343,7 @@ const getContractById = async (req, res, next) => {
     }
     await pool.query(
       `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
-      [contractId, 'contract_archived', req.user?.id || null, null]
+      [contractId, 'contract_viewed', req.user?.id || null, null]
     );
 
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
@@ -2512,6 +2560,212 @@ const createContractAmendment = async (req, res, next) => {
   }
 };
 
+const APPROVAL_CHAIN = [
+  { level: 1, stage: 'Legal Review', reviewer_role: 'legal', status: 'legal_review' },
+  { level: 2, stage: 'Finance Review', reviewer_role: 'finance', status: 'finance_review' },
+  { level: 3, stage: 'Technical Review', reviewer_role: 'technical', status: 'technical_review' },
+  { level: 4, stage: 'SCM Review', reviewer_role: 'scm', status: 'under_review' },
+  { level: 5, stage: 'COO/CEO Approval', reviewer_role: 'coo_ceo', status: 'under_review' },
+];
+
+const submitContractReview = async (req, res, next) => {
+  const contractId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  const client = await pool.connect();
+  try {
+    await ensureContractsPhaseTwoTables();
+    await client.query('BEGIN');
+    const { rows: contracts } = await client.query('SELECT * FROM contracts WHERE id = $1 FOR UPDATE', [contractId]);
+    if (!contracts.length) return next(createHttpError(404, 'Contract not found'));
+    await client.query('DELETE FROM contract_approvals WHERE contract_id = $1', [contractId]);
+    for (const step of APPROVAL_CHAIN) {
+      await client.query(`INSERT INTO contract_approvals (contract_id, approval_level, stage, reviewer_role, reviewer_id, status, is_active, created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`, [contractId, step.level, step.stage, step.reviewer_role, null, 'Pending', step.level === 1]);
+    }
+    await client.query(`UPDATE contracts SET status='under_review', updated_at=NOW() WHERE id=$1`, [contractId]);
+    await recordContractLog(client, { contractId, action: 'contract_review_submitted', actorId: req.user?.id || null });
+    await client.query('COMMIT');
+    res.json({ message: 'Contract submitted for review' });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(createHttpError(500, 'Failed to submit review workflow'));
+  } finally { client.release(); }
+};
+
+const listContractApprovals = async (req, res, next) => {
+  const contractId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  try {
+    await ensureContractsPhaseTwoTables();
+    const { rows } = await pool.query(`SELECT id, contract_id, approval_level, stage, reviewer_role, reviewer_id, status, comments, is_active, decided_at, created_at
+      FROM contract_approvals WHERE contract_id=$1 ORDER BY approval_level`, [contractId]);
+    res.json(rows);
+  } catch {
+    next(createHttpError(500, 'Failed to fetch approvals'));
+  }
+};
+
+const decideContractApproval = async (req, res, next) => {
+  const contractId = Number(req.params.id); const approvalId = Number(req.params.approvalId);
+  const decision = normalizeText(req.body?.decision);
+  if (!Number.isInteger(contractId) || !Number.isInteger(approvalId)) return next(createHttpError(400, 'Invalid id'));
+  if (!['Approved', 'Rejected', 'Returned'].includes(decision)) return next(createHttpError(400, 'Invalid decision'));
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`SELECT * FROM contract_approvals WHERE id=$1 AND contract_id=$2 FOR UPDATE`, [approvalId, contractId]);
+    if (!rows.length) return next(createHttpError(404, 'Approval step not found'));
+    const current = rows[0];
+    if (!current.is_active) return next(createHttpError(400, 'Only active approval can be decided'));
+    await client.query(`UPDATE contract_approvals SET status=$1, comments=$2, decided_at=NOW(), is_active=FALSE, updated_at=NOW() WHERE id=$3`, [decision, normalizeText(req.body?.comments) || null, approvalId]);
+    if (decision === 'Approved') {
+      const { rows: nextStep } = await client.query(`SELECT id, approval_level FROM contract_approvals WHERE contract_id=$1 AND approval_level > $2 ORDER BY approval_level LIMIT 1`, [contractId, current.approval_level]);
+      if (nextStep.length) {
+        await client.query(`UPDATE contract_approvals SET is_active=TRUE WHERE id=$1`, [nextStep[0].id]);
+      } else {
+        await client.query(`UPDATE contracts SET status='pending_signature', updated_at=NOW() WHERE id=$1`, [contractId]);
+      }
+    } else {
+      await client.query(`UPDATE contracts SET status='draft', updated_at=NOW() WHERE id=$1`, [contractId]);
+    }
+    await recordContractLog(client, { contractId, action: 'contract_approval_decision', actorId: req.user?.id || null, details: { approvalId, decision } });
+    await client.query('COMMIT');
+    res.json({ message: 'Decision recorded' });
+  } catch {
+    await client.query('ROLLBACK').catch(() => {});
+    next(createHttpError(500, 'Failed to save approval decision'));
+  } finally { client.release(); }
+};
+
+const assertContractExists = async (client, contractId) => {
+  const { rows } = await client.query('SELECT id, contract_value, estimated_contract_value, actual_consumed_value, amount_paid, status, end_date, renewal_notice_days, supplier_id FROM contracts WHERE id=$1', [contractId]);
+  if (!rows.length) throw createHttpError(404, 'Contract not found');
+  return rows[0];
+};
+
+const listContractItems = async (req, res, next) => {
+  const contractId = Number(req.params.id);
+  if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  try {
+    await ensureContractsPhaseTwoTables();
+    await assertContractExists(pool, contractId);
+    const { rows } = await pool.query('SELECT * FROM contract_items WHERE contract_id=$1 ORDER BY id DESC', [contractId]);
+    res.json(rows);
+  } catch (err) { next(err.statusCode ? err : createHttpError(500, 'Failed to fetch contract items')); }
+};
+
+const upsertContractItemValidation = (payload = {}) => {
+  if (!normalizeText(payload.item_name)) throw createHttpError(400, 'item_name is required');
+  if (payload.contracted_price !== undefined && payload.contracted_price !== null && payload.contracted_price !== '' && Number.isNaN(Number(payload.contracted_price))) throw createHttpError(400, 'contracted_price must be numeric');
+  if (payload.lead_time_days !== undefined && payload.lead_time_days !== null && payload.lead_time_days !== '') {
+    const ltd = Number(payload.lead_time_days);
+    if (!Number.isInteger(ltd) || ltd <= 0) throw createHttpError(400, 'lead_time_days must be a positive integer');
+  }
+  const from = payload.price_valid_from ? new Date(payload.price_valid_from) : null;
+  const to = payload.price_valid_to ? new Date(payload.price_valid_to) : null;
+  if (from && to && from > to) throw createHttpError(400, 'price_valid_from must be before or equal to price_valid_to');
+};
+
+const createContractItem = async (req, res, next) => {
+  const contractId = Number(req.params.id);
+  if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  const client = await pool.connect();
+  try {
+    await ensureContractsPhaseTwoTables(); upsertContractItemValidation(req.body || {}); await client.query('BEGIN'); await assertContractExists(client, contractId);
+    const b = req.body || {};
+    const { rows } = await client.query(`INSERT INTO contract_items (contract_id,item_id,item_name,generic_name,brand_name,unit,contracted_price,currency,minimum_order_quantity,lead_time_days,warranty_terms,price_valid_from,price_valid_to,is_active,notes,updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW()) RETURNING *`,
+      [contractId, b.item_id || null, normalizeText(b.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null]);
+    await recordContractLog(client, { contractId, action: 'contract_item_created', actorId: req.user?.id || null, details: { item_id: rows[0].id } });
+    await client.query('COMMIT'); res.status(201).json(rows[0]);
+  } catch (err) { await client.query('ROLLBACK').catch(() => {}); next(err.statusCode ? err : createHttpError(500, 'Failed to create contract item')); } finally { client.release(); }
+};
+
+const updateContractItem = async (req, res, next) => {
+  const contractId = Number(req.params.id); const itemId = Number(req.params.itemId);
+  if (!Number.isInteger(contractId) || !Number.isInteger(itemId)) return next(createHttpError(400, 'Invalid id'));
+  const client = await pool.connect();
+  try {
+    await ensureContractsPhaseTwoTables(); upsertContractItemValidation(req.body || {}); await client.query('BEGIN'); await assertContractExists(client, contractId);
+    const b = req.body || {};
+    const { rows } = await client.query(`UPDATE contract_items SET item_name=$1,generic_name=$2,brand_name=$3,unit=$4,contracted_price=$5,currency=$6,minimum_order_quantity=$7,lead_time_days=$8,warranty_terms=$9,price_valid_from=$10,price_valid_to=$11,is_active=$12,notes=$13,updated_at=NOW() WHERE id=$14 AND contract_id=$15 RETURNING *`,
+      [normalizeText(b.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null, itemId, contractId]);
+    if (!rows.length) return next(createHttpError(404, 'Contract item not found'));
+    await recordContractLog(client, { contractId, action: 'contract_item_updated', actorId: req.user?.id || null, details: { item_id: itemId } });
+    await client.query('COMMIT'); res.json(rows[0]);
+  } catch (err) { await client.query('ROLLBACK').catch(() => {}); next(err.statusCode ? err : createHttpError(500, 'Failed to update contract item')); } finally { client.release(); }
+};
+
+const deleteContractItem = async (req, res, next) => {
+  const contractId = Number(req.params.id); const itemId = Number(req.params.itemId);
+  if (!Number.isInteger(contractId) || !Number.isInteger(itemId)) return next(createHttpError(400, 'Invalid id'));
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN'); await assertContractExists(client, contractId);
+    const { rowCount } = await client.query('DELETE FROM contract_items WHERE id=$1 AND contract_id=$2', [itemId, contractId]);
+    if (!rowCount) return next(createHttpError(404, 'Contract item not found'));
+    await recordContractLog(client, { contractId, action: 'contract_item_deleted', actorId: req.user?.id || null, details: { item_id: itemId } });
+    await client.query('COMMIT'); res.json({ message: 'Contract item deleted' });
+  } catch (err) { await client.query('ROLLBACK').catch(() => {}); next(err.statusCode ? err : createHttpError(500, 'Failed to delete contract item')); } finally { client.release(); }
+};
+
+const getContractConsumption = async (req, res, next) => {
+  const contractId = Number(req.params.id); if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  try {
+    const c = await assertContractExists(pool, contractId);
+    const safe = async q => { try { return await pool.query(q.text, q.values || []); } catch { return { rows: [] }; } };
+    const po = await safe({ text: 'SELECT id, po_number, total_amount FROM purchase_orders WHERE contract_id=$1', values: [contractId] });
+    const inv = await safe({ text: 'SELECT id, invoice_number, total_amount FROM supplier_invoices WHERE contract_id=$1', values: [contractId] });
+    const pay = await safe({ text: 'SELECT id, voucher_number, total_amount FROM ap_vouchers WHERE contract_id=$1', values: [contractId] });
+    const consumedPO = po.rows.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+    const consumedInv = inv.rows.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+    const paid = pay.rows.reduce((s, r) => s + (Number(r.total_amount) || 0), 0) || Number(c.amount_paid) || 0;
+    const total = Number(c.contract_value) || Number(c.estimated_contract_value) || 0;
+    const consumed = Number(c.actual_consumed_value) || Math.max(consumedPO, consumedInv);
+    res.json({ contract_value: Number(c.contract_value) || 0, estimated_contract_value: Number(c.estimated_contract_value) || 0, actual_consumed_value: consumed, consumed_from_purchase_orders: consumedPO, consumed_from_invoices: consumedInv, paid_amount: paid, remaining_balance: total - consumed, consumed_percentage: total > 0 ? Number(((consumed / total) * 100).toFixed(2)) : 0, linked_purchase_orders: po.rows, linked_invoices: inv.rows, linked_payments: pay.rows });
+  } catch (err) { next(err.statusCode ? err : createHttpError(500, 'Failed to fetch consumption')); }
+};
+
+const REQUIRED_DOCUMENT_TYPES = ['Draft Contract', 'Final Signed Contract', 'Supplier Offer', 'Legal Review', 'Finance Approval', 'Technical Approval', 'Tax / Registration Documents', 'Amendment Document', 'Renewal Letter', 'Termination Letter'];
+const getDocumentChecklist = async (req, res, next) => {
+  const contractId = Number(req.params.id); if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  try {
+    await ensureContractsPhaseTwoTables(); await assertContractExists(pool, contractId);
+    for (const t of REQUIRED_DOCUMENT_TYPES) await pool.query('INSERT INTO contract_required_documents (contract_id, document_type) VALUES ($1,$2) ON CONFLICT (contract_id, document_type) DO NOTHING', [contractId, t]);
+    const { rows } = await pool.query('SELECT * FROM contract_required_documents WHERE contract_id=$1 ORDER BY id', [contractId]);
+    res.json(rows);
+  } catch (err) { next(err.statusCode ? err : createHttpError(500, 'Failed to fetch checklist')); }
+};
+const updateDocumentChecklist = async (req, res, next) => {
+  const contractId = Number(req.params.id); const documentId = Number(req.params.documentId);
+  if (!Number.isInteger(contractId) || !Number.isInteger(documentId)) return next(createHttpError(400, 'Invalid id'));
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN'); await assertContractExists(client, contractId);
+    const { rows } = await client.query('UPDATE contract_required_documents SET is_uploaded=$1, notes=$2, updated_at=NOW() WHERE id=$3 AND contract_id=$4 RETURNING *', [Boolean(req.body?.is_uploaded), normalizeText(req.body?.notes) || null, documentId, contractId]);
+    if (!rows.length) return next(createHttpError(404, 'Checklist document not found'));
+    await recordContractLog(client, { contractId, action: 'contract_document_checklist_updated', actorId: req.user?.id || null, details: { document_id: documentId, is_uploaded: rows[0].is_uploaded } });
+    await client.query('COMMIT'); res.json(rows[0]);
+  } catch (err) { await client.query('ROLLBACK').catch(() => {}); next(err.statusCode ? err : createHttpError(500, 'Failed to update checklist')); } finally { client.release(); }
+};
+
+const getContractRisk = async (req, res, next) => {
+  const contractId = Number(req.params.id); if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
+  try {
+    const c = await assertContractExists(pool, contractId);
+    const consumption = await new Promise(resolve => getContractConsumption({ params: { id: contractId } }, { json: resolve }, () => resolve({})));
+    const flags = []; let score = 0; const today = new Date();
+    if (c.status === 'expired' || (c.end_date && new Date(c.end_date) < today)) { score += 25; flags.push('Contract expired'); }
+    if (c.end_date && c.renewal_notice_days) { const days = (new Date(c.end_date) - today) / 86400000; if (days >= 0 && days <= Number(c.renewal_notice_days)) { score += 15; flags.push('Expiring within renewal notice window'); } }
+    const docs = await pool.query(`SELECT COUNT(*) FILTER (WHERE document_type='Final Signed Contract' AND is_uploaded=TRUE)::int AS ok FROM contract_required_documents WHERE contract_id=$1`, [contractId]);
+    if (!(docs.rows[0] && docs.rows[0].ok > 0)) { score += 15; flags.push('Final signed contract missing'); }
+    if ((consumption.consumed_percentage || 0) > 100) { score += 20; flags.push('Consumption above 100%'); } else if ((consumption.consumed_percentage || 0) > 80) { score += 10; flags.push('Consumption above 80%'); }
+    if ((Number(c.contract_value) || 0) > 1000000) { score += 10; flags.push('High contract value'); }
+    const level = score >= 70 ? 'Critical' : score >= 45 ? 'High' : score >= 20 ? 'Medium' : 'Low';
+    res.json({ risk_score: score, risk_level: level, risk_flags: flags });
+  } catch (err) { next(err.statusCode ? err : createHttpError(500, 'Failed to compute risk')); }
+};
+
 module.exports = {
   listContracts,
   getContractById,
@@ -2528,4 +2782,15 @@ module.exports = {
   getEvaluationCandidates,
   listContractAmendments,
   createContractAmendment,
+  submitContractReview,
+  listContractApprovals,
+  decideContractApproval,
+  listContractItems,
+  createContractItem,
+  updateContractItem,
+  deleteContractItem,
+  getDocumentChecklist,
+  updateDocumentChecklist,
+  getContractConsumption,
+  getContractRisk,
 };

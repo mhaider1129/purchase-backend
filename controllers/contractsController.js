@@ -14,6 +14,12 @@ const { removeObject } = require('../utils/storage');
 
 const CONTRACT_STATUSES = [
   'draft',
+  'legal-review',
+  'technical-review',
+  'finance-review',
+  'scm-review',
+  'ceo-coo-approval',
+  'signed',
   'active',
   'on-hold',
   'expired',
@@ -503,7 +509,7 @@ const ensureContractsTable = (() => {
         end_date DATE,
         contract_value NUMERIC(14, 2),
         amount_paid NUMERIC(14, 2) DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'active',
+        status TEXT NOT NULL DEFAULT 'draft',
         description TEXT,
         delivery_terms TEXT,
         warranty_terms TEXT,
@@ -927,14 +933,24 @@ const ensureContractsPhaseTwoTables = (() => {
           CREATE TABLE IF NOT EXISTS contract_approvals (
             id SERIAL PRIMARY KEY,
             contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            workflow_level INTEGER NOT NULL DEFAULT 1,
+            is_active_level BOOLEAN NOT NULL DEFAULT FALSE,
             stage TEXT NOT NULL,
+            reviewer_role TEXT,
             reviewer_id INTEGER,
             decision TEXT,
             comments TEXT,
+            assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             decided_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
         `);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS workflow_level INTEGER NOT NULL DEFAULT 1`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS is_active_level BOOLEAN NOT NULL DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS reviewer_role TEXT`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`
           CREATE TABLE IF NOT EXISTS contract_logs (
             id SERIAL PRIMARY KEY,
@@ -1333,7 +1349,7 @@ const createContract = async (req, res, next) => {
   const changeManagementTerms = normalizeText(req.body?.change_management_terms) || null;
   const terminationExitTerms = normalizeText(req.body?.termination_exit_terms) || null;
   const alertRules = normalizeText(req.body?.alert_rules) || null;
-  const rawStatus = req.body?.status || 'active';
+  const rawStatus = req.body?.status || 'draft';
 
   if (!title) {
     return next(createHttpError(400, 'title is required'));
@@ -2242,7 +2258,7 @@ const renewContract = async (req, res, next) => {
     return next(createHttpError(400, 'end_date must be after start_date'));
   }
 
-  const nextStatus = (req.body?.status || 'active').trim().toLowerCase();
+  const nextStatus = (req.body?.status || 'draft').trim().toLowerCase();
   if (!CONTRACT_STATUSES.includes(nextStatus)) {
     return next(createHttpError(400, 'Invalid status for renewal'));
   }

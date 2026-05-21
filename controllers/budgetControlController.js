@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
-const ensureFinanceCoreTables = require('../utils/ensureFinanceCoreTables');
+const { ensureFinanceCoreTables } = require('../utils/ensureFinanceCoreTables');
 
 const requireBudgetAccess = (req) => {
   const role = String(req.user?.role || '').toLowerCase();

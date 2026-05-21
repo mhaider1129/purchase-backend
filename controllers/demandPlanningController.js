@@ -122,6 +122,63 @@ function applySopAdjustments(forecast, sopAdjustments = []) {
   }));
 }
 
+function buildIndexedFactorMap(entries = []) {
+  return (Array.isArray(entries) ? entries : []).reduce((acc, entry) => {
+    if (!entry || !entry.period) return acc;
+    acc[entry.period] = Number(entry.factor ?? entry.multiplier ?? entry.value);
+    return acc;
+  }, {});
+}
+
+function clampFactor(rawFactor, fallback = 1) {
+  const numeric = Number(rawFactor);
+  if (Number.isNaN(numeric) || !Number.isFinite(numeric)) return fallback;
+  return Math.max(numeric, 0);
+}
+
+function applyAdvancedDemandAdjustments(forecast, options = {}) {
+  const {
+    seasonality = [],
+    department_activity = [],
+    oncology_protocols = [],
+    stock_outs = [],
+    min_monthly_stock = null,
+    max_monthly_stock = null,
+  } = options;
+
+  const seasonalityByMonth = buildIndexedFactorMap(seasonality);
+  const departmentByMonth = buildIndexedFactorMap(department_activity);
+  const oncologyByMonth = buildIndexedFactorMap(oncology_protocols);
+  const stockOutByMonth = buildIndexedFactorMap(stock_outs);
+  const minStock = min_monthly_stock == null ? null : Number(min_monthly_stock);
+  const maxStock = max_monthly_stock == null ? null : Number(max_monthly_stock);
+
+  return forecast.map(entry => {
+    const base = Number(entry.forecast_qty) || 0;
+    const month = entry.month;
+    const seasonalityFactor = clampFactor(seasonalityByMonth[month], 1);
+    const departmentFactor = clampFactor(departmentByMonth[month], 1);
+    const oncologyFactor = clampFactor(oncologyByMonth[month], 1);
+    const stockOutCorrection = clampFactor(stockOutByMonth[month], 1);
+    const multiplier = seasonalityFactor * departmentFactor * oncologyFactor * stockOutCorrection;
+    let adjusted = base * multiplier;
+
+    if (!Number.isNaN(minStock) && minStock >= 0) adjusted = Math.max(adjusted, minStock);
+    if (!Number.isNaN(maxStock) && maxStock >= 0) adjusted = Math.min(adjusted, maxStock);
+
+    return {
+      ...entry,
+      forecast_qty: Number(adjusted.toFixed(2)),
+      driver_factors: {
+        seasonality: seasonalityFactor,
+        department_activity: departmentFactor,
+        oncology_protocols: oncologyFactor,
+        stock_out_correction: stockOutCorrection,
+      },
+    };
+  });
+}
+
 async function fetchMonthlyDemand(itemName, months = DEFAULT_HISTORY_MONTHS) {
   const { rows: tableCheck } = await pool.query(
     "SELECT to_regclass('public.monthly_dispensing') AS table_name",
@@ -209,7 +266,20 @@ async function getPlanningSettings(warehouseId = null) {
 }
 
 const getDemandForecast = async (req, res, next) => {
-  const { item_name: itemName, warehouse_id: warehouseId = null, method = 'moving_average', horizon_months: providedHorizonMonths, window_size: providedWindowSize, sop_adjustments: sopAdjustments = [] } = req.body;
+  const {
+    item_name: itemName,
+    warehouse_id: warehouseId = null,
+    method = 'moving_average',
+    horizon_months: providedHorizonMonths,
+    window_size: providedWindowSize,
+    sop_adjustments: sopAdjustments = [],
+    seasonality = [],
+    oncology_protocols = [],
+    department_activity = [],
+    stock_outs = [],
+    min_monthly_stock = null,
+    max_monthly_stock = null,
+  } = req.body;
 
   if (!itemName) {
     return next(createHttpError(400, 'item_name is required'));
@@ -232,7 +302,15 @@ const getDemandForecast = async (req, res, next) => {
       forecast = movingAverage(history, horizon, Number(windowSize) || 3);
     }
 
-    const adjustedForecast = applySopAdjustments(forecast, sopAdjustments);
+    const adjustedForSop = applySopAdjustments(forecast, sopAdjustments);
+    const adjustedForecast = applyAdvancedDemandAdjustments(adjustedForSop, {
+      seasonality,
+      oncology_protocols,
+      department_activity,
+      stock_outs,
+      min_monthly_stock,
+      max_monthly_stock,
+    });
 
     res.json({
       item_name: itemName,
@@ -244,6 +322,12 @@ const getDemandForecast = async (req, res, next) => {
       assumptions: {
         window_size: Number(windowSize) || 3,
         sop_adjustments: sopAdjustments,
+        seasonality,
+        oncology_protocols,
+        department_activity,
+        stock_outs,
+        min_monthly_stock,
+        max_monthly_stock,
       },
     });
   } catch (err) {

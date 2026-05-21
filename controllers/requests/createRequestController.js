@@ -683,7 +683,7 @@ const createRequest = async (req, res, next) => {
           request_type,
           approval_level,
           requestDomain,
-          warehouse_id ?? null,
+          supplyWarehouseId ?? req.user?.warehouse_id ?? null,
         );
       }
     }

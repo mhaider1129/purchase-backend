@@ -1114,6 +1114,16 @@ const ensureContractsPhaseThreeTables = (() => {
     await ensuringPromise;
   };
 })();
+
+const runEnsureDdl = async (sql) => {
+  try {
+    await pool.query(sql);
+  } catch (err) {
+    if (err?.code === '42501' || err?.code === '42P07' || err?.code === '42710') return;
+    throw err;
+  }
+};
+
 const OBLIGATION_TYPES = ['general','payment','delivery','reporting','compliance','maintenance','warranty','sla','renewal','termination','documentation','other'];
 const OBLIGATION_RECURRENCES = ['none','daily','weekly','monthly','quarterly','semiannual','annual','custom'];
 const OBLIGATION_PRIORITIES = ['low','medium','high','critical'];
@@ -1125,7 +1135,7 @@ const ensureContractsPhaseFourTables = (() => {
   return async () => {
     if (ensured) return;
     if (!ensuringPromise) ensuringPromise = (async () => {
-      await pool.query(`CREATE TABLE IF NOT EXISTS contract_obligations (
+      await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_obligations (
         id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, title TEXT NOT NULL, description TEXT,
         obligation_type TEXT NOT NULL DEFAULT 'general', owner_user_id BIGINT, owner_department_id BIGINT,
         due_date DATE, recurrence TEXT NOT NULL DEFAULT 'none', recurrence_interval INTEGER, next_due_date DATE, evidence_required BOOLEAN NOT NULL DEFAULT FALSE, evidence_document_id BIGINT,
@@ -1136,22 +1146,22 @@ const ensureContractsPhaseFourTables = (() => {
         CONSTRAINT contract_obligations_priority_check CHECK (priority = ANY(ARRAY['low','medium','high','critical'])),
         CONSTRAINT contract_obligations_status_check CHECK (status = ANY(ARRAY['open','in_progress','completed','overdue','waived','cancelled']))
       )`);
-      await pool.query(`CREATE TABLE IF NOT EXISTS contract_renewal_events (
+      await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_renewal_events (
         id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, renewal_type TEXT, renewal_date DATE, notice_days INTEGER NOT NULL DEFAULT 90, alert_date DATE,
         status TEXT NOT NULL DEFAULT 'pending', decision TEXT, decision_notes TEXT, decided_by BIGINT, decided_at TIMESTAMPTZ, created_by BIGINT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT contract_renewal_events_status_check CHECK (status = ANY(ARRAY['pending','alerted','under_review','renewed','not_renewed','cancelled','completed'])),
         CONSTRAINT contract_renewal_events_decision_check CHECK (decision IS NULL OR decision = ANY(ARRAY['renew','do_not_renew','renegotiate','terminate','extend_temporarily']))
       )`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_obligations_contract_id_idx ON contract_obligations(contract_id)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_obligations_owner_user_id_idx ON contract_obligations(owner_user_id)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_obligations_due_date_idx ON contract_obligations(due_date)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_obligations_status_idx ON contract_obligations(status)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_obligations_next_due_date_idx ON contract_obligations(next_due_date)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_renewal_events_contract_id_idx ON contract_renewal_events(contract_id)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_renewal_events_alert_date_idx ON contract_renewal_events(alert_date)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_renewal_events_renewal_date_idx ON contract_renewal_events(renewal_date)`);
-      await pool.query(`CREATE INDEX IF NOT EXISTS contract_renewal_events_status_idx ON contract_renewal_events(status)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_contract_id_idx ON contract_obligations(contract_id)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_owner_user_id_idx ON contract_obligations(owner_user_id)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_due_date_idx ON contract_obligations(due_date)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_status_idx ON contract_obligations(status)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_next_due_date_idx ON contract_obligations(next_due_date)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_contract_id_idx ON contract_renewal_events(contract_id)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_alert_date_idx ON contract_renewal_events(alert_date)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_renewal_date_idx ON contract_renewal_events(renewal_date)`);
+      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_status_idx ON contract_renewal_events(status)`);
       ensured = true;
     })().finally(()=>{ensuringPromise=null;});
     await ensuringPromise;
@@ -3181,10 +3191,10 @@ const MATCHING_STATUSES = ['not_checked','matched','warning','failed'];
 const PAYMENT_STATUSES = ['pending','approved','paid','rejected','cancelled'];
 const CONSUMPTION_SOURCES = ['manual','invoice','purchase_order','goods_receipt','service_entry','adjustment'];
 const ensureContractsPhaseFiveTables = (() => { let ensured=false; let p=null; return async()=>{ if(ensured) return; if(!p) p=(async()=>{
-  await pool.query(`CREATE TABLE IF NOT EXISTS contract_invoices (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, supplier_id BIGINT, invoice_number TEXT NOT NULL, invoice_date DATE, due_date DATE, received_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0, discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0, retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0, penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0, net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', matching_status TEXT NOT NULL DEFAULT 'not_checked', matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb, notes TEXT, document_id BIGINT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS contract_payments (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, payment_reference TEXT, payment_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', method TEXT, status TEXT NOT NULL DEFAULT 'pending', notes TEXT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS contract_consumption (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, source_type TEXT NOT NULL DEFAULT 'manual', source_id BIGINT, consumption_date DATE NOT NULL DEFAULT CURRENT_DATE, description TEXT, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  for (const q of [`CREATE INDEX IF NOT EXISTS contract_invoices_contract_id_idx ON contract_invoices(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_supplier_id_idx ON contract_invoices(supplier_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_invoice_number_idx ON contract_invoices(invoice_number)`,`CREATE INDEX IF NOT EXISTS contract_invoices_status_idx ON contract_invoices(status)`,`CREATE INDEX IF NOT EXISTS contract_invoices_matching_status_idx ON contract_invoices(matching_status)`,`CREATE INDEX IF NOT EXISTS contract_payments_contract_id_idx ON contract_payments(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_invoice_id_idx ON contract_payments(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_status_idx ON contract_payments(status)`,`CREATE INDEX IF NOT EXISTS contract_consumption_contract_id_idx ON contract_consumption(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_invoice_id_idx ON contract_consumption(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_consumption_date_idx ON contract_consumption(consumption_date)`]) await pool.query(q);
+  await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_invoices (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, supplier_id BIGINT, invoice_number TEXT NOT NULL, invoice_date DATE, due_date DATE, received_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0, discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0, retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0, penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0, net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', matching_status TEXT NOT NULL DEFAULT 'not_checked', matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb, notes TEXT, document_id BIGINT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_payments (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, payment_reference TEXT, payment_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', method TEXT, status TEXT NOT NULL DEFAULT 'pending', notes TEXT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_consumption (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, source_type TEXT NOT NULL DEFAULT 'manual', source_id BIGINT, consumption_date DATE NOT NULL DEFAULT CURRENT_DATE, description TEXT, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  for (const q of [`CREATE INDEX IF NOT EXISTS contract_invoices_contract_id_idx ON contract_invoices(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_supplier_id_idx ON contract_invoices(supplier_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_invoice_number_idx ON contract_invoices(invoice_number)`,`CREATE INDEX IF NOT EXISTS contract_invoices_status_idx ON contract_invoices(status)`,`CREATE INDEX IF NOT EXISTS contract_invoices_matching_status_idx ON contract_invoices(matching_status)`,`CREATE INDEX IF NOT EXISTS contract_payments_contract_id_idx ON contract_payments(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_invoice_id_idx ON contract_payments(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_status_idx ON contract_payments(status)`,`CREATE INDEX IF NOT EXISTS contract_consumption_contract_id_idx ON contract_consumption(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_invoice_id_idx ON contract_consumption(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_consumption_date_idx ON contract_consumption(consumption_date)`]) await runEnsureDdl(q);
   ensured=true; })().finally(()=>p=null); await p; };})();
 const evaluateContractInvoiceMatching = ({invoice, contract, previousInvoices=[], payments=[]}) => { const flags=[]; const amt=Number(invoice.amount||0), retention=Number(invoice.retention_amount||0), penalty=Number(invoice.penalty_amount||0), tax=Number(invoice.tax_amount||0), discount=Number(invoice.discount_amount||0); const net=Number((amt+tax-discount-retention-penalty).toFixed(2));
  if(!contract) flags.push('missing_contract'); if(!invoice.supplier_id) flags.push('missing_supplier'); if(!invoice.invoice_date) flags.push('missing_invoice_date'); if(amt<=0) flags.push('negative_or_zero_invoice_amount'); if(retention>amt) flags.push('retention_amount_exceeds_invoice'); if(penalty>amt) flags.push('penalty_amount_exceeds_invoice');

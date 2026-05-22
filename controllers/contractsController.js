@@ -1127,9 +1127,9 @@ const ensureContractsPhaseFourTables = (() => {
     if (!ensuringPromise) ensuringPromise = (async () => {
       await pool.query(`CREATE TABLE IF NOT EXISTS contract_obligations (
         id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, title TEXT NOT NULL, description TEXT,
-        obligation_type TEXT NOT NULL DEFAULT 'general', owner_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL, owner_department_id BIGINT REFERENCES departments(id) ON DELETE SET NULL,
-        due_date DATE, recurrence TEXT NOT NULL DEFAULT 'none', recurrence_interval INTEGER, next_due_date DATE, evidence_required BOOLEAN NOT NULL DEFAULT FALSE, evidence_document_id BIGINT REFERENCES contract_documents(id) ON DELETE SET NULL,
-        priority TEXT NOT NULL DEFAULT 'medium', status TEXT NOT NULL DEFAULT 'open', completion_notes TEXT, completed_at TIMESTAMPTZ, completed_by BIGINT REFERENCES users(id) ON DELETE SET NULL, created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        obligation_type TEXT NOT NULL DEFAULT 'general', owner_user_id BIGINT, owner_department_id BIGINT,
+        due_date DATE, recurrence TEXT NOT NULL DEFAULT 'none', recurrence_interval INTEGER, next_due_date DATE, evidence_required BOOLEAN NOT NULL DEFAULT FALSE, evidence_document_id BIGINT,
+        priority TEXT NOT NULL DEFAULT 'medium', status TEXT NOT NULL DEFAULT 'open', completion_notes TEXT, completed_at TIMESTAMPTZ, completed_by BIGINT, created_by BIGINT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT contract_obligations_type_check CHECK (obligation_type = ANY(ARRAY['general','payment','delivery','reporting','compliance','maintenance','warranty','sla','renewal','termination','documentation','other'])),
         CONSTRAINT contract_obligations_recurrence_check CHECK (recurrence = ANY(ARRAY['none','daily','weekly','monthly','quarterly','semiannual','annual','custom'])),
@@ -1138,7 +1138,7 @@ const ensureContractsPhaseFourTables = (() => {
       )`);
       await pool.query(`CREATE TABLE IF NOT EXISTS contract_renewal_events (
         id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, renewal_type TEXT, renewal_date DATE, notice_days INTEGER NOT NULL DEFAULT 90, alert_date DATE,
-        status TEXT NOT NULL DEFAULT 'pending', decision TEXT, decision_notes TEXT, decided_by BIGINT REFERENCES users(id) ON DELETE SET NULL, decided_at TIMESTAMPTZ, created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'pending', decision TEXT, decision_notes TEXT, decided_by BIGINT, decided_at TIMESTAMPTZ, created_by BIGINT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT contract_renewal_events_status_check CHECK (status = ANY(ARRAY['pending','alerted','under_review','renewed','not_renewed','cancelled','completed'])),
         CONSTRAINT contract_renewal_events_decision_check CHECK (decision IS NULL OR decision = ANY(ARRAY['renew','do_not_renew','renegotiate','terminate','extend_temporarily']))
@@ -1741,8 +1741,22 @@ const createContract = async (req, res, next) => {
       );
     }
     const contract = serializeContract(rows[0], supplierCompliance);
-    await ensureContractsPhaseFourTables();
-    await ensurePendingRenewalEvent(client, { contractId: contract.id, renewalDate: contract.end_date, noticeDays: contract.renewal_notice_days || 90, renewalType: contract.renewal_type || null, actorId: req.user?.id || null });
+    try {
+      await ensureContractsPhaseThreeTables();
+      await ensureContractsPhaseFourTables();
+      await ensurePendingRenewalEvent(client, {
+        contractId: contract.id,
+        renewalDate: contract.end_date,
+        noticeDays: contract.renewal_notice_days || 90,
+        renewalType: contract.renewal_type || null,
+        actorId: req.user?.id || null,
+      });
+    } catch (renewalEventErr) {
+      console.warn(
+        '⚠️ Contract created without renewal event bootstrap:',
+        renewalEventErr?.message || renewalEventErr
+      );
+    }
 
     await client.query('SAVEPOINT contract_evaluation_bootstrap');
     try {
@@ -3167,9 +3181,9 @@ const MATCHING_STATUSES = ['not_checked','matched','warning','failed'];
 const PAYMENT_STATUSES = ['pending','approved','paid','rejected','cancelled'];
 const CONSUMPTION_SOURCES = ['manual','invoice','purchase_order','goods_receipt','service_entry','adjustment'];
 const ensureContractsPhaseFiveTables = (() => { let ensured=false; let p=null; return async()=>{ if(ensured) return; if(!p) p=(async()=>{
-  await pool.query(`CREATE TABLE IF NOT EXISTS contract_invoices (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, supplier_id BIGINT REFERENCES suppliers(id) ON DELETE SET NULL, invoice_number TEXT NOT NULL, invoice_date DATE, due_date DATE, received_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0, discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0, retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0, penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0, net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', matching_status TEXT NOT NULL DEFAULT 'not_checked', matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb, notes TEXT, document_id BIGINT REFERENCES contract_documents(id) ON DELETE SET NULL, created_by BIGINT REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS contract_payments (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, payment_reference TEXT, payment_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', method TEXT, status TEXT NOT NULL DEFAULT 'pending', notes TEXT, created_by BIGINT REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS contract_consumption (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, source_type TEXT NOT NULL DEFAULT 'manual', source_id BIGINT, consumption_date DATE NOT NULL DEFAULT CURRENT_DATE, description TEXT, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, created_by BIGINT REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS contract_invoices (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, supplier_id BIGINT, invoice_number TEXT NOT NULL, invoice_date DATE, due_date DATE, received_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0, discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0, retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0, penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0, net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', matching_status TEXT NOT NULL DEFAULT 'not_checked', matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb, notes TEXT, document_id BIGINT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS contract_payments (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, payment_reference TEXT, payment_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', method TEXT, status TEXT NOT NULL DEFAULT 'pending', notes TEXT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS contract_consumption (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, source_type TEXT NOT NULL DEFAULT 'manual', source_id BIGINT, consumption_date DATE NOT NULL DEFAULT CURRENT_DATE, description TEXT, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   for (const q of [`CREATE INDEX IF NOT EXISTS contract_invoices_contract_id_idx ON contract_invoices(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_supplier_id_idx ON contract_invoices(supplier_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_invoice_number_idx ON contract_invoices(invoice_number)`,`CREATE INDEX IF NOT EXISTS contract_invoices_status_idx ON contract_invoices(status)`,`CREATE INDEX IF NOT EXISTS contract_invoices_matching_status_idx ON contract_invoices(matching_status)`,`CREATE INDEX IF NOT EXISTS contract_payments_contract_id_idx ON contract_payments(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_invoice_id_idx ON contract_payments(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_status_idx ON contract_payments(status)`,`CREATE INDEX IF NOT EXISTS contract_consumption_contract_id_idx ON contract_consumption(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_invoice_id_idx ON contract_consumption(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_consumption_date_idx ON contract_consumption(consumption_date)`]) await pool.query(q);
   ensured=true; })().finally(()=>p=null); await p; };})();
 const evaluateContractInvoiceMatching = ({invoice, contract, previousInvoices=[], payments=[]}) => { const flags=[]; const amt=Number(invoice.amount||0), retention=Number(invoice.retention_amount||0), penalty=Number(invoice.penalty_amount||0), tax=Number(invoice.tax_amount||0), discount=Number(invoice.discount_amount||0); const net=Number((amt+tax-discount-retention-penalty).toFixed(2));

@@ -203,6 +203,35 @@ CREATE TABLE public.commitment_ledger (
   CONSTRAINT commitment_ledger_budget_envelope_id_fkey FOREIGN KEY (budget_envelope_id) REFERENCES public.budget_envelopes(id),
   CONSTRAINT commitment_ledger_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.contract_ai_extractions (
+  id bigint NOT NULL DEFAULT nextval('contract_ai_extractions_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  document_id bigint,
+  document_version_id bigint,
+  extraction_status text NOT NULL DEFAULT 'pending'::text,
+  provider text,
+  model text,
+  extracted_parties jsonb NOT NULL DEFAULT '{}'::jsonb,
+  extracted_dates jsonb NOT NULL DEFAULT '{}'::jsonb,
+  extracted_value jsonb NOT NULL DEFAULT '{}'::jsonb,
+  extracted_payment_terms jsonb NOT NULL DEFAULT '{}'::jsonb,
+  extracted_renewal_clause jsonb NOT NULL DEFAULT '{}'::jsonb,
+  extracted_termination_clause jsonb NOT NULL DEFAULT '{}'::jsonb,
+  extracted_obligations jsonb NOT NULL DEFAULT '[]'::jsonb,
+  extracted_risks jsonb NOT NULL DEFAULT '[]'::jsonb,
+  summary text,
+  confidence_score numeric,
+  raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  error_message text,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_ai_extractions_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_ai_extractions_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_ai_extractions_document_id_fkey FOREIGN KEY (document_id) REFERENCES public.contract_documents(id),
+  CONSTRAINT contract_ai_extractions_document_version_id_fkey FOREIGN KEY (document_version_id) REFERENCES public.contract_document_versions(id),
+  CONSTRAINT contract_ai_extractions_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
 CREATE TABLE public.contract_alerts (
   id integer NOT NULL DEFAULT nextval('contract_alerts_id_seq'::regclass),
   contract_id integer NOT NULL,
@@ -270,6 +299,58 @@ CREATE TABLE public.contract_clauses (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT contract_clauses_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.contract_consumption (
+  id bigint NOT NULL DEFAULT nextval('contract_consumption_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  source_type text NOT NULL DEFAULT 'manual'::text,
+  source_id bigint,
+  consumption_date date NOT NULL DEFAULT CURRENT_DATE,
+  description text,
+  amount numeric NOT NULL DEFAULT 0,
+  currency text NOT NULL DEFAULT 'IQD'::text,
+  invoice_id bigint,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_consumption_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_consumption_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_consumption_invoice_id_fkey FOREIGN KEY (invoice_id) REFERENCES public.contract_invoices(id),
+  CONSTRAINT contract_consumption_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
+CREATE TABLE public.contract_document_versions (
+  id bigint NOT NULL DEFAULT nextval('contract_document_versions_id_seq'::regclass),
+  document_id bigint NOT NULL,
+  contract_id bigint NOT NULL,
+  version_number integer NOT NULL,
+  file_name text,
+  file_url text,
+  storage_path text,
+  mime_type text,
+  file_size bigint,
+  checksum text,
+  uploaded_by bigint,
+  uploaded_at timestamp with time zone NOT NULL DEFAULT now(),
+  is_current boolean NOT NULL DEFAULT false,
+  notes text,
+  CONSTRAINT contract_document_versions_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_document_versions_document_id_fkey FOREIGN KEY (document_id) REFERENCES public.contract_documents(id),
+  CONSTRAINT contract_document_versions_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_document_versions_uploaded_by_fkey FOREIGN KEY (uploaded_by) REFERENCES public.users(id)
+);
+CREATE TABLE public.contract_documents (
+  id bigint NOT NULL DEFAULT nextval('contract_documents_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  document_type text NOT NULL,
+  title text,
+  description text,
+  current_version_id bigint,
+  status text NOT NULL DEFAULT 'active'::text,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_documents_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_documents_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_documents_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
 CREATE TABLE public.contract_evaluations (
   id integer NOT NULL DEFAULT nextval('contract_evaluations_id_seq'::regclass),
   contract_id integer NOT NULL,
@@ -289,6 +370,35 @@ CREATE TABLE public.contract_evaluations (
   CONSTRAINT contract_evaluations_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
   CONSTRAINT contract_evaluations_evaluator_id_fkey FOREIGN KEY (evaluator_id) REFERENCES public.users(id),
   CONSTRAINT contract_evaluations_criterion_id_fkey FOREIGN KEY (criterion_id) REFERENCES public.evaluation_criteria(id)
+);
+CREATE TABLE public.contract_invoices (
+  id bigint NOT NULL DEFAULT nextval('contract_invoices_id_seq'::regclass),
+  contract_id bigint,
+  supplier_id bigint,
+  invoice_number text NOT NULL,
+  invoice_date date,
+  due_date date,
+  received_date date,
+  amount numeric NOT NULL DEFAULT 0,
+  currency text NOT NULL DEFAULT 'IQD'::text,
+  tax_amount numeric NOT NULL DEFAULT 0,
+  discount_amount numeric NOT NULL DEFAULT 0,
+  retention_amount numeric NOT NULL DEFAULT 0,
+  penalty_amount numeric NOT NULL DEFAULT 0,
+  net_payable_amount numeric NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'pending'::text,
+  matching_status text NOT NULL DEFAULT 'not_checked'::text,
+  matching_flags jsonb NOT NULL DEFAULT '[]'::jsonb,
+  notes text,
+  document_id bigint,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_invoices_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_invoices_document_id_fkey FOREIGN KEY (document_id) REFERENCES public.contract_documents(id),
+  CONSTRAINT contract_invoices_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT contract_invoices_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_invoices_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id)
 );
 CREATE TABLE public.contract_legal_reviews (
   id bigint NOT NULL DEFAULT nextval('contract_legal_reviews_id_seq'::regclass),
@@ -359,6 +469,41 @@ CREATE TABLE public.contract_payments (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT contract_payments_pkey PRIMARY KEY (id),
   CONSTRAINT contract_payments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+);
+CREATE TABLE public.contract_renewal_events (
+  id bigint NOT NULL DEFAULT nextval('contract_renewal_events_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  renewal_type text,
+  renewal_date date,
+  notice_days integer NOT NULL DEFAULT 90,
+  alert_date date,
+  status text NOT NULL DEFAULT 'pending'::text,
+  decision text,
+  decision_notes text,
+  decided_by bigint,
+  decided_at timestamp with time zone,
+  created_by bigint,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_renewal_events_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_renewal_events_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_renewal_events_decided_by_fkey FOREIGN KEY (decided_by) REFERENCES public.users(id),
+  CONSTRAINT contract_renewal_events_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
+CREATE TABLE public.contract_risk_assessments (
+  id bigint NOT NULL DEFAULT nextval('contract_risk_assessments_id_seq'::regclass),
+  contract_id bigint NOT NULL,
+  risk_score integer NOT NULL DEFAULT 0,
+  risk_level text NOT NULL DEFAULT 'low'::text,
+  risk_factors jsonb NOT NULL DEFAULT '[]'::jsonb,
+  assessed_at timestamp with time zone NOT NULL DEFAULT now(),
+  assessed_by bigint,
+  assessment_source text NOT NULL DEFAULT 'system'::text,
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_risk_assessments_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_risk_assessments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_risk_assessments_assessed_by_fkey FOREIGN KEY (assessed_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.contract_sla_events (
   id bigint NOT NULL DEFAULT nextval('contract_sla_events_id_seq'::regclass),
@@ -1889,6 +2034,10 @@ CREATE TABLE public.warehouse_supply_items (
   quantity integer NOT NULL,
   created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
   requested_item_id smallint,
+  approval_status text DEFAULT 'Pending'::text,
+  approval_comments text,
+  approved_at timestamp with time zone,
+  updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT warehouse_supply_items_pkey PRIMARY KEY (id),
   CONSTRAINT warehouse_supply_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id)
 );

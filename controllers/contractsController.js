@@ -1232,8 +1232,11 @@ const parseContractValue = (value) => {
   }
 
   const numeric = Number(value);
-  if (Number.isNaN(numeric)) {
+  if (!Number.isFinite(numeric)) {
     throw createHttpError(400, 'contract_value must be a valid number');
+  }
+  if (Math.abs(numeric) >= 1000000000000) {
+    throw createHttpError(400, 'contract_value is too large');
   }
 
   return numeric;
@@ -1245,8 +1248,11 @@ const parseAmountPaid = (value) => {
   }
 
   const numeric = Number(value);
-  if (Number.isNaN(numeric)) {
+  if (!Number.isFinite(numeric)) {
     throw createHttpError(400, 'amount_paid must be a valid number');
+  }
+  if (Math.abs(numeric) >= 1000000000000) {
+    throw createHttpError(400, 'amount_paid is too large');
   }
 
   if (numeric < 0) {

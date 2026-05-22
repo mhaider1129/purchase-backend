@@ -1153,6 +1153,17 @@ const ensureContractsPhaseFourTables = (() => {
         CONSTRAINT contract_renewal_events_status_check CHECK (status = ANY(ARRAY['pending','alerted','under_review','renewed','not_renewed','cancelled','completed'])),
         CONSTRAINT contract_renewal_events_decision_check CHECK (decision IS NULL OR decision = ANY(ARRAY['renew','do_not_renew','renegotiate','terminate','extend_temporarily']))
       )`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS owner_user_id BIGINT`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS owner_department_id BIGINT`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS recurrence TEXT NOT NULL DEFAULT 'none'`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS next_due_date DATE`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS evidence_required BOOLEAN NOT NULL DEFAULT FALSE`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS evidence_document_id BIGINT`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'medium'`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS completed_by BIGINT`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
       await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_contract_id_idx ON contract_obligations(contract_id)`);
       await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_owner_user_id_idx ON contract_obligations(owner_user_id)`);
       await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_due_date_idx ON contract_obligations(due_date)`);
@@ -3192,7 +3203,28 @@ const PAYMENT_STATUSES = ['pending','approved','paid','rejected','cancelled'];
 const CONSUMPTION_SOURCES = ['manual','invoice','purchase_order','goods_receipt','service_entry','adjustment'];
 const ensureContractsPhaseFiveTables = (() => { let ensured=false; let p=null; return async()=>{ if(ensured) return; if(!p) p=(async()=>{
   await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_invoices (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, supplier_id BIGINT, invoice_number TEXT NOT NULL, invoice_date DATE, due_date DATE, received_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0, discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0, retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0, penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0, net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', matching_status TEXT NOT NULL DEFAULT 'not_checked', matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb, notes TEXT, document_id BIGINT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS supplier_id BIGINT`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS invoice_number TEXT`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS invoice_date DATE`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS due_date DATE`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS received_date DATE`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS matching_status TEXT NOT NULL DEFAULT 'not_checked'`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS document_id BIGINT`);
+  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
   await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_payments (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, payment_reference TEXT, payment_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', method TEXT, status TEXT NOT NULL DEFAULT 'pending', notes TEXT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL`);
+  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS payment_reference TEXT`);
+  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS method TEXT`);
+  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`);
+  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
   await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_consumption (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, source_type TEXT NOT NULL DEFAULT 'manual', source_id BIGINT, consumption_date DATE NOT NULL DEFAULT CURRENT_DATE, description TEXT, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   for (const q of [`CREATE INDEX IF NOT EXISTS contract_invoices_contract_id_idx ON contract_invoices(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_supplier_id_idx ON contract_invoices(supplier_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_invoice_number_idx ON contract_invoices(invoice_number)`,`CREATE INDEX IF NOT EXISTS contract_invoices_status_idx ON contract_invoices(status)`,`CREATE INDEX IF NOT EXISTS contract_invoices_matching_status_idx ON contract_invoices(matching_status)`,`CREATE INDEX IF NOT EXISTS contract_payments_contract_id_idx ON contract_payments(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_invoice_id_idx ON contract_payments(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_status_idx ON contract_payments(status)`,`CREATE INDEX IF NOT EXISTS contract_consumption_contract_id_idx ON contract_consumption(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_invoice_id_idx ON contract_consumption(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_consumption_date_idx ON contract_consumption(consumption_date)`]) await runEnsureDdl(q);
   ensured=true; })().finally(()=>p=null); await p; };})();

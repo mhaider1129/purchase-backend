@@ -16,13 +16,14 @@ const CONTRACT_STATUSES = [
   'draft',
   'under_review',
   'legal_review',
-  'finance_review',
   'technical_review',
-  'pending_signature',
+  'finance_review',
+  'executive_approval',
+  'sent_for_signature',
   'active',
-  'expiring',
-  'expired',
+  'expiring_soon',
   'renewed',
+  'expired',
   'terminated',
   'archived',
 ];
@@ -30,11 +31,35 @@ const LEGACY_STATUS_MAP = {
   'legal-review': 'legal_review',
   'technical-review': 'technical_review',
   'finance-review': 'finance_review',
-  signed: 'pending_signature',
+  signed: 'active',
+  pending_review: 'under_review',
+  approved: 'active',
+  inactive: 'archived',
+  cancelled: 'terminated',
+  completed: 'expired',
+  pending_signature: 'sent_for_signature',
+  expiring: 'expiring_soon',
   'on-hold': 'under_review',
   'scm-review': 'under_review',
-  'ceo-coo-approval': 'under_review',
+  'ceo-coo-approval': 'executive_approval',
 };
+
+const CONTRACT_STATUS_TRANSITIONS = {
+  draft: new Set(['under_review', 'archived']),
+  under_review: new Set(['legal_review', 'technical_review', 'finance_review', 'executive_approval', 'draft', 'terminated']),
+  legal_review: new Set(['technical_review', 'finance_review', 'executive_approval', 'under_review', 'terminated']),
+  technical_review: new Set(['finance_review', 'executive_approval', 'under_review', 'terminated']),
+  finance_review: new Set(['executive_approval', 'sent_for_signature', 'under_review', 'terminated']),
+  executive_approval: new Set(['sent_for_signature', 'active', 'under_review', 'terminated']),
+  sent_for_signature: new Set(['active', 'under_review', 'terminated']),
+  active: new Set(['expiring_soon', 'renewed', 'expired', 'terminated', 'archived']),
+  expiring_soon: new Set(['renewed', 'expired', 'terminated', 'active']),
+  renewed: new Set(['active', 'expiring_soon', 'archived']),
+  expired: new Set(['renewed', 'archived']),
+  terminated: new Set(['archived']),
+  archived: new Set(),
+};
+
 
 const CRITERION_CODES = {
   CONTRACT_COMPLIANCE: 'contract_compliance',
@@ -109,6 +134,19 @@ const toJsonbParameter = value => {
   }
 
   return JSON.stringify(value);
+};
+
+
+const CLM_ADDITIONAL_PAYLOAD_KEYS = [
+  'commercial_contract_value','commercial_unit_pricing','commercial_price_validity','commercial_discount_structure','commercial_vat_tax','commercial_currency_exchange_clause','commercial_escalation_clause','commercial_minimum_order_quantity','commercial_delivery_charges','delivery_location_department_id','delivery_incoterms','delivery_lead_time_days','delivery_emergency_terms','delivery_shipping_responsibility','delivery_customs_clearance_responsibility','delivery_packaging_requirements','delivery_transportation_requirements','delivery_partial_allowed','sla_response_time','sla_resolution_time','sla_uptime_requirement','sla_preventive_maintenance_frequency','sla_emergency_support_availability','sla_spare_parts_availability','sla_escalation_path_user','payment_methods','payment_period','payment_advance_percentage','payment_retention','payment_milestone_details','payment_invoice_requirements','payment_partial_allowed','payment_penalty_rate_percent','payment_penalty_timeline','payment_penalty_max_percent',
+];
+
+const extractAdditionalClmPayload = (payload = {}) => {
+  const additional = {};
+  for (const key of CLM_ADDITIONAL_PAYLOAD_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) additional[key] = payload[key];
+  }
+  return additional;
 };
 
 const parseOptionalInteger = (value, fieldName) => {
@@ -421,7 +459,7 @@ const getEvaluationCandidates = async (req, res, next) => {
               vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
               scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules,
+              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -562,6 +600,7 @@ const ensureContractsTable = (() => {
         end_user_department_id INTEGER,
         contract_manager_id INTEGER,
         technical_department_ids JSONB,
+        clm_additional_payload JSONB,
         created_by INTEGER,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -674,6 +713,11 @@ const ensureContractsTable = (() => {
         ADD COLUMN IF NOT EXISTS change_management_terms TEXT,
         ADD COLUMN IF NOT EXISTS termination_exit_terms TEXT,
         ADD COLUMN IF NOT EXISTS alert_rules TEXT
+    `);
+
+    await pool.query(`
+      ALTER TABLE contracts
+        ADD COLUMN IF NOT EXISTS clm_additional_payload JSONB
     `);
 
     contractSectionsColumnsEnsured = true;
@@ -1050,6 +1094,34 @@ const normalizeStatus = (value) => {
   return CONTRACT_STATUSES.includes(status) ? status : null;
 };
 
+
+const computeExpiringSoonStatus = ({ status, startDate, endDate, renewalNoticeDays }) => {
+  if (!endDate) return status;
+  if (['terminated', 'archived', 'expired', 'renewed'].includes(status)) return status;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const end = new Date(endDate); end.setHours(0,0,0,0);
+  if (Number.isNaN(end.getTime())) return status;
+  if (end < today) return 'expired';
+  const noticeDays = Number.isFinite(Number(renewalNoticeDays)) && Number(renewalNoticeDays) > 0 ? Number(renewalNoticeDays) : 90;
+  const days = Math.ceil((end.getTime()-today.getTime())/86400000);
+  if (days <= noticeDays) return 'expiring_soon';
+  if (status === 'expiring_soon') return 'active';
+  return status;
+};
+
+const ensureValidStatusTransition = ({ currentStatus, nextStatus, allowArchivedSource = false }) => {
+  const normalizedCurrent = normalizeStatus(currentStatus) || 'draft';
+  const normalizedNext = normalizeStatus(nextStatus);
+  if (!normalizedNext) throw createHttpError(400, 'status is invalid');
+  if (normalizedCurrent === normalizedNext) return normalizedNext;
+  if (normalizedCurrent === 'archived' && allowArchivedSource) return normalizedNext;
+  const allowed = CONTRACT_STATUS_TRANSITIONS[normalizedCurrent] || new Set();
+  if (!allowed.has(normalizedNext)) {
+    throw createHttpError(400, `Invalid status transition from ${normalizedCurrent} to ${normalizedNext}`);
+  }
+  return normalizedNext;
+};
+
 const parseISODate = (value, fieldName) => {
   if (!value) return null;
 
@@ -1172,6 +1244,7 @@ const serializeContract = (row, compliance = null) => {
     typeof amountPaidValue === 'number' && Number.isFinite(amountPaidValue)
       ? Number(Math.min((amountPaidValue / contractValue) * 100, 9999).toFixed(2))
       : null;
+  const clmAdditionalPayload = parseJson(row.clm_additional_payload) || {};
 
   return {
     id: row.id,
@@ -1229,6 +1302,8 @@ const serializeContract = (row, compliance = null) => {
     change_management_terms: row.change_management_terms,
     termination_exit_terms: row.termination_exit_terms,
     alert_rules: row.alert_rules,
+    clm_additional_payload: clmAdditionalPayload,
+    ...clmAdditionalPayload,
     end_user_department_id: endUserDepartmentId,
     contract_manager_id: contractManagerId,
     technical_department_ids: technicalDepartmentIds,
@@ -1282,7 +1357,7 @@ const listContracts = async (req, res, next) => {
               vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
               scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules,
+              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -1329,7 +1404,7 @@ const getContractById = async (req, res, next) => {
               vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
               scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules,
+              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
               end_user_department_id, contract_manager_id, technical_department_ids,
               created_by, created_at, updated_at
          FROM contracts
@@ -1397,6 +1472,7 @@ const createContract = async (req, res, next) => {
   const changeManagementTerms = normalizeText(req.body?.change_management_terms) || null;
   const terminationExitTerms = normalizeText(req.body?.termination_exit_terms) || null;
   const alertRules = normalizeText(req.body?.alert_rules) || null;
+  const clmAdditionalPayload = extractAdditionalClmPayload(req.body || {});
   const rawStatus = req.body?.status || 'draft';
 
   if (!title) {
@@ -1482,9 +1558,9 @@ const createContract = async (req, res, next) => {
          vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
          scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
          payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-         change_management_terms, termination_exit_terms, alert_rules,
+         change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
          created_by, end_user_department_id, contract_manager_id, technical_department_ids
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54)
        RETURNING id, title, vendor, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
                  delivery_terms, warranty_terms, performance_management, commercial_terms, compliance_legal_terms,
                  financial_payment_control, risk_dispute_management, digital_attachments_tracking,
@@ -1493,7 +1569,7 @@ const createContract = async (req, res, next) => {
                  vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
                  scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
                  payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-                 change_management_terms, termination_exit_terms, alert_rules,
+                 change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
                  supplier_id, source_request_id,
                  end_user_department_id, contract_manager_id, technical_department_ids,
                  created_by, created_at, updated_at`,
@@ -1547,6 +1623,7 @@ const createContract = async (req, res, next) => {
         changeManagementTerms,
         terminationExitTerms,
         alertRules,
+        toJsonbParameter(clmAdditionalPayload),
         req.user?.id || null,
         endUserDepartmentId,
         contractManagerId,
@@ -1702,7 +1779,7 @@ const updateContract = async (req, res, next) => {
     await ensureContractsTable();
     await ensureContractsPhaseTwoTables();
     const current = await client.query(
-      `SELECT id, start_date, signing_date, end_date, vendor, supplier_id, source_request_id, contract_value, amount_paid
+      `SELECT id, start_date, signing_date, end_date, status, renewal_notice_days, vendor, supplier_id, source_request_id, contract_value, amount_paid, clm_additional_payload
          FROM contracts
         WHERE id = $1
         LIMIT 1`,
@@ -1806,6 +1883,7 @@ const updateContract = async (req, res, next) => {
       req.body?.termination_exit_terms !== undefined ? normalizeText(req.body.termination_exit_terms) || null : undefined;
     const alertRules =
       req.body?.alert_rules !== undefined ? normalizeText(req.body.alert_rules) || null : undefined;
+    const clmAdditionalPayload = extractAdditionalClmPayload(req.body || {});
 
 
     if (title !== undefined) {
@@ -1890,6 +1968,10 @@ const updateContract = async (req, res, next) => {
     if (changeManagementTerms !== undefined) pushAssignment('change_management_terms', changeManagementTerms);
     if (terminationExitTerms !== undefined) pushAssignment('termination_exit_terms', terminationExitTerms);
     if (alertRules !== undefined) pushAssignment('alert_rules', alertRules);
+    if (Object.keys(clmAdditionalPayload).length > 0) {
+      const mergedPayload = { ...(parseJson(existing.clm_additional_payload) || {}), ...clmAdditionalPayload };
+      pushAssignment('clm_additional_payload', toJsonbParameter(mergedPayload));
+    }
 
 
     if (req.body?.end_user_department_id !== undefined) {
@@ -1908,11 +1990,13 @@ const updateContract = async (req, res, next) => {
     }
 
     if (req.body?.status !== undefined) {
-      const status = normalizeStatus(req.body.status);
-      if (!status) {
+      const requestedStatus = normalizeStatus(req.body.status);
+      if (!requestedStatus) {
         return next(createHttpError(400, 'status is invalid'));
       }
+      const status = ensureValidStatusTransition({ currentStatus: existing.status, nextStatus: requestedStatus });
       pushAssignment('status', status);
+      await recordContractLog(client, { contractId, action: 'contract_status_changed', actorId: req.user?.id || null, details: { from: normalizeStatus(existing.status), to: status } });
     }
 
     let requestedStart;
@@ -2018,7 +2102,22 @@ const updateContract = async (req, res, next) => {
       return next(createHttpError(400, 'signing_date must be on or before end_date'));
     }
 
-    if (
+    let computedStatus = normalizeStatus(existing.status) || 'draft';
+    const statusAssignmentIndex = assignments.findIndex(entry => entry.startsWith('status = '));
+    if (statusAssignmentIndex >= 0) {
+      computedStatus = values[statusAssignmentIndex];
+    }
+    const autoStatus = computeExpiringSoonStatus({ status: computedStatus, startDate: nextStart, endDate: nextEnd, renewalNoticeDays: req.body?.renewal_notice_days !== undefined ? req.body.renewal_notice_days : existing.renewal_notice_days });
+    if (autoStatus !== computedStatus) {
+      if (statusAssignmentIndex >= 0) {
+        values[statusAssignmentIndex] = autoStatus;
+      } else {
+        pushAssignment('status', autoStatus);
+      }
+      await recordContractLog(client, { contractId, action: 'contract_status_auto_adjusted', actorId: req.user?.id || null, details: { from: computedStatus, to: autoStatus, reason: 'expiry_window' } });
+    }
+
+if (
       typeof nextContractValue === 'number' &&
       nextContractValue !== null &&
       typeof nextAmountPaid === 'number' &&
@@ -2041,7 +2140,7 @@ const updateContract = async (req, res, next) => {
               vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
               scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules,
+              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [...values, contractId]
@@ -2096,7 +2195,7 @@ const archiveContract = async (req, res, next) => {
               vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
               scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules,
+              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [contractId]
@@ -2306,8 +2405,8 @@ const renewContract = async (req, res, next) => {
     return next(createHttpError(400, 'end_date must be after start_date'));
   }
 
-  const nextStatus = (req.body?.status || 'draft').trim().toLowerCase();
-  if (!CONTRACT_STATUSES.includes(nextStatus)) {
+  const nextStatusRaw = normalizeStatus(req.body?.status || 'renewed');
+  if (!nextStatusRaw) {
     return next(createHttpError(400, 'Invalid status for renewal'));
   }
 
@@ -2332,6 +2431,9 @@ const renewContract = async (req, res, next) => {
   try {
     await ensureContractsTable();
     await ensureContractsPhaseTwoTables();
+    const { rows: currentRows } = await pool.query('SELECT id, status, renewal_notice_days, supplier_id FROM contracts WHERE id=$1', [contractId]);
+    if (!currentRows.length) return next(createHttpError(404, 'Contract not found'));
+    const validatedStatus = ensureValidStatusTransition({ currentStatus: currentRows[0].status, nextStatus: nextStatusRaw, allowArchivedSource: false });
 
     const { rows } = await pool.query(
       `UPDATE contracts
@@ -2350,10 +2452,10 @@ const renewContract = async (req, res, next) => {
               vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
               scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules,
+              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
-      [nextStart, nextEnd, nextStatus, parsedValue, parsedPaid, contractId]
+      [nextStart, nextEnd, validatedStatus, parsedValue, parsedPaid, contractId]
     );
 
     if (rows.length === 0) {
@@ -2361,13 +2463,9 @@ const renewContract = async (req, res, next) => {
     }
     await pool.query(
       `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
-      [contractId, 'contract_renewed', req.user?.id || null, null]
+      [contractId, 'contract_renewed', req.user?.id || null, JSON.stringify({ from: normalizeStatus(currentRows[0].status), to: validatedStatus })]
     );
-    await pool.query(
-      `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
-      [contractId, 'contract_unarchived', req.user?.id || null, null]
-    );
-
+    
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
     res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
   } catch (err) {
@@ -2391,7 +2489,12 @@ const unarchiveContract = async (req, res, next) => {
     await ensureContractsPhaseTwoTables();
     const { rows } = await pool.query(
       `UPDATE contracts
-          SET status = 'active',
+          SET status = CASE
+                WHEN start_date IS NULL THEN 'draft'
+                WHEN end_date IS NOT NULL AND end_date < CURRENT_DATE THEN 'expired'
+                WHEN start_date <= CURRENT_DATE AND (end_date IS NULL OR end_date >= CURRENT_DATE) THEN 'active'
+                ELSE 'draft'
+              END,
               updated_at = NOW()
         WHERE id = $1
         RETURNING id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
@@ -2402,7 +2505,7 @@ const unarchiveContract = async (req, res, next) => {
               vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
               scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules,
+              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
                   end_user_department_id, contract_manager_id, technical_department_ids,
                   created_by, created_at, updated_at`,
       [contractId]
@@ -2411,11 +2514,7 @@ const unarchiveContract = async (req, res, next) => {
     if (rows.length === 0) {
       return next(createHttpError(404, 'Contract not found'));
     }
-    await pool.query(
-      `INSERT INTO contract_logs (contract_id, action, actor_id, details) VALUES ($1,$2,$3,$4)`,
-      [contractId, 'contract_unarchived', req.user?.id || null, null]
-    );
-
+    
     const complianceMap = await getComplianceStatusBySupplierIds([rows[0].supplier_id]);
     res.json(serializeContract(rows[0], complianceMap.get(rows[0].supplier_id) || null));
   } catch (err) {
@@ -2623,7 +2722,7 @@ const decideContractApproval = async (req, res, next) => {
       if (nextStep.length) {
         await client.query(`UPDATE contract_approvals SET is_active=TRUE WHERE id=$1`, [nextStep[0].id]);
       } else {
-        await client.query(`UPDATE contracts SET status='pending_signature', updated_at=NOW() WHERE id=$1`, [contractId]);
+        await client.query(`UPDATE contracts SET status='sent_for_signature', updated_at=NOW() WHERE id=$1`, [contractId]);
       }
     } else {
       await client.query(`UPDATE contracts SET status='draft', updated_at=NOW() WHERE id=$1`, [contractId]);

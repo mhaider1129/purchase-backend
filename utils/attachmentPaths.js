@@ -35,9 +35,7 @@ function serializeAttachment(row) {
 
   let downloadUrl = null;
 
-  if (isLocal && storedPath) {
-    downloadUrl = `/api/attachments/download/${encodeURIComponent(path.basename(storedPath))}`;
-  } else if (row.id) {
+  if (row.id) {
     downloadUrl = `/api/attachments/${row.id}/download`;
   }
 

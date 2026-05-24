@@ -68,6 +68,7 @@ router.post('/register', authenticateUser, async (req, res) => {
     department_id,
     section_id,
     employee_id,
+    phone_number,
   } = req.body;
   try {
     ensureScmOrAdmin(req.user);
@@ -82,12 +83,13 @@ router.post('/register', authenticateUser, async (req, res) => {
   const normalizedEmail = normalizeEmail(email);
   const normalizedRole = typeof role === 'string' ? role.trim() : '';
   const employeeId = typeof employee_id === 'string' ? employee_id.trim() : '';
+  const phoneNumber = typeof phone_number === 'string' ? phone_number.trim() : '';
   const departmentId = parseInt(department_id, 10);
   const hasSectionId = section_id !== undefined && section_id !== null && section_id !== '';
   const sectionId = hasSectionId ? parseInt(section_id, 10) : null;
 
-  if (!trimmedName || !normalizedEmail || !password || !normalizedRole || Number.isNaN(departmentId) || !employeeId) {
-    return res.status(400).json({ success: false, message: 'Name, email, password, role, employee ID, and department are required' });
+  if (!trimmedName || !normalizedEmail || !password || !normalizedRole || Number.isNaN(departmentId) || !employeeId || !phoneNumber) {
+    return res.status(400).json({ success: false, message: 'Name, email, password, role, employee ID, phone number, and department are required' });
   }
 
   if (hasSectionId && Number.isNaN(sectionId)) {
@@ -138,9 +140,9 @@ router.post('/register', authenticateUser, async (req, res) => {
     const sectionIdValue = sectionId === null ? null : sectionId;
 
     const newUser = await client.query(
-      `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id`,
+      `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id, phone_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id, phone_number`,
       [
         trimmedName,
         normalizedEmail,
@@ -150,6 +152,7 @@ router.post('/register', authenticateUser, async (req, res) => {
         instituteId,
         sectionIdValue,
         employeeId,
+        phoneNumber,
       ]
     );
 
@@ -190,15 +193,22 @@ router.post('/register', authenticateUser, async (req, res) => {
 // 🔑 POST /auth/login
 // ============================
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body || {};
+  const { login, email, password } = req.body || {};
 
-  if (!email || !password) {
-    return res.status(400).json({ success: false, message: 'Email and password are required' });
+  const loginIdentifier = typeof login === 'string' && login.trim() ? login.trim() : normalizeEmail(email || '');
+
+  if (!loginIdentifier || !password) {
+    return res.status(400).json({ success: false, message: 'Login identifier and password are required' });
   }
 
   try {
-    const normalizedEmail = normalizeEmail(email);
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [normalizedEmail]);
+    const normalizedEmail = normalizeEmail(loginIdentifier);
+    const normalizedPhone = loginIdentifier.replace(/[^0-9+]/g, '');
+    const numericId = Number.parseInt(loginIdentifier, 10);
+    const result = await pool.query(
+      `SELECT * FROM users WHERE email = $1 OR employee_id = $2 OR phone_number = $3 OR (id = $4 AND $4 IS NOT NULL)`,
+      [normalizedEmail, loginIdentifier, normalizedPhone, Number.isNaN(numericId) ? null : numericId]
+    );
     if (result.rows.length === 0) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
@@ -291,11 +301,13 @@ router.post('/register-request', async (req, res) => {
     section_id,
     requested_role,
     employee_id,
+    phone_number,
   } = req.body || {};
 
   const trimmedName = typeof name === 'string' ? name.trim() : '';
   const normalizedEmail = normalizeEmail(email);
   const employeeId = typeof employee_id === 'string' ? employee_id.trim() : '';
+  const phoneNumber = typeof phone_number === 'string' ? phone_number.trim() : '';
 
   if (!trimmedName || !normalizedEmail || !password || !department_id || !employeeId) {
     return res.status(400).json({
@@ -377,6 +389,7 @@ router.post('/register-request', async (req, res) => {
         instituteId,
         sectionId,
         employeeId,
+        phoneNumber,
       ]
     );
 
@@ -544,9 +557,9 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     }
 
     const newUser = await client.query(
-      `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id`,
+      `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id, phone_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id, phone_number`,
       [
         request.name,
         normalizedEmail,
@@ -556,6 +569,7 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
         request.institute_id,
         request.section_id,
         employeeId,
+        phoneNumber,
       ]
     );
 

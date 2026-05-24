@@ -76,6 +76,7 @@ const router = express.Router();
 
 router.get('/', listContracts);
 router.get('/:contractId/evaluation-candidates', getEvaluationCandidates);
+router.get('/pending-approvals', authenticateUser, listPendingContractApprovals);
 router.get('/:id', getContractById);
 router.post('/', createContract);
 router.patch('/:id', updateContract);
@@ -83,7 +84,6 @@ router.patch('/:id/archive', archiveContract);
 router.patch('/:id/unarchive', unarchiveContract);
 router.post('/:id/renew', renewContract);
 router.post('/:id/submit-review', authenticateUser, submitContractReview);
-router.get('/pending-approvals', authenticateUser, listPendingContractApprovals);
 router.get('/:id/approvals', authenticateUser, listContractApprovals);
 router.post('/:id/approvals/:approvalId/decision', authenticateUser, decideContractApproval);
 router.get('/:id/items', listContractItems);

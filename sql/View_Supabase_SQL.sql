@@ -272,6 +272,9 @@ CREATE TABLE public.contract_approvals (
   reviewer_role text,
   assigned_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  approval_level integer NOT NULL DEFAULT 1,
+  status text NOT NULL DEFAULT 'Pending'::text,
+  is_active boolean NOT NULL DEFAULT false,
   CONSTRAINT contract_approvals_pkey PRIMARY KEY (id),
   CONSTRAINT contract_approvals_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
@@ -349,7 +352,8 @@ CREATE TABLE public.contract_documents (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT contract_documents_pkey PRIMARY KEY (id),
   CONSTRAINT contract_documents_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
-  CONSTRAINT contract_documents_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+  CONSTRAINT contract_documents_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT contract_documents_current_version_id_fkey FOREIGN KEY (current_version_id) REFERENCES public.contract_document_versions(id)
 );
 CREATE TABLE public.contract_evaluations (
   id integer NOT NULL DEFAULT nextval('contract_evaluations_id_seq'::regclass),
@@ -386,8 +390,8 @@ CREATE TABLE public.contract_invoices (
   retention_amount numeric NOT NULL DEFAULT 0,
   penalty_amount numeric NOT NULL DEFAULT 0,
   net_payable_amount numeric NOT NULL DEFAULT 0,
-  status text NOT NULL DEFAULT 'pending'::text,
-  matching_status text NOT NULL DEFAULT 'not_checked'::text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'under_review'::text, 'approved'::text, 'partially_paid'::text, 'paid'::text, 'rejected'::text, 'disputed'::text, 'cancelled'::text])),
+  matching_status text NOT NULL DEFAULT 'not_checked'::text CHECK (matching_status = ANY (ARRAY['not_checked'::text, 'matched'::text, 'warning'::text, 'failed'::text])),
   matching_flags jsonb NOT NULL DEFAULT '[]'::jsonb,
   notes text,
   document_id bigint,
@@ -399,6 +403,28 @@ CREATE TABLE public.contract_invoices (
   CONSTRAINT contract_invoices_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
   CONSTRAINT contract_invoices_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
   CONSTRAINT contract_invoices_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id)
+);
+CREATE TABLE public.contract_items (
+  id integer NOT NULL DEFAULT nextval('contract_items_id_seq'::regclass),
+  contract_id integer NOT NULL,
+  item_id integer,
+  item_name text NOT NULL,
+  generic_name text,
+  brand_name text,
+  unit text,
+  contracted_price numeric,
+  currency text,
+  minimum_order_quantity numeric,
+  lead_time_days integer,
+  warranty_terms text,
+  price_valid_from date,
+  price_valid_to date,
+  is_active boolean NOT NULL DEFAULT true,
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_items_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_items_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
 CREATE TABLE public.contract_legal_reviews (
   id bigint NOT NULL DEFAULT nextval('contract_legal_reviews_id_seq'::regclass),
@@ -443,20 +469,30 @@ CREATE TABLE public.contract_negotiations (
 CREATE TABLE public.contract_obligations (
   id bigint NOT NULL DEFAULT nextval('contract_obligations_id_seq'::regclass),
   contract_id bigint NOT NULL,
-  obligation_type text,
+  obligation_type text CHECK (obligation_type = ANY (ARRAY['general'::text, 'payment'::text, 'delivery'::text, 'reporting'::text, 'compliance'::text, 'maintenance'::text, 'warranty'::text, 'sla'::text, 'renewal'::text, 'termination'::text, 'documentation'::text, 'other'::text])),
   title text NOT NULL,
   description text,
   responsible_party text,
   due_date date,
-  status text NOT NULL DEFAULT 'Pending'::text CHECK (status = ANY (ARRAY['Pending'::text, 'Completed'::text, 'Overdue'::text, 'Cancelled'::text])),
+  status text NOT NULL DEFAULT 'Pending'::text CHECK (status = ANY (ARRAY['open'::text, 'in_progress'::text, 'completed'::text, 'overdue'::text, 'waived'::text, 'cancelled'::text])),
   completion_notes text,
   completed_at timestamp with time zone,
   proof_attachment_id bigint,
   created_by bigint,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  owner_user_id bigint,
+  owner_department_id bigint,
+  recurrence text NOT NULL DEFAULT 'none'::text CHECK (recurrence = ANY (ARRAY['none'::text, 'daily'::text, 'weekly'::text, 'monthly'::text, 'quarterly'::text, 'semiannual'::text, 'annual'::text, 'custom'::text])),
+  recurrence_interval integer,
+  next_due_date date,
+  evidence_required boolean NOT NULL DEFAULT false,
+  evidence_document_id bigint,
+  priority text NOT NULL DEFAULT 'medium'::text CHECK (priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'critical'::text])),
+  completed_by bigint,
   CONSTRAINT contract_obligations_pkey PRIMARY KEY (id),
-  CONSTRAINT contract_obligations_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+  CONSTRAINT contract_obligations_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_obligations_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.contract_payments (
   id bigint NOT NULL DEFAULT nextval('contract_payments_id_seq'::regclass),
@@ -467,8 +503,14 @@ CREATE TABLE public.contract_payments (
   notes text,
   created_by bigint,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  invoice_id bigint,
+  payment_reference text,
+  method text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'approved'::text, 'paid'::text, 'rejected'::text, 'cancelled'::text])),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT contract_payments_pkey PRIMARY KEY (id),
-  CONSTRAINT contract_payments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
+  CONSTRAINT contract_payments_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
+  CONSTRAINT contract_payments_invoice_id_fkey FOREIGN KEY (invoice_id) REFERENCES public.contract_invoices(id)
 );
 CREATE TABLE public.contract_renewal_events (
   id bigint NOT NULL DEFAULT nextval('contract_renewal_events_id_seq'::regclass),
@@ -477,8 +519,8 @@ CREATE TABLE public.contract_renewal_events (
   renewal_date date,
   notice_days integer NOT NULL DEFAULT 90,
   alert_date date,
-  status text NOT NULL DEFAULT 'pending'::text,
-  decision text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'alerted'::text, 'under_review'::text, 'renewed'::text, 'not_renewed'::text, 'cancelled'::text, 'completed'::text])),
+  decision text CHECK (decision IS NULL OR (decision = ANY (ARRAY['renew'::text, 'do_not_renew'::text, 'renegotiate'::text, 'terminate'::text, 'extend_temporarily'::text]))),
   decision_notes text,
   decided_by bigint,
   decided_at timestamp with time zone,
@@ -489,6 +531,18 @@ CREATE TABLE public.contract_renewal_events (
   CONSTRAINT contract_renewal_events_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
   CONSTRAINT contract_renewal_events_decided_by_fkey FOREIGN KEY (decided_by) REFERENCES public.users(id),
   CONSTRAINT contract_renewal_events_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id)
+);
+CREATE TABLE public.contract_required_documents (
+  id integer NOT NULL DEFAULT nextval('contract_required_documents_id_seq'::regclass),
+  contract_id integer NOT NULL,
+  document_type text NOT NULL,
+  is_uploaded boolean NOT NULL DEFAULT false,
+  attachment_id integer,
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contract_required_documents_pkey PRIMARY KEY (id),
+  CONSTRAINT contract_required_documents_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
 CREATE TABLE public.contract_risk_assessments (
   id bigint NOT NULL DEFAULT nextval('contract_risk_assessments_id_seq'::regclass),
@@ -609,6 +663,10 @@ CREATE TABLE public.contracts (
   committed_value numeric,
   block_overspend boolean NOT NULL DEFAULT false,
   clm_additional_payload jsonb,
+  commercial_terms text,
+  contract_owner text,
+  estimated_contract_value numeric,
+  actual_consumed_value numeric,
   CONSTRAINT contracts_pkey PRIMARY KEY (id),
   CONSTRAINT contracts_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
   CONSTRAINT contracts_end_user_department_id_fkey FOREIGN KEY (end_user_department_id) REFERENCES public.departments(id),
@@ -1480,14 +1538,14 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
   CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
   CONSTRAINT requests_awarded_supplier_id_fkey FOREIGN KEY (awarded_supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
-  CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id)
+  CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id)
 );
 CREATE TABLE public.rfx_events (
   id integer NOT NULL DEFAULT nextval('rfx_events_id_seq'::regclass),
@@ -1893,6 +1951,7 @@ CREATE TABLE public.users (
   employee_id text,
   warehouse_id integer,
   institute_id integer,
+  phone_number text,
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT users_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),

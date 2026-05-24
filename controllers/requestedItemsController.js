@@ -64,6 +64,24 @@ const fetchContractSnapshot = async (client, contractId) => {
   };
 };
 
+const assertProcurementAssignmentAccess = (req, assignedTo, actionLabel = 'update this request item') => {
+  const isScmOverrideUser = req.user.hasPermission('requests.manage');
+  if (isScmOverrideUser) {
+    return;
+  }
+
+  if (!assignedTo) {
+    throw createHttpError(409, 'This request has not been assigned to procurement yet');
+  }
+
+  if (Number(assignedTo) !== Number(req.user.id)) {
+    throw createHttpError(
+      403,
+      `Only the assigned procurement user can ${actionLabel}. SCM can override via reassignment when needed.`
+    );
+  }
+};
+
 const upsertItemFinancials = async (client, item, updates, userId) => {
   await ensureRequestedItemFinancialsTable(client);
 
@@ -306,6 +324,7 @@ const updateItemCost = async (req, res, next) => {
     }
 
     const item = itemRes.rows[0];
+    assertProcurementAssignmentAccess(req, item.assigned_to, 'update cost on this request item');
 
     await client.query(
       `UPDATE public.requested_items
@@ -434,7 +453,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
     await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
-      `SELECT ri.*, r.estimated_cost AS request_estimated_cost
+      `SELECT ri.*, r.assigned_to, r.estimated_cost AS request_estimated_cost
          FROM public.requested_items ri
          JOIN requests r ON ri.request_id = r.id
         WHERE ri.id = $1`,
@@ -447,6 +466,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
     }
 
     const item = itemRes.rows[0];
+    assertProcurementAssignmentAccess(req, item.assigned_to, 'fulfill this order item');
 
     await client.query(
       `UPDATE public.requested_items
@@ -539,7 +559,11 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
     await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
-      `SELECT * FROM public.requested_items WHERE id = $1 FOR UPDATE`,
+      `SELECT ri.*, r.assigned_to
+       FROM public.requested_items ri
+       JOIN requests r ON ri.request_id = r.id
+       WHERE ri.id = $1
+       FOR UPDATE`,
       [item_id]
     );
 
@@ -549,6 +573,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
     }
 
     const item = itemRes.rows[0];
+    assertProcurementAssignmentAccess(req, item.assigned_to, 'update purchased quantity for this order item');
 
     const currentReceivedQuantity = Number(item.received_quantity || 0);
     if (purchased_quantity < currentReceivedQuantity) {

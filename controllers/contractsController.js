@@ -2805,6 +2805,28 @@ const APPROVAL_CHAIN = [
   { level: 5, stage: 'COO/CEO Approval', reviewer_role: 'coo_ceo', status: 'under_review' },
 ];
 
+
+const ROLE_ALIASES = {
+  legal: ['legal'],
+  finance: ['finance'],
+  technical: ['technical'],
+  scm: ['scm'],
+  coo_ceo: ['coo', 'ceo'],
+};
+
+const normalizeUserRole = (role) => String(role || '').trim().toLowerCase();
+
+const canUserDecideContractStep = (user = {}, approvalStep = {}) => {
+  const userId = Number(user?.id);
+  const reviewerId = Number(approvalStep?.reviewer_id);
+  if (Number.isInteger(userId) && Number.isInteger(reviewerId)) {
+    return userId == reviewerId;
+  }
+  const role = normalizeUserRole(user?.role);
+  const allowedRoles = ROLE_ALIASES[String(approvalStep?.reviewer_role || '').trim().toLowerCase()] || [];
+  return allowedRoles.includes(role);
+};
+
 const submitContractReview = async (req, res, next) => {
   const contractId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
@@ -2827,6 +2849,32 @@ const submitContractReview = async (req, res, next) => {
     await client.query('ROLLBACK').catch(() => {});
     next(createHttpError(500, 'Failed to submit review workflow'));
   } finally { client.release(); }
+};
+
+const listPendingContractApprovals = async (req, res, next) => {
+  try {
+    await ensureContractsPhaseTwoTables();
+    const role = normalizeUserRole(req.user?.role);
+    const userId = Number(req.user?.id);
+    const roleKeys = Object.entries(ROLE_ALIASES)
+      .filter(([, roles]) => roles.includes(role))
+      .map(([key]) => key);
+
+    const params = [Number.isInteger(userId) ? userId : -1, roleKeys];
+    const { rows } = await pool.query(
+      `SELECT ca.id AS approval_id, ca.contract_id, ca.approval_level, ca.stage, ca.reviewer_role, ca.status, c.title AS contract_title
+         FROM contract_approvals ca
+         JOIN contracts c ON c.id = ca.contract_id
+        WHERE ca.is_active = TRUE
+          AND ca.status = 'Pending'
+          AND (ca.reviewer_id = $1 OR (ca.reviewer_id IS NULL AND ca.reviewer_role = ANY($2::TEXT[])))
+        ORDER BY ca.created_at ASC`,
+      params
+    );
+    res.json(rows);
+  } catch {
+    next(createHttpError(500, 'Failed to fetch pending contract approvals'));
+  }
 };
 
 const listContractApprovals = async (req, res, next) => {
@@ -2854,7 +2902,8 @@ const decideContractApproval = async (req, res, next) => {
     if (!rows.length) return next(createHttpError(404, 'Approval step not found'));
     const current = rows[0];
     if (!current.is_active) return next(createHttpError(400, 'Only active approval can be decided'));
-    await client.query(`UPDATE contract_approvals SET status=$1, comments=$2, decided_at=NOW(), is_active=FALSE, updated_at=NOW() WHERE id=$3`, [decision, normalizeText(req.body?.comments) || null, approvalId]);
+    if (!canUserDecideContractStep(req.user, current)) return next(createHttpError(403, 'This approval step is not assigned to your account or role'));
+    await client.query(`UPDATE contract_approvals SET status=$1, comments=$2, reviewer_id = COALESCE(reviewer_id, $3), decided_at=NOW(), is_active=FALSE, updated_at=NOW() WHERE id=$4`, [decision, normalizeText(req.body?.comments) || null, req.user?.id || null, approvalId]);
     if (decision === 'Approved') {
       const { rows: nextStep } = await client.query(`SELECT id, approval_level FROM contract_approvals WHERE contract_id=$1 AND approval_level > $2 ORDER BY approval_level LIMIT 1`, [contractId, current.approval_level]);
       if (nextStep.length) {
@@ -3285,6 +3334,7 @@ module.exports = {
   listContractAmendments,
   createContractAmendment,
   submitContractReview,
+  listPendingContractApprovals,
   listContractApprovals,
   decideContractApproval,
   listContractItems,

@@ -301,13 +301,11 @@ router.post('/register-request', async (req, res) => {
     section_id,
     requested_role,
     employee_id,
-    phone_number,
   } = req.body || {};
 
   const trimmedName = typeof name === 'string' ? name.trim() : '';
   const normalizedEmail = normalizeEmail(email);
   const employeeId = typeof employee_id === 'string' ? employee_id.trim() : '';
-  const phoneNumber = typeof phone_number === 'string' ? phone_number.trim() : '';
 
   if (!trimmedName || !normalizedEmail || !password || !department_id || !employeeId) {
     return res.status(400).json({
@@ -377,9 +375,9 @@ router.post('/register-request', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
     const { rows } = await pool.query(
       `INSERT INTO user_registration_requests
-        (name, email, password_hash, requested_role, department_id, institute_id, section_id, employee_id, phone_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, name, email, requested_role AS role, department_id, institute_id, section_id, employee_id, phone_number, status, created_at`,
+        (name, email, password_hash, requested_role, department_id, institute_id, section_id, employee_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, email, requested_role AS role, department_id, institute_id, section_id, employee_id, status, created_at`,
       [
         trimmedName,
         normalizedEmail,
@@ -389,7 +387,6 @@ router.post('/register-request', async (req, res) => {
         instituteId,
         sectionId,
         employeeId,
-        phoneNumber,
       ]
     );
 

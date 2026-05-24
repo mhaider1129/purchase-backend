@@ -595,6 +595,7 @@ const getAllRequests = async (req, res, next) => {
         r.*,
         p.name AS project_name,
         d.name AS department_name,
+        s.name AS section_name,
         u.name AS assigned_user_name,
         u.role AS assigned_user_role,
         COALESCE(r.temporary_requester_name, requester.name) AS requester_name,
@@ -603,6 +604,7 @@ const getAllRequests = async (req, res, next) => {
         au.role AS current_approver_role
       FROM requests r
       JOIN departments d ON r.department_id = d.id
+      LEFT JOIN sections s ON r.section_id = s.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN users u ON r.assigned_to = u.id
       LEFT JOIN users requester ON r.requester_id = requester.id
@@ -689,7 +691,18 @@ const buildItemSummary = (rows = [], fallbackCost = null) => {
 
 const getAssignedRequests = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const overrideAssigneeId = Number.parseInt(req.query?.procurement_user_id, 10);
+    const canOverrideAssignee = req.user.hasPermission('requests.manage');
+
+    if (req.query?.procurement_user_id && (!Number.isInteger(overrideAssigneeId) || overrideAssigneeId <= 0)) {
+      return errorResponse(res, 400, 'procurement_user_id must be a positive integer');
+    }
+
+    if (req.query?.procurement_user_id && !canOverrideAssignee) {
+      return errorResponse(res, 403, 'You do not have permission to view another procurement user\'s assigned requests');
+    }
+
+    const userId = req.query?.procurement_user_id ? overrideAssigneeId : req.user.id;
     const result = await pool.query(
       `SELECT r.*, p.name AS project_name,
               COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name) AS requester_name,

@@ -17,6 +17,7 @@ const {
   listContractAmendments,
   createContractAmendment,
   submitContractReview,
+  listPendingContractApprovals,
   listContractApprovals,
   decideContractApproval,
   listContractItems,
@@ -81,9 +82,10 @@ router.patch('/:id', updateContract);
 router.patch('/:id/archive', archiveContract);
 router.patch('/:id/unarchive', unarchiveContract);
 router.post('/:id/renew', renewContract);
-router.post('/:id/submit-review', submitContractReview);
-router.get('/:id/approvals', listContractApprovals);
-router.post('/:id/approvals/:approvalId/decision', decideContractApproval);
+router.post('/:id/submit-review', authenticateUser, submitContractReview);
+router.get('/pending-approvals', authenticateUser, listPendingContractApprovals);
+router.get('/:id/approvals', authenticateUser, listContractApprovals);
+router.post('/:id/approvals/:approvalId/decision', authenticateUser, decideContractApproval);
 router.get('/:id/items', listContractItems);
 router.post('/:id/items', createContractItem);
 router.patch('/:id/items/:itemId', updateContractItem);

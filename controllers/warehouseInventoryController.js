@@ -677,10 +677,20 @@ const getWarehouseItems = async (req, res, next) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, quantity
-         FROM warehouse_stock_levels
-        WHERE warehouse_id = $1
-        ORDER BY item_name, COALESCE(expiry_date, DATE '9999-12-31'), lot_number NULLS LAST`,
+      `SELECT
+        wsl.stock_item_id,
+        wsl.batch_id,
+        wsl.item_name,
+        wsl.lot_number,
+        wsl.expiry_date,
+        wsl.serial_number,
+        wsl.quantity,
+        si.category,
+        si.sub_category
+       FROM warehouse_stock_levels wsl
+       LEFT JOIN stock_items si ON si.id = wsl.stock_item_id
+      WHERE wsl.warehouse_id = $1
+      ORDER BY wsl.item_name, COALESCE(wsl.expiry_date, DATE '9999-12-31'), wsl.lot_number NULLS LAST`,
       [warehouseId],
     );
 

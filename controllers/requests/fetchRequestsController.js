@@ -692,11 +692,14 @@ const getAssignedRequests = async (req, res) => {
     const userId = req.user.id;
     const result = await pool.query(
       `SELECT r.*, p.name AS project_name,
-              COALESCE(r.temporary_requester_name, u.name) AS requester_name,
-              CASE WHEN r.temporary_requester_name IS NOT NULL THEN 'Temporary Requester' ELSE u.role END AS requester_role
+              COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name) AS requester_name,
+              CASE
+                WHEN NULLIF(TRIM(r.temporary_requester_name), '') IS NOT NULL THEN 'Temporary Requester'
+                ELSE u.role
+              END AS requester_role
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
-       JOIN users u ON r.requester_id = u.id
+       LEFT JOIN users u ON r.requester_id = u.id
        WHERE r.assigned_to = $1
          AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received')
        ORDER BY r.created_at DESC`,
@@ -756,11 +759,17 @@ const getPendingApprovals = async (req, res, next) => {
          r.project_id,
          p.name AS project_name,
          d.name AS department_name,
-         s.name AS section_name
+         s.name AS section_name,
+         COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), requester.name) AS requester_name,
+         CASE
+           WHEN NULLIF(TRIM(r.temporary_requester_name), '') IS NOT NULL THEN 'Temporary Requester'
+           ELSE requester.role
+         END AS requester_role
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN sections s ON r.section_id = s.id
+       LEFT JOIN users requester ON r.requester_id = requester.id
        JOIN approvals a ON r.id = a.request_id
        WHERE a.approver_id = $1
          AND a.is_active = true

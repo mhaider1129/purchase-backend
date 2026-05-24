@@ -37,9 +37,10 @@ const printRequest = async (req, res, next) => {
     const request = updateRes.rows[0];
 
     let finalApproval = null;
+    let finalApproverName = null;
     try {
       const finalApprovalRes = await pool.query(
-        `SELECT a.approved_at, a.comments, u.name AS approver_name
+        `SELECT a.approved_at, a.comments, u.name AS approver_name, u.role AS approver_role
          FROM approvals a
          LEFT JOIN users u ON a.approver_id = u.id
          WHERE a.request_id = $1 AND a.status = 'Approved'
@@ -48,6 +49,15 @@ const printRequest = async (req, res, next) => {
         [id]
       );
       finalApproval = finalApprovalRes.rows[0] || null;
+
+      finalApproverName = finalApproval?.approver_name || null;
+      const finalApproverRole = (finalApproval?.approver_role || '').trim().toUpperCase();
+      if ((!finalApproverName || finalApproverName.trim().toUpperCase() === finalApproverRole) && finalApproverRole === 'COO') {
+        const cooUserRes = await pool.query(
+          `SELECT name FROM users WHERE UPPER(TRIM(role)) = 'COO' AND COALESCE(NULLIF(TRIM(name), ''), NULL) IS NOT NULL ORDER BY id ASC LIMIT 1`
+        );
+        finalApproverName = cooUserRes.rows[0]?.name || finalApproverName;
+      }
     } catch (error) {
       console.error('⚠️ Failed to fetch final approval details:', error);
     }
@@ -60,7 +70,7 @@ const printRequest = async (req, res, next) => {
       request.final_approval = finalApproval
         ? {
             approved_at: finalApproval.approved_at,
-            approver_name: finalApproval.approver_name || null,
+            approver_name: finalApproverName,
             comments: finalApproval.comments || null,
           }
         : null;

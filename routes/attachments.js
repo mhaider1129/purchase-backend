@@ -248,6 +248,23 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
   }
 });
 
+// 📤 Download a file from local disk (legacy support)
+router.get('/download/:filename', authenticateUser, (req, res, next) => {
+  const sanitizedFilename = sanitize(req.params.filename);
+  const filePath = path.join(UPLOADS_DIR, sanitizedFilename);
+
+  fs.access(filePath, fs.constants.F_OK, err => {
+    if (err) {
+      console.warn('🟥 File not found:', filePath);
+      return next(createHttpError(404, 'File not found'));
+    }
+
+    res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.download(filePath);
+  });
+});
+
 // 📤 Download attachment by id (supports Supabase-backed files)
 router.get('/:id/download', authenticateUser, async (req, res, next) => {
   const { id } = req.params;
@@ -328,23 +345,6 @@ router.get('/:id/download', authenticateUser, async (req, res, next) => {
 
     next(createHttpError(500, 'Failed to download attachment'));
   }
-});
-
-// 📤 Download a file from local disk (legacy support)
-router.get('/download/:filename', authenticateUser, (req, res, next) => {
-  const sanitizedFilename = sanitize(req.params.filename);
-  const filePath = path.join(UPLOADS_DIR, sanitizedFilename);
-
-  fs.access(filePath, fs.constants.F_OK, err => {
-    if (err) {
-      console.warn('🟥 File not found:', filePath);
-      return next(createHttpError(404, 'File not found'));
-    }
-
-    res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.download(filePath);
-  });
 });
 
 // 📥 Upload a file to a request

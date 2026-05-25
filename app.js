@@ -13,6 +13,8 @@ const { syncUiAccessResources } = require('./utils/uiAccessService');
 const { syncCapabilityPolicies } = require('./utils/capabilityPolicyService');
 const ensureWarehouseAssignments = require('./utils/ensureWarehouseAssignments');
 const ensureProjectsTable = require('./utils/ensureProjectsTable');
+const ensureRequestSchedulingColumns = require('./utils/ensureRequestSchedulingColumns');
+const processScheduledRequests = require('./controllers/utils/processScheduledRequests');
 const { loadEnvironmentConfig } = require('./config/environment');
 const { writeAuditTrail } = require('./middleware/writeAuditTrail');
 const {
@@ -49,6 +51,10 @@ ensureWarehouseAssignments()
 ensureProjectsTable()
   .then(() => log('info', 'project_tables_ensured'))
   .catch(err => log('error', 'project_table_ensure_failed', { error: err.message }));
+
+ensureRequestSchedulingColumns()
+  .then(() => log('info', 'request_scheduling_columns_ensured'))
+  .catch(err => log('error', 'request_scheduling_columns_ensure_failed', { error: err.message }));
 
 function getLANIP() {
   const interfaces = os.networkInterfaces();
@@ -315,12 +321,8 @@ const errorHandler = require('./middleware/errorHandler');
 // =========================
 // 🔓 Public Routes
 // =========================
-app.use('/auth', authLimiter);
-app.use('/auth', authRoutes);
 app.use('/api/auth', authLimiter);
 app.use('/api/auth', authRoutes);
-app.use('/api/api/auth', authLimiter);
-app.use('/api/api/auth', authRoutes);
 
 // =========================
 // 🔒 Protected Routes
@@ -383,9 +385,6 @@ mountApiRoutes(apiRouter);
 
 // Mount the API router
 app.use('/api', apiRouter);
-app.use('/api/api', apiRouter); // Alias for malformed client requests
-mountApiRoutes(app); // Backward-compat aliases for proxies that strip /api
-app.use('/projects', authenticateUser, writeAuditTrail, projectsRoutes); // Backward-compat alias for clients hitting /projects
 
 // =========================
 // 🛠️ Utility Routes
@@ -423,7 +422,11 @@ const startServer = (port = process.env.PORT || 5000, host = process.env.HOST ||
       log('info', 'pending_approvals_reassigned_on_startup');
       await remindPendingApprovals();
       await remindPendingReceipts();
+      await processScheduledRequests();
       setInterval(() => {
+        processScheduledRequests().catch(err =>
+          log('error', 'scheduled_request_processor_failed', { error: err.message })
+        );
         remindPendingApprovals().catch(err =>
           log('error', 'reminder_job_failed', { error: err.message })
         );

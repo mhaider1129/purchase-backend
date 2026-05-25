@@ -509,7 +509,7 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
     await client.query('BEGIN');
 
     const requestRes = await client.query(
-      `SELECT id, name, email, password_hash, requested_role, department_id, institute_id, section_id, employee_id, status
+      `SELECT id, name, email, password_hash, requested_role, department_id, institute_id, section_id, employee_id, phone_number, status
          FROM user_registration_requests
         WHERE id = $1
         FOR UPDATE`,
@@ -552,6 +552,8 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Employee ID is already assigned to another user' });
     }
+
+    const phoneNumber = typeof request.phone_number === 'string' ? request.phone_number.trim() : null;
 
     const newUser = await client.query(
       `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id, phone_number)

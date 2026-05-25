@@ -618,6 +618,39 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Approve register request error:', err);
+
+    if (err?.code === '23505') {
+      const conflictTarget = err?.constraint || '';
+      if (conflictTarget.includes('email')) {
+        return res.status(409).json({ success: false, message: 'A user with this email already exists' });
+      }
+      if (conflictTarget.includes('employee_id')) {
+        return res.status(409).json({ success: false, message: 'Employee ID is already assigned to another user' });
+      }
+      return res.status(409).json({ success: false, message: 'User already exists with conflicting details' });
+    }
+
+    if (err?.code === '23503') {
+      const fkTarget = err?.constraint || '';
+      if (fkTarget.includes('department')) {
+        return res.status(400).json({ success: false, message: 'Selected department no longer exists' });
+      }
+      if (fkTarget.includes('section')) {
+        return res.status(400).json({ success: false, message: 'Selected section no longer exists' });
+      }
+      if (fkTarget.includes('institute')) {
+        return res.status(400).json({ success: false, message: 'Selected institute is invalid' });
+      }
+      return res.status(400).json({ success: false, message: 'Account request references invalid related data' });
+    }
+
+    if (err?.code === '23514' && err?.constraint?.includes('users_role')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Requested role is not supported by the users table configuration',
+      });
+    }
+
     return res.status(500).json({ success: false, message: 'Failed to approve account request' });
   } finally {
     client.release();

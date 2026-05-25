@@ -54,6 +54,31 @@ const ensureUsersUpdatedAtColumn = async () => {
   }
 };
 
+
+const ensureUsersPhoneNumberColumn = async () => {
+  try {
+    return await checkColumnExists({
+      table: 'users',
+      column: 'phone_number',
+    });
+  } catch (err) {
+    console.error('❌ Failed to detect phone_number column on users table:', err);
+    return false;
+  }
+};
+
+const ensureRegistrationRequestsPhoneNumberColumn = async () => {
+  try {
+    return await checkColumnExists({
+      table: 'user_registration_requests',
+      column: 'phone_number',
+    });
+  } catch (err) {
+    console.error('❌ Failed to detect phone_number column on user_registration_requests table:', err);
+    return false;
+  }
+};
+
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret'; // 🔐 Use a secure secret in production
 
 // ============================
@@ -508,8 +533,27 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
   try {
     await client.query('BEGIN');
 
+    const hasRegistrationPhoneNumberColumn = await ensureRegistrationRequestsPhoneNumberColumn();
+    const hasUsersPhoneNumberColumn = await ensureUsersPhoneNumberColumn();
+
+    const requestSelectColumns = [
+      'id',
+      'name',
+      'email',
+      'password_hash',
+      'requested_role',
+      'department_id',
+      'institute_id',
+      'section_id',
+      'employee_id',
+      'status',
+    ];
+    if (hasRegistrationPhoneNumberColumn) {
+      requestSelectColumns.push('phone_number');
+    }
+
     const requestRes = await client.query(
-      `SELECT id, name, email, password_hash, requested_role, department_id, institute_id, section_id, employee_id, phone_number, status
+      `SELECT ${requestSelectColumns.join(', ')}
          FROM user_registration_requests
         WHERE id = $1
         FOR UPDATE`,
@@ -553,23 +597,43 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
       return res.status(409).json({ success: false, message: 'Employee ID is already assigned to another user' });
     }
 
-    const phoneNumber = typeof request.phone_number === 'string' ? request.phone_number.trim() : null;
+    const phoneNumber = hasUsersPhoneNumberColumn && typeof request.phone_number === 'string'
+      ? request.phone_number.trim()
+      : null;
+
+    const insertColumns = [
+      'name',
+      'email',
+      'password',
+      'role',
+      'department_id',
+      'institute_id',
+      'section_id',
+      'employee_id',
+    ];
+    const insertValues = [
+      request.name,
+      normalizedEmail,
+      request.password_hash,
+      request.requested_role,
+      request.department_id,
+      request.institute_id,
+      request.section_id,
+      employeeId,
+    ];
+
+    if (hasUsersPhoneNumberColumn) {
+      insertColumns.push('phone_number');
+      insertValues.push(phoneNumber);
+    }
+
+    const valuePlaceholders = insertColumns.map((_, index) => `$${index + 1}`).join(', ');
 
     const newUser = await client.query(
-      `INSERT INTO users (name, email, password, role, department_id, institute_id, section_id, employee_id, phone_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id, phone_number`,
-      [
-        request.name,
-        normalizedEmail,
-        request.password_hash,
-        request.requested_role,
-        request.department_id,
-        request.institute_id,
-        request.section_id,
-        employeeId,
-        phoneNumber,
-      ]
+      `INSERT INTO users (${insertColumns.join(', ')})
+       VALUES (${valuePlaceholders})
+       RETURNING id, name, email, role, department_id, institute_id, section_id, employee_id${hasUsersPhoneNumberColumn ? ', phone_number' : ''}`,
+      insertValues
     );
 
     const createdUserId = newUser.rows[0]?.id;

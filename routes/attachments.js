@@ -320,6 +320,16 @@ router.get('/:id/download', authenticateUser, async (req, res, next) => {
       fs.access(filePath, fs.constants.F_OK, err => {
         if (err) {
           console.warn('🟥 Local attachment not found:', filePath);
+
+          if (storedPath && isStorageConfigured()) {
+            return streamRemoteAttachment({
+              objectKey: storedPath,
+              res,
+              fallbackFilename: attachment.file_name || path.basename(storedPath) || 'attachment',
+              next,
+            });
+          }
+
           return next(createHttpError(404, 'Attachment not found'));
         }
 

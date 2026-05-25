@@ -801,24 +801,6 @@ const updateApprovalItems = async (req, res, next) => {
       approvedByColumnType &&
       ['integer', 'int4', 'bigint', 'int8', 'smallint', 'int2'].includes(approvedByColumnType);
 
-    const approvedByCastFragment = (() => {
-      switch (approvedByColumnType) {
-        case 'uuid':
-          return '::uuid';
-        case 'integer':
-        case 'int4':
-          return '::int4';
-        case 'bigint':
-        case 'int8':
-          return '::int8';
-        case 'smallint':
-        case 'int2':
-          return '::int2';
-        default:
-          return '';
-      }
-    })();
-
     const resolvedApproverValue = approvedByPrefersString
       ? approverIdAsString ?? null
       : approvedByPrefersInteger
@@ -941,30 +923,31 @@ const updateApprovalItems = async (req, res, next) => {
         });
       }
 
+      const approvedByValue = isFinalDecision ? resolvedApproverValue : null;
+
       const updateRes = await client.query(
         isWarehouseSupply
           ? `UPDATE public.warehouse_supply_items
                SET approval_status = $1,
                    approval_comments = $2,
-                   approved_by = CASE WHEN $6 THEN $3${approvedByCastFragment} ELSE NULL END,
-                   approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END,
+                   approved_by = $3,
+                   approved_at = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE NULL END,
                    updated_at = NOW()
              WHERE id = $4 AND request_id = $5
              RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, NULL::numeric AS total_cost, NULL::numeric AS unit_cost`
           : `UPDATE public.requested_items
                SET approval_status = $1,
                    approval_comments = $2,
-                   approved_by = CASE WHEN $6 THEN $3${approvedByCastFragment} ELSE NULL END,
-                   approved_at = CASE WHEN $6 THEN NOW() ELSE NULL END
+                   approved_by = $3,
+                   approved_at = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE NULL END
              WHERE id = $4 AND request_id = $5
              RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, total_cost, unit_cost`,
         [
           finalStatus,
           itemDecision.comments ?? null,
-          resolvedApproverValue,
+          approvedByValue,
           itemId,
           approval.request_id,
-          isFinalDecision,
         ]
       );
 

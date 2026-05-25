@@ -82,7 +82,7 @@ const ensureRegistrationRequestsPhoneNumberColumn = async () => {
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret'; // 🔐 Use a secure secret in production
 
 // ============================
-// 🔐 POST /auth/register (Protected - Admin or SCM only)
+// 🔐 POST /api/auth/register (Protected - Admin or SCM only)
 // ============================
 router.post('/register', authenticateUser, async (req, res) => {
   const {
@@ -215,7 +215,7 @@ router.post('/register', authenticateUser, async (req, res) => {
 });
 
 // ============================
-// 🔑 POST /auth/login
+// 🔑 POST /api/auth/login
 // ============================
 router.post('/login', async (req, res) => {
   const { login, email, password } = req.body || {};
@@ -284,7 +284,7 @@ router.post('/login', async (req, res) => {
 
 
 // ============================
-// 🔒 POST /auth/verify-password
+// 🔒 POST /api/auth/verify-password
 // ============================
 router.post('/verify-password', authenticateUser, async (req, res) => {
   const { password } = req.body;
@@ -315,7 +315,7 @@ router.post('/verify-password', authenticateUser, async (req, res) => {
 });
 
 // ============================
-// 📝 POST /auth/register-request (Public)
+// 📝 POST /api/auth/register-request (Public)
 // ============================
 router.post('/register-request', async (req, res) => {
   const {
@@ -455,7 +455,7 @@ router.post('/register-request', async (req, res) => {
 });
 
 // ============================
-// 📋 GET /auth/register-requests (Admin/SCM)
+// 📋 GET /api/auth/register-requests (Admin/SCM)
 // ============================
 router.get('/register-requests', authenticateUser, async (req, res) => {
   try {
@@ -510,7 +510,7 @@ router.get('/register-requests', authenticateUser, async (req, res) => {
 });
 
 // ============================
-// ✅ POST /auth/register-requests/:id/approve (Admin/SCM)
+// ✅ POST /api/auth/register-requests/:id/approve (Admin/SCM)
 // ============================
 router.post('/register-requests/:id/approve', authenticateUser, async (req, res) => {
   const requestId = parseInt(req.params.id, 10);
@@ -722,7 +722,7 @@ router.post('/register-requests/:id/approve', authenticateUser, async (req, res)
 });
 
 // ============================
-// ❌ POST /auth/register-requests/:id/reject (Admin/SCM)
+// ❌ POST /api/auth/register-requests/:id/reject (Admin/SCM)
 // ============================
 router.post('/register-requests/:id/reject', authenticateUser, async (req, res) => {
   const requestId = parseInt(req.params.id, 10);
@@ -773,7 +773,7 @@ router.post('/register-requests/:id/reject', authenticateUser, async (req, res) 
 });
 
 // ============================
-// 📋 GET /auth/register-request/institutes (Public)
+// 📋 GET /api/auth/register-request/institutes (Public)
 // ============================
 router.get('/register-request/institutes', async (req, res) => {
   try {
@@ -791,7 +791,7 @@ router.get('/register-request/institutes', async (req, res) => {
 });
 
 // ============================
-// 📋 GET /auth/register-request/departments (Public)
+// 📋 GET /api/auth/register-request/departments (Public)
 // ============================
 router.get('/register-request/departments', async (req, res) => {
   try {
@@ -836,7 +836,7 @@ router.get('/register-request/departments', async (req, res) => {
 });
 
 // ============================
-// 🔒 PUT /auth/change-password
+// 🔒 PUT /api/auth/change-password
 // ============================
 router.put('/change-password', authenticateUser, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
@@ -896,7 +896,7 @@ router.put('/change-password', authenticateUser, async (req, res) => {
 });
 
 // ============================
-// 👤 GET /auth/me (Authenticated User Info)
+// 👤 GET /api/auth/me (Authenticated User Info)
 // ============================
 router.get('/me', authenticateUser, (req, res) => {
   return res.status(200).json({

@@ -11,9 +11,6 @@ const remindPendingReceipts = require('./controllers/utils/remindPendingReceipts
 const { syncPermissionCatalog } = require('./utils/permissionService');
 const { syncUiAccessResources } = require('./utils/uiAccessService');
 const { syncCapabilityPolicies } = require('./utils/capabilityPolicyService');
-const ensureWarehouseAssignments = require('./utils/ensureWarehouseAssignments');
-const ensureProjectsTable = require('./utils/ensureProjectsTable');
-const ensureRequestSchedulingColumns = require('./utils/ensureRequestSchedulingColumns');
 const processScheduledRequests = require('./controllers/utils/processScheduledRequests');
 const { loadEnvironmentConfig } = require('./config/environment');
 const { writeAuditTrail } = require('./middleware/writeAuditTrail');
@@ -43,18 +40,6 @@ syncUiAccessResources()
 syncCapabilityPolicies()
   .then(() => log('info', 'capability_policies_synchronized'))
   .catch(err => log('error', 'capability_policies_sync_failed', { error: err.message }));
-
-ensureWarehouseAssignments()
-  .then(() => log('info', 'warehouse_assignment_columns_ensured'))
-  .catch(err => log('error', 'warehouse_assignment_ensure_failed', { error: err.message }));
-
-ensureProjectsTable()
-  .then(() => log('info', 'project_tables_ensured'))
-  .catch(err => log('error', 'project_table_ensure_failed', { error: err.message }));
-
-ensureRequestSchedulingColumns()
-  .then(() => log('info', 'request_scheduling_columns_ensured'))
-  .catch(err => log('error', 'request_scheduling_columns_ensure_failed', { error: err.message }));
 
 function getLANIP() {
   const interfaces = os.networkInterfaces();
@@ -411,13 +396,11 @@ app.use(errorHandler);
 // =========================
 // 🚀 Start Server
 // =========================
-const { ensureEvaluationCriteriaTable } = require('./utils/evaluationCriteriaSeeder');
 
 const startServer = (port = process.env.PORT || 5000, host = process.env.HOST || getLANIP()) => {
   const server = app.listen(port, host, async () => {
     log('info', 'server_started', { host, port });
     try {
-      await ensureEvaluationCriteriaTable();
       await reassignPendingApprovals();
       log('info', 'pending_approvals_reassigned_on_startup');
       await remindPendingApprovals();

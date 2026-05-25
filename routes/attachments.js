@@ -248,6 +248,35 @@ router.get('/item/:itemId', authenticateUser, async (req, res, next) => {
   }
 });
 
+
+// 📤 Download a file from local disk by stored path
+router.get('/download', authenticateUser, (req, res, next) => {
+  const rawPath = typeof req.query.path === 'string' ? req.query.path : '';
+  const normalized = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
+
+  if (!normalized) {
+    return next(createHttpError(400, 'Attachment path is required'));
+  }
+
+  const relativePath = normalized.startsWith('uploads/')
+    ? normalized.slice('uploads/'.length)
+    : normalized;
+
+  const filePath = path.join(UPLOADS_DIR, relativePath);
+  const filename = sanitize(path.basename(relativePath) || 'attachment');
+
+  fs.access(filePath, fs.constants.F_OK, err => {
+    if (err) {
+      console.warn('🟥 File not found:', filePath);
+      return next(createHttpError(404, 'File not found'));
+    }
+
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.download(filePath);
+  });
+});
+
 // 📤 Download a file from local disk (legacy support)
 router.get('/download/:filename', authenticateUser, (req, res, next) => {
   const sanitizedFilename = sanitize(req.params.filename);

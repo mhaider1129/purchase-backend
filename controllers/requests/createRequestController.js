@@ -9,6 +9,7 @@ const {
 const ensureWarehouseAssignments = require("../../utils/ensureWarehouseAssignments");
 const ensureWarehouseInventoryTables = require("../../utils/ensureWarehouseInventoryTables");
 const ensureProjectsTable = require("../../utils/ensureProjectsTable");
+const ensureRequestSchedulingColumns = require("../../utils/ensureRequestSchedulingColumns");
 const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
 const {
   assertBudgetCanCover,
@@ -183,6 +184,20 @@ const createRequest = async (req, res, next) => {
 
   let supplyWarehouseId = null;
   let supplyWarehouseType = null;
+  let scheduledFor = null;
+
+  if (req.body?.scheduled_for !== undefined && req.body?.scheduled_for !== null && req.body?.scheduled_for !== '') {
+    const candidateDate = new Date(req.body.scheduled_for);
+    if (Number.isNaN(candidateDate.getTime())) {
+      return next(createHttpError(400, 'scheduled_for must be a valid date-time'));
+    }
+
+    if (candidateDate.getTime() <= Date.now()) {
+      return next(createHttpError(400, 'scheduled_for must be in the future'));
+    }
+
+    scheduledFor = candidateDate;
+  }
   if (request_type === "Warehouse Supply") {
     const candidateWarehouseId =
       req.body?.supply_warehouse_id ?? req.body?.warehouse_id ?? null;
@@ -447,6 +462,7 @@ const createRequest = async (req, res, next) => {
 
   const client = await pool.connect();
   try {
+    await ensureRequestSchedulingColumns();
     await client.query("BEGIN");
 
     if (projectId !== null) {
@@ -489,13 +505,14 @@ const createRequest = async (req, res, next) => {
       requestDomain = supplyWarehouseType;
     }
 
+    const initialStatus = scheduledFor ? 'Scheduled' : 'Submitted';
     const requestRes = await client.query(
       `INSERT INTO requests (
         request_type, requester_id, department_id, institute_id, section_id, justification,
-        estimated_cost, request_domain,
+        estimated_cost, request_domain, status,
         maintenance_ref_number, initiated_by_technician_id,
-        project_id, temporary_requester_name, supply_warehouse_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+        project_id, temporary_requester_name, supply_warehouse_id, scheduled_for
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [
         request_type,
         requester_id,
@@ -505,11 +522,13 @@ const createRequest = async (req, res, next) => {
         justification,
         estimatedCost,
         requestDomain,
+        initialStatus,
         maintenance_ref_number,
         initiated_by_technician_id,
         projectId,
         request_type === "Maintenance" ? temporaryRequesterName : null,
         supplyWarehouseId,
+        scheduledFor,
       ],
     );
 
@@ -702,18 +721,20 @@ const createRequest = async (req, res, next) => {
       files: req.files,
     });
 
-    // Ensure the earliest pending approval is active
-    await client.query(
-      `UPDATE approvals
-       SET is_active = TRUE
-       WHERE request_id = $1
-         AND approval_level = (
-           SELECT MIN(approval_level)
-           FROM approvals
-           WHERE request_id = $1 AND status = 'Pending'
-         )`,
-      [request.id],
-    );
+    if (!scheduledFor) {
+      // Ensure the earliest pending approval is active
+      await client.query(
+        `UPDATE approvals
+         SET is_active = TRUE
+         WHERE request_id = $1
+           AND approval_level = (
+             SELECT MIN(approval_level)
+             FROM approvals
+             WHERE request_id = $1 AND status = 'Pending'
+           )`,
+        [request.id],
+      );
+    }
 
     const { rows: pendingApprovals } = await client.query(
       `SELECT a.approval_level,
@@ -793,7 +814,9 @@ const createRequest = async (req, res, next) => {
     }
 
     const nextApproval = pendingApprovals[0] || null;
-    const approversToNotify = pendingApprovals.filter((approval) => approval?.approver_id);
+    const approversToNotify = scheduledFor
+      ? []
+      : pendingApprovals.filter((approval) => approval?.approver_id);
 
     if (approversToNotify.length > 0) {
       const message = `The ${request_type} request with ID ${request.id} is ready for your approval.`;
@@ -838,6 +861,8 @@ Please log in to the system to take action.`,
       request_id: request.id,
       request_type,
       estimated_cost: estimatedCost,
+      status: initialStatus,
+      scheduled_for: request.scheduled_for || null,
       attachments_uploaded: attachmentsStored,
       temporary_requester_name: request.temporary_requester_name || null,
       items: itemStatusPayload,

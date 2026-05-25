@@ -36,11 +36,13 @@ function isLocalFallbackEnabled() {
     return true;
   }
 
-  if (['false', '0', 'no'].includes(rawValue)) {
+  if (['false', '0', 'no', 'off', 'disabled'].includes(rawValue)) {
     return false;
   }
 
-  return ['true', '1', 'yes'].includes(rawValue);
+  // Treat any other explicit value as enabled so env values like
+  // "enabled" or "on" do not unexpectedly disable the fallback.
+  return true;
 }
 
 function createSharedStorageUploadError(err) {

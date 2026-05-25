@@ -214,9 +214,34 @@ EMAIL_PORT=587
 EMAIL_USER=your_email
 EMAIL_PASS=your_password
 
+# Shared attachment storage (Supabase)
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_STORAGE_BUCKET=attachments
+SUPABASE_STORAGE_PREFIX=attachments
+
+# Recommended in production so uploads fail loudly instead of falling back to local disk.
+ATTACHMENT_LOCAL_FALLBACK_ENABLED=false
+
 # Run Backend
 
 Development:
+
+## Attachment Storage Across Devices (Important)
+
+If attachments are visible only on the machine that uploaded them, your backend is falling back to local filesystem storage (`uploads/...`).
+
+To make attachments downloadable from any PC/server:
+
+1. Configure Supabase storage env vars in backend `.env`:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY` (recommended)
+   - `SUPABASE_STORAGE_BUCKET` (for example: `attachments`)
+2. Set `ATTACHMENT_LOCAL_FALLBACK_ENABLED=false` (recommended for production).
+3. Restart backend after changing env vars.
+4. Verify your Supabase bucket exists and the service key has permission to upload/sign URLs.
+
+With this setup, uploaded files are stored in Supabase object storage instead of local disk, so they can be downloaded from other devices.
 
 npm run dev
 

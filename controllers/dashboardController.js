@@ -27,6 +27,57 @@ const getWorkloadFilters = (query = {}) => {
   };
 };
 
+const isProcuredItemCondition = `(
+  LOWER(COALESCE(ri.procurement_status, '')) IN ('purchased', 'completed', 'received', 'fulfilled')
+  OR COALESCE(ri.purchased_quantity, 0) > 0
+  OR COALESCE(ri.received_quantity, 0) > 0
+)`;
+
+const itemActualCostExpression = `CASE
+  WHEN COALESCE(ri.purchased_quantity, 0) > 0 THEN COALESCE(ri.purchased_quantity, 0) * COALESCE(ri.unit_cost, 0)
+  WHEN COALESCE(ri.received_quantity, 0) > 0 THEN COALESCE(ri.received_quantity, 0) * COALESCE(ri.unit_cost, 0)
+  WHEN ${isProcuredItemCondition} THEN COALESCE(ri.total_cost, ri.quantity * COALESCE(ri.unit_cost, 0), 0)
+  ELSE 0
+END`;
+
+const requestValueExpression = `CASE
+  WHEN r.estimated_cost IS NOT NULL AND r.estimated_cost > 0 THEN r.estimated_cost
+  ELSE COALESCE(SUM(COALESCE(ri.total_cost, ri.quantity * COALESCE(ri.unit_cost, 0), 0)), 0)
+END`;
+
+const requestProcurementRollup = `
+  SELECT
+    r.id,
+    r.department_id,
+    r.created_at,
+    r.updated_at,
+    LOWER(COALESCE(r.status, '')) AS request_status,
+    COUNT(ri.id) AS item_count,
+    COUNT(ri.id) FILTER (WHERE ${isProcuredItemCondition}) AS procured_item_count,
+    COALESCE(SUM(${itemActualCostExpression}), 0) AS actual_procured_cost
+  FROM requests r
+  LEFT JOIN requested_items ri ON ri.request_id = r.id
+  WHERE r.request_type <> 'Warehouse Supply'
+  GROUP BY r.id, r.department_id, r.created_at, r.updated_at, LOWER(COALESCE(r.status, ''))
+`;
+
+const isRequestProcurementPendingCondition = `(
+  request_status = 'pending'
+  OR (
+    request_status = 'approved'
+    AND (item_count = 0 OR procured_item_count < item_count)
+  )
+)`;
+
+const isRequestProcurementCompletedCondition = `(
+  request_status IN ('completed', 'received')
+  OR (
+    request_status = 'approved'
+    AND item_count > 0
+    AND procured_item_count = item_count
+  )
+)`;
+
 const getDashboardSummary = async (req, res) => {
   try {
     const [
@@ -42,6 +93,10 @@ const getDashboardSummary = async (req, res) => {
       topDepartments,
       pendingVsCompletedTrendRes,
       oldestPendingRes,
+      procurementBacklogByStageRes,
+      pendingAgingBucketsRes,
+      departmentDemandVsProcuredRes,
+      dataQualityAlertsRes,
     ] = await Promise.all([
       pool.query("SELECT COUNT(*) FROM requests WHERE request_type <> 'Warehouse Supply'"),
       pool.query(
@@ -50,21 +105,26 @@ const getDashboardSummary = async (req, res) => {
       pool.query(
         "SELECT COUNT(*) FROM requests WHERE LOWER(status) = 'rejected' AND request_type <> 'Warehouse Supply'",
       ),
-      pool.query(
-        "SELECT COUNT(*) FROM requests WHERE LOWER(status) = 'pending' AND request_type <> 'Warehouse Supply'",
-      ),
-      pool.query(
-        "SELECT COUNT(*) FROM requests WHERE LOWER(status) = 'completed' AND request_type <> 'Warehouse Supply'",
-      ),
+      pool.query(`
+        WITH request_rollup AS (${requestProcurementRollup})
+        SELECT COUNT(*) FROM request_rollup
+        WHERE ${isRequestProcurementPendingCondition}
+      `),
+      pool.query(`
+        WITH request_rollup AS (${requestProcurementRollup})
+        SELECT COUNT(*) FROM request_rollup
+        WHERE ${isRequestProcurementCompletedCondition}
+      `),
       pool.query(`
         SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) / 86400 AS avg_days
         FROM requests
         WHERE LOWER(status) = 'approved' AND request_type <> 'Warehouse Supply'
       `),
       pool.query(`
+        WITH request_rollup AS (${requestProcurementRollup})
         SELECT AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at))) / 86400 AS avg_days
-        FROM requests
-        WHERE LOWER(status) = 'pending' AND request_type <> 'Warehouse Supply'
+        FROM request_rollup
+        WHERE ${isRequestProcurementPendingCondition}
       `),
       pool.query(`
         SELECT
@@ -76,32 +136,13 @@ const getDashboardSummary = async (req, res) => {
         ORDER BY month
       `),
       pool.query(`
-        WITH request_costs AS (
-          SELECT
-            r.id,
-            r.created_at,
-            CASE
-              WHEN r.estimated_cost IS NOT NULL AND r.estimated_cost > 0 THEN r.estimated_cost
-              ELSE NULL
-            END AS recorded_cost,
-            SUM(
-              CASE
-                WHEN ri.id IS NULL THEN 0
-                WHEN ri.purchased_quantity IS NOT NULL AND ri.purchased_quantity > 0 THEN ri.purchased_quantity * COALESCE(ri.unit_cost, 0)
-                WHEN ri.quantity IS NOT NULL AND ri.quantity > 0 THEN ri.quantity * COALESCE(ri.unit_cost, 0)
-                ELSE 0
-              END
-            ) AS items_cost
-          FROM requests r
-          LEFT JOIN requested_items ri ON ri.request_id = r.id
-          WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
-            AND r.request_type <> 'Warehouse Supply'
-          GROUP BY r.id, r.created_at
-        )
         SELECT
-          TO_CHAR(created_at, 'YYYY-MM') AS month,
-          SUM(COALESCE(recorded_cost, items_cost, 0)) AS total_cost
-        FROM request_costs
+          TO_CHAR(COALESCE(ri.procurement_updated_at, r.updated_at, r.created_at), 'YYYY-MM') AS month,
+          SUM(${itemActualCostExpression}) AS total_cost
+        FROM requests r
+        JOIN requested_items ri ON ri.request_id = r.id
+        WHERE r.request_type <> 'Warehouse Supply'
+          AND ${isProcuredItemCondition}
         GROUP BY month
         ORDER BY month
       `),
@@ -116,27 +157,150 @@ const getDashboardSummary = async (req, res) => {
         LIMIT 5
       `),
       pool.query(`
+        WITH request_rollup AS (${requestProcurementRollup})
         SELECT
           TO_CHAR(created_at, 'YYYY-MM') AS month,
-          SUM(CASE WHEN LOWER(status) = 'completed' THEN 1 ELSE 0 END) AS completed_count,
-          SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_count
-        FROM requests
-        WHERE request_type <> 'Warehouse Supply'
-          AND created_at >= (CURRENT_DATE - INTERVAL '11 months')
+          SUM(CASE WHEN ${isRequestProcurementCompletedCondition} THEN 1 ELSE 0 END) AS completed_count,
+          SUM(CASE WHEN ${isRequestProcurementPendingCondition} THEN 1 ELSE 0 END) AS pending_count
+        FROM request_rollup
+        WHERE created_at >= (CURRENT_DATE - INTERVAL '11 months')
         GROUP BY month
         ORDER BY month
       `),
       pool.query(`
+        WITH request_rollup AS (${requestProcurementRollup})
         SELECT
-          r.id,
+          rr.id,
           COALESCE(r.justification, 'No justification provided') AS justification,
           COALESCE(d.name, 'Unassigned') AS department,
-          EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400 AS age_days
-        FROM requests r
-        LEFT JOIN departments d ON r.department_id = d.id
-        WHERE LOWER(r.status) = 'pending' AND r.request_type <> 'Warehouse Supply'
+          EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - rr.created_at)) / 86400 AS age_days,
+          rr.item_count,
+          rr.procured_item_count
+        FROM request_rollup rr
+        JOIN requests r ON r.id = rr.id
+        LEFT JOIN departments d ON rr.department_id = d.id
+        WHERE ${isRequestProcurementPendingCondition}
         ORDER BY age_days DESC
         LIMIT 5
+      `),
+      pool.query(`
+        WITH request_rollup AS (${requestProcurementRollup}), staged AS (
+          SELECT
+            CASE
+              WHEN request_status = 'pending' THEN 'Pending approval'
+              WHEN request_status = 'approved' AND item_count = 0 THEN 'Approved - no items'
+              WHEN request_status = 'approved' AND procured_item_count = 0 THEN 'Approved - not started'
+              WHEN request_status = 'approved' AND procured_item_count < item_count THEN 'Partially procured'
+              WHEN request_status = 'approved' AND procured_item_count = item_count THEN 'Ready to close'
+              ELSE 'Other pending'
+            END AS stage,
+            actual_procured_cost
+          FROM request_rollup
+          WHERE ${isRequestProcurementPendingCondition}
+        )
+        SELECT stage, COUNT(*) AS request_count, SUM(actual_procured_cost) AS procured_cost
+        FROM staged
+        GROUP BY stage
+        ORDER BY request_count DESC, stage
+      `),
+      pool.query(`
+        WITH request_rollup AS (${requestProcurementRollup}), aged AS (
+          SELECT
+            CASE
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '7 days' THEN '0-7 days'
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '14 days' THEN '8-14 days'
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '30 days' THEN '15-30 days'
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '60 days' THEN '31-60 days'
+              ELSE '60+ days'
+            END AS bucket,
+            CASE
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '7 days' THEN 1
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '14 days' THEN 2
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '30 days' THEN 3
+              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '60 days' THEN 4
+              ELSE 5
+            END AS sort_order,
+            actual_procured_cost
+          FROM request_rollup
+          WHERE ${isRequestProcurementPendingCondition}
+        )
+        SELECT bucket, COUNT(*) AS request_count, SUM(actual_procured_cost) AS procured_cost
+        FROM aged
+        GROUP BY bucket, sort_order
+        ORDER BY sort_order
+      `),
+      pool.query(`
+        WITH request_values AS (
+          SELECT
+            r.id,
+            r.department_id,
+            r.created_at,
+            LOWER(COALESCE(r.status, '')) AS status,
+            ${requestValueExpression} AS submitted_cost,
+            COALESCE(SUM(${itemActualCostExpression}), 0) AS actual_procured_cost
+          FROM requests r
+          LEFT JOIN requested_items ri ON ri.request_id = r.id
+          WHERE r.request_type <> 'Warehouse Supply'
+            AND r.created_at >= (CURRENT_DATE - INTERVAL '11 months')
+          GROUP BY r.id, r.department_id, r.created_at, LOWER(COALESCE(r.status, ''))
+        )
+        SELECT
+          COALESCE(d.name, 'Unassigned') AS department,
+          TO_CHAR(rv.created_at, 'YYYY-MM') AS month,
+          SUM(rv.submitted_cost) AS submitted_cost,
+          SUM(rv.submitted_cost) FILTER (WHERE rv.status IN ('approved', 'completed', 'received')) AS approved_cost,
+          SUM(rv.actual_procured_cost) AS actual_procured_cost,
+          COUNT(*) AS request_count
+        FROM request_values rv
+        LEFT JOIN departments d ON rv.department_id = d.id
+        GROUP BY department, month
+        ORDER BY month, department
+      `),
+      pool.query(`
+        WITH issue_counts AS (
+          SELECT 'approved_no_items' AS issue_key, 'Approved requests without items' AS issue_label, COUNT(*) AS issue_count
+          FROM requests r
+          WHERE LOWER(COALESCE(r.status, '')) = 'approved'
+            AND r.request_type <> 'Warehouse Supply'
+            AND NOT EXISTS (SELECT 1 FROM requested_items ri WHERE ri.request_id = r.id)
+          UNION ALL
+          SELECT 'procured_zero_cost', 'Procured items with zero unit cost', COUNT(*)
+          FROM requests r
+          JOIN requested_items ri ON ri.request_id = r.id
+          WHERE r.request_type <> 'Warehouse Supply'
+            AND ${isProcuredItemCondition}
+            AND COALESCE(ri.unit_cost, 0) = 0
+          UNION ALL
+          SELECT 'purchased_zero_quantity', 'Purchased/completed items with zero quantity', COUNT(*)
+          FROM requests r
+          JOIN requested_items ri ON ri.request_id = r.id
+          WHERE r.request_type <> 'Warehouse Supply'
+            AND LOWER(COALESCE(ri.procurement_status, '')) IN ('purchased', 'completed', 'received')
+            AND COALESCE(ri.purchased_quantity, 0) = 0
+            AND COALESCE(ri.received_quantity, 0) = 0
+          UNION ALL
+          SELECT 'received_over_purchased', 'Received quantity greater than purchased quantity', COUNT(*)
+          FROM requests r
+          JOIN requested_items ri ON ri.request_id = r.id
+          WHERE r.request_type <> 'Warehouse Supply'
+            AND COALESCE(ri.received_quantity, 0) > COALESCE(NULLIF(ri.purchased_quantity, 0), ri.quantity, 0)
+          UNION ALL
+          SELECT 'completed_unprocured_items', 'Completed requests with unprocured items', COUNT(*)
+          FROM requests r
+          JOIN requested_items ri ON ri.request_id = r.id
+          WHERE LOWER(COALESCE(r.status, '')) IN ('completed', 'received')
+            AND r.request_type <> 'Warehouse Supply'
+            AND NOT ${isProcuredItemCondition}
+          UNION ALL
+          SELECT 'missing_department', 'Requests without a department', COUNT(*)
+          FROM requests r
+          WHERE r.request_type <> 'Warehouse Supply'
+            AND r.department_id IS NULL
+        )
+        SELECT issue_key, issue_label, issue_count
+        FROM issue_counts
+        WHERE issue_count > 0
+        ORDER BY issue_count DESC, issue_label
       `),
     ]);
 
@@ -172,6 +336,39 @@ const getDashboardSummary = async (req, res) => {
         department: row.department,
         age_days: parseFloat(row.age_days) || 0,
       })),
+      procurement_backlog_by_stage: procurementBacklogByStageRes.rows.map((row) => ({
+        stage: row.stage,
+        request_count: parseInt(row.request_count, 10) || 0,
+        procured_cost: parseFloat(row.procured_cost) || 0,
+      })),
+      pending_aging_buckets: pendingAgingBucketsRes.rows.map((row) => ({
+        bucket: row.bucket,
+        request_count: parseInt(row.request_count, 10) || 0,
+        procured_cost: parseFloat(row.procured_cost) || 0,
+      })),
+      department_demand_vs_procured: departmentDemandVsProcuredRes.rows.map((row) => ({
+        department: row.department,
+        month: row.month,
+        submitted_cost: parseFloat(row.submitted_cost) || 0,
+        approved_cost: parseFloat(row.approved_cost) || 0,
+        actual_procured_cost: parseFloat(row.actual_procured_cost) || 0,
+        request_count: parseInt(row.request_count, 10) || 0,
+      })),
+      procurement_value_completion_rate: (() => {
+        const totals = departmentDemandVsProcuredRes.rows.reduce(
+          (acc, row) => ({
+            approved: acc.approved + (parseFloat(row.approved_cost) || 0),
+            procured: acc.procured + (parseFloat(row.actual_procured_cost) || 0),
+          }),
+          { approved: 0, procured: 0 }
+        );
+        return totals.approved ? (totals.procured / totals.approved) * 100 : 0;
+      })(),
+      data_quality_alerts: dataQualityAlertsRes.rows.map((row) => ({
+        issue_key: row.issue_key,
+        issue_label: row.issue_label,
+        issue_count: parseInt(row.issue_count, 10) || 0,
+      })),
     });
   } catch (err) {
     console.error('❌ Failed to load dashboard summary:', err);
@@ -188,35 +385,15 @@ const getDepartmentMonthlySpending = async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `WITH request_costs AS (
-         SELECT
-           r.id,
-           r.department_id,
-           r.created_at,
-           CASE
-             WHEN r.estimated_cost IS NOT NULL AND r.estimated_cost > 0 THEN r.estimated_cost
-             ELSE NULL
-           END AS recorded_cost,
-           SUM(
-             CASE
-               WHEN ri.id IS NULL THEN 0
-               WHEN ri.purchased_quantity IS NOT NULL AND ri.purchased_quantity > 0 THEN ri.purchased_quantity * COALESCE(ri.unit_cost, 0)
-               WHEN ri.quantity IS NOT NULL AND ri.quantity > 0 THEN ri.quantity * COALESCE(ri.unit_cost, 0)
-               ELSE 0
-             END
-           ) AS items_cost
-         FROM requests r
-         LEFT JOIN requested_items ri ON ri.request_id = r.id
-         WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
-           AND r.request_type <> 'Warehouse Supply'
-           AND EXTRACT(YEAR FROM r.created_at) = $1
-         GROUP BY r.id, r.department_id, r.created_at
-       )
-       SELECT COALESCE(d.name, 'Unassigned') AS department,
-              TO_CHAR(rc.created_at, 'YYYY-MM') AS month,
-              SUM(COALESCE(rc.recorded_cost, rc.items_cost, 0)) AS total_cost
-       FROM request_costs rc
-       LEFT JOIN departments d ON rc.department_id = d.id
+      `SELECT COALESCE(d.name, 'Unassigned') AS department,
+              TO_CHAR(COALESCE(ri.procurement_updated_at, r.updated_at, r.created_at), 'YYYY-MM') AS month,
+              SUM(${itemActualCostExpression}) AS total_cost
+       FROM requests r
+       JOIN requested_items ri ON ri.request_id = r.id
+       LEFT JOIN departments d ON r.department_id = d.id
+       WHERE r.request_type <> 'Warehouse Supply'
+         AND ${isProcuredItemCondition}
+         AND EXTRACT(YEAR FROM COALESCE(ri.procurement_updated_at, r.updated_at, r.created_at)) = $1
        GROUP BY department, month
        ORDER BY department, month`,
       [year]
@@ -231,6 +408,61 @@ const getDepartmentMonthlySpending = async (req, res) => {
   } catch (err) {
     console.error('❌ Failed to fetch department spending:', err);
     res.status(500).json({ error: 'Failed to fetch department spending' });
+  }
+};
+
+const getDepartmentMonthlyRequestCosts = async (req, res) => {
+  if (!req.user.hasPermission('dashboard.view')) {
+    return res.status(403).json({ message: 'You do not have permission to view this dashboard' });
+  }
+
+  const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+
+  try {
+    const { rows } = await pool.query(
+      `WITH request_costs AS (
+         SELECT
+           r.id,
+           r.department_id,
+           r.created_at,
+           LOWER(COALESCE(r.status, '')) AS status,
+           ${requestValueExpression} AS request_cost
+         FROM requests r
+         LEFT JOIN requested_items ri ON ri.request_id = r.id
+         WHERE r.request_type <> 'Warehouse Supply'
+           AND LOWER(COALESCE(r.status, '')) IN ('approved', 'rejected')
+           AND EXTRACT(YEAR FROM r.created_at) = $1
+         GROUP BY r.id, r.department_id, r.created_at, LOWER(COALESCE(r.status, ''))
+       )
+       SELECT
+         COALESCE(d.name, 'Unassigned') AS department,
+         TO_CHAR(rc.created_at, 'YYYY-MM') AS month,
+         SUM(rc.request_cost) FILTER (WHERE rc.status = 'approved') AS approved_cost,
+         SUM(rc.request_cost) FILTER (WHERE rc.status = 'rejected') AS rejected_cost,
+         COUNT(*) FILTER (WHERE rc.status = 'approved') AS approved_count,
+         COUNT(*) FILTER (WHERE rc.status = 'rejected') AS rejected_count,
+         SUM(rc.request_cost) AS total_cost
+       FROM request_costs rc
+       LEFT JOIN departments d ON rc.department_id = d.id
+       GROUP BY department, month
+       ORDER BY month, department`,
+      [year]
+    );
+
+    res.json(
+      rows.map((row) => ({
+        department: row.department,
+        month: row.month,
+        approved_cost: parseFloat(row.approved_cost) || 0,
+        rejected_cost: parseFloat(row.rejected_cost) || 0,
+        total_cost: parseFloat(row.total_cost) || 0,
+        approved_count: parseInt(row.approved_count, 10) || 0,
+        rejected_count: parseInt(row.rejected_count, 10) || 0,
+      }))
+    );
+  } catch (err) {
+    console.error('❌ Failed to fetch department request costs:', err);
+    res.status(500).json({ error: 'Failed to fetch department request costs' });
   }
 };
 
@@ -431,6 +663,7 @@ const getWorkloadAnalysis = async (req, res) => {
 module.exports = {
   getDashboardSummary,
   getDepartmentMonthlySpending,
+  getDepartmentMonthlyRequestCosts,
   getLifecycleAnalytics,
   getWorkloadAnalysis,
 };

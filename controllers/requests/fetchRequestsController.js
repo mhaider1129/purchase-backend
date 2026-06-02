@@ -502,6 +502,7 @@ const getAllRequests = async (req, res, next) => {
     to_date,
     status,
     department_id,
+    section_id,
     request_id,
     page = 1,
     limit = 10,
@@ -510,7 +511,13 @@ const getAllRequests = async (req, res, next) => {
   const offset = (page - 1) * limit;
   const params = [];
   let whereClauses = [];
-  let orderBy = 'r.is_urgent DESC, r.created_at DESC';
+  const activeUrgentSort = `CASE
+    WHEN r.is_urgent = TRUE
+      AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'rejected', 'received', 'cancelled')
+    THEN 1
+    ELSE 0
+  END DESC`;
+  let orderBy = `${activeUrgentSort}, r.created_at DESC`;
 
   if (filter === 'unassigned') {
     whereClauses.push('r.assigned_to IS NULL');
@@ -519,8 +526,20 @@ const getAllRequests = async (req, res, next) => {
   }
 
   if (request_type) {
-    params.push(request_type);
-    whereClauses.push(`r.request_type = $${params.length}`);
+    const normalizedRequestType = String(request_type).trim().toLowerCase();
+    if (normalizedRequestType === 'printing logbook' || normalizedRequestType === 'logbooks') {
+      whereClauses.push(`(
+        r.request_type = 'Printing Logbook'
+        OR EXISTS (
+          SELECT 1 FROM public.requested_items ri_logbook
+          WHERE ri_logbook.request_id = r.id
+            AND LOWER(ri_logbook.item_name) LIKE '%logbook%'
+        )
+      )`);
+    } else {
+      params.push(request_type);
+      whereClauses.push(`r.request_type = $${params.length}`);
+    }
   }
 
   const trimmedRequestId = typeof request_id === 'string' ? request_id.trim() : '';
@@ -577,13 +596,18 @@ const getAllRequests = async (req, res, next) => {
     whereClauses.push(`r.department_id = $${params.length}`);
   }
 
+  if (section_id) {
+    params.push(section_id);
+    whereClauses.push(`r.section_id = $${params.length}`);
+  }
+
   if (Number.isInteger(req.user?.institute_id)) {
     params.push(req.user.institute_id);
     whereClauses.push(`r.institute_id = $${params.length}`);
   }
 
   if (sort === 'assigned') {
-    orderBy = 'r.is_urgent DESC, r.assigned_to NULLS LAST, r.created_at DESC';
+    orderBy = `${activeUrgentSort}, r.assigned_to NULLS LAST, r.created_at DESC`;
   }
 
   const whereSQL = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -769,6 +793,25 @@ const getPendingApprovals = async (req, res, next) => {
          r.estimated_cost,
          r.status,
          r.is_urgent,
+         a.approval_level,
+         COALESCE((
+           SELECT JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'approval_id', prior.id,
+               'approval_level', prior.approval_level,
+               'approver_id', prior.approver_id,
+               'approver_name', prior_user.name,
+               'approver_role', prior_user.role,
+               'approved_at', prior.approved_at
+             )
+             ORDER BY prior.approval_level ASC, prior.approved_at ASC NULLS LAST, prior.id ASC
+           )
+           FROM approvals prior
+           JOIN users prior_user ON prior.approver_id = prior_user.id
+           WHERE prior.request_id = r.id
+             AND prior.status = 'Approved'
+             AND prior.approval_level < a.approval_level
+         ), '[]'::json) AS previous_approvers,
          r.project_id,
          p.name AS project_name,
          d.name AS department_name,
@@ -949,6 +992,25 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          r.maintenance_ref_number,
          r.is_urgent,
          r.estimated_cost,
+         a.approval_level,
+         COALESCE((
+           SELECT JSON_AGG(
+             JSON_BUILD_OBJECT(
+               'approval_id', prior.id,
+               'approval_level', prior.approval_level,
+               'approver_id', prior.approver_id,
+               'approver_name', prior_user.name,
+               'approver_role', prior_user.role,
+               'approved_at', prior.approved_at
+             )
+             ORDER BY prior.approval_level ASC, prior.approved_at ASC NULLS LAST, prior.id ASC
+           )
+           FROM approvals prior
+           JOIN users prior_user ON prior.approver_id = prior_user.id
+           WHERE prior.request_id = r.id
+             AND prior.status = 'Approved'
+             AND prior.approval_level < a.approval_level
+         ), '[]'::json) AS previous_approvers,
          COALESCE(r.temporary_requester_name, u.name) AS requester_name,
          d.name AS department_name,
          s.name AS section_name,

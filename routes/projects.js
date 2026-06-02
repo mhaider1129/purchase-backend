@@ -4,12 +4,14 @@ const {
   getProjects,
   createProject,
   getAllProjects,
+  updateProjectDepartments,
   deactivateProject,
 } = require('../controllers/projectsController');
 
 router.get('/', getProjects);
 router.get('/management', getAllProjects);
 router.post('/', createProject);
+router.patch('/:id/departments', updateProjectDepartments);
 router.patch('/:id/deactivate', deactivateProject);
 
 module.exports = router;

@@ -10,6 +10,7 @@ const ensureWarehouseAssignments = require("../../utils/ensureWarehouseAssignmen
 const ensureWarehouseInventoryTables = require("../../utils/ensureWarehouseInventoryTables");
 const ensureProjectsTable = require("../../utils/ensureProjectsTable");
 const ensureRequestSchedulingColumns = require("../../utils/ensureRequestSchedulingColumns");
+const ensureRequestClientSubmissionKey = require("../../utils/ensureRequestClientSubmissionKey");
 const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
 const {
   assertBudgetCanCover,
@@ -19,6 +20,26 @@ const {
 const hasWarehouseAssignment = (value) => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0;
+};
+
+const parseOptionalPositiveInteger = (value, fieldName) => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized || normalized === "null" || normalized === "undefined") {
+      return null;
+    }
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw createHttpError(400, `${fieldName} must be a valid ID`);
+  }
+
+  return parsed;
 };
 
 const assignApprover = async (
@@ -153,10 +174,61 @@ const assignApprover = async (
   );
 };
 
+const normalizeClientSubmissionKey = (value) => {
+  if (value === undefined || value === null) return null;
+
+  const normalized = String(value).trim();
+  if (!normalized) return null;
+
+  if (normalized.length > 128) {
+    throw createHttpError(400, 'Submission key is too long');
+  }
+
+  return normalized;
+};
+
+const findExistingRequestBySubmissionKey = async ({ clientSubmissionKey, requesterId }) => {
+  if (!clientSubmissionKey || !requesterId) return null;
+
+  const { rows } = await pool.query(
+    `SELECT id, request_type, estimated_cost, status, scheduled_for, created_at
+       FROM public.requests
+      WHERE client_submission_key = $1
+        AND requester_id = $2
+      LIMIT 1`,
+    [clientSubmissionKey, requesterId],
+  );
+
+  return rows[0] || null;
+};
+
+const createIdempotentRequestResponse = (request) => ({
+  message: 'Request was already submitted; showing the existing request.',
+  request_id: request.id,
+  request_type: request.request_type,
+  estimated_cost: Number(request.estimated_cost) || 0,
+  status: request.status,
+  scheduled_for: request.scheduled_for || null,
+  submitted_at: request.created_at || null,
+  duplicate_submission: true,
+  attachments_uploaded: 0,
+  items: [],
+  next_approval: null,
+});
+
 const createRequest = async (req, res, next) => {
   let { request_type, justification, items } = req.body;
+  let clientSubmissionKey = null;
+
+  try {
+    clientSubmissionKey = normalizeClientSubmissionKey(req.body?.client_submission_key);
+  } catch (err) {
+    return next(err);
+  }
+
   await ensureWarehouseAssignments();
   await ensureProjectsTable();
+  await ensureRequestClientSubmissionKey();
 
   const rawProjectId = req.body?.project_id;
   let projectId = null;
@@ -369,6 +441,10 @@ const createRequest = async (req, res, next) => {
     );
   }
 
+  if (request_type === "Stock") {
+    supplyWarehouseId = Number(req.user.warehouse_id);
+  }
+
   if (request_type === "Medication") {
     if (
       req.user.role.toLowerCase() !== "requester" ||
@@ -384,9 +460,19 @@ const createRequest = async (req, res, next) => {
   }
 
   let requester_id = req.user.id;
-  const department_id = req.body.target_department_id || req.user.department_id;
+  let department_id;
+  let section_id;
+  try {
+    department_id =
+      parseOptionalPositiveInteger(req.body.target_department_id, "Target department") ||
+      req.user.department_id;
+    section_id =
+      parseOptionalPositiveInteger(req.body.target_section_id, "Target section") ||
+      parseOptionalPositiveInteger(req.user.section_id, "User section");
+  } catch (err) {
+    return next(err);
+  }
   const institute_id = req.user.institute_id;
-  const section_id = req.body.target_section_id || req.user.section_id || null;
 
   let temporaryRequesterName = '';
 
@@ -511,8 +597,8 @@ const createRequest = async (req, res, next) => {
         request_type, requester_id, department_id, institute_id, section_id, justification,
         estimated_cost, request_domain, status,
         maintenance_ref_number, initiated_by_technician_id,
-        project_id, temporary_requester_name, supply_warehouse_id, scheduled_for
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        project_id, temporary_requester_name, supply_warehouse_id, scheduled_for, client_submission_key
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
       [
         request_type,
         requester_id,
@@ -529,6 +615,7 @@ const createRequest = async (req, res, next) => {
         request_type === "Maintenance" ? temporaryRequesterName : null,
         supplyWarehouseId,
         scheduledFor,
+        clientSubmissionKey,
       ],
     );
 
@@ -877,6 +964,26 @@ Please log in to the system to take action.`,
     });
   } catch (err) {
     await client.query("ROLLBACK");
+
+    if (
+      err?.code === '23505' &&
+      err?.constraint === 'requests_client_submission_key_unique_idx' &&
+      clientSubmissionKey
+    ) {
+      try {
+        const existingRequest = await findExistingRequestBySubmissionKey({
+          clientSubmissionKey,
+          requesterId: req.user?.id,
+        });
+
+        if (existingRequest) {
+          return res.status(200).json(createIdempotentRequestResponse(existingRequest));
+        }
+      } catch (lookupErr) {
+        console.error('❌ Failed to resolve duplicate request submission:', lookupErr);
+      }
+    }
+
     console.error("❌ Error creating request:", err);
     if (err?.statusCode) {
       next(err);

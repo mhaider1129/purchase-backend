@@ -5,6 +5,7 @@ const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedI
 const ensureRequestedItemPoIssuanceColumn = require('../../utils/ensureRequestedItemPoIssuanceColumn');
 const { ensureWarehouseSupplyApprovalColumns } = require('../../utils/ensureWarehouseSupplyTables');
 const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureRequestedItemFinancialsTable');
+const { ensureFinanceCoreTables } = require('../../utils/ensureFinanceCoreTables');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -784,6 +785,7 @@ const getAssignedRequests = async (req, res) => {
 
 const getPendingApprovals = async (req, res, next) => {
   try {
+    await ensureFinanceCoreTables();
     const result = await pool.query(
       `SELECT
          a.id AS approval_id,
@@ -793,6 +795,11 @@ const getPendingApprovals = async (req, res, next) => {
          r.estimated_cost,
          r.status,
          r.is_urgent,
+         budget_snapshot.budget_envelope_id,
+         budget_snapshot.allocated_amount AS budget_allocated_amount,
+         budget_snapshot.available_amount AS budget_available_amount,
+         budget_snapshot.currency AS budget_currency,
+         COALESCE(budget_snapshot.available_amount < COALESCE(r.estimated_cost, 0), FALSE) AS budget_exceeded,
          a.approval_level,
          COALESCE((
            SELECT JSON_AGG(
@@ -826,6 +833,24 @@ const getPendingApprovals = async (req, res, next) => {
        LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN sections s ON r.section_id = s.id
        LEFT JOIN users requester ON r.requester_id = requester.id
+       LEFT JOIN LATERAL (
+         SELECT
+           be.id AS budget_envelope_id,
+           be.allocated_amount,
+           be.currency,
+           be.allocated_amount - COALESCE((
+             SELECT SUM(cl.amount)
+             FROM commitment_ledger cl
+             WHERE cl.budget_envelope_id = be.id
+               AND cl.stage = 'actual'
+           ), 0) AS available_amount
+         FROM budget_envelopes be
+         WHERE be.department_id = r.department_id
+           AND COALESCE(be.project_id::text, '') = COALESCE(r.project_id::text, '')
+           AND be.fiscal_year = EXTRACT(YEAR FROM NOW())::integer
+           AND be.currency = 'USD'
+         LIMIT 1
+       ) budget_snapshot ON TRUE
        JOIN approvals a ON r.id = a.request_id
        WHERE a.approver_id = $1
          AND a.is_active = true
@@ -984,6 +1009,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
 
 const getPendingMaintenanceApprovals = async (req, res, next) => {
   try {
+    await ensureFinanceCoreTables();
     const { rows } = await pool.query(
       `SELECT
          a.id AS approval_id,
@@ -992,6 +1018,11 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          r.maintenance_ref_number,
          r.is_urgent,
          r.estimated_cost,
+         budget_snapshot.budget_envelope_id,
+         budget_snapshot.allocated_amount AS budget_allocated_amount,
+         budget_snapshot.available_amount AS budget_available_amount,
+         budget_snapshot.currency AS budget_currency,
+         COALESCE(budget_snapshot.available_amount < COALESCE(r.estimated_cost, 0), FALSE) AS budget_exceeded,
          a.approval_level,
          COALESCE((
            SELECT JSON_AGG(
@@ -1043,12 +1074,34 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
        LEFT JOIN sections s ON r.section_id = s.id
        JOIN approvals a ON a.request_id = r.id
        LEFT JOIN projects p ON r.project_id = p.id
+       LEFT JOIN LATERAL (
+         SELECT
+           be.id AS budget_envelope_id,
+           be.allocated_amount,
+           be.currency,
+           be.allocated_amount - COALESCE((
+             SELECT SUM(cl.amount)
+             FROM commitment_ledger cl
+             WHERE cl.budget_envelope_id = be.id
+               AND cl.stage = 'actual'
+           ), 0) AS available_amount
+         FROM budget_envelopes be
+         WHERE be.department_id = r.department_id
+           AND COALESCE(be.project_id::text, '') = COALESCE(r.project_id::text, '')
+           AND be.fiscal_year = EXTRACT(YEAR FROM NOW())::integer
+           AND be.currency = 'USD'
+         LIMIT 1
+       ) budget_snapshot ON TRUE
        LEFT JOIN public.requested_items ri ON ri.request_id = r.id
        WHERE r.request_type = 'Maintenance'
          AND a.approver_id = $1
          AND a.status = 'Pending'
          AND a.is_active = true
-       GROUP BY a.id, r.id, r.temporary_requester_name, u.name, d.name, s.name, p.name
+       GROUP BY a.id, r.id, r.temporary_requester_name, u.name, d.name, s.name, p.name,
+         budget_snapshot.budget_envelope_id,
+         budget_snapshot.allocated_amount,
+         budget_snapshot.available_amount,
+         budget_snapshot.currency
        ORDER BY r.created_at DESC`,
       [req.user.id]
     );

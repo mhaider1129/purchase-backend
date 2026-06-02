@@ -104,6 +104,7 @@ const buildFilteredQuery = (queryParams) => {
     to_date,
     status,
     department_id,
+    section_id,
     request_id,
   } = queryParams;
   let sql = `
@@ -120,8 +121,20 @@ const buildFilteredQuery = (queryParams) => {
   const values = [];
 
   if (request_type) {
-    values.push(request_type);
-    sql += ` AND r.request_type = $${values.length}`;
+    const normalizedRequestType = String(request_type).trim().toLowerCase();
+    if (normalizedRequestType === 'printing logbook' || normalizedRequestType === 'logbooks') {
+      sql += ` AND (
+        r.request_type = 'Printing Logbook'
+        OR EXISTS (
+          SELECT 1 FROM public.requested_items ri_logbook
+          WHERE ri_logbook.request_id = r.id
+            AND LOWER(ri_logbook.item_name) LIKE '%logbook%'
+        )
+      )`;
+    } else {
+      values.push(request_type);
+      sql += ` AND r.request_type = $${values.length}`;
+    }
   }
 
   const trimmedRequestId = typeof request_id === 'string' ? request_id.trim() : '';
@@ -171,7 +184,17 @@ const buildFilteredQuery = (queryParams) => {
     sql += ` AND r.department_id = $${values.length}`;
   }
 
-  sql += ' ORDER BY r.is_urgent DESC, r.created_at DESC';
+  if (section_id) {
+    values.push(section_id);
+    sql += ` AND r.section_id = $${values.length}`;
+  }
+
+  sql += ` ORDER BY CASE
+    WHEN r.is_urgent = TRUE
+      AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'rejected', 'received', 'cancelled')
+    THEN 1
+    ELSE 0
+  END DESC, r.created_at DESC`;
   return { sql, values };
 };
 

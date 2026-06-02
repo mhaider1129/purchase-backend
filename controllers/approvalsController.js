@@ -8,6 +8,7 @@ const { ensureWarehouseSupplyApprovalColumns } = require('../utils/ensureWarehou
 const getColumnType = require('../utils/getColumnType');
 const { assignApprover } = require('./requests/createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('./utils/approvalRoutes');
+const { applyAutoAssignmentForApprovedRequest } = require('../services/requestAutoAssignmentService');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -493,6 +494,19 @@ const handleApprovalDecision = async (req, res, next) => {
       }
 
       if (newStatus === 'Approved') {
+        const autoAssignment = await applyAutoAssignmentForApprovedRequest(
+          client,
+          {
+            ...request,
+            id: approval.request_id,
+          },
+          approver_id,
+        );
+
+        if (autoAssignment?.assigned_request) {
+          request.assigned_to = autoAssignment.assigned_request.assigned_to;
+        }
+
         if (
           request.request_type === 'Maintenance' &&
           request.initiated_by_technician_id &&

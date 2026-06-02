@@ -33,6 +33,20 @@ const ensureProjectsTable = async (client = pool) => {
     `CREATE INDEX IF NOT EXISTS idx_projects_lower_name ON public.projects (LOWER(name))`
   );
 
+  await runner.query(`
+    CREATE TABLE IF NOT EXISTS public.project_department_visibility (
+      project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+      department_id INTEGER NOT NULL REFERENCES public.departments(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (project_id, department_id)
+    )
+  `);
+
+  await runner.query(
+    `CREATE INDEX IF NOT EXISTS idx_project_department_visibility_department
+       ON public.project_department_visibility(department_id)`
+  );
+
   await runner.query(
     `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS project_id UUID`
   );

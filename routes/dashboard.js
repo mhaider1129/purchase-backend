@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   getDashboardSummary,
   getDepartmentMonthlySpending,
+  getDepartmentMonthlyRequestCosts,
   getLifecycleAnalytics,
   getWorkloadAnalysis,
 } = require('../controllers/dashboardController');
@@ -10,6 +11,7 @@ const { authenticateUser } = require('../middleware/authMiddleware');
 
 router.get('/summary', authenticateUser, getDashboardSummary);
 router.get('/department-spending', authenticateUser, getDepartmentMonthlySpending);
+router.get('/department-request-costs', authenticateUser, getDepartmentMonthlyRequestCosts);
 router.get('/lifecycle', authenticateUser, getLifecycleAnalytics);
 router.get('/workload', authenticateUser, getWorkloadAnalysis);
 

@@ -9,9 +9,10 @@ const ensureRequestClientSubmissionKey = async () => {
   if (!ensurePromise) {
     ensurePromise = (async () => {
       await pool.query(`ALTER TABLE public.requests ADD COLUMN IF NOT EXISTS client_submission_key TEXT`);
+      await pool.query(`DROP INDEX IF EXISTS public.requests_client_submission_key_unique_idx`);
       await pool.query(
-        `CREATE UNIQUE INDEX IF NOT EXISTS requests_client_submission_key_unique_idx
-         ON public.requests (client_submission_key)
+        `CREATE UNIQUE INDEX IF NOT EXISTS requests_requester_client_submission_key_unique_idx
+         ON public.requests (requester_id, client_submission_key)
          WHERE client_submission_key IS NOT NULL`
       );
       ensured = true;

@@ -195,11 +195,27 @@ const findExistingRequestBySubmissionKey = async ({ clientSubmissionKey, request
        FROM public.requests
       WHERE client_submission_key = $1
         AND requester_id = $2
+      ORDER BY id DESC
       LIMIT 1`,
     [clientSubmissionKey, requesterId],
   );
 
   return rows[0] || null;
+};
+
+const isClientSubmissionKeyConflict = (err) => {
+  if (err?.code !== '23505') return false;
+
+  const conflictText = [
+    err?.constraint,
+    err?.detail,
+    err?.message,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return conflictText.includes('client_submission_key');
 };
 
 const createIdempotentRequestResponse = (request) => ({
@@ -460,6 +476,7 @@ const createRequest = async (req, res, next) => {
   }
 
   let requester_id = req.user.id;
+  let effectiveRequesterId = requester_id;
   let department_id;
   let section_id;
   try {
@@ -518,6 +535,7 @@ const createRequest = async (req, res, next) => {
       return next(createHttpError(400, "Selected requester is invalid for the selected department/section"));
     }
     requester_id = selectedRequesterId;
+    effectiveRequesterId = requester_id;
   }
 
   const itemNames = items.map((i) => i.item_name.toLowerCase());
@@ -966,14 +984,13 @@ Please log in to the system to take action.`,
     await client.query("ROLLBACK");
 
     if (
-      err?.code === '23505' &&
-      err?.constraint === 'requests_client_submission_key_unique_idx' &&
+      isClientSubmissionKeyConflict(err) &&
       clientSubmissionKey
     ) {
       try {
         const existingRequest = await findExistingRequestBySubmissionKey({
           clientSubmissionKey,
-          requesterId: req.user?.id,
+          requesterId: effectiveRequesterId || req.user?.id,
         });
 
         if (existingRequest) {

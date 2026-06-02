@@ -11,6 +11,7 @@ jest.mock('../utils/ensureRequestSchedulingColumns', () => jest.fn(() => Promise
 jest.mock('../utils/ensureFinanceCoreTables', () => ({ ensureFinanceCoreTables: jest.fn(() => Promise.resolve()) }));
 jest.mock('../services/financeCoreService', () => ({
   assertBudgetCanCover: jest.fn(() => Promise.resolve({ envelope: { id: 1 } })),
+  evaluateBudgetCoverage: jest.fn(() => Promise.resolve({ envelope: { id: 1 }, snapshot: { available: 1000, currency: 'USD' }, isOverBudget: false, hasBudget: true, warning: null })),
   recordCommitment: jest.fn(() => Promise.resolve()),
 }));
 

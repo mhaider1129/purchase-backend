@@ -64,7 +64,7 @@ const getBudgetSnapshot = async (client, budgetEnvelopeId) => {
   };
 };
 
-const assertBudgetCanCover = async (client, {
+const evaluateBudgetCoverage = async (client, {
   departmentId,
   projectId = null,
   amount,
@@ -72,7 +72,13 @@ const assertBudgetCanCover = async (client, {
 }) => {
   const normalizedAmount = Number(amount) || 0;
   if (normalizedAmount <= 0) {
-    return { envelope: null, snapshot: null };
+    return {
+      envelope: null,
+      snapshot: null,
+      isOverBudget: false,
+      hasBudget: false,
+      warning: null,
+    };
   }
 
   const envelope = await resolveBudgetEnvelope(client, {
@@ -82,21 +88,54 @@ const assertBudgetCanCover = async (client, {
   });
 
   if (!envelope) {
+    return {
+      envelope: null,
+      snapshot: null,
+      isOverBudget: false,
+      hasBudget: false,
+      warning: null,
+    };
+  }
+
+  const snapshot = await getBudgetSnapshot(client, envelope.id);
+  const isOverBudget = snapshot.available < normalizedAmount;
+
+  return {
+    envelope,
+    snapshot,
+    isOverBudget,
+    hasBudget: true,
+    warning: isOverBudget
+      ? `Budget exceeded. Available ${snapshot.available.toFixed(2)} ${snapshot.currency}, required ${normalizedAmount.toFixed(2)} ${snapshot.currency}`
+      : null,
+  };
+};
+
+const assertBudgetCanCover = async (client, {
+  departmentId,
+  projectId = null,
+  amount,
+  currency = 'USD',
+}) => {
+  const coverage = await evaluateBudgetCoverage(client, {
+    departmentId,
+    projectId,
+    amount,
+    currency,
+  });
+
+  if (Number(amount) > 0 && !coverage.envelope) {
     throw createHttpError(
       409,
       'No active budget envelope found for this department/project and fiscal year'
     );
   }
 
-  const snapshot = await getBudgetSnapshot(client, envelope.id);
-  if (snapshot.available < normalizedAmount) {
-    throw createHttpError(
-      409,
-      `Budget exceeded. Available ${snapshot.available.toFixed(2)} ${snapshot.currency}, required ${normalizedAmount.toFixed(2)} ${snapshot.currency}`
-    );
+  if (coverage.isOverBudget) {
+    throw createHttpError(409, coverage.warning);
   }
 
-  return { envelope, snapshot };
+  return { envelope: coverage.envelope, snapshot: coverage.snapshot };
 };
 
 const recordCommitment = async (client, {
@@ -298,6 +337,7 @@ const postProcureToPayAccrual = async (client, {
 module.exports = {
   resolveBudgetEnvelope,
   getBudgetSnapshot,
+  evaluateBudgetCoverage,
   assertBudgetCanCover,
   recordCommitment,
   createJournalEntry,

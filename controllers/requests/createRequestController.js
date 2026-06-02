@@ -13,7 +13,7 @@ const ensureRequestSchedulingColumns = require("../../utils/ensureRequestSchedul
 const ensureRequestClientSubmissionKey = require("../../utils/ensureRequestClientSubmissionKey");
 const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
 const {
-  assertBudgetCanCover,
+  evaluateBudgetCoverage,
   recordCommitment,
 } = require("../../services/financeCoreService");
 
@@ -644,26 +644,31 @@ const createRequest = async (req, res, next) => {
         "❌ Failed to retrieve request ID after insertion",
       );
 
+    let budgetCoverage = null;
     if (estimatedCost > 0) {
       await ensureFinanceCoreTables(client);
-      const budgetCheck = await assertBudgetCanCover(client, {
+      budgetCoverage = await evaluateBudgetCoverage(client, {
         departmentId: department_id,
         projectId: projectId || null,
         amount: estimatedCost,
         currency: 'USD',
       });
 
-      await recordCommitment(client, {
-        requestId: request.id,
-        budgetEnvelopeId: budgetCheck.envelope.id,
-        stage: 'reservation',
-        amount: estimatedCost,
-        currency: 'USD',
-        sourceType: 'purchase_request',
-        sourceId: String(request.id),
-        notes: `Budget reservation from purchase request ${request.id}`,
-        actorId: req.user.id,
-      });
+      if (budgetCoverage.envelope) {
+        await recordCommitment(client, {
+          requestId: request.id,
+          budgetEnvelopeId: budgetCoverage.envelope.id,
+          stage: 'reservation',
+          amount: estimatedCost,
+          currency: 'USD',
+          sourceType: 'purchase_request',
+          sourceId: String(request.id),
+          notes: budgetCoverage.isOverBudget
+            ? `Over-budget reservation from purchase request ${request.id}`
+            : `Budget reservation from purchase request ${request.id}`,
+          actorId: req.user.id,
+        });
+      }
     }
 
     const itemIdMap = [];
@@ -979,6 +984,9 @@ Please log in to the system to take action.`,
           }
         : null,
       duplicate_detected: duplicateFound,
+      budget_warning: budgetCoverage?.warning || null,
+      budget_exceeded: Boolean(budgetCoverage?.isOverBudget),
+      budget: budgetCoverage?.snapshot || null,
     });
   } catch (err) {
     await client.query("ROLLBACK");

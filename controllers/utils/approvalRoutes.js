@@ -51,13 +51,16 @@ const fetchApprovalRoutes = async ({
     return [];
   }
 
+  // Treat max_amount as an approval cap, not a route exclusion. Requests that exceed
+  // an approver's cap must still pass through that lower level before added higher
+  // thresholds such as CFO approval are included.
   const { rows } = await runner.query(
     `SELECT id, request_type, department_type, approval_level, role, min_amount, max_amount, warehouse_id
        FROM approval_route_rules
       WHERE version_id = $1
         AND request_type = $2
         AND department_type = $3
-        AND $4 BETWEEN COALESCE(min_amount, $5) AND COALESCE(max_amount, $6)
+        AND $4 >= COALESCE(min_amount, $5)
       ORDER BY approval_level, id`,
     [
       activeVersion.id,
@@ -65,7 +68,6 @@ const fetchApprovalRoutes = async ({
       normalizedDepartmentType,
       numericAmount,
       DEFAULT_MIN_AMOUNT,
-      DEFAULT_MAX_AMOUNT,
     ],
   );
 

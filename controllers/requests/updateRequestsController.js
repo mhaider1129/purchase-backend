@@ -676,11 +676,37 @@ const requestHodApproval = async (req, res, next) => {
 
     const insertionLevel = Number(currentApproval.approval_level);
 
+    await client.query(
+      `UPDATE approvals
+          SET is_active = FALSE,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [currentApproval.id],
+    );
+
     const insertedApproval = await client.query(
-      `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
-       VALUES ($1, $2, $3, TRUE, 'Pending', NULL)
+      `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at, comments)
+       VALUES ($1, $2, $3, TRUE, 'Pending', NULL, $4)
        RETURNING id`,
-      [requestId, hodUserId, insertionLevel],
+      [
+        requestId,
+        hodUserId,
+        insertionLevel,
+        `Routed by SCM approval ${currentApproval.id}`,
+      ],
+    );
+
+    await client.query(
+      `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+       VALUES ($1, $2, $3, 'Routed to HOD', $4)`,
+      [
+        currentApproval.id,
+        requestId,
+        req.user.id,
+        hodUser.department_name
+          ? `SCM step paused while ${hodUser.department_name} HOD reviews`
+          : 'SCM step paused while selected HOD reviews',
+      ],
     );
 
     await client.query(
@@ -767,7 +793,7 @@ const markRequestAsCompleted = async (req, res, next) => {
              WHEN procurement_status IS NULL
                OR TRIM(procurement_status) = ''
              THEN 0
-             WHEN LOWER(TRIM(procurement_status)) NOT IN ('purchased', 'completed')
+             WHEN LOWER(TRIM(procurement_status)) NOT IN ('purchased', 'completed', 'not_procured', 'canceled')
              THEN 1
              ELSE 0
            END
@@ -801,7 +827,7 @@ const markRequestAsCompleted = async (req, res, next) => {
       return next(
         createHttpError(
           400,
-          'All items must be purchased or completed before marking the request as completed.'
+          'All items must be purchased, completed, not procured, or canceled before marking the request as completed.'
         )
       );
     }

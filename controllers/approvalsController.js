@@ -97,6 +97,22 @@ const handleApprovalDecision = async (req, res, next) => {
       await ensureRequestedItemApprovalColumns(client);
     }
 
+    const routedHodRes = await client.query(
+      `SELECT scm_approval.id AS scm_approval_id, scm_user.id AS scm_user_id
+         FROM approvals scm_approval
+         JOIN users scm_user ON scm_user.id = scm_approval.approver_id
+        WHERE scm_approval.request_id = $1
+          AND scm_approval.approval_level = $2
+          AND scm_approval.status = 'Pending'
+          AND scm_approval.is_active = FALSE
+          AND UPPER(scm_user.role) = 'SCM'
+        ORDER BY scm_approval.id DESC
+        LIMIT 1`,
+      [approval.request_id, approval.approval_level],
+    );
+    const routedHodContext =
+      (user_role || '').toUpperCase() === 'HOD' ? routedHodRes.rows[0] || null : null;
+
     const routeDomain = await resolveRouteDomain({
       client,
       departmentId: request.department_id,
@@ -185,7 +201,7 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     // 3. HOD Role Validation
-    if (user_role === 'HOD' && req.user.department_id !== request.department_id) {
+    if (user_role === 'HOD' && req.user.department_id !== request.department_id && !routedHodContext) {
       return rollbackWithError(client, res, next, 403, 'Only the HOD of the same department can approve this request');
     }
 
@@ -196,7 +212,8 @@ const handleApprovalDecision = async (req, res, next) => {
     const expectedRole = routeForLevel?.role || null;
     if (
       expectedRole &&
-      expectedRole.trim().toUpperCase() !== (user_role || '').toUpperCase()
+      expectedRole.trim().toUpperCase() !== (user_role || '').toUpperCase() &&
+      !routedHodContext
     ) {
       return rollbackWithError(client, res, next, 403, `Only users with role '${expectedRole}' can approve at this level.`);
     }
@@ -267,6 +284,76 @@ const handleApprovalDecision = async (req, res, next) => {
       VALUES ($1, $2, $3, $4, $5)`,
       [approvalId, approval.request_id, approver_id, status, comments || null]
     );
+
+    if (routedHodContext) {
+      if (status === 'Approved') {
+        const resumedScmRes = await client.query(
+          `UPDATE approvals
+              SET is_active = TRUE,
+                  updated_at = NOW()
+            WHERE id = $1
+              AND status = 'Pending'
+            RETURNING id, approver_id`,
+          [routedHodContext.scm_approval_id],
+        );
+
+        if (resumedScmRes.rowCount > 0) {
+          const resumedScm = resumedScmRes.rows[0];
+          await client.query(
+            `INSERT INTO request_logs (request_id, action, actor_id, comments)
+             VALUES ($1, 'SCM approval resumed', $2, $3)`,
+            [
+              approval.request_id,
+              approver_id,
+              'Routed HOD approved the request; SCM can now continue the review',
+            ],
+          );
+
+          await client.query(
+            `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+             VALUES ($1, $2, $3, 'Resumed', $4)`,
+            [
+              resumedScm.id,
+              approval.request_id,
+              approver_id,
+              'Routed HOD approved the request; SCM approval is active again',
+            ],
+          );
+
+          enqueueNotification({
+            userId: resumedScm.approver_id,
+            title: 'HOD review complete',
+            message: `The routed HOD approved request ${approval.request_id}. Your SCM approval step is active again.`,
+            link: `/requests/${approval.request_id}`,
+            metadata: {
+              requestId: approval.request_id,
+              requestType: request.request_type,
+              action: 'scm_approval_resumed',
+            },
+          });
+        }
+      } else if (status === 'Rejected') {
+        await client.query(
+          `UPDATE approvals
+              SET is_active = FALSE,
+                  updated_at = NOW()
+            WHERE request_id = $1
+              AND id <> $2
+              AND status = 'Pending'`,
+          [approval.request_id, approvalId],
+        );
+
+        await client.query(
+          `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, 'Routed HOD rejected request', $2, $3)`,
+          [
+            approval.request_id,
+            approver_id,
+            'Approval cycle stopped because the routed HOD rejected the request',
+          ],
+        );
+      }
+    }
 
     // 8. Activate Next Approval Step (only when approved)
     if (status === 'Approved') {

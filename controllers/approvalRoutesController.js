@@ -226,12 +226,13 @@ const deleteRoute = async (req, res, next) => {
 
 const findMatchingRouteRoles = (routes, scenario) => {
   const amount = Number.isFinite(Number(scenario.amount)) ? Number(scenario.amount) : 0;
+  // Match runtime routing: max_amount is an approval cap, so over-cap requests
+  // continue through lower levels while higher min_amount thresholds are added.
   return routes
     .filter(route => (
       route.request_type === scenario.request_type
       && route.department_type === String(scenario.department_type || '').toLowerCase()
       && amount >= Number(route.min_amount || 0)
-      && amount <= Number(route.max_amount || DEFAULT_MAX_AMOUNT)
     ))
     .sort((a, b) => Number(a.approval_level) - Number(b.approval_level))
     .map(route => ({

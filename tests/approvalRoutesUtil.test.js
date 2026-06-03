@@ -60,7 +60,7 @@ describe('approval route utilities', () => {
     expect(getActiveVersion).toHaveBeenCalledWith(pool);
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining('FROM approval_route_rules'),
-      [11, 'Stock', 'medical', 100, 0, 999999999],
+      [11, 'Stock', 'medical', 100, 0],
     );
     expect(routes).toHaveLength(1);
     expect(routes[0].role).toBe('HOD');

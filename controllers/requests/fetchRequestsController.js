@@ -6,6 +6,7 @@ const ensureRequestedItemPoIssuanceColumn = require('../../utils/ensureRequested
 const { ensureWarehouseSupplyApprovalColumns } = require('../../utils/ensureWarehouseSupplyTables');
 const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureRequestedItemFinancialsTable');
 const { ensureFinanceCoreTables } = require('../../utils/ensureFinanceCoreTables');
+const { ensureRequestedItemAssignmentColumns } = require('./assignRequestController');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
@@ -13,6 +14,7 @@ const getRequestDetails = async (req, res, next) => {
   const isPrivilegedViewer = req.user.hasPermission('requests.view-all');
 
   try {
+    await ensureRequestedItemAssignmentColumns();
     let accessCheck;
 
     if (isPrivilegedViewer) {
@@ -30,7 +32,15 @@ const getRequestDetails = async (req, res, next) => {
          FROM requests r
          LEFT JOIN projects p ON r.project_id = p.id
          LEFT JOIN approvals a ON r.id = a.request_id
-         WHERE r.id = $1 AND (r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
+         WHERE r.id = $1 AND (
+           r.requester_id = $2
+           OR a.approver_id = $2
+           OR r.assigned_to = $2
+           OR EXISTS (
+             SELECT 1 FROM public.requested_items access_ri
+             WHERE access_ri.request_id = r.id AND access_ri.assigned_to = $2
+           )
+         )
          LIMIT 1`,
         [id, userId],
       );
@@ -73,7 +83,12 @@ const getRequestDetails = async (req, res, next) => {
          NULL::text AS savings_notes,
          NULL::numeric AS savings_baseline,
          NULL::integer AS contract_id,
-         NULL::numeric AS contract_value_snapshot
+         NULL::numeric AS contract_value_snapshot,
+         NULL::integer AS assigned_to,
+         NULL::text AS assigned_user_name,
+         NULL::text AS assigned_user_role,
+         NULL::timestamp AS assigned_at,
+         NULL::text AS assignment_notes
        FROM warehouse_supply_items
        WHERE request_id = $1`,
         [id]
@@ -113,9 +128,15 @@ const getRequestDetails = async (req, res, next) => {
            rif.savings_notes,
            rif.savings_baseline,
            rif.contract_id,
-           rif.contract_value_snapshot
+           rif.contract_value_snapshot,
+           ri.assigned_to,
+           assigned_user.name AS assigned_user_name,
+           assigned_user.role AS assigned_user_role,
+           ri.assigned_at,
+           ri.assignment_notes
          FROM public.requested_items ri
          LEFT JOIN public.requested_item_financials rif ON rif.requested_item_id = ri.id
+         LEFT JOIN users assigned_user ON assigned_user.id = ri.assigned_to
          WHERE ri.request_id = $1`,
         [id]
       );
@@ -130,12 +151,18 @@ const getRequestDetails = async (req, res, next) => {
       assignedUser = assignedRes.rows[0] || null;
     }
 
-    const shouldHideRejectedItems =
-      request.status === 'Approved' && request.assigned_to === req.user.id;
+    const isSplitAssignee = itemsRes.rows.some((item) => Number(item.assigned_to) === Number(req.user.id))
+      && Number(request.assigned_to) !== Number(req.user.id)
+      && !isPrivilegedViewer;
 
-    const filteredItems = shouldHideRejectedItems
-      ? itemsRes.rows.filter((item) => item.approval_status !== 'Rejected')
-      : itemsRes.rows;
+    const shouldHideRejectedItems =
+      request.status === 'Approved' && (Number(request.assigned_to) === Number(req.user.id) || isSplitAssignee);
+
+    const filteredItems = itemsRes.rows.filter((item) => {
+      if (isSplitAssignee && Number(item.assigned_to) !== Number(req.user.id)) return false;
+      if (shouldHideRejectedItems && item.approval_status === 'Rejected') return false;
+      return true;
+    });
 
     res.json({
       request,
@@ -155,6 +182,7 @@ const getRequestItemsOnly = async (req, res, next) => {
   const userWarehouseId = req.user?.warehouse_id;
 
   try {
+    await ensureRequestedItemAssignmentColumns();
     let accessCheck;
 
     if (isPrivilegedViewer) {
@@ -176,6 +204,10 @@ const getRequestItemsOnly = async (req, res, next) => {
             r.requester_id = $2
             OR a.approver_id = $2
             OR r.assigned_to = $2
+            OR EXISTS (
+              SELECT 1 FROM public.requested_items access_ri
+              WHERE access_ri.request_id = r.id AND access_ri.assigned_to = $2
+            )
             ${
               req.user.hasPermission('warehouse.manage-supply') &&
               Number.isInteger(userWarehouseId)
@@ -231,7 +263,12 @@ const getRequestItemsOnly = async (req, res, next) => {
         NULL::text AS savings_notes,
         NULL::numeric AS savings_baseline,
         NULL::integer AS contract_id,
-        NULL::numeric AS contract_value_snapshot
+        NULL::numeric AS contract_value_snapshot,
+        NULL::integer AS assigned_to,
+        NULL::text AS assigned_user_name,
+        NULL::text AS assigned_user_role,
+        NULL::timestamp AS assigned_at,
+        NULL::text AS assignment_notes
       FROM warehouse_supply_items
       WHERE request_id = $1
       `,
@@ -273,21 +310,33 @@ const getRequestItemsOnly = async (req, res, next) => {
         rif.savings_notes,
         rif.savings_baseline,
         rif.contract_id,
-        rif.contract_value_snapshot
+        rif.contract_value_snapshot,
+        ri.assigned_to,
+        assigned_user.name AS assigned_user_name,
+        assigned_user.role AS assigned_user_role,
+        ri.assigned_at,
+        ri.assignment_notes
       FROM public.requested_items ri
       LEFT JOIN public.requested_item_financials rif ON rif.requested_item_id = ri.id
+      LEFT JOIN users assigned_user ON assigned_user.id = ri.assigned_to
       WHERE ri.request_id = $1
       `,
         [id]
       );
     }
 
-    const shouldHideRejectedItems =
-      requestMeta?.status === 'Approved' && requestMeta?.assigned_to === req.user.id;
+    const isSplitAssignee = itemsRes.rows.some((item) => Number(item.assigned_to) === Number(req.user.id))
+      && Number(requestMeta?.assigned_to) !== Number(req.user.id)
+      && !isPrivilegedViewer;
 
-    const filteredItems = shouldHideRejectedItems
-      ? itemsRes.rows.filter((item) => item.approval_status !== 'Rejected')
-      : itemsRes.rows;
+    const shouldHideRejectedItems =
+      requestMeta?.status === 'Approved' && (Number(requestMeta?.assigned_to) === Number(req.user.id) || isSplitAssignee);
+
+    const filteredItems = itemsRes.rows.filter((item) => {
+      if (isSplitAssignee && Number(item.assigned_to) !== Number(req.user.id)) return false;
+      if (shouldHideRejectedItems && item.approval_status === 'Rejected') return false;
+      return true;
+    });
 
     res.json({ items: filteredItems });
   } catch (err) {
@@ -614,6 +663,7 @@ const getAllRequests = async (req, res, next) => {
   const whereSQL = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   try {
+    await ensureRequestedItemAssignmentColumns();
     const result = await pool.query(
       `
       SELECT
@@ -623,6 +673,12 @@ const getAllRequests = async (req, res, next) => {
         s.name AS section_name,
         u.name AS assigned_user_name,
         u.role AS assigned_user_role,
+        COALESCE((
+          SELECT JSON_AGG(DISTINCT JSONB_BUILD_OBJECT('id', split_user.id, 'name', split_user.name, 'role', split_user.role))
+          FROM public.requested_items split_ri
+          JOIN users split_user ON split_user.id = split_ri.assigned_to
+          WHERE split_ri.request_id = r.id
+        ), '[]'::json) AS split_assignees,
         COALESCE(r.temporary_requester_name, requester.name) AS requester_name,
         CASE WHEN r.temporary_requester_name IS NOT NULL THEN 'Temporary Requester' ELSE requester.role END AS requester_role,
         ap.approval_level AS current_approval_level,
@@ -716,6 +772,7 @@ const buildItemSummary = (rows = [], fallbackCost = null) => {
 
 const getAssignedRequests = async (req, res) => {
   try {
+    await ensureRequestedItemAssignmentColumns();
     const overrideAssigneeId = Number.parseInt(req.query?.procurement_user_id, 10);
     const canOverrideAssignee = req.user.hasPermission('requests.manage');
 
@@ -738,7 +795,13 @@ const getAssignedRequests = async (req, res) => {
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN users u ON r.requester_id = u.id
-       WHERE r.assigned_to = $1
+       WHERE (
+           r.assigned_to = $1
+           OR EXISTS (
+             SELECT 1 FROM public.requested_items assigned_ri
+             WHERE assigned_ri.request_id = r.id AND assigned_ri.assigned_to = $1
+           )
+         )
          AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received')
        ORDER BY r.created_at DESC`,
       [userId],
@@ -752,7 +815,7 @@ const getAssignedRequests = async (req, res) => {
     const requestIds = requests.map((row) => row.id);
     const requestStatusById = new Map(requests.map((row) => [row.id, row.status]));
     const itemsRes = await pool.query(
-      `SELECT request_id, procurement_status, unit_cost, quantity, purchased_quantity, approval_status
+      `SELECT request_id, procurement_status, unit_cost, quantity, purchased_quantity, approval_status, assigned_to
        FROM public.requested_items
        WHERE request_id = ANY($1::int[])`,
       [requestIds],
@@ -760,6 +823,9 @@ const getAssignedRequests = async (req, res) => {
 
     const groupedByRequest = itemsRes.rows.reduce((acc, item) => {
       const requestStatus = requestStatusById.get(item.request_id);
+      if (item.assigned_to && Number(item.assigned_to) !== Number(userId)) {
+        return acc;
+      }
       if (requestStatus === 'Approved' && item.approval_status === 'Rejected') {
         return acc;
       }

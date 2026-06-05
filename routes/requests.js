@@ -48,7 +48,7 @@ const {
 
 const { generateRfx } = require('../controllers/requestsController');
 
-const assignRequestToUser = require('../controllers/requests/assignRequestController');
+const { assignRequestToUser, splitAssignRequest } = require('../controllers/requests/assignRequestController');
 
 const { Parser } = require('json2csv');
 const PDFDocument = require('pdfkit');
@@ -260,5 +260,6 @@ router.get('/:id', getRequestDetails);
 router.put('/approval/:id', updateApprovalStatus);
 router.put('/assign', assignRequestToProcurement);
 router.put('/assign-procurement', assignRequestToUser);
+router.put('/:id/split-assign-procurement', splitAssignRequest);
 
 module.exports = router;

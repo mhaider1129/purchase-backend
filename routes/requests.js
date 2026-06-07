@@ -105,6 +105,7 @@ const buildFilteredQuery = (queryParams) => {
     status,
     department_id,
     section_id,
+    assigned_to,
     request_id,
   } = queryParams;
   let sql = `
@@ -187,6 +188,16 @@ const buildFilteredQuery = (queryParams) => {
   if (section_id) {
     values.push(section_id);
     sql += ` AND r.section_id = $${values.length}`;
+  }
+
+  if (assigned_to) {
+    const assignedToValue = Array.isArray(assigned_to) ? assigned_to[0] : assigned_to;
+    if (String(assignedToValue).trim().toLowerCase() === 'unassigned') {
+      sql += ` AND r.assigned_to IS NULL`;
+    } else {
+      values.push(assignedToValue);
+      sql += ` AND r.assigned_to = $${values.length}`;
+    }
   }
 
   sql += ` ORDER BY CASE

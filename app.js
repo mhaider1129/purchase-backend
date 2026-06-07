@@ -14,6 +14,7 @@ const { syncCapabilityPolicies } = require('./utils/capabilityPolicyService');
 const processScheduledRequests = require('./controllers/utils/processScheduledRequests');
 const { loadEnvironmentConfig } = require('./config/environment');
 const { writeAuditTrail } = require('./middleware/writeAuditTrail');
+const { getRequestBodyLimit } = require('./config/uploadLimits');
 const {
   log,
   requestTracingMiddleware,
@@ -194,8 +195,9 @@ app.use((req, res, next) => {
 
   next();
 });
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+const requestBodyLimit = getRequestBodyLimit();
+app.use(express.json({ limit: requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 app.use(
   morgan('combined', {
     skip: () => process.env.NODE_ENV === 'test',

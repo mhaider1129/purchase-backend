@@ -1,7 +1,7 @@
 // middleware/upload.js
 const multer = require('multer');
 const path = require('path');
-const { getAttachmentMaxSizeBytes } = require('../config/uploadLimits');
+const { getAttachmentMaxFiles, getAttachmentMaxSizeBytes } = require('../config/uploadLimits');
 
 // ✅ Allowed extensions
 const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.doc', '.docx', '.xlsx'];
@@ -48,7 +48,8 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: getAttachmentMaxSizeBytes()
+    fileSize: getAttachmentMaxSizeBytes(),
+    files: getAttachmentMaxFiles(),
   }
 });
 

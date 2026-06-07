@@ -1,6 +1,6 @@
 // middleware/errorHandler.js
 
-const { getAttachmentMaxSizeMb } = require('../config/uploadLimits');
+const { getAttachmentMaxFiles, getAttachmentMaxSizeMb, getRequestBodyLimitMb } = require('../config/uploadLimits');
 const { log } = require('../utils/observability');
 
 // 🔥 Global Error Handling Middleware
@@ -15,6 +15,22 @@ const errorHandler = (err, req, res, next) => {
     return res.status(413).json({
       success: false,
       message: `Attachment is too large. Maximum file size is ${getAttachmentMaxSizeMb()}MB.`,
+      requestId: req?.requestId,
+    });
+  }
+
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      message: `Request payload is too large. Maximum non-attachment request body size is ${getRequestBodyLimitMb()}MB.`,
+      requestId: req?.requestId,
+    });
+  }
+
+  if (err.code === 'LIMIT_FILE_COUNT') {
+    return res.status(413).json({
+      success: false,
+      message: `Too many attachments. Maximum number of files is ${getAttachmentMaxFiles()}.`,
       requestId: req?.requestId,
     });
   }

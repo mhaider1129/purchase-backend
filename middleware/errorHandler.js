@@ -1,5 +1,6 @@
 // middleware/errorHandler.js
 
+const { getAttachmentMaxSizeMb } = require('../config/uploadLimits');
 const { log } = require('../utils/observability');
 
 // 🔥 Global Error Handling Middleware
@@ -9,6 +10,22 @@ const errorHandler = (err, req, res, next) => {
   // 🧠 Extract status and message
   const statusCode = err.statusCode || 500;
   const message = err.message || 'Internal Server Error';
+
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      success: false,
+      message: `Attachment is too large. Maximum file size is ${getAttachmentMaxSizeMb()}MB.`,
+      requestId: req?.requestId,
+    });
+  }
+
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({
+      success: false,
+      message,
+      requestId: req?.requestId,
+    });
+  }
 
   // 🛠 PostgreSQL-specific error codes
   switch (err.code) {

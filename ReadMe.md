@@ -220,6 +220,9 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 SUPABASE_STORAGE_BUCKET=attachments
 SUPABASE_STORAGE_PREFIX=attachments
 
+# Maximum upload size per attachment in MB. Defaults to 50 if omitted.
+ATTACHMENT_MAX_SIZE_MB=50
+
 # Recommended in production so uploads fail loudly instead of falling back to local disk.
 ATTACHMENT_LOCAL_FALLBACK_ENABLED=false
 

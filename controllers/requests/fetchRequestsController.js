@@ -553,6 +553,7 @@ const getAllRequests = async (req, res, next) => {
     status,
     department_id,
     section_id,
+    assigned_to,
     request_id,
     page = 1,
     limit = 10,
@@ -649,6 +650,16 @@ const getAllRequests = async (req, res, next) => {
   if (section_id) {
     params.push(section_id);
     whereClauses.push(`r.section_id = $${params.length}`);
+  }
+
+  if (assigned_to) {
+    const assignedToValue = Array.isArray(assigned_to) ? assigned_to[0] : assigned_to;
+    if (String(assignedToValue).trim().toLowerCase() === 'unassigned') {
+      whereClauses.push('r.assigned_to IS NULL');
+    } else {
+      params.push(assignedToValue);
+      whereClauses.push(`r.assigned_to = $${params.length}`);
+    }
   }
 
   if (Number.isInteger(req.user?.institute_id)) {

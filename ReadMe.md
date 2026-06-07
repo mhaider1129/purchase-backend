@@ -223,6 +223,12 @@ SUPABASE_STORAGE_PREFIX=attachments
 # Maximum upload size per attachment in MB. Defaults to 50 if omitted.
 ATTACHMENT_MAX_SIZE_MB=50
 
+# Maximum number of attachments per request. Defaults to 20 if omitted.
+ATTACHMENT_MAX_FILES=20
+
+# Maximum JSON/urlencoded request body size in MB. Defaults to ATTACHMENT_MAX_SIZE_MB.
+REQUEST_BODY_LIMIT_MB=50
+
 # Recommended in production so uploads fail loudly instead of falling back to local disk.
 ATTACHMENT_LOCAL_FALLBACK_ENABLED=false
 
@@ -289,6 +295,10 @@ Example Nginx reverse proxy:
 
 server {
     server_name wici-procurement.org;
+
+    # Must be at least as large as ATTACHMENT_MAX_SIZE_MB or uploads may fail
+    # at Nginx with HTTP 413 before the request reaches Express.
+    client_max_body_size 50M;
 
     location /api {
         proxy_pass http://localhost:5000;

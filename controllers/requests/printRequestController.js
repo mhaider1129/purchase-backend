@@ -11,6 +11,7 @@ const ordinalSuffix = (n) => {
 const printRequest = async (req, res, next) => {
   const { id } = req.params;
   const userId = req.user.id;
+  const shouldIncrementPrintCount = req.query?.incrementPrintCount !== 'false';
 
   try {
     const accessRes = await pool.query(
@@ -27,14 +28,18 @@ const printRequest = async (req, res, next) => {
     if (accessRes.rowCount === 0)
       return next(createHttpError(404, 'Request not found or access denied'));
 
-    const currentCount = accessRes.rows[0].print_count;
+    const currentCount = Number(accessRes.rows[0].print_count) || 0;
+    const count = shouldIncrementPrintCount ? currentCount + 1 : currentCount;
 
-    const updateRes = await pool.query(
-      `UPDATE requests SET print_count = $1 WHERE id = $2 RETURNING *`,
-      [currentCount + 1, id]
-    );
+    let request = accessRes.rows[0];
+    if (shouldIncrementPrintCount) {
+      const updateRes = await pool.query(
+        `UPDATE requests SET print_count = $1 WHERE id = $2 RETURNING *`,
+        [count, id]
+      );
 
-    const request = updateRes.rows[0];
+      request = updateRes.rows[0];
+    }
 
     let finalApproval = null;
     let finalApproverName = null;
@@ -75,8 +80,6 @@ const printRequest = async (req, res, next) => {
           }
         : null;
     }
-    const count = currentCount + 1;
-
     let itemsRes;
     if (request.request_type === 'Warehouse Supply') {
       itemsRes = await pool.query(
@@ -132,7 +135,9 @@ const printRequest = async (req, res, next) => {
     }
 
     res.json({
-      message: `Request printed for the ${ordinalSuffix(count)} time`,
+      message: shouldIncrementPrintCount
+        ? `Request printed for the ${ordinalSuffix(count)} time`
+        : 'Request ready for printing.',
       request,
       items: itemsRes?.rows || [],
       assigned_user: assignedUser,

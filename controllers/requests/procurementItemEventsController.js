@@ -128,7 +128,7 @@ const addProcurementItemEvent = async (req, res, next) => {
     await ensureRequestedItemFinancialsTable(client);
 
     const requestRes = await client.query(
-      `SELECT id, status, assigned_to FROM requests WHERE id = $1 FOR UPDATE`,
+      `SELECT id, status, assigned_to, request_type FROM requests WHERE id = $1 FOR UPDATE`,
       [requestId]
     );
 
@@ -155,6 +155,9 @@ const addProcurementItemEvent = async (req, res, next) => {
 
     if (itemRes.rowCount === 0) {
       await client.query('ROLLBACK');
+      if (requestRow.request_type === 'Warehouse Supply') {
+        return next(createHttpError(400, 'Procurement entries are not supported for warehouse supply items'));
+      }
       return next(createHttpError(404, 'Requested item not found for this request'));
     }
 

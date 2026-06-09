@@ -528,7 +528,10 @@ const getSuppliersDashboard = async (req, res, next) => {
         suppliers_by_type: suppliersByTypeResult.rows,
         expiring_authorizations_30_days: expiringAuthorizationResult.rows,
         unverified_supplier_principals: Number(unverifiedPrincipalsResult.rows[0]?.total) || 0,
-        
+        high_risk_suppliers: highRiskSuppliersResult.rows,
+        expired_authorizations: expiredAuthorizationResult.rows,
+      },
+    });
   } catch (err) {
     console.error('❌ Failed to load suppliers dashboard:', err);
     if (err.statusCode) {

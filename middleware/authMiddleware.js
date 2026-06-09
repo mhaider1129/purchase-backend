@@ -5,6 +5,7 @@ const {
   getPermissionsForUserId,
   buildPermissionSet,
   userHasPermission,
+  getDefaultPermissionsForRole,
 } = require('../utils/permissionService');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 
@@ -32,6 +33,28 @@ function isDatabaseConnectivityError(err) {
 
   const message = typeof err.message === 'string' ? err.message : '';
   return /(getaddrinfo|connect\s+ECONNREFUSED|ECONNRESET|timeout)/i.test(message);
+}
+
+function isPermissionLookupError(err) {
+  if (!err) return false;
+
+  if (isDatabaseConnectivityError(err)) {
+    return false;
+  }
+
+  const permissionErrorCodes = new Set([
+    '42P01', // undefined_table
+    '42703', // undefined_column
+    '42883', // undefined_function/operator
+    '42501', // insufficient_privilege
+  ]);
+
+  if (err.code && permissionErrorCodes.has(err.code)) {
+    return true;
+  }
+
+  const message = typeof err.message === 'string' ? err.message : '';
+  return /(permission|user_permissions|data_scopes|role_permissions|relation .* does not exist|column .* does not exist)/i.test(message);
 }
 
 // 🔐 JWT Authentication Middleware
@@ -65,7 +88,21 @@ const attachUserFromToken = async (token) => {
     throw createHttpError(401, 'Unauthorized: User is deactivated');
   }
 
-  const { permissions = [], dataScopes = {} } = await getPermissionsForUserId(user.id);
+  let permissions = [];
+  let dataScopes = {};
+  try {
+    ({ permissions = [], dataScopes = {} } = await getPermissionsForUserId(user.id));
+  } catch (err) {
+    if (!isPermissionLookupError(err)) {
+      throw err;
+    }
+
+    permissions = getDefaultPermissionsForRole(user.role);
+    dataScopes = {};
+    console.warn(
+      `⚠️ Falling back to default role permissions for user ${user.id} because permission lookup failed: ${err.message}`
+    );
+  }
 
   const userContext = {
     id: user.id,

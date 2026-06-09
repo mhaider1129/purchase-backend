@@ -102,6 +102,35 @@ describe('authenticateUser middleware', () => {
     );
   });
 
+  it('falls back to default role permissions when permission lookup tables are unavailable', async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            id: 1,
+            name: 'Test User',
+            role: 'ProcurementSpecialist',
+            department_id: 2,
+            is_active: true,
+            can_request_medication: false,
+          },
+        ],
+      })
+      .mockRejectedValueOnce(Object.assign(new Error('relation "user_permissions" does not exist'), { code: '42P01' }));
+
+    const req = {
+      headers: { authorization: 'Bearer token' },
+    };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await authenticateUser(req, res, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(req.user.permissions).toEqual(expect.arrayContaining(['requests.manage', 'procurement.update-status']));
+  });
+
   it('falls back to 500 for unexpected errors', async () => {
     const unexpectedError = new Error('boom');
     pool.query.mockRejectedValueOnce(unexpectedError);

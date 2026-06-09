@@ -47,7 +47,7 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
 
   client.query.mockImplementation(async (sql, params) => {
     if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
-    if (/SELECT id, status, assigned_to FROM requests/.test(sql)) {
+    if (/SELECT id, status, assigned_to, request_type FROM requests/.test(sql)) {
       return { rowCount: 1, rows: [state.request] };
     }
     if (/FROM public\.requested_items ri\s+JOIN requests r/.test(sql)) {
@@ -184,6 +184,32 @@ describe('procurement item events', () => {
       statusCode: 400,
       message: 'Item is already fully procured, cancelled, or unable to procure',
     }));
+  });
+
+  it('returns a clear error when trying to add a procurement event to a warehouse supply item', async () => {
+    const client = buildClient({ requestOverrides: { request_type: 'Warehouse Supply' } });
+    client.query.mockImplementation(async (sql, params) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (/SELECT id, status, assigned_to, request_type FROM requests/.test(sql)) {
+        return { rowCount: 1, rows: [{ id: 10, status: 'Approved', assigned_to: 7, request_type: 'Warehouse Supply' }] };
+      }
+      if (/FROM public\.requested_items ri\s+JOIN requests r/.test(sql)) {
+        return { rowCount: 0, rows: [] };
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ event_quantity: 1 });
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await addProcurementItemEvent(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 400,
+      message: 'Procurement entries are not supported for warehouse supply items',
+    }));
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
   });
 
   it('preserves old purchased_quantity as the starting point when no events exist', async () => {

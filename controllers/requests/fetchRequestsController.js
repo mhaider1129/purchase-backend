@@ -53,24 +53,26 @@ const getRequestDetails = async (req, res, next) => {
 
     let itemsRes;
     if (request.request_type === 'Warehouse Supply') {
+      await ensureWarehouseSupplyApprovalColumns();
       itemsRes = await pool.query(
         `SELECT
-           id,
-           request_id,
-           item_name,
+           wsi.id,
+           wsi.request_id,
+           TRUE AS supports_procurement_events,
+           wsi.item_name,
            NULL::text AS brand,
-           quantity,
+           wsi.quantity,
            NULL::numeric AS available_quantity,
-           NULL::numeric AS purchased_quantity,
-           NULL::numeric AS remaining_quantity,
-           NULL::text AS latest_procurement_date,
-           0::integer AS procurement_events_count,
-           NULL::numeric AS unit_cost,
-           NULL::numeric AS total_cost,
+           COALESCE(ri.purchased_quantity, 0)::numeric AS purchased_quantity,
+           GREATEST(wsi.quantity - COALESCE(ri.purchased_quantity, 0), 0)::numeric AS remaining_quantity,
+           procurement_events.latest_procurement_date,
+           COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
+           ri.unit_cost,
+           ri.total_cost,
            NULL::text AS specs,
-           NULL::text AS procurement_status,
-           NULL::text AS procurement_comment,
-           NULL::text AS po_issuance_method,
+           COALESCE(ri.procurement_status, 'pending') AS procurement_status,
+           ri.procurement_comment,
+           ri.po_issuance_method,
            NULL::text AS approval_status,
          NULL::text AS approval_comments,
          NULL::integer AS approved_by,
@@ -93,8 +95,14 @@ const getRequestDetails = async (req, res, next) => {
          NULL::text AS assigned_user_role,
          NULL::timestamp AS assigned_at,
          NULL::text AS assignment_notes
-       FROM warehouse_supply_items
-       WHERE request_id = $1`,
+       FROM warehouse_supply_items wsi
+       LEFT JOIN public.requested_items ri ON ri.id = wsi.requested_item_id
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS procurement_events_count, MAX(procurement_date) AS latest_procurement_date
+         FROM public.procurement_item_events pie
+         WHERE pie.requested_item_id = ri.id
+       ) procurement_events ON TRUE
+       WHERE wsi.request_id = $1`,
         [id]
       );
     } else {
@@ -248,27 +256,27 @@ const getRequestItemsOnly = async (req, res, next) => {
       itemsRes = await pool.query(
         `
       SELECT
-        id,
-        request_id,
-        FALSE AS supports_procurement_events,
-        item_name,
+        wsi.id,
+        wsi.request_id,
+        TRUE AS supports_procurement_events,
+        wsi.item_name,
         NULL::text AS brand,
-        quantity,
+        wsi.quantity,
         NULL::numeric AS available_quantity,
-        NULL::numeric AS purchased_quantity,
-        NULL::numeric AS remaining_quantity,
-        NULL::text AS latest_procurement_date,
-        0::integer AS procurement_events_count,
-        NULL::numeric AS unit_cost,
-        NULL::numeric AS total_cost,
-        NULL::text AS procurement_status,
-        NULL::text AS procurement_comment,
-        NULL::text AS po_issuance_method,
+        COALESCE(ri.purchased_quantity, 0)::numeric AS purchased_quantity,
+        GREATEST(wsi.quantity - COALESCE(ri.purchased_quantity, 0), 0)::numeric AS remaining_quantity,
+        procurement_events.latest_procurement_date,
+        COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
+        ri.unit_cost,
+        ri.total_cost,
+        COALESCE(ri.procurement_status, 'pending') AS procurement_status,
+        ri.procurement_comment,
+        ri.po_issuance_method,
         NULL::text AS specs,
-        COALESCE(approval_status, 'Pending') AS approval_status,
-        approval_comments,
-        approved_by,
-        approved_at,
+        COALESCE(wsi.approval_status, 'Pending') AS approval_status,
+        wsi.approval_comments,
+        wsi.approved_by,
+        wsi.approved_at,
         NULL::boolean AS is_received,
         NULL::integer AS received_by,
         NULL::timestamp AS received_at,
@@ -287,8 +295,14 @@ const getRequestItemsOnly = async (req, res, next) => {
         NULL::text AS assigned_user_role,
         NULL::timestamp AS assigned_at,
         NULL::text AS assignment_notes
-      FROM warehouse_supply_items
-      WHERE request_id = $1
+      FROM warehouse_supply_items wsi
+      LEFT JOIN public.requested_items ri ON ri.id = wsi.requested_item_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS procurement_events_count, MAX(procurement_date) AS latest_procurement_date
+        FROM public.procurement_item_events pie
+        WHERE pie.requested_item_id = ri.id
+      ) procurement_events ON TRUE
+      WHERE wsi.request_id = $1
       `,
         [id]
       );

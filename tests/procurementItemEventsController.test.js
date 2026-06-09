@@ -186,8 +186,22 @@ describe('procurement item events', () => {
     }));
   });
 
-  it('returns a clear error when trying to add a procurement event to a warehouse supply item', async () => {
+  it('creates a linked requested item when adding a procurement event to a warehouse supply item', async () => {
     const client = buildClient({ requestOverrides: { request_type: 'Warehouse Supply' } });
+    const state = {
+      item: {
+        id: 88,
+        request_id: 10,
+        item_name: 'Gloves',
+        quantity: 100,
+        purchased_quantity: 0,
+        unit_cost: null,
+        total_cost: null,
+        procurement_status: 'pending',
+        assigned_to: null,
+      },
+    };
+
     client.query.mockImplementation(async (sql, params) => {
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
       if (/SELECT id, status, assigned_to, request_type FROM requests/.test(sql)) {
@@ -196,8 +210,46 @@ describe('procurement item events', () => {
       if (/FROM public\.requested_items ri\s+JOIN requests r/.test(sql)) {
         return { rowCount: 0, rows: [] };
       }
+      if (/FROM public\.warehouse_supply_items/.test(sql)) {
+        return { rowCount: 1, rows: [{ id: 20, request_id: 10, requested_item_id: null, item_name: 'Gloves', quantity: 100 }] };
+      }
+      if (/INSERT INTO public\.requested_items/.test(sql)) {
+        return { rowCount: 1, rows: [{ ...state.item, request_assigned_to: 7 }] };
+      }
+      if (/UPDATE public\.warehouse_supply_items/.test(sql)) return {};
+      if (/INSERT INTO public\.procurement_item_events/.test(sql)) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 1,
+            request_id: params[0],
+            requested_item_id: params[1],
+            procurement_user_id: params[2],
+            event_quantity: params[3],
+            previous_purchased_quantity: params[4],
+            new_purchased_quantity: params[5],
+            remaining_quantity: params[6],
+          }],
+        };
+      }
+      if (/UPDATE public\.requested_items/.test(sql)) {
+        state.item = {
+          ...state.item,
+          purchased_quantity: params[0],
+          unit_cost: params[1] ?? state.item.unit_cost,
+          total_cost: params[2] ?? state.item.total_cost,
+          procurement_status: params[3],
+        };
+        return { rowCount: 1, rows: [state.item] };
+      }
+      if (/INSERT INTO request_logs/.test(sql)) return {};
+      if (/COUNT\(\*\)::int AS total_items/.test(sql)) {
+        return { rows: [{ total_items: 1, fully_procured_items: 0, started_items: 1 }] };
+      }
+      if (/UPDATE requests/.test(sql)) return {};
       throw new Error(`Unexpected SQL: ${sql}`);
     });
+
     pool.connect.mockResolvedValue(client);
     const req = buildRequest({ event_quantity: 1 });
     const res = buildResponse();
@@ -205,11 +257,20 @@ describe('procurement item events', () => {
 
     await addProcurementItemEvent(req, res, next);
 
-    expect(next).toHaveBeenCalledWith(expect.objectContaining({
-      statusCode: 400,
-      message: 'Procurement entries are not supported for warehouse supply items',
+    expect(next).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO public.requested_items'), [10, 'Gloves', 100, 7]);
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE public.warehouse_supply_items'), [88, 20]);
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      event: expect.objectContaining({
+        requested_item_id: 88,
+        event_quantity: 1,
+      }),
+      item: expect.objectContaining({
+        purchased_quantity: 1,
+        procurement_status: 'partially_procured',
+      }),
     }));
-    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
   });
 
   it('preserves old purchased_quantity as the starting point when no events exist', async () => {

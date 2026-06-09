@@ -4,6 +4,24 @@ const { ensureSupplierEvaluationsTable } = require('./supplierEvaluationsControl
 
 const normalizeText = (value) => (typeof value === 'string' ? value.trim() : '');
 
+const ALLOWED_SUPPLIER_TYPES = [
+  'Manufacturer',
+  'Authorized Agent',
+  'Authorized Distributor',
+  'Sub-distributor',
+  'Local Trader',
+  'Service Provider',
+  'Contractor',
+];
+
+
+const SUPPLIER_SELECT_COLUMNS = `id, name, contact_email, contact_phone, supplier_type,
+       is_manufacturer, is_authorized_agent, is_authorized_distributor,
+       is_sub_distributor, is_service_provider, is_contractor,
+       regulatory_risk_level, supplier_category, notes, tax_number, bank_info,
+       currency, payment_terms, lead_time_days, credit_limit, status, country,
+       created_at, updated_at`;
+
 let suppliersEnsured = false;
 let ensuringPromise = null;
 
@@ -37,6 +55,7 @@ const ensureSuppliersTable = async () => {
 
 
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_type TEXT`);
+        await pool.query(`ALTER TABLE suppliers ALTER COLUMN supplier_type SET DEFAULT 'Local Trader'`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tax_number TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS bank_info JSONB`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS currency TEXT`);
@@ -45,6 +64,15 @@ const ensureSuppliersTable = async () => {
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(18,2)`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS status TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS country TEXT`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_manufacturer BOOLEAN DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_authorized_agent BOOLEAN DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_authorized_distributor BOOLEAN DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_sub_distributor BOOLEAN DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_service_provider BOOLEAN DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_contractor BOOLEAN DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS regulatory_risk_level VARCHAR DEFAULT 'medium'`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_category VARCHAR`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS notes TEXT`);
 
         await pool.query(`
           CREATE UNIQUE INDEX IF NOT EXISTS suppliers_name_ci_idx
@@ -70,7 +98,7 @@ const getSupplierById = async (client, supplierId) => {
   await ensureSuppliersTable();
   const executor = client || pool;
   const { rows } = await executor.query(
-    `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
+    `SELECT ${SUPPLIER_SELECT_COLUMNS}
        FROM suppliers
       WHERE id = $1
       LIMIT 1`,
@@ -90,7 +118,7 @@ const findOrCreateSupplierByName = async (client, name) => {
   const executor = client || pool;
 
   const existing = await executor.query(
-    `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
+    `SELECT ${SUPPLIER_SELECT_COLUMNS}
        FROM suppliers
       WHERE LOWER(name) = LOWER($1)
       LIMIT 1`,
@@ -105,7 +133,7 @@ const findOrCreateSupplierByName = async (client, name) => {
     const inserted = await executor.query(
       `INSERT INTO suppliers (name)
          VALUES ($1)
-         RETURNING id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at`,
+         RETURNING ${SUPPLIER_SELECT_COLUMNS}`,
       [sanitizedName]
     );
 
@@ -113,7 +141,7 @@ const findOrCreateSupplierByName = async (client, name) => {
   } catch (err) {
     if (err?.code === '23505') {
       const retry = await executor.query(
-        `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
+        `SELECT ${SUPPLIER_SELECT_COLUMNS}
            FROM suppliers
           WHERE LOWER(name) = LOWER($1)
           LIMIT 1`,
@@ -133,7 +161,7 @@ const listSuppliers = async (req, res, next) => {
   try {
     await ensureSuppliersTable();
     const { rows } = await pool.query(
-      `SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at
+      `SELECT ${SUPPLIER_SELECT_COLUMNS}
          FROM suppliers
         ORDER BY LOWER(name) ASC`
     );
@@ -172,6 +200,10 @@ const createSupplier = async (req, res, next) => {
     return next(createHttpError(400, 'Supplier name is required'));
   }
 
+  if (supplierType && !ALLOWED_SUPPLIER_TYPES.includes(supplierType)) {
+    return next(createHttpError(400, 'supplier_type must be one of the allowed values'));
+  }
+
   if (leadTimeDays !== null && (!Number.isInteger(leadTimeDays) || leadTimeDays < 0)) {
     return next(createHttpError(400, 'lead_time_days must be a non-negative integer'));
   }
@@ -199,7 +231,7 @@ const createSupplier = async (req, res, next) => {
                 country = COALESCE($11, country),
                 updated_at = NOW()
           WHERE id = $12
-        RETURNING id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at`,
+        RETURNING ${SUPPLIER_SELECT_COLUMNS}`,
         [contactEmail, contactPhone, supplierType, taxNumber, bankInfo, currency, paymentTerms, leadTimeDays, creditLimit, status, country, supplier.id]
       );
 
@@ -261,8 +293,12 @@ const updateSupplier = async (req, res, next) => {
 
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'supplier_type')) {
+      const nextSupplierType = normalizeText(req.body.supplier_type);
+      if (!ALLOWED_SUPPLIER_TYPES.includes(nextSupplierType)) {
+        return next(createHttpError(400, 'supplier_type must be one of the allowed values'));
+      }
       updates.push(`supplier_type = $${updates.length + 1}`);
-      values.push(normalizeText(req.body.supplier_type) || null);
+      values.push(nextSupplierType);
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'tax_number')) {
@@ -323,7 +359,7 @@ const updateSupplier = async (req, res, next) => {
     const query = `UPDATE suppliers
                       SET ${updates.join(', ')}
                     WHERE id = $${values.length}
-                RETURNING id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at, updated_at`;
+                RETURNING ${SUPPLIER_SELECT_COLUMNS}`;
 
     const { rows } = await pool.query(query, values);
 
@@ -380,7 +416,16 @@ const getSuppliersDashboard = async (req, res, next) => {
     await ensureSuppliersTable();
     await ensureSupplierEvaluationsTable();
 
-    const [summaryResult, coverageResult, recentResult] = await Promise.all([
+    const [
+      summaryResult,
+      coverageResult,
+      recentResult,
+      suppliersByTypeResult,
+      expiringAuthorizationResult,
+      unverifiedPrincipalsResult,
+      highRiskSuppliersResult,
+      expiredAuthorizationResult,
+    ] = await Promise.all([
       pool.query(`
         SELECT COUNT(*) AS total_suppliers,
                SUM(CASE WHEN contact_email IS NOT NULL AND contact_email <> '' THEN 1 ELSE 0 END) AS with_email,
@@ -412,10 +457,49 @@ const getSuppliersDashboard = async (req, res, next) => {
          LIMIT 12
       `),
       pool.query(`
-        SELECT id, name, contact_email, contact_phone, supplier_type, tax_number, bank_info, currency, payment_terms, lead_time_days, credit_limit, status, country, created_at
+        SELECT ${SUPPLIER_SELECT_COLUMNS}
           FROM suppliers
       ORDER BY created_at DESC
          LIMIT 8
+      `),
+      pool.query(`
+        SELECT supplier_type, COUNT(*)::INTEGER AS supplier_count
+          FROM suppliers
+      GROUP BY supplier_type
+      ORDER BY supplier_count DESC, supplier_type ASC
+      `),
+      pool.query(`
+        SELECT sp.id, sp.supplier_id, s.name AS supplier_name, sp.principal_name,
+               sp.authorization_expiry_date,
+               (sp.authorization_expiry_date - CURRENT_DATE)::INTEGER AS days_until_expiry
+          FROM supplier_principals sp
+          JOIN suppliers s ON s.id = sp.supplier_id
+         WHERE sp.is_active = TRUE
+           AND sp.authorization_status = 'Verified'
+           AND sp.authorization_expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+      ORDER BY sp.authorization_expiry_date ASC
+         LIMIT 12
+      `),
+      pool.query(`
+        SELECT COUNT(*)::INTEGER AS total
+          FROM supplier_principals
+         WHERE is_active = TRUE AND authorization_status = 'Pending Verification'
+      `),
+      pool.query(`
+        SELECT id, name, supplier_type, regulatory_risk_level, supplier_category
+          FROM suppliers
+         WHERE regulatory_risk_level IN ('high', 'critical')
+      ORDER BY CASE regulatory_risk_level WHEN 'critical' THEN 1 WHEN 'high' THEN 2 ELSE 3 END, name ASC
+         LIMIT 12
+      `),
+      pool.query(`
+        SELECT sp.id, sp.supplier_id, s.name AS supplier_name, sp.principal_name, sp.authorization_expiry_date
+          FROM supplier_principals sp
+          JOIN suppliers s ON s.id = sp.supplier_id
+         WHERE sp.is_active = TRUE
+           AND (sp.authorization_status = 'Expired' OR sp.authorization_expiry_date < CURRENT_DATE)
+      ORDER BY sp.authorization_expiry_date ASC NULLS LAST
+         LIMIT 12
       `),
     ]);
 
@@ -440,7 +524,11 @@ const getSuppliersDashboard = async (req, res, next) => {
         evaluation_count: Number(row.evaluation_count) || 0,
       })),
       recent_suppliers: recentResult.rows,
-    });
+      widgets: {
+        suppliers_by_type: suppliersByTypeResult.rows,
+        expiring_authorizations_30_days: expiringAuthorizationResult.rows,
+        unverified_supplier_principals: Number(unverifiedPrincipalsResult.rows[0]?.total) || 0,
+        
   } catch (err) {
     console.error('❌ Failed to load suppliers dashboard:', err);
     if (err.statusCode) {

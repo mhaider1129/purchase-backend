@@ -19,6 +19,7 @@ const {
   submitContractReview,
   listPendingContractApprovals,
   listContractApprovals,
+  listContractApprovalStageMonitor,
   decideContractApproval,
   listContractItems,
   createContractItem,
@@ -77,6 +78,7 @@ const router = express.Router();
 router.get('/', listContracts);
 router.get('/:contractId/evaluation-candidates', getEvaluationCandidates);
 router.get('/pending-approvals', authenticateUser, listPendingContractApprovals);
+router.get('/approval-stage-monitor', authenticateUser, listContractApprovalStageMonitor);
 router.get('/:id', getContractById);
 router.post('/', createContract);
 router.patch('/:id', updateContract);

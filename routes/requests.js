@@ -4,6 +4,7 @@ const router = express.Router();
 const { authenticateUser } = require('../middleware/authMiddleware');
 router.use(authenticateUser); // 🔐 Protect all routes
 const { getCompletedAssignedRequests } = require('../controllers/requests/procurementHistoryController');
+const { addProcurementItemEvent, getProcurementItemEvents } = require('../controllers/requests/procurementItemEventsController');
 const upload = require('../middleware/upload');
 
 // 🧩 Controllers
@@ -76,6 +77,8 @@ router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.put('/:id/cost', authenticateUser, updateRequestCost);
 router.put('/:id/edit', upload.any(), updateRequestBeforeApproval);
+router.post('/:requestId/items/:itemId/procurement-events', addProcurementItemEvent);
+router.get('/:requestId/items/:itemId/procurement-events', getProcurementItemEvents);
 router.delete('/:id/hard-delete', deleteRequestCompletely);
 
 

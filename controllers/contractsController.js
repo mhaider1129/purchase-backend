@@ -2890,6 +2890,91 @@ const listContractApprovals = async (req, res, next) => {
   }
 };
 
+
+const listContractApprovalStageMonitor = async (req, res, next) => {
+  if (normalizeUserRole(req.user?.role) !== 'scm') {
+    return next(createHttpError(403, 'Only SCM users can view the contract approval stage monitor'));
+  }
+
+  try {
+    await ensureContractsPhaseTwoTables();
+    const { rows } = await pool.query(
+      `SELECT
+          c.id AS contract_id,
+          c.title AS contract_title,
+          c.vendor,
+          c.reference_number,
+          c.status AS contract_status,
+          c.updated_at AS contract_updated_at,
+          ca.id AS approval_id,
+          ca.approval_level,
+          ca.stage,
+          ca.reviewer_role,
+          ca.reviewer_id,
+          reviewer.name AS reviewer_name,
+          reviewer.email AS reviewer_email,
+          reviewer.role AS reviewer_user_role,
+          ca.status AS stage_status,
+          ca.comments,
+          ca.is_active,
+          ca.assigned_at,
+          ca.decided_at,
+          ca.updated_at AS stage_updated_at
+         FROM contracts c
+         LEFT JOIN contract_approvals ca ON ca.contract_id = c.id
+         LEFT JOIN users reviewer ON reviewer.id = ca.reviewer_id
+        ORDER BY c.updated_at DESC NULLS LAST, c.id DESC, ca.approval_level ASC NULLS LAST, ca.id ASC NULLS LAST`
+    );
+
+    const contractMap = new Map();
+    for (const row of rows) {
+      if (!contractMap.has(row.contract_id)) {
+        contractMap.set(row.contract_id, {
+          contract_id: row.contract_id,
+          contract_title: row.contract_title,
+          vendor: row.vendor,
+          reference_number: row.reference_number,
+          contract_status: row.contract_status,
+          contract_updated_at: row.contract_updated_at,
+          active_stage: null,
+          stages: [],
+        });
+      }
+
+      if (!row.approval_id) {
+        continue;
+      }
+
+      const contract = contractMap.get(row.contract_id);
+      const stage = {
+        approval_id: row.approval_id,
+        approval_level: row.approval_level,
+        stage: row.stage,
+        reviewer_role: row.reviewer_role,
+        reviewer_id: row.reviewer_id,
+        reviewer_name: row.reviewer_name,
+        reviewer_email: row.reviewer_email,
+        reviewer_user_role: row.reviewer_user_role,
+        stage_status: row.stage_status,
+        comments: row.comments,
+        is_active: row.is_active,
+        assigned_at: row.assigned_at,
+        decided_at: row.decided_at,
+        stage_updated_at: row.stage_updated_at,
+      };
+      contract.stages.push(stage);
+      if (stage.is_active) {
+        contract.active_stage = stage;
+      }
+    }
+
+    res.json(Array.from(contractMap.values()));
+  } catch (err) {
+    console.error('❌ Failed to fetch SCM contract approval stage monitor:', err);
+    next(createHttpError(500, 'Failed to fetch contract approval stage monitor'));
+  }
+};
+
 const decideContractApproval = async (req, res, next) => {
   const contractId = Number(req.params.id); const approvalId = Number(req.params.approvalId);
   const decision = normalizeText(req.body?.decision);
@@ -3336,6 +3421,7 @@ module.exports = {
   submitContractReview,
   listPendingContractApprovals,
   listContractApprovals,
+  listContractApprovalStageMonitor,
   decideContractApproval,
   listContractItems,
   createContractItem,

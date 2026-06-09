@@ -107,7 +107,13 @@ CREATE TABLE public.requested_items (
   received_at timestamp with time zone,
   po_issuance_method text,
   received_quantity numeric NOT NULL DEFAULT 0,
+  assigned_to integer,
+  assigned_by integer,
+  assigned_at timestamp with time zone,
+  assignment_notes text,
   CONSTRAINT requested_items_pkey PRIMARY KEY (id),
+  CONSTRAINT requested_items_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
+  CONSTRAINT requested_items_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES public.users(id),
   CONSTRAINT requested_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT requested_items_marked_by_fkey FOREIGN KEY (marked_by) REFERENCES public.users(id),
   CONSTRAINT requested_items_procurement_updated_by_fkey FOREIGN KEY (procurement_updated_by) REFERENCES public.users(id)

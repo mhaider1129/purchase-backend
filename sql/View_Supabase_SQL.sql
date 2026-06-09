@@ -26,8 +26,8 @@ CREATE TABLE public.users (
   phone_number text,
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
-  CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT users_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
+  CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 CREATE TABLE public.requests (
@@ -67,11 +67,11 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_pkey PRIMARY KEY (id),
   CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
   CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_awarded_supplier_id_fkey FOREIGN KEY (awarded_supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
@@ -112,11 +112,11 @@ CREATE TABLE public.requested_items (
   assigned_at timestamp with time zone,
   assignment_notes text,
   CONSTRAINT requested_items_pkey PRIMARY KEY (id),
-  CONSTRAINT requested_items_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
-  CONSTRAINT requested_items_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES public.users(id),
   CONSTRAINT requested_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT requested_items_marked_by_fkey FOREIGN KEY (marked_by) REFERENCES public.users(id),
-  CONSTRAINT requested_items_procurement_updated_by_fkey FOREIGN KEY (procurement_updated_by) REFERENCES public.users(id)
+  CONSTRAINT requested_items_procurement_updated_by_fkey FOREIGN KEY (procurement_updated_by) REFERENCES public.users(id),
+  CONSTRAINT requested_items_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
+  CONSTRAINT requested_items_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.approvals (
   id integer NOT NULL DEFAULT nextval('approvals_id_seq'::regclass),
@@ -682,7 +682,7 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  supplier_type text,
+  supplier_type text NOT NULL DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
   tax_number text,
   bank_info jsonb,
   currency text,
@@ -691,6 +691,15 @@ CREATE TABLE public.suppliers (
   credit_limit numeric,
   status text,
   country text,
+  is_manufacturer boolean DEFAULT false,
+  is_authorized_agent boolean DEFAULT false,
+  is_authorized_distributor boolean DEFAULT false,
+  is_sub_distributor boolean DEFAULT false,
+  is_service_provider boolean DEFAULT false,
+  is_contractor boolean DEFAULT false,
+  regulatory_risk_level character varying DEFAULT 'medium'::character varying CHECK (regulatory_risk_level::text = ANY (ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying]::text[])),
+  supplier_category character varying,
+  notes text,
   CONSTRAINT suppliers_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.supplier_scorecards (

@@ -56,6 +56,7 @@ const getRequestDetails = async (req, res, next) => {
       itemsRes = await pool.query(
         `SELECT
            id,
+           request_id,
            item_name,
            NULL::text AS brand,
            quantity,
@@ -104,6 +105,7 @@ const getRequestDetails = async (req, res, next) => {
       itemsRes = await pool.query(
         `SELECT
            ri.id,
+           ri.request_id,
            ri.item_name,
            ri.brand,
            ri.quantity,
@@ -247,6 +249,8 @@ const getRequestItemsOnly = async (req, res, next) => {
         `
       SELECT
         id,
+        request_id,
+        FALSE AS supports_procurement_events,
         item_name,
         NULL::text AS brand,
         quantity,
@@ -297,6 +301,8 @@ const getRequestItemsOnly = async (req, res, next) => {
         `
       SELECT
         ri.id,
+        ri.request_id,
+        TRUE AS supports_procurement_events,
         ri.item_name,
         ri.brand,
         ri.quantity,

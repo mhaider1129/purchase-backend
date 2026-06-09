@@ -45,6 +45,69 @@ const deriveItemStatus = (newPurchasedQuantity, requestedQuantity) => {
   return 'purchased';
 };
 
+const resolveProcurementEventItem = async (client, requestRow, requestId, itemId) => {
+  const itemRes = await client.query(
+    `SELECT ri.*, r.assigned_to AS request_assigned_to
+     FROM public.requested_items ri
+     JOIN requests r ON r.id = ri.request_id
+     WHERE ri.id = $1 AND ri.request_id = $2
+     FOR UPDATE OF ri`,
+    [itemId, requestId]
+  );
+
+  if (itemRes.rowCount > 0) {
+    return itemRes.rows[0];
+  }
+
+  if (requestRow.request_type !== 'Warehouse Supply') {
+    return null;
+  }
+
+  const warehouseItemRes = await client.query(
+    `SELECT *
+     FROM public.warehouse_supply_items
+     WHERE id = $1 AND request_id = $2
+     FOR UPDATE`,
+    [itemId, requestId]
+  );
+
+  if (warehouseItemRes.rowCount === 0) {
+    return null;
+  }
+
+  const warehouseItem = warehouseItemRes.rows[0];
+  if (warehouseItem.requested_item_id) {
+    const linkedItemRes = await client.query(
+      `SELECT ri.*, $2::integer AS request_assigned_to
+       FROM public.requested_items ri
+       WHERE ri.id = $1 AND ri.request_id = $3
+       FOR UPDATE`,
+      [warehouseItem.requested_item_id, requestRow.assigned_to, requestId]
+    );
+
+    if (linkedItemRes.rowCount > 0) {
+      return linkedItemRes.rows[0];
+    }
+  }
+
+  const insertedItemRes = await client.query(
+    `INSERT INTO public.requested_items (
+       request_id, item_name, quantity, purchased_quantity, procurement_status, approval_status
+     ) VALUES ($1, $2, $3, 0, 'pending', 'Approved')
+     RETURNING *, $4::integer AS request_assigned_to`,
+    [requestId, warehouseItem.item_name, warehouseItem.quantity, requestRow.assigned_to]
+  );
+
+  await client.query(
+    `UPDATE public.warehouse_supply_items
+     SET requested_item_id = $1
+     WHERE id = $2`,
+    [insertedItemRes.rows[0].id, warehouseItem.id]
+  );
+
+  return insertedItemRes.rows[0];
+};
+
 const recalculateRequestProcurementStatus = async (client, requestId) => {
   const { rows } = await client.query(
     `SELECT
@@ -144,24 +207,13 @@ const addProcurementItemEvent = async (req, res, next) => {
       return next(createHttpError(400, 'Cannot add procurement events to a rejected, cancelled, closed, completed, or received request'));
     }
 
-    const itemRes = await client.query(
-      `SELECT ri.*, r.assigned_to AS request_assigned_to
-       FROM public.requested_items ri
-       JOIN requests r ON r.id = ri.request_id
-       WHERE ri.id = $1 AND ri.request_id = $2
-       FOR UPDATE OF ri`,
-      [itemId, requestId]
-    );
+    const item = await resolveProcurementEventItem(client, requestRow, requestId, itemId);
 
-    if (itemRes.rowCount === 0) {
+    if (!item) {
       await client.query('ROLLBACK');
-      if (requestRow.request_type === 'Warehouse Supply') {
-        return next(createHttpError(400, 'Procurement entries are not supported for warehouse supply items'));
-      }
       return next(createHttpError(404, 'Requested item not found for this request'));
     }
 
-    const item = itemRes.rows[0];
     if (!hasProcurementEventAccess(req, requestRow, item)) {
       await client.query('ROLLBACK');
       return next(createHttpError(403, 'You must be assigned to this request or have SCM/Admin/Procurement Supervisor access'));
@@ -206,7 +258,7 @@ const addProcurementItemEvent = async (req, res, next) => {
        RETURNING *`,
       [
         requestId,
-        itemId,
+        item.id,
         userId,
         eventQuantity,
         previousPurchasedQuantity,
@@ -231,7 +283,7 @@ const addProcurementItemEvent = async (req, res, next) => {
            procurement_updated_at = CURRENT_TIMESTAMP
        WHERE id = $6
        RETURNING *`,
-      [newPurchasedQuantity, unitCost, itemTotalCost, procurementStatus, userId, itemId]
+      [newPurchasedQuantity, unitCost, itemTotalCost, procurementStatus, userId, item.id]
     );
 
     if (effectiveUnitCost !== null) {
@@ -242,7 +294,7 @@ const addProcurementItemEvent = async (req, res, next) => {
            committed_cost = EXCLUDED.committed_cost,
            updated_at = now(),
            created_by = COALESCE(requested_item_financials.created_by, EXCLUDED.created_by)`,
-        [itemId, requestId, itemTotalCost, userId]
+        [item.id, requestId, itemTotalCost, userId]
       );
     }
 
@@ -281,10 +333,16 @@ const getProcurementItemEvents = async (req, res, next) => {
 
   try {
     const accessRes = await pool.query(
-      `SELECT r.id AS request_id, r.assigned_to, ri.id AS item_id, ri.assigned_to AS item_assigned_to
+      `SELECT r.id AS request_id,
+              r.assigned_to,
+              COALESCE(ri.id, linked_ri.id) AS item_id,
+              COALESCE(ri.assigned_to, linked_ri.assigned_to) AS item_assigned_to
        FROM requests r
-       JOIN public.requested_items ri ON ri.request_id = r.id AND ri.id = $2
-       WHERE r.id = $1`,
+       LEFT JOIN public.requested_items ri ON ri.request_id = r.id AND ri.id = $2
+       LEFT JOIN public.warehouse_supply_items wsi ON wsi.request_id = r.id AND wsi.id = $2
+       LEFT JOIN public.requested_items linked_ri ON linked_ri.request_id = r.id AND linked_ri.id = wsi.requested_item_id
+       WHERE r.id = $1
+         AND (ri.id IS NOT NULL OR wsi.id IS NOT NULL)`,
       [requestId, itemId]
     );
 
@@ -297,13 +355,17 @@ const getProcurementItemEvents = async (req, res, next) => {
       return next(createHttpError(403, 'You do not have access to procurement events for this item'));
     }
 
+    if (!accessRow.item_id) {
+      return res.json({ events: [] });
+    }
+
     const eventsRes = await pool.query(
       `SELECT pie.*, u.name AS procurement_user_name
        FROM public.procurement_item_events pie
        LEFT JOIN users u ON u.id = pie.procurement_user_id
        WHERE pie.request_id = $1 AND pie.requested_item_id = $2
        ORDER BY pie.procurement_date ASC, pie.created_at ASC, pie.id ASC`,
-      [requestId, itemId]
+      [requestId, accessRow.item_id]
     );
 
     res.json({ events: eventsRes.rows });

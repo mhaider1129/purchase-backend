@@ -61,6 +61,9 @@ const getRequestDetails = async (req, res, next) => {
            quantity,
            NULL::numeric AS available_quantity,
            NULL::numeric AS purchased_quantity,
+           NULL::numeric AS remaining_quantity,
+           NULL::text AS latest_procurement_date,
+           0::integer AS procurement_events_count,
            NULL::numeric AS unit_cost,
            NULL::numeric AS total_cost,
            NULL::text AS specs,
@@ -106,6 +109,9 @@ const getRequestDetails = async (req, res, next) => {
            ri.quantity,
            ri.available_quantity,
            ri.purchased_quantity,
+           GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+           procurement_events.latest_procurement_date,
+           COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
            ri.unit_cost,
            ri.total_cost,
            ri.procurement_status,
@@ -136,6 +142,11 @@ const getRequestDetails = async (req, res, next) => {
            ri.assignment_notes
          FROM public.requested_items ri
          LEFT JOIN public.requested_item_financials rif ON rif.requested_item_id = ri.id
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS procurement_events_count, MAX(procurement_date) AS latest_procurement_date
+           FROM public.procurement_item_events pie
+           WHERE pie.requested_item_id = ri.id
+         ) procurement_events ON TRUE
          LEFT JOIN users assigned_user ON assigned_user.id = ri.assigned_to
          WHERE ri.request_id = $1`,
         [id]
@@ -241,6 +252,9 @@ const getRequestItemsOnly = async (req, res, next) => {
         quantity,
         NULL::numeric AS available_quantity,
         NULL::numeric AS purchased_quantity,
+        NULL::numeric AS remaining_quantity,
+        NULL::text AS latest_procurement_date,
+        0::integer AS procurement_events_count,
         NULL::numeric AS unit_cost,
         NULL::numeric AS total_cost,
         NULL::text AS procurement_status,
@@ -288,6 +302,9 @@ const getRequestItemsOnly = async (req, res, next) => {
         ri.quantity,
         ri.available_quantity,
         ri.purchased_quantity,
+        GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+        procurement_events.latest_procurement_date,
+        COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
         ri.unit_cost,
         ri.total_cost,
         ri.procurement_status,
@@ -318,6 +335,11 @@ const getRequestItemsOnly = async (req, res, next) => {
         ri.assignment_notes
       FROM public.requested_items ri
       LEFT JOIN public.requested_item_financials rif ON rif.requested_item_id = ri.id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS procurement_events_count, MAX(procurement_date) AS latest_procurement_date
+        FROM public.procurement_item_events pie
+        WHERE pie.requested_item_id = ri.id
+      ) procurement_events ON TRUE
       LEFT JOIN users assigned_user ON assigned_user.id = ri.assigned_to
       WHERE ri.request_id = $1
       `,
@@ -826,9 +848,18 @@ const getAssignedRequests = async (req, res) => {
     const requestIds = requests.map((row) => row.id);
     const requestStatusById = new Map(requests.map((row) => [row.id, row.status]));
     const itemsRes = await pool.query(
-      `SELECT request_id, procurement_status, unit_cost, quantity, purchased_quantity, approval_status, assigned_to
-       FROM public.requested_items
-       WHERE request_id = ANY($1::int[])`,
+      `SELECT ri.request_id, ri.procurement_status, ri.unit_cost, ri.quantity, ri.purchased_quantity,
+              GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+              COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
+              procurement_events.latest_procurement_date,
+              ri.approval_status, ri.assigned_to
+       FROM public.requested_items ri
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS procurement_events_count, MAX(procurement_date) AS latest_procurement_date
+         FROM public.procurement_item_events pie
+         WHERE pie.requested_item_id = ri.id
+       ) procurement_events ON TRUE
+       WHERE ri.request_id = ANY($1::int[])`,
       [requestIds],
     );
 

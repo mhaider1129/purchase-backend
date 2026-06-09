@@ -414,6 +414,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
   const allowedStatuses = [
     'pending',
     'purchased',
+    'partially_procured',
     'not_procured',
     'completed',
     'canceled',

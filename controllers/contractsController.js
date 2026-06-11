@@ -1007,6 +1007,7 @@ const ensureContractsPhaseTwoTables = (() => {
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT FALSE`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS reviewer_department_id INTEGER`);
         await pool.query(`
           CREATE TABLE IF NOT EXISTS contract_items (
             id SERIAL PRIMARY KEY,
@@ -2797,33 +2798,303 @@ const createContractAmendment = async (req, res, next) => {
   }
 };
 
-const APPROVAL_CHAIN = [
-  { level: 1, stage: 'Legal Review', reviewer_role: 'legal', status: 'legal_review' },
-  { level: 2, stage: 'Finance Review', reviewer_role: 'finance', status: 'finance_review' },
-  { level: 3, stage: 'Technical Review', reviewer_role: 'technical', status: 'technical_review' },
-  { level: 4, stage: 'SCM Review', reviewer_role: 'scm', status: 'under_review' },
-  { level: 5, stage: 'COO/CEO Approval', reviewer_role: 'coo_ceo', status: 'under_review' },
+const BASE_APPROVAL_CHAIN = [
+  { stage: 'Legal Review', reviewer_role: 'legal', status: 'legal_review' },
+  { stage: 'Finance Review', reviewer_role: 'finance', status: 'finance_review' },
+];
+
+const FINAL_APPROVAL_CHAIN = [
+  { stage: 'SCM Review', reviewer_role: 'scm', status: 'under_review' },
+  { stage: 'COO/CEO Approval', reviewer_role: 'coo_ceo', status: 'under_review' },
 ];
 
 
 const ROLE_ALIASES = {
   legal: ['legal'],
-  finance: ['finance'],
-  technical: ['technical'],
+  finance: ['finance', 'cfo'],
+  technical: ['technical', 'technician'],
   scm: ['scm'],
-  coo_ceo: ['coo', 'ceo'],
+  coo_ceo: ['coo', 'ceo', 'coo_ceo', 'coo/ceo'],
 };
 
 const normalizeUserRole = (role) => String(role || '').trim().toLowerCase();
 
+const getContractApprovalRoleAliases = reviewerRole => (
+  ROLE_ALIASES[String(reviewerRole || '').trim().toLowerCase()] || []
+);
+
+const isContractUnderReviewStatus = status => (
+  ['under_review', 'legal_review', 'technical_review', 'finance_review', 'executive_approval']
+    .includes(String(status || '').trim().toLowerCase())
+);
+
+const getReviewerDepartmentId = approvalStep => {
+  const departmentId = Number(approvalStep?.reviewer_department_id);
+  return Number.isInteger(departmentId) && departmentId > 0 ? departmentId : null;
+};
+
+const fetchDepartmentsByIds = async (client, departmentIds = []) => {
+  const normalizedIds = normalizeIdArray(departmentIds);
+  if (!normalizedIds.length) {
+    return new Map();
+  }
+
+  const { rows } = await client.query(
+    `SELECT id, name
+       FROM departments
+      WHERE id = ANY($1::INT[])`,
+    [normalizedIds]
+  );
+
+  return new Map(rows.map(row => [Number(row.id), row]));
+};
+
+const getTechnicalApprovalSteps = async (client, contract = {}) => {
+  const departmentIds = normalizeIdArray(contract?.technical_department_ids);
+  if (!departmentIds.length) {
+    return [{ stage: 'Technical Review', reviewer_role: 'technical', status: 'technical_review' }];
+  }
+
+  const departmentsById = await fetchDepartmentsByIds(client, departmentIds);
+  return departmentIds.map(departmentId => {
+    const department = departmentsById.get(departmentId);
+    return {
+      stage: `Technical Review${department?.name ? ` - ${department.name}` : ''}`,
+      reviewer_role: 'technical',
+      reviewer_department_id: departmentId,
+      status: 'technical_review',
+    };
+  });
+};
+
+const buildContractApprovalChain = async (client, contract = {}) => {
+  const steps = [
+    ...BASE_APPROVAL_CHAIN,
+    ...(await getTechnicalApprovalSteps(client, contract)),
+    ...FINAL_APPROVAL_CHAIN,
+  ];
+
+  return steps.map((step, index) => ({ ...step, level: index + 1 }));
+};
+
+const findDepartmentReviewerCandidate = async (client, departmentId, { activeOnly = false } = {}) => {
+  if (!departmentId) {
+    return null;
+  }
+
+  const { rows } = await client.query(
+    `SELECT id, is_active, role, department_id
+       FROM users
+      WHERE department_id = $1
+        AND ($2::BOOLEAN = FALSE OR is_active = TRUE)
+      ORDER BY is_active DESC,
+               CASE WHEN LOWER(TRIM(role)) = 'hod' THEN 0 ELSE 1 END,
+               id ASC
+      LIMIT 1`,
+    [departmentId, Boolean(activeOnly)]
+  );
+
+  return rows[0] || null;
+};
+
+const getApprovalStepActiveReviewer = async (client, approvalStep = {}) => {
+  const departmentId = getReviewerDepartmentId(approvalStep);
+  const reviewerId = Number(approvalStep?.reviewer_id);
+  if (Number.isInteger(reviewerId) && reviewerId > 0) {
+    const params = [reviewerId];
+    let departmentFilter = '';
+    if (departmentId) {
+      params.push(departmentId);
+      departmentFilter = `AND department_id = $${params.length}`;
+    }
+
+    const { rows } = await client.query(
+      `SELECT id
+         FROM users
+        WHERE id = $1
+          AND is_active = TRUE
+          ${departmentFilter}
+        LIMIT 1`,
+      params
+    );
+    if (rows.length) {
+      return rows[0];
+    }
+  }
+
+  if (departmentId) {
+    return findDepartmentReviewerCandidate(client, departmentId, { activeOnly: true });
+  }
+
+  const aliases = getContractApprovalRoleAliases(approvalStep?.reviewer_role);
+  if (!aliases.length) {
+    return null;
+  }
+
+  const { rows } = await client.query(
+    `SELECT id
+       FROM users
+      WHERE is_active = TRUE
+        AND LOWER(TRIM(role)) = ANY($1::TEXT[])
+      ORDER BY id ASC
+      LIMIT 1`,
+    [aliases]
+  );
+
+  return rows[0] || null;
+};
+
+const getApprovalStepReviewerCandidate = async (client, approvalStep = {}) => {
+  const departmentId = getReviewerDepartmentId(approvalStep);
+  if (departmentId) {
+    return findDepartmentReviewerCandidate(client, departmentId);
+  }
+
+  const aliases = getContractApprovalRoleAliases(approvalStep?.reviewer_role);
+  if (!aliases.length) {
+    return null;
+  }
+
+  const reviewerId = Number(approvalStep?.reviewer_id);
+  if (Number.isInteger(reviewerId) && reviewerId > 0) {
+    const { rows: assignedRows } = await client.query(
+      `SELECT id, is_active
+         FROM users
+        WHERE id = $1
+          AND LOWER(TRIM(role)) = ANY($2::TEXT[])
+        LIMIT 1`,
+      [reviewerId, aliases]
+    );
+    if (assignedRows[0]?.is_active) {
+      return assignedRows[0];
+    }
+  }
+
+  const { rows } = await client.query(
+    `SELECT id, is_active
+       FROM users
+      WHERE LOWER(TRIM(role)) = ANY($1::TEXT[])
+      ORDER BY is_active DESC, id ASC
+      LIMIT 1`,
+    [aliases]
+  );
+
+  return rows[0] || null;
+};
+
+const assignContractApprovalReviewer = async (client, approvalStep = {}) => {
+  const candidate = await getApprovalStepReviewerCandidate(client, approvalStep);
+  if (!candidate) {
+    return null;
+  }
+
+  if (Number(candidate.id) !== Number(approvalStep.reviewer_id)) {
+    await client.query(
+      `UPDATE contract_approvals
+          SET reviewer_id = $1, assigned_at = NOW(), updated_at = NOW()
+        WHERE id = $2`,
+      [candidate.id, approvalStep.id]
+    );
+  }
+
+  return candidate;
+};
+
+const assignContractApprovalReviewers = async (client, contractId) => {
+  const { rows } = await client.query(
+    `SELECT id, reviewer_role, reviewer_id, reviewer_department_id
+       FROM contract_approvals
+      WHERE contract_id = $1
+        AND status = 'Pending'
+      ORDER BY approval_level ASC, id ASC`,
+    [contractId]
+  );
+
+  for (const step of rows) {
+    await assignContractApprovalReviewer(client, step);
+  }
+};
+
+const activateNextResolvableContractApproval = async (client, contractId, afterLevel = 0) => {
+  const { rows: steps } = await client.query(
+    `SELECT id, approval_level, reviewer_role, reviewer_id, reviewer_department_id
+       FROM contract_approvals
+      WHERE contract_id = $1
+        AND status = 'Pending'
+        AND approval_level > $2
+      ORDER BY approval_level ASC, id ASC
+      FOR UPDATE`,
+    [contractId, afterLevel]
+  );
+
+  for (const step of steps) {
+    await assignContractApprovalReviewer(client, step);
+    const activeReviewer = await getApprovalStepActiveReviewer(client, step);
+    if (activeReviewer) {
+      await client.query(
+        `UPDATE contract_approvals
+            SET is_active = FALSE, updated_at = NOW()
+          WHERE contract_id = $1
+            AND is_active = TRUE`,
+        [contractId]
+      );
+      await client.query(
+        `UPDATE contract_approvals
+            SET reviewer_id = $1, is_active = TRUE, updated_at = NOW()
+          WHERE id = $2`,
+        [activeReviewer.id, step.id]
+      );
+      return { activated: true, approvalId: step.id, approvalLevel: step.approval_level };
+    }
+  }
+
+  await client.query(
+    `UPDATE contract_approvals
+        SET is_active = FALSE, updated_at = NOW()
+      WHERE contract_id = $1
+        AND is_active = TRUE`,
+    [contractId]
+  );
+
+  return { activated: false, pendingCount: steps.length };
+};
+
+const reconcileContractApprovalWorkflow = async (client, contractId) => {
+  const { rows: contracts } = await client.query(
+    `SELECT id, status
+       FROM contracts
+      WHERE id = $1
+      LIMIT 1`,
+    [contractId]
+  );
+  if (!contracts.length || !isContractUnderReviewStatus(contracts[0].status)) {
+    return;
+  }
+
+  await assignContractApprovalReviewers(client, contractId);
+  await activateNextResolvableContractApproval(client, contractId, 0);
+};
+
+const reconcileContractsUnderReview = async (client) => {
+  const { rows } = await client.query(
+    `SELECT id
+       FROM contracts
+      WHERE status IN ('under_review', 'legal_review', 'technical_review', 'finance_review', 'executive_approval')`
+  );
+
+  for (const row of rows) {
+    await reconcileContractApprovalWorkflow(client, row.id);
+  }
+};
+
 const canUserDecideContractStep = (user = {}, approvalStep = {}) => {
   const userId = Number(user?.id);
   const reviewerId = Number(approvalStep?.reviewer_id);
-  if (Number.isInteger(userId) && Number.isInteger(reviewerId)) {
-    return userId == reviewerId;
+  if (Number.isInteger(userId) && userId > 0 && Number.isInteger(reviewerId) && reviewerId > 0) {
+    return userId === reviewerId;
   }
   const role = normalizeUserRole(user?.role);
-  const allowedRoles = ROLE_ALIASES[String(approvalStep?.reviewer_role || '').trim().toLowerCase()] || [];
+  const allowedRoles = getContractApprovalRoleAliases(approvalStep?.reviewer_role);
   return allowedRoles.includes(role);
 };
 
@@ -2837,11 +3108,14 @@ const submitContractReview = async (req, res, next) => {
     const { rows: contracts } = await client.query('SELECT * FROM contracts WHERE id = $1 FOR UPDATE', [contractId]);
     if (!contracts.length) return next(createHttpError(404, 'Contract not found'));
     await client.query('DELETE FROM contract_approvals WHERE contract_id = $1', [contractId]);
-    for (const step of APPROVAL_CHAIN) {
-      await client.query(`INSERT INTO contract_approvals (contract_id, approval_level, stage, reviewer_role, reviewer_id, status, is_active, created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`, [contractId, step.level, step.stage, step.reviewer_role, null, 'Pending', step.level === 1]);
+    const approvalChain = await buildContractApprovalChain(client, contracts[0]);
+    for (const step of approvalChain) {
+      const reviewer = await getApprovalStepReviewerCandidate(client, step);
+      await client.query(`INSERT INTO contract_approvals (contract_id, approval_level, stage, reviewer_role, reviewer_department_id, reviewer_id, status, is_active, created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,FALSE,NOW())`, [contractId, step.level, step.stage, step.reviewer_role, step.reviewer_department_id || null, reviewer?.id || null, 'Pending']);
     }
     await client.query(`UPDATE contracts SET status='under_review', updated_at=NOW() WHERE id=$1`, [contractId]);
+    await activateNextResolvableContractApproval(client, contractId, 0);
     await recordContractLog(client, { contractId, action: 'contract_review_submitted', actorId: req.user?.id || null });
     await client.query('COMMIT');
     res.json({ message: 'Contract submitted for review' });
@@ -2854,6 +3128,8 @@ const submitContractReview = async (req, res, next) => {
 const listPendingContractApprovals = async (req, res, next) => {
   try {
     await ensureContractsPhaseTwoTables();
+    const client = pool;
+    await reconcileContractsUnderReview(client);
     const role = normalizeUserRole(req.user?.role);
     const userId = Number(req.user?.id);
     const roleKeys = Object.entries(ROLE_ALIASES)
@@ -2862,7 +3138,7 @@ const listPendingContractApprovals = async (req, res, next) => {
 
     const params = [Number.isInteger(userId) ? userId : -1, roleKeys];
     const { rows } = await pool.query(
-      `SELECT ca.id AS approval_id, ca.contract_id, ca.approval_level, ca.stage, ca.reviewer_role, ca.status, c.title AS contract_title
+      `SELECT ca.id AS approval_id, ca.contract_id, ca.approval_level, ca.stage, ca.reviewer_role, ca.reviewer_department_id, ca.status, c.title AS contract_title
          FROM contract_approvals ca
          JOIN contracts c ON c.id = ca.contract_id
         WHERE ca.is_active = TRUE
@@ -2882,7 +3158,8 @@ const listContractApprovals = async (req, res, next) => {
   if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
   try {
     await ensureContractsPhaseTwoTables();
-    const { rows } = await pool.query(`SELECT id, contract_id, approval_level, stage, reviewer_role, reviewer_id, status, comments, is_active, decided_at, created_at
+    await reconcileContractApprovalWorkflow(pool, contractId);
+    const { rows } = await pool.query(`SELECT id, contract_id, approval_level, stage, reviewer_role, reviewer_department_id, reviewer_id, status, comments, is_active, decided_at, created_at
       FROM contract_approvals WHERE contract_id=$1 ORDER BY approval_level`, [contractId]);
     res.json(rows);
   } catch {
@@ -2898,6 +3175,7 @@ const listContractApprovalStageMonitor = async (req, res, next) => {
 
   try {
     await ensureContractsPhaseTwoTables();
+    await reconcileContractsUnderReview(pool);
     const { rows } = await pool.query(
       `SELECT
           c.id AS contract_id,
@@ -2910,6 +3188,8 @@ const listContractApprovalStageMonitor = async (req, res, next) => {
           ca.approval_level,
           ca.stage,
           ca.reviewer_role,
+          ca.reviewer_department_id,
+          reviewer_department.name AS reviewer_department_name,
           ca.reviewer_id,
           reviewer.name AS reviewer_name,
           reviewer.email AS reviewer_email,
@@ -2923,6 +3203,7 @@ const listContractApprovalStageMonitor = async (req, res, next) => {
          FROM contracts c
          LEFT JOIN contract_approvals ca ON ca.contract_id = c.id
          LEFT JOIN users reviewer ON reviewer.id = ca.reviewer_id
+         LEFT JOIN departments reviewer_department ON reviewer_department.id = ca.reviewer_department_id
         ORDER BY c.updated_at DESC NULLS LAST, c.id DESC, ca.approval_level ASC NULLS LAST, ca.id ASC NULLS LAST`
     );
 
@@ -2951,6 +3232,8 @@ const listContractApprovalStageMonitor = async (req, res, next) => {
         approval_level: row.approval_level,
         stage: row.stage,
         reviewer_role: row.reviewer_role,
+        reviewer_department_id: row.reviewer_department_id,
+        reviewer_department_name: row.reviewer_department_name,
         reviewer_id: row.reviewer_id,
         reviewer_name: row.reviewer_name,
         reviewer_email: row.reviewer_email,
@@ -2990,11 +3273,11 @@ const decideContractApproval = async (req, res, next) => {
     if (!canUserDecideContractStep(req.user, current)) return next(createHttpError(403, 'This approval step is not assigned to your account or role'));
     await client.query(`UPDATE contract_approvals SET status=$1, comments=$2, reviewer_id = COALESCE(reviewer_id, $3), decided_at=NOW(), is_active=FALSE, updated_at=NOW() WHERE id=$4`, [decision, normalizeText(req.body?.comments) || null, req.user?.id || null, approvalId]);
     if (decision === 'Approved') {
-      const { rows: nextStep } = await client.query(`SELECT id, approval_level FROM contract_approvals WHERE contract_id=$1 AND approval_level > $2 ORDER BY approval_level LIMIT 1`, [contractId, current.approval_level]);
-      if (nextStep.length) {
-        await client.query(`UPDATE contract_approvals SET is_active=TRUE WHERE id=$1`, [nextStep[0].id]);
-      } else {
+      const activation = await activateNextResolvableContractApproval(client, contractId, current.approval_level);
+      if (!activation.activated && activation.pendingCount === 0) {
         await client.query(`UPDATE contracts SET status='sent_for_signature', updated_at=NOW() WHERE id=$1`, [contractId]);
+      } else {
+        await client.query(`UPDATE contracts SET status='under_review', updated_at=NOW() WHERE id=$1`, [contractId]);
       }
     } else {
       await client.query(`UPDATE contracts SET status='draft', updated_at=NOW() WHERE id=$1`, [contractId]);
@@ -3472,4 +3755,12 @@ module.exports = {
   listContractConsumptionEntries,
   createContractConsumptionEntry,
   getContractFinancialSummary,
+  __contractApprovalInternals: {
+    ROLE_ALIASES,
+    getContractApprovalRoleAliases,
+    canUserDecideContractStep,
+    activateNextResolvableContractApproval,
+    buildContractApprovalChain,
+    reconcileContractApprovalWorkflow,
+  },
 };

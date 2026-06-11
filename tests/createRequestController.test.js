@@ -1,3 +1,7 @@
+jest.mock('../utils/ensureWarehouseAssignments', () => jest.fn().mockResolvedValue());
+jest.mock('../utils/ensureProjectsTable', () => jest.fn().mockResolvedValue());
+jest.mock('../utils/ensureRequestClientSubmissionKey', () => jest.fn().mockResolvedValue());
+
 const { createRequest } = require('../controllers/requests/createRequestController');
 
 describe('createRequestController.createRequest', () => {

@@ -302,6 +302,7 @@ const auditRegistryRoutes = require('./routes/auditRegistry');
 const tasksRoutes = require('./routes/tasks');
 const budgetControlRoutes = require('./routes/budgetControl');
 const requestAutoAssignmentRulesRoutes = require('./routes/requestAutoAssignmentRules');
+const departmentRequestedItemsRoutes = require('./routes/departmentRequestedItems');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -362,6 +363,7 @@ const protectedApiRoutes = [
   { path: '/tasks', router: tasksRoutes },
   { path: '/budget-control', router: budgetControlRoutes },
   { path: '/request-auto-assignment-rules', router: requestAutoAssignmentRulesRoutes },
+  { path: '/department-requested-items', router: departmentRequestedItemsRoutes },
 ];
 
 const mountApiRoutes = router => {

@@ -840,6 +840,7 @@ const getAssignedRequests = async (req, res) => {
     const userId = req.query?.procurement_user_id ? overrideAssigneeId : req.user.id;
     const result = await pool.query(
       `SELECT r.*, p.name AS project_name,
+              d.name AS department_name,
               COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name) AS requester_name,
               CASE
                 WHEN NULLIF(TRIM(r.temporary_requester_name), '') IS NOT NULL THEN 'Temporary Requester'
@@ -847,6 +848,7 @@ const getAssignedRequests = async (req, res) => {
               END AS requester_role
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
+       LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN users u ON r.requester_id = u.id
        WHERE (
            r.assigned_to = $1

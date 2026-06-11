@@ -65,6 +65,7 @@ describe('stockItemRequestsController', () => {
 
       client.query
         .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ exists: false }] }) // approval trigger check
         .mockResolvedValueOnce({
           rowCount: 1,
           rows: [
@@ -111,6 +112,7 @@ describe('stockItemRequestsController', () => {
 
       client.query
         .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ exists: false }] }) // approval trigger check
         .mockResolvedValueOnce({
           rowCount: 1,
           rows: [
@@ -125,7 +127,7 @@ describe('stockItemRequestsController', () => {
           ],
         })
         .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // duplicate stock item check
-        .mockResolvedValueOnce({ rows: [{ id: 42, name: 'Mask' }] }) // insert stock item
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 42, name: 'Mask' }] }) // insert stock item
         .mockResolvedValueOnce({
           rows: [
             {

@@ -14,8 +14,6 @@ const buildRes = () => {
   const res = {};
   res.status = jest.fn(() => res);
   res.json = jest.fn(() => res);
-  res.status = res.status.bind(res);
-  res.json = res.json.bind(res);
   res.send = jest.fn(() => res);
   return res;
 };

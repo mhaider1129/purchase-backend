@@ -148,6 +148,7 @@ describe('createRequest controller', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ id: 201, item_name: 'Gloves', quantity: 3, purchased_quantity: 0 }] })
       .mockResolvedValueOnce({});

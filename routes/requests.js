@@ -5,6 +5,7 @@ const { authenticateUser } = require('../middleware/authMiddleware');
 router.use(authenticateUser); // 🔐 Protect all routes
 const { getCompletedAssignedRequests } = require('../controllers/requests/procurementHistoryController');
 const { addProcurementItemEvent, getProcurementItemEvents } = require('../controllers/requests/procurementItemEventsController');
+const { getFullRequestDetails, addRequestNote } = require('../controllers/requests/requestWorkspaceController');
 const upload = require('../middleware/upload');
 
 // 🧩 Controllers
@@ -259,6 +260,8 @@ router.get('/export/pdf', async (req, res) => {
 // ==========================
 // 🔍 Request Details & Logs
 // ==========================
+router.get('/:requestId/full-details', getFullRequestDetails);
+router.post('/:requestId/notes', addRequestNote);
 router.get('/:id/items', getRequestItemsOnly);
 router.get('/:id/logs', getRequestLogs);
 router.get('/:id/status-communications', listStatusCommunications);

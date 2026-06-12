@@ -68,8 +68,10 @@ const ensureEditableCase = async id => {
   return row;
 };
 
-const normalizePayload = (body, allowedFields) => allowedFields.reduce((acc, field) => {
-  if (Object.prototype.hasOwnProperty.call(body, field)) acc[field] = body[field];
+const normalizePayload = (body = {}, allowedFields) => allowedFields.reduce((acc, field) => {
+  if (Object.prototype.hasOwnProperty.call(body, field)) {
+    acc[field] = body[field] === '' ? null : body[field];
+  }
   return acc;
 }, {});
 

@@ -1,7 +1,8 @@
 const pool = require('../config/db');
 
-const PRICING_METHODS = new Set(['KIT_OWNERSHIP', 'PAY_PER_REPORTABLE']);
-const PRICING_MODELS = new Set(['KIT_OWNERSHIP', 'PAY_PER_REPORTABLE', 'REAGENT_RENTAL', 'HYBRID']);
+const COMMERCIAL_MODELS = ['PURCHASE', 'LEASE', 'REAGENT_RENTAL', 'PAY_PER_REPORTABLE', 'KIT_OWNERSHIP', 'HYBRID', 'SUBSCRIPTION', 'OUTSOURCING', 'SERVICE_CONTRACT', 'CUSTOM'];
+const PRICING_METHODS = new Set(COMMERCIAL_MODELS);
+const PRICING_MODELS = new Set(COMMERCIAL_MODELS);
 
 const toNumber = value => {
   const parsed = Number(value);
@@ -69,6 +70,22 @@ const calculatePayPerReportableCost = (testCost, annualVolume) => {
   };
 };
 
+
+const calculateRecurringElementCost = (element, annualVolume) => {
+  const method = element.pricing_method || 'PURCHASE';
+  if (!PRICING_METHODS.has(method)) throw new Error(`Invalid pricing_method: ${method}`);
+  if (method === 'PAY_PER_REPORTABLE') return calculatePayPerReportableCost(element, annualVolume);
+  if (method === 'KIT_OWNERSHIP' || method === 'REAGENT_RENTAL' || method === 'HYBRID') return calculateKitOwnershipCost(element, annualVolume);
+
+  const annualQuantity = Math.max(1, toNumber(element.annual_quantity || element.quantity || 1));
+  const unitCost = toNumber(element.unit_cost || element.kit_price || element.price_per_reportable_test);
+  const recurringCost = money(annualQuantity * unitCost);
+  return {
+    calculated_effective_cost_per_reported_test: annualVolume > 0 ? Number((recurringCost / annualVolume).toFixed(4)) : 0,
+    annual_test_cost: recurringCost,
+  };
+};
+
 const calculateOfferAnnualVariableCost = async (caseId, offerId, options = {}) => {
   const { rows } = await pool.query(
     `SELECT tc.*, t.expected_monthly_volume, COALESCE(t.growth_rate, c.expected_annual_growth_rate, 0) AS growth_rate
@@ -88,17 +105,18 @@ const calculateOfferAnnualVariableCost = async (caseId, offerId, options = {}) =
     const method = row.pricing_method || 'KIT_OWNERSHIP';
     if (!PRICING_METHODS.has(method)) throw new Error(`Invalid pricing_method: ${method}`);
     const annualVolume = toNumber(row.expected_monthly_volume) * 12 * volumeMultiplier;
-    const calculation = method === 'PAY_PER_REPORTABLE'
-      ? calculatePayPerReportableCost(row, annualVolume)
-      : calculateKitOwnershipCost({
-          ...row,
-          kit_price: toNumber(row.kit_price) * (options.reagentPriceMultiplier || 1),
-          expected_waste_percentage: normalizePercent(row.expected_waste_percentage) * (options.wastageMultiplier || 1),
-          price_per_reportable_test: toNumber(row.price_per_reportable_test) * (options.payPerReportableMultiplier || 1),
-        }, annualVolume);
+    const practical = calculatePracticalUtilization(row, toNumber(row.expected_monthly_volume) * volumeMultiplier);
+    const adjustedRow = {
+      ...row,
+      kit_price: toNumber(row.kit_price) * (options.reagentPriceMultiplier || 1),
+      unit_cost: toNumber(row.unit_cost) * (options.reagentPriceMultiplier || 1),
+      expected_waste_percentage: normalizePercent(row.expected_waste_percentage) * (options.wastageMultiplier || 1),
+      price_per_reportable_test: toNumber(row.price_per_reportable_test) * (options.payPerReportableMultiplier || 1),
+    };
+    const calculation = calculateRecurringElementCost(adjustedRow, annualVolume);
     annualVariableCost += calculation.annual_test_cost;
     totalExpectedReportedTests += annualVolume;
-    tests.push({ ...row, ...calculation, annual_volume: annualVolume });
+    tests.push({ ...row, ...practical, ...calculation, annual_volume: annualVolume });
   }
 
   return {
@@ -274,6 +292,44 @@ const calculateSensitivityAnalysis = async caseId => {
   return output.map(item => ({ ...item, recommendation_changes: baseWinner && item.winner?.offer_id !== baseWinner }));
 };
 
+
+const calculateBreakEven = (left, right, maxVolume = 250000) => {
+  const step = Math.max(1, Math.ceil(maxVolume / 500));
+  let previous = null;
+  for (let volume = step; volume <= maxVolume; volume += step) {
+    const leftCost = toNumber(left.initial_cost) + toNumber(left.fixed_annual_cost) + toNumber(left.variable_cost_per_unit) * volume;
+    const rightCost = toNumber(right.initial_cost) + toNumber(right.fixed_annual_cost) + toNumber(right.variable_cost_per_unit) * volume;
+    const diff = leftCost - rightCost;
+    if (previous && Math.sign(previous.diff) !== Math.sign(diff)) {
+      return { break_even_volume: volume, left_cost: money(leftCost), right_cost: money(rightCost), cheaper_below: previous.diff < 0 ? left.name : right.name, cheaper_above: diff < 0 ? left.name : right.name };
+    }
+    previous = { volume, diff };
+  }
+  return { break_even_volume: null, message: 'No break-even point found in the evaluated range.' };
+};
+
+const optimizeResults = async caseId => {
+  let results = (await pool.query(
+    `SELECT r.*, o.offer_name, o.supplier_name, o.risk_notes
+       FROM procurement_evaluation_results r
+       JOIN procurement_evaluation_offers o ON o.id = r.offer_id
+      WHERE r.evaluation_case_id = $1`,
+    [caseId]
+  )).rows;
+  if (results.length === 0) results = await calculateAllOfferResults(caseId);
+  const byLowest = field => [...results].filter(row => toNumber(row[field]) > 0).sort((a, b) => toNumber(a[field]) - toNumber(b[field]))[0] || null;
+  const byHighest = field => [...results].sort((a, b) => toNumber(b[field]) - toNumber(a[field]))[0] || null;
+  return {
+    best_financial_scenario: byLowest('total_annual_cost'),
+    best_tco: byLowest('tco_period_cost'),
+    lowest_cost_per_unit: byLowest('average_cost_per_reported_test'),
+    best_technical_scenario: byHighest('technical_score'),
+    best_overall_scenario: byHighest('final_weighted_score'),
+    lowest_risk_scenario: byLowest('risk_score'),
+    greatest_savings_opportunity: byLowest('tco_period_cost'),
+  };
+};
+
 const generateRecommendationSummary = async caseId => {
   let results = (await pool.query(
     `SELECT r.*, o.offer_name, o.supplier_name
@@ -294,11 +350,101 @@ const generateRecommendationSummary = async caseId => {
     best_final_weighted_score_offer: bestScore || null,
     risk_warnings: warnings,
     final_recommended_offer: bestScore || lowestTco || null,
-    summary: bestScore ? `${bestScore.offer_name || `Offer #${bestScore.offer_id}`} is recommended based on the highest final weighted score (${bestScore.final_weighted_score}) with ${lowestTco ? `lowest TCO offer ${lowestTco.offer_name || lowestTco.offer_id}` : 'no TCO benchmark available'}.` : 'No recommendation available until offers are calculated.',
+    advantages: bestScore ? [`Highest weighted score: ${bestScore.final_weighted_score}`, lowestTco && Number(bestScore.offer_id) === Number(lowestTco.offer_id) ? 'Lowest TCO scenario' : null].filter(Boolean) : [],
+    disadvantages: bestScore && lowestTco && Number(bestScore.offer_id) !== Number(lowestTco.offer_id) ? [`Not the lowest TCO; ${lowestTco.offer_name || lowestTco.offer_id} is financially lower.`] : [],
+    hidden_costs: warnings,
+    risks: results.filter(row => row.risk_score && Number(row.risk_score) > 70).map(row => `${row.offer_name || row.offer_id} has elevated risk score ${row.risk_score}`),
+    long_term_implications: bestScore ? [`${bestScore.offer_name || `Scenario #${bestScore.offer_id}`} has ${bestScore.tco_period_cost} period TCO and ${bestScore.average_cost_per_reported_test} average cost per unit.`] : [],
+    summary: bestScore ? `${bestScore.offer_name || `Scenario #${bestScore.offer_id}`} is recommended because it has the highest weighted score (${bestScore.final_weighted_score}). ${lowestTco ? `Lowest TCO scenario: ${lowestTco.offer_name || lowestTco.offer_id}.` : ''}` : 'No recommendation available until scenarios are calculated.',
   };
 };
 
+const canonical = value => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+const COLUMN_ALIASES = {
+  test_name: ['item','item_name','kit','kit_name','test','test_name','name'],
+  test_code: ['code','item_code','kit_code','test_code'],
+  category: ['category','type'],
+  unit: ['unit','uom'],
+  kit_price: ['price','unit_price','kit_price','cost'],
+  tests_per_kit: ['tests_kit','tests_per_kit','kit_size','pack_size'],
+  shelf_life_months: ['shelf_life','shelf_life_months'],
+  open_vial_stability_days: ['stability','open_kit_stability','open_vial_stability','open_kit_stability_days'],
+  onboard_stability_days: ['onboard_stability','onboard_stability_days'],
+  expected_monthly_volume: ['monthly_volume','volume','expected_monthly_volume'],
+  price_per_reportable_test: ['reportable_price','pay_per_reportable','price_per_reportable_test'],
+  expected_waste_percentage: ['waste','waste_percent','waste_percentage'],
+  repeat_rate_percentage: ['repeat','repeat_percent','repeat_percentage'],
+  qc_cost_per_kit: ['qc_cost','qc_cost_per_kit'],
+  calibrator_cost_per_kit: ['calibrator_cost','calibrator_cost_per_kit'],
+  fixed_consumable_cost_per_kit: ['fixed_consumables','fixed_consumable_cost_per_kit'],
+  pricing_method: ['pricing_method','commercial_model','pricing_model'],
+  notes: ['notes','comment','comments'],
+};
+
+const autoMapColumns = headers => {
+  const result = {};
+  const normalized = headers.map(header => ({ header, key: canonical(header) }));
+  for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
+    const match = normalized.find(item => aliases.includes(item.key));
+    if (match) result[field] = match.header;
+  }
+  return result;
+};
+
+const parseDelimitedText = text => {
+  const lines = String(text || '').trim().split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return { headers: [], rows: [] };
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  const parseLine = line => line.split(delimiter).map(cell => cell.trim().replace(/^"|"$/g, ''));
+  const headers = parseLine(lines[0]);
+  return { headers, rows: lines.slice(1).map(line => Object.fromEntries(parseLine(line).map((value, index) => [headers[index], value]))) };
+};
+
+const validateImportRows = (rows, columnMap = autoMapColumns(Object.keys(rows[0] || {}))) => {
+  const seen = new Set();
+  return rows.map((raw, index) => {
+    const item = {};
+    for (const [field, source] of Object.entries(columnMap || {})) item[field] = raw[source];
+    const errors = [];
+    const key = canonical(`${item.test_code || ''}:${item.test_name || ''}`);
+    if (!item.test_name) errors.push('missing item name');
+    if (!item.kit_price && !item.price_per_reportable_test) errors.push('missing price');
+    if (key && seen.has(key)) errors.push('duplicate row');
+    seen.add(key);
+    if (item.pricing_method && !PRICING_MODELS.has(item.pricing_method) && !PRICING_METHODS.has(item.pricing_method)) errors.push('invalid pricing method');
+    ['kit_price','tests_per_kit','open_vial_stability_days','expected_monthly_volume','price_per_reportable_test','expected_waste_percentage','repeat_rate_percentage','qc_cost_per_kit','calibrator_cost_per_kit','fixed_consumable_cost_per_kit'].forEach(field => {
+      if (item[field] !== undefined && item[field] !== '' && !Number.isFinite(Number(item[field]))) errors.push(`invalid ${field}`);
+    });
+    if (item.tests_per_kit !== undefined && item.tests_per_kit !== '' && Number(item.tests_per_kit) <= 0) errors.push('invalid tests per kit');
+    return { row_number: index + 2, raw, item, errors, valid: errors.length === 0 };
+  });
+};
+
+const calculatePracticalUtilization = (testCost, monthlyVolume) => {
+  const annualVolume = toNumber(monthlyVolume) * 12;
+  const testsPerKit = toNumber(testCost.tests_per_kit || testCost.usable_tests_per_kit);
+  const kitPrice = toNumber(testCost.kit_price);
+  const openDays = toNumber(testCost.open_vial_stability_days);
+  const kitsByVolume = testsPerKit > 0 ? Math.ceil(annualVolume / testsPerKit) : 0;
+  const kitsByStability = openDays > 0 && annualVolume > 0 ? Math.ceil(365 / openDays) : kitsByVolume;
+  const actualKitsNeeded = Math.max(kitsByVolume, kitsByStability);
+  const capacity = actualKitsNeeded * testsPerKit;
+  const wastedTests = Math.max(0, capacity - annualVolume);
+  const annualKitCost = money(actualKitsNeeded * (kitPrice + toNumber(testCost.qc_cost_per_kit) + toNumber(testCost.calibrator_cost_per_kit) + toNumber(testCost.fixed_consumable_cost_per_kit) + toNumber(testCost.other_kit_related_cost)));
+  const annualPay = money(annualVolume * toNumber(testCost.price_per_reportable_test));
+  const effective = annualVolume > 0 ? Number((annualKitCost / annualVolume).toFixed(4)) : 0;
+  const saving = annualPay > 0 ? money(Math.abs(annualKitCost - annualPay)) : 0;
+  const warnings = [];
+  const utilization = capacity > 0 ? Number(((annualVolume / capacity) * 100).toFixed(2)) : 0;
+  if (utilization < 50 && capacity > 0) warnings.push('low utilization');
+  if (wastedTests > testsPerKit) warnings.push('high wastage');
+  if (kitsByStability > kitsByVolume) warnings.push('stability limitations');
+  return { annual_volume: annualVolume, kits_needed_by_volume: kitsByVolume, kits_needed_by_stability: kitsByStability, actual_kits_needed: actualKitsNeeded, wasted_tests: wastedTests, utilization_percentage: utilization, effective_cost_per_reported_test: effective, annual_kit_cost: annualKitCost, annual_pay_per_reportable_cost: annualPay, annual_saving: saving, best_pricing_method: annualPay > 0 && annualPay < annualKitCost ? 'PAY_PER_REPORTABLE' : 'KIT_OWNERSHIP', recommendation_reason: annualPay > 0 && annualPay < annualKitCost ? 'Pay per reportable is cheaper after stability and wastage.' : 'Kit ownership is cheaper or no pay-per-reportable price was offered.', warnings };
+};
+
+
 module.exports = {
+  COMMERCIAL_MODELS,
   PRICING_METHODS,
   PRICING_MODELS,
   normalizePercent,
@@ -306,11 +452,18 @@ module.exports = {
   calculateAnnualFixedCost,
   calculateKitOwnershipCost,
   calculatePayPerReportableCost,
+  calculateRecurringElementCost,
   calculateOfferAnnualVariableCost,
   calculateOfferTco,
   calculateAllOfferResults,
   rankOffers,
   calculateCostPerReportedTest,
   calculateSensitivityAnalysis,
+  calculateBreakEven,
+  optimizeResults,
   generateRecommendationSummary,
+  autoMapColumns,
+  parseDelimitedText,
+  validateImportRows,
+  calculatePracticalUtilization,
 };

@@ -86,3 +86,42 @@ describe('procurement evaluation service', () => {
     expect(results[0].rank).toBe(1);
   });
 });
+test('calculates practical utilization using open-kit stability instead of simple kit price division', () => {
+  const result = service.calculatePracticalUtilization({ kit_price: 500, tests_per_kit: 100, open_vial_stability_days: 30, price_per_reportable_test: 12 }, 10);
+  expect(result.annual_volume).toBe(120);
+  expect(result.kits_needed_by_volume).toBe(2);
+  expect(result.kits_needed_by_stability).toBe(13);
+  expect(result.actual_kits_needed).toBe(13);
+  expect(result.effective_cost_per_reported_test).toBeCloseTo(54.1667, 4);
+  expect(result.best_pricing_method).toBe('PAY_PER_REPORTABLE');
+  expect(result.warnings).toContain('low utilization');
+});
+
+test('auto maps and validates pasted Excel-style import rows', () => {
+  const parsed = service.parseDelimitedText('Item Name\tCode\tKit Price\tTests/Kit\tStability\tMonthly Volume\nA\tA1\t500\t100\t30\t10');
+  const map = service.autoMapColumns(parsed.headers);
+  const rows = service.validateImportRows(parsed.rows, map);
+  expect(map.test_name).toBe('Item Name');
+  expect(map.kit_price).toBe('Kit Price');
+  expect(map.tests_per_kit).toBe('Tests/Kit');
+  expect(rows[0].valid).toBe(true);
+  expect(rows[0].item.test_name).toBe('A');
+});
+
+test('supports strategic commercial model catalog and generic recurring elements', () => {
+  expect(service.COMMERCIAL_MODELS).toContain('OUTSOURCING');
+  expect(service.COMMERCIAL_MODELS).toContain('SERVICE_CONTRACT');
+  const result = service.calculateRecurringElementCost({ pricing_method: 'SUBSCRIPTION', unit_cost: 250, annual_quantity: 12 }, 1200);
+  expect(result.annual_test_cost).toBe(3000);
+  expect(result.calculated_effective_cost_per_reported_test).toBe(2.5);
+});
+
+test('calculates break-even between two strategic scenarios', () => {
+  const result = service.calculateBreakEven(
+    { name: 'Purchase', initial_cost: 10000, fixed_annual_cost: 1000, variable_cost_per_unit: 1 },
+    { name: 'Pay per use', initial_cost: 0, fixed_annual_cost: 0, variable_cost_per_unit: 5 },
+    10000
+  );
+  expect(result.break_even_volume).toBeGreaterThan(0);
+  expect(result.cheaper_below).toBe('Pay per use');
+});

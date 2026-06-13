@@ -32,8 +32,9 @@ const getCompletedAssignedRequests = async (req, res, next) => {
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
-       WHERE r.assigned_to = $1 AND r.status = 'completed'${searchClause}
-       ORDER BY r.completed_at DESC NULLS LAST`,
+       WHERE r.assigned_to = $1
+         AND LOWER(TRIM(r.status)) IN ('completed', 'received')${searchClause}
+       ORDER BY r.completed_at DESC NULLS LAST, r.updated_at DESC NULLS LAST`,
       params
     );
 

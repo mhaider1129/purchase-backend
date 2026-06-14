@@ -1,6 +1,6 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
-const ensureProjectsTable = require('../../utils/ensureProjectsTable');
+const ensureHistoricalRequestSchema = require('../../utils/ensureHistoricalRequestSchema');
 
 const parseBoolean = (value) => {
   if (typeof value === 'string') {
@@ -75,7 +75,7 @@ const sanitizeItems = (items) => {
 };
 
 const insertHistoricalRequest = async (req, res, next) => {
-  await ensureProjectsTable();
+  await ensureHistoricalRequestSchema();
   let { items } = req.body;
   const requestType = typeof req.body.request_type === 'string'
     ? req.body.request_type.trim()
@@ -285,7 +285,7 @@ const insertHistoricalRequest = async (req, res, next) => {
     await client.query(
       `INSERT INTO approvals (request_id, approver_id, approval_level, status, approved_at, is_active)
          VALUES ($1, $2, 1, 'Approved', $3, FALSE)`,
-      [requestId, req.user.id || null, approvedAt],
+      [requestId, Number.isInteger(req.user?.id) ? req.user.id : null, approvedAt],
     );
 
     await client.query(
@@ -293,7 +293,7 @@ const insertHistoricalRequest = async (req, res, next) => {
          VALUES ($1, 'Imported Historical Request', $2, $3)`,
       [
         requestId,
-        req.user.id,
+        Number.isInteger(req.user?.id) ? req.user.id : null,
         markCompleted
           ? 'Paper request recorded as completed for KPI analysis'
           : 'Paper request recorded as approved for KPI analysis',

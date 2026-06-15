@@ -59,6 +59,7 @@ const ensureSuppliersTable = async () => {
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_type TEXT`);
         await pool.query(`ALTER TABLE suppliers ALTER COLUMN supplier_type SET DEFAULT 'Local Trader'`);
+        await pool.query(`ALTER TABLE suppliers ALTER COLUMN supplier_type DROP NOT NULL`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tax_number TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS bank_info JSONB`);
 
@@ -79,6 +80,21 @@ const ensureSuppliersTable = async () => {
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(18,2)`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS status TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS country TEXT`);
+
+        await pool.query(`
+          ALTER TABLE suppliers
+            ALTER COLUMN contact_email DROP NOT NULL,
+            ALTER COLUMN contact_phone DROP NOT NULL,
+            ALTER COLUMN tax_number DROP NOT NULL,
+            ALTER COLUMN bank_info DROP NOT NULL,
+            ALTER COLUMN currency DROP NOT NULL,
+            ALTER COLUMN payment_terms DROP NOT NULL,
+            ALTER COLUMN lead_time_days DROP NOT NULL,
+            ALTER COLUMN credit_limit DROP NOT NULL,
+            ALTER COLUMN status DROP NOT NULL,
+            ALTER COLUMN country DROP NOT NULL
+        `);
+
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_manufacturer BOOLEAN DEFAULT FALSE`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_authorized_agent BOOLEAN DEFAULT FALSE`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_authorized_distributor BOOLEAN DEFAULT FALSE`);

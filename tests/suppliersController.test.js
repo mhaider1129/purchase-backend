@@ -4,7 +4,11 @@ jest.mock('../config/db', () => ({
 
 const pool = require('../config/db');
 
-const { createSupplier, updateSupplier } = require('../controllers/suppliersController');
+const {
+  createSupplier,
+  updateSupplier,
+  resetSuppliersTableCacheForTests,
+} = require('../controllers/suppliersController');
 
 const makeRes = () => ({
   status: jest.fn().mockReturnThis(),
@@ -39,9 +43,55 @@ const supplierRow = {
 };
 
 describe('suppliersController', () => {
+
   beforeEach(() => {
     pool.query.mockReset();
+    resetSuppliersTableCacheForTests();
   });
+
+  it('adds missing legacy contact columns before relaxing supplier constraints', async () => {
+    pool.query.mockImplementation((sql) => {
+      if (/information_schema\.columns/.test(sql)) {
+        return Promise.resolve({ rowCount: 0, rows: [] });
+      }
+
+      if (/SELECT .*FROM suppliers\s+WHERE LOWER\(name\)/s.test(sql)) {
+        return Promise.resolve({ rowCount: 1, rows: [supplierRow] });
+      }
+
+      return Promise.resolve({ rowCount: 0, rows: [] });
+    });
+
+    const req = {
+      user: { hasPermission: jest.fn().mockReturnValue(true) },
+      body: { name: 'Acme Medical' },
+    };
+    const res = makeRes();
+    const next = jest.fn();
+
+    await createSupplier(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+
+    const statements = pool.query.mock.calls.map(([sql]) => sql);
+    const addEmailIndex = statements.findIndex((sql) =>
+      /ADD COLUMN IF NOT EXISTS contact_email TEXT/.test(sql)
+    );
+    const addPhoneIndex = statements.findIndex((sql) =>
+      /ADD COLUMN IF NOT EXISTS contact_phone TEXT/.test(sql)
+    );
+    const dropNotNullIndex = statements.findIndex((sql) =>
+      /ALTER COLUMN contact_email DROP NOT NULL/.test(sql)
+    );
+
+    expect(addEmailIndex).toBeGreaterThanOrEqual(0);
+    expect(addPhoneIndex).toBeGreaterThanOrEqual(0);
+    expect(dropNotNullIndex).toBeGreaterThan(addEmailIndex);
+    expect(dropNotNullIndex).toBeGreaterThan(addPhoneIndex);
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith(supplierRow);
+  });
+
 
   it('migrates legacy bank_info columns to jsonb before saving supplier details', async () => {
     const savedSupplier = {

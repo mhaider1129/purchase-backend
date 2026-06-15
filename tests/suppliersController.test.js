@@ -126,4 +126,87 @@ describe('suppliersController', () => {
     );
     expect(res.json).toHaveBeenCalledWith(updatedSupplier);
   });
+
+  it('accepts formatted numeric supplier values when creating suppliers', async () => {
+    const savedSupplier = {
+      ...supplierRow,
+      lead_time_days: 14,
+      credit_limit: '25000000000.00',
+    };
+
+    pool.query.mockImplementation((sql) => {
+      if (/information_schema\.columns/.test(sql)) {
+        return Promise.resolve({ rowCount: 1, rows: [{ data_type: 'jsonb', udt_name: 'jsonb' }] });
+      }
+
+      if (/SELECT .*FROM suppliers\s+WHERE LOWER\(name\)/s.test(sql)) {
+        return Promise.resolve({ rowCount: 1, rows: [supplierRow] });
+      }
+
+      if (/UPDATE suppliers/s.test(sql)) {
+        return Promise.resolve({ rowCount: 1, rows: [savedSupplier] });
+      }
+
+      return Promise.resolve({ rowCount: 0, rows: [] });
+    });
+
+    const req = {
+      user: { hasPermission: jest.fn().mockReturnValue(true) },
+      body: {
+        name: 'Acme Medical',
+        lead_time_days: '14',
+        credit_limit: '25,000,000,000',
+      },
+    };
+    const res = makeRes();
+    const next = jest.fn();
+
+    await createSupplier(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('credit_limit = COALESCE($9::numeric, credit_limit)'),
+      expect.arrayContaining([14, 25000000000])
+    );
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith(savedSupplier);
+  });
+
+  it('accepts formatted credit limits when updating suppliers', async () => {
+    const updatedSupplier = { ...supplierRow, credit_limit: '25000000000.00' };
+
+    pool.query.mockImplementation((sql) => {
+      if (/information_schema\.columns/.test(sql)) {
+        return Promise.resolve({ rowCount: 1, rows: [{ data_type: 'jsonb', udt_name: 'jsonb' }] });
+      }
+
+      if (/SELECT .*FROM suppliers\s+WHERE id = \$1/s.test(sql)) {
+        return Promise.resolve({ rowCount: 1, rows: [supplierRow] });
+      }
+
+      if (/UPDATE suppliers/s.test(sql)) {
+        return Promise.resolve({ rowCount: 1, rows: [updatedSupplier] });
+      }
+
+      return Promise.resolve({ rowCount: 0, rows: [] });
+    });
+
+    const req = {
+      user: { hasPermission: jest.fn().mockReturnValue(true) },
+      params: { id: '7' },
+      body: { credit_limit: '25,000,000,000' },
+    };
+    const res = makeRes();
+    const next = jest.fn();
+
+    await updateSupplier(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('credit_limit = $1'),
+      [25000000000, 7]
+    );
+    expect(res.json).toHaveBeenCalledWith(updatedSupplier);
+  });
+
 });

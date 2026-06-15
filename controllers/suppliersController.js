@@ -19,6 +19,26 @@ const parseOptionalNumericInput = (value) => {
   return Number(normalizedValue);
 };
 
+const normalizeJsonbInput = (value, fieldName) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value));
+    } catch (err) {
+      throw createHttpError(400, `${fieldName} must be valid JSON`);
+    }
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch (err) {
+    throw createHttpError(400, `${fieldName} must be valid JSON`);
+  }
+};
+
 const ALLOWED_SUPPLIER_TYPES = [
   'Manufacturer',
   'Authorized Agent',
@@ -239,7 +259,13 @@ const createSupplier = async (req, res, next) => {
   const contactPhone = normalizeText(req.body?.contact_phone) || null;
   const supplierType = normalizeText(req.body?.supplier_type) || null;
   const taxNumber = normalizeText(req.body?.tax_number) || null;
-  const bankInfo = req.body?.bank_info ?? null;
+  let bankInfo;
+
+  try {
+    bankInfo = normalizeJsonbInput(req.body?.bank_info, 'bank_info');
+  } catch (err) {
+    return next(err);
+  }
   const currency = normalizeText(req.body?.currency) || null;
   const paymentTerms = normalizeText(req.body?.payment_terms) || null;
   const leadTimeDays = parseOptionalNumericInput(req.body?.lead_time_days);
@@ -359,7 +385,11 @@ const updateSupplier = async (req, res, next) => {
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'bank_info')) {
       updates.push(`bank_info = $${updates.length + 1}::jsonb`);
-      values.push(req.body.bank_info ?? null);
+      try {
+        values.push(normalizeJsonbInput(req.body.bank_info, 'bank_info'));
+      } catch (err) {
+        return next(err);
+      }
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'currency')) {

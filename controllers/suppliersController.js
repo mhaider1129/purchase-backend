@@ -5,6 +5,20 @@ const { ensureSupplierEvaluationsTable } = require('./supplierEvaluationsControl
 
 const normalizeText = (value) => (typeof value === 'string' ? value.trim() : '');
 
+const parseOptionalNumericInput = (value) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const normalizedValue = typeof value === 'string' ? value.replace(/,/g, '').trim() : value;
+
+  if (normalizedValue === '') {
+    return null;
+  }
+
+  return Number(normalizedValue);
+};
+
 const ALLOWED_SUPPLIER_TYPES = [
   'Manufacturer',
   'Authorized Agent',
@@ -220,10 +234,8 @@ const createSupplier = async (req, res, next) => {
   const bankInfo = req.body?.bank_info ?? null;
   const currency = normalizeText(req.body?.currency) || null;
   const paymentTerms = normalizeText(req.body?.payment_terms) || null;
-  const leadTimeDaysRaw = req.body?.lead_time_days;
-  const leadTimeDays = leadTimeDaysRaw === undefined || leadTimeDaysRaw === null || leadTimeDaysRaw === '' ? null : Number(leadTimeDaysRaw);
-  const creditLimitRaw = req.body?.credit_limit;
-  const creditLimit = creditLimitRaw === undefined || creditLimitRaw === null || creditLimitRaw === '' ? null : Number(creditLimitRaw);
+  const leadTimeDays = parseOptionalNumericInput(req.body?.lead_time_days);
+  const creditLimit = parseOptionalNumericInput(req.body?.credit_limit);
   const status = normalizeText(req.body?.status) || null;
   const country = normalizeText(req.body?.country) || null;
 
@@ -239,7 +251,7 @@ const createSupplier = async (req, res, next) => {
     return next(createHttpError(400, 'lead_time_days must be a non-negative integer'));
   }
 
-  if (creditLimit !== null && Number.isNaN(creditLimit)) {
+  if (creditLimit !== null && !Number.isFinite(creditLimit)) {
     return next(createHttpError(400, 'credit_limit must be a valid number'));
   }
 
@@ -353,21 +365,21 @@ const updateSupplier = async (req, res, next) => {
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'lead_time_days')) {
-      const leadTimeDays = req.body.lead_time_days;
-      if (leadTimeDays !== null && leadTimeDays !== '' && (!Number.isInteger(Number(leadTimeDays)) || Number(leadTimeDays) < 0)) {
+      const leadTimeDays = parseOptionalNumericInput(req.body.lead_time_days);
+      if (leadTimeDays !== null && (!Number.isInteger(leadTimeDays) || leadTimeDays < 0)) {
         return next(createHttpError(400, 'lead_time_days must be a non-negative integer'));
       }
       updates.push(`lead_time_days = $${updates.length + 1}`);
-      values.push(leadTimeDays === '' ? null : (leadTimeDays === null ? null : Number(leadTimeDays)));
+      values.push(leadTimeDays);
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'credit_limit')) {
-      const creditLimit = req.body.credit_limit;
-      if (creditLimit !== null && creditLimit !== '' && Number.isNaN(Number(creditLimit))) {
+      const creditLimit = parseOptionalNumericInput(req.body.credit_limit);
+      if (creditLimit !== null && !Number.isFinite(creditLimit)) {
         return next(createHttpError(400, 'credit_limit must be a valid number'));
       }
       updates.push(`credit_limit = $${updates.length + 1}`);
-      values.push(creditLimit === '' ? null : (creditLimit === null ? null : Number(creditLimit)));
+      values.push(creditLimit);
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'status')) {

@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const getColumnType = require('../utils/getColumnType');
 const { ensureSupplierEvaluationsTable } = require('./supplierEvaluationsController');
 
 const normalizeText = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -60,6 +61,18 @@ const ensureSuppliersTable = async () => {
         await pool.query(`ALTER TABLE suppliers ALTER COLUMN supplier_type SET DEFAULT 'Local Trader'`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tax_number TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS bank_info JSONB`);
+
+        const bankInfoType = await getColumnType('public', 'suppliers', 'bank_info');
+        if (bankInfoType && bankInfoType !== 'jsonb') {
+          await pool.query(`
+            ALTER TABLE suppliers
+            ALTER COLUMN bank_info TYPE JSONB
+            USING CASE
+              WHEN bank_info IS NULL OR btrim(bank_info::text) = '' THEN NULL
+              ELSE to_jsonb(bank_info::text)
+            END
+          `);
+        }
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS currency TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS lead_time_days INTEGER`);
@@ -309,7 +322,7 @@ const updateSupplier = async (req, res, next) => {
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'bank_info')) {
-      updates.push(`bank_info = $${updates.length + 1}`);
+      updates.push(`bank_info = $${updates.length + 1}::jsonb`);
       values.push(req.body.bank_info ?? null);
     }
 

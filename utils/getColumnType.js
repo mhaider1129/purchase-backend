@@ -39,4 +39,8 @@ const getColumnType = async (schema, table, column, runner = pool) => {
   return resolved;
 };
 
+getColumnType.resetColumnTypeCacheForTests = () => {
+  cache.clear();
+};
+
 module.exports = getColumnType;

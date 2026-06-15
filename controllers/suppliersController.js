@@ -69,6 +69,8 @@ const ensureSuppliersTable = async () => {
         `);
 
 
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_email TEXT`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_phone TEXT`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_type TEXT`);
@@ -132,6 +134,12 @@ const ensureSuppliersTable = async () => {
   }
 
   await ensuringPromise;
+};
+
+const resetSuppliersTableCacheForTests = () => {
+  suppliersEnsured = false;
+  ensuringPromise = null;
+  getColumnType.resetColumnTypeCacheForTests?.();
 };
 
 const getSupplierById = async (client, supplierId) => {
@@ -593,4 +601,5 @@ module.exports = {
   getSuppliersDashboard,
   updateSupplier,
   deleteSupplier,
+  resetSuppliersTableCacheForTests,
 };

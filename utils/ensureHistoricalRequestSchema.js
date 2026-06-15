@@ -35,6 +35,25 @@ const ensureHistoricalRequestSchema = async (client = pool) => {
   await runner.query(
     `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS estimated_cost BIGINT`,
   );
+  await runner.query(
+    `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS request_domain VARCHAR DEFAULT 'operational'`,
+  );
+
+  await runner.query(
+    `ALTER TABLE IF EXISTS public.requested_items ADD COLUMN IF NOT EXISTS brand TEXT`,
+  );
+  await runner.query(
+    `ALTER TABLE IF EXISTS public.requested_items ADD COLUMN IF NOT EXISTS total_cost BIGINT`,
+  );
+  await runner.query(
+    `ALTER TABLE IF EXISTS public.requested_items ADD COLUMN IF NOT EXISTS available_quantity INTEGER`,
+  );
+  await runner.query(
+    `ALTER TABLE IF EXISTS public.requested_items ADD COLUMN IF NOT EXISTS intended_use TEXT`,
+  );
+  await runner.query(
+    `ALTER TABLE IF EXISTS public.requested_items ADD COLUMN IF NOT EXISTS specs TEXT`,
+  );
 
   await runner.query(
     `CREATE INDEX IF NOT EXISTS idx_requests_temporary_requester_name

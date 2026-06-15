@@ -207,6 +207,28 @@ const insertHistoricalRequest = async (req, res, next) => {
       return next(createHttpError(403, 'Department is outside your institute'));
     }
 
+    if (requesterId) {
+      const requesterRes = await client.query(
+        'SELECT id FROM users WHERE id = $1',
+        [requesterId],
+      );
+      if (requesterRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(404, 'Requester not found'));
+      }
+    }
+
+    if (projectId) {
+      const projectRes = await client.query(
+        'SELECT id FROM projects WHERE id = $1',
+        [projectId],
+      );
+      if (projectRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(404, 'Project not found'));
+      }
+    }
+
     let requestDomain = deptRes.rows[0]?.type?.toLowerCase() === 'medical'
       ? 'medical'
       : 'operational';

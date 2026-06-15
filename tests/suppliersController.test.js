@@ -134,7 +134,7 @@ describe('suppliersController', () => {
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('ALTER COLUMN contact_email DROP NOT NULL'));
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining('bank_info = COALESCE($5::jsonb, bank_info)'),
-      expect.arrayContaining([{ iban: 'SA123' }])
+      expect.arrayContaining([JSON.stringify({ iban: 'SA123' })])
     );
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(savedSupplier);
@@ -172,9 +172,24 @@ describe('suppliersController', () => {
     expect(next).not.toHaveBeenCalled();
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining('bank_info = $1::jsonb'),
-      [{ account: '123' }, 7]
+      [JSON.stringify({ account: '123' }), 7]
     );
     expect(res.json).toHaveBeenCalledWith(updatedSupplier);
+  });
+
+
+  it('returns a validation error for invalid bank_info JSON when creating suppliers', async () => {
+    const req = {
+      user: { hasPermission: jest.fn().mockReturnValue(true) },
+      body: { name: 'Acme Medical', bank_info: '{bad json' },
+    };
+    const res = makeRes();
+    const next = jest.fn();
+
+    await createSupplier(req, res, next);
+
+    expect(pool.query).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400 }));
   });
 
   it('accepts formatted numeric supplier values when creating suppliers', async () => {

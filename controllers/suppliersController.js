@@ -54,6 +54,8 @@ const ensureSuppliersTable = async () => {
         `);
 
 
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_type TEXT`);
         await pool.query(`ALTER TABLE suppliers ALTER COLUMN supplier_type SET DEFAULT 'Local Trader'`);
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tax_number TEXT`);
@@ -218,17 +220,17 @@ const createSupplier = async (req, res, next) => {
     if (contactEmail || contactPhone || supplierType || taxNumber || bankInfo || currency || paymentTerms || leadTimeDays !== null || creditLimit !== null || status || country) {
       const updated = await pool.query(
         `UPDATE suppliers
-            SET contact_email = COALESCE($1, contact_email),
-                contact_phone = COALESCE($2, contact_phone),
-                supplier_type = COALESCE($3, supplier_type),
-                tax_number = COALESCE($4, tax_number),
-                bank_info = COALESCE($5, bank_info),
-                currency = COALESCE($6, currency),
-                payment_terms = COALESCE($7, payment_terms),
-                lead_time_days = COALESCE($8, lead_time_days),
-                credit_limit = COALESCE($9, credit_limit),
-                status = COALESCE($10, status),
-                country = COALESCE($11, country),
+            SET contact_email = COALESCE($1::text, contact_email),
+                contact_phone = COALESCE($2::text, contact_phone),
+                supplier_type = COALESCE($3::text, supplier_type),
+                tax_number = COALESCE($4::text, tax_number),
+                bank_info = COALESCE($5::jsonb, bank_info),
+                currency = COALESCE($6::text, currency),
+                payment_terms = COALESCE($7::text, payment_terms),
+                lead_time_days = COALESCE($8::integer, lead_time_days),
+                credit_limit = COALESCE($9::numeric, credit_limit),
+                status = COALESCE($10::text, status),
+                country = COALESCE($11::text, country),
                 updated_at = NOW()
           WHERE id = $12
         RETURNING ${SUPPLIER_SELECT_COLUMNS}`,
@@ -294,11 +296,11 @@ const updateSupplier = async (req, res, next) => {
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'supplier_type')) {
       const nextSupplierType = normalizeText(req.body.supplier_type);
-      if (!ALLOWED_SUPPLIER_TYPES.includes(nextSupplierType)) {
+      if (nextSupplierType && !ALLOWED_SUPPLIER_TYPES.includes(nextSupplierType)) {
         return next(createHttpError(400, 'supplier_type must be one of the allowed values'));
       }
       updates.push(`supplier_type = $${updates.length + 1}`);
-      values.push(nextSupplierType);
+      values.push(nextSupplierType || null);
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'tax_number')) {

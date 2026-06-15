@@ -27,8 +27,8 @@ CREATE TABLE public.users (
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT users_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
-  CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
-  CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
+  CONSTRAINT users_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
+  CONSTRAINT users_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id)
 );
 CREATE TABLE public.requests (
   id integer NOT NULL DEFAULT nextval('requests_id_seq'::regclass),
@@ -69,14 +69,14 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
   CONSTRAINT requests_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES public.users(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_awarded_supplier_id_fkey FOREIGN KEY (awarded_supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
-  CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id)
+  CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
 );
 CREATE TABLE public.requested_items (
   id integer NOT NULL DEFAULT nextval('requested_items_id_seq'::regclass),

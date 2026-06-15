@@ -81,6 +81,7 @@ describe('suppliersController', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('ALTER COLUMN bank_info TYPE JSONB'));
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('ALTER COLUMN contact_email DROP NOT NULL'));
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining('bank_info = COALESCE($5::jsonb, bank_info)'),
       expect.arrayContaining([{ iban: 'SA123' }])

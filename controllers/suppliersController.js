@@ -90,7 +90,7 @@ const ensureSuppliersTable = async () => {
         await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS notes TEXT`);
 
         await pool.query(`
-          CREATE UNIQUE INDEX IF NOT EXISTS suppliers_name_ci_idx
+          CREATE INDEX IF NOT EXISTS suppliers_name_ci_lookup_idx
             ON suppliers (LOWER(name))
         `);
 

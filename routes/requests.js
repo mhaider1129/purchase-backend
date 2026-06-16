@@ -197,10 +197,24 @@ const buildFilteredQuery = (queryParams) => {
   if (assigned_to) {
     const assignedToValue = Array.isArray(assigned_to) ? assigned_to[0] : assigned_to;
     if (String(assignedToValue).trim().toLowerCase() === 'unassigned') {
-      sql += ` AND r.assigned_to IS NULL`;
+      sql += ` AND (
+        r.assigned_to IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM public.requested_items unassigned_ri
+          WHERE unassigned_ri.request_id = r.id
+            AND unassigned_ri.assigned_to IS NOT NULL
+        )
+      )`;
     } else {
       values.push(assignedToValue);
-      sql += ` AND r.assigned_to = $${values.length}`;
+      sql += ` AND (
+        r.assigned_to = $${values.length}
+        OR EXISTS (
+          SELECT 1 FROM public.requested_items assigned_ri
+          WHERE assigned_ri.request_id = r.id
+            AND assigned_ri.assigned_to = $${values.length}
+        )
+      )`;
     }
   }
 

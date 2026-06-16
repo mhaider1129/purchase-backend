@@ -613,7 +613,14 @@ const getAllRequests = async (req, res, next) => {
   let orderBy = `${activeUrgentSort}, r.created_at DESC`;
 
   if (filter === 'unassigned') {
-    whereClauses.push('r.assigned_to IS NULL');
+    whereClauses.push(`(
+      r.assigned_to IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.requested_items unassigned_ri
+        WHERE unassigned_ri.request_id = r.id
+          AND unassigned_ri.assigned_to IS NOT NULL
+      )
+    )`);
     params.push('Approved');
     whereClauses.push(`r.status = $${params.length}`);
   }
@@ -697,10 +704,24 @@ const getAllRequests = async (req, res, next) => {
   if (assigned_to) {
     const assignedToValue = Array.isArray(assigned_to) ? assigned_to[0] : assigned_to;
     if (String(assignedToValue).trim().toLowerCase() === 'unassigned') {
-      whereClauses.push('r.assigned_to IS NULL');
+      whereClauses.push(`(
+        r.assigned_to IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM public.requested_items unassigned_ri
+          WHERE unassigned_ri.request_id = r.id
+            AND unassigned_ri.assigned_to IS NOT NULL
+        )
+      )`);
     } else {
       params.push(assignedToValue);
-      whereClauses.push(`r.assigned_to = $${params.length}`);
+      whereClauses.push(`(
+        r.assigned_to = $${params.length}
+        OR EXISTS (
+          SELECT 1 FROM public.requested_items assigned_ri
+          WHERE assigned_ri.request_id = r.id
+            AND assigned_ri.assigned_to = $${params.length}
+        )
+      )`);
     }
   }
 

@@ -11,6 +11,25 @@ const parseBoolean = (value) => {
   return Boolean(value);
 };
 
+const normalizeRequestType = (value) => {
+  if (typeof value !== 'string') return '';
+
+  const trimmed = value.trim();
+  const normalized = trimmed.toLowerCase().replace(/[\s_]+/g, '-');
+  const aliases = {
+    stock: 'Stock',
+    'non-stock': 'Non-Stock',
+    maintenance: 'Maintenance',
+    'medical-device': 'Medical Device',
+    medication: 'Medication',
+    'it-item': 'IT Item',
+    'warehouse-supply': 'Warehouse Supply',
+    'printing-logbook': 'Printing Logbook',
+  };
+
+  return aliases[normalized] || trimmed;
+};
+
 const sanitizeItems = (items) => {
   if (!Array.isArray(items) || items.length === 0) {
     throw createHttpError(400, 'At least one item is required');
@@ -77,9 +96,7 @@ const sanitizeItems = (items) => {
 const insertHistoricalRequest = async (req, res, next) => {
   await ensureHistoricalRequestSchema();
   let { items } = req.body;
-  const requestType = typeof req.body.request_type === 'string'
-    ? req.body.request_type.trim()
-    : '';
+  const requestType = normalizeRequestType(req.body.request_type);
 
   if (!requestType) {
     return next(createHttpError(400, 'Request type is required'));
@@ -341,4 +358,4 @@ const insertHistoricalRequest = async (req, res, next) => {
   }
 };
 
-module.exports = { insertHistoricalRequest };
+module.exports = { insertHistoricalRequest, normalizeRequestType };

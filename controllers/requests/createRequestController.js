@@ -17,6 +17,19 @@ const {
   recordCommitment,
 } = require("../../services/financeCoreService");
 
+const URGENT_REQUEST_PERMISSION = 'requests.mark-urgent-on-submit';
+
+const parseBooleanFlag = (value) => {
+  if (value === true) return true;
+  if (value === false || value === undefined || value === null || value === '') return false;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  }
+  return Boolean(value);
+};
+
 const hasWarehouseAssignment = (value) => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0;
@@ -160,6 +173,34 @@ const assignApprover = async (
   const result = await client.query(query, values);
 
   const approverId = result.rows[0]?.id || null;
+  let shouldAutoApprove = !approverId;
+
+  if (approverId) {
+    const duplicateApproverRes = await client.query(
+      `SELECT 1
+         FROM approvals
+        WHERE request_id = $1
+          AND approver_id = $2
+          AND approval_level < $3
+        LIMIT 1`,
+      [requestId, approverId, level],
+    );
+
+    if (duplicateApproverRes.rowCount > 0) {
+      shouldAutoApprove = true;
+    } else {
+      const requesterRes = await client.query(
+        `SELECT 1
+           FROM requests
+          WHERE id = $1
+            AND requester_id = $2
+          LIMIT 1`,
+        [requestId, approverId],
+      );
+      shouldAutoApprove = requesterRes.rowCount > 0;
+    }
+  }
+
   await client.query(
     `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -167,9 +208,9 @@ const assignApprover = async (
       requestId,
       approverId,
       level,
-      approverId ? level === 1 : false,
-      approverId ? 'Pending' : 'Approved',
-      approverId ? null : new Date(),
+      approverId && !shouldAutoApprove ? level === 1 : false,
+      shouldAutoApprove ? 'Approved' : 'Pending',
+      shouldAutoApprove ? new Date() : null,
     ],
   );
 };
@@ -235,6 +276,7 @@ const createIdempotentRequestResponse = (request) => ({
 const createRequest = async (req, res, next) => {
   let { request_type, justification, items } = req.body;
   let clientSubmissionKey = null;
+  const requestedUrgent = parseBooleanFlag(req.body?.is_urgent);
 
   try {
     clientSubmissionKey = normalizeClientSubmissionKey(req.body?.client_submission_key);
@@ -448,6 +490,10 @@ const createRequest = async (req, res, next) => {
     return next(createHttpError(400, "User is not linked to an institute"));
   }
 
+  if (requestedUrgent && !req.user?.hasPermission?.(URGENT_REQUEST_PERMISSION)) {
+    return next(createHttpError(403, "You do not have permission to mark requests as urgent"));
+  }
+
   if (request_type === "Stock" && !hasWarehouseAssignment(req.user?.warehouse_id)) {
     return next(
       createHttpError(
@@ -615,8 +661,8 @@ const createRequest = async (req, res, next) => {
         request_type, requester_id, department_id, institute_id, section_id, justification,
         estimated_cost, request_domain, status,
         maintenance_ref_number, initiated_by_technician_id,
-        project_id, temporary_requester_name, supply_warehouse_id, scheduled_for, client_submission_key
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+        project_id, temporary_requester_name, supply_warehouse_id, scheduled_for, client_submission_key, is_urgent
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [
         request_type,
         requester_id,
@@ -634,6 +680,7 @@ const createRequest = async (req, res, next) => {
         supplyWarehouseId,
         scheduledFor,
         clientSubmissionKey,
+        requestedUrgent,
       ],
     );
 
@@ -972,6 +1019,7 @@ Please log in to the system to take action.`,
       request_type,
       estimated_cost: estimatedCost,
       status: initialStatus,
+      is_urgent: Boolean(request.is_urgent),
       scheduled_for: request.scheduled_for || null,
       attachments_uploaded: attachmentsStored,
       temporary_requester_name: request.temporary_requester_name || null,

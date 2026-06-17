@@ -459,17 +459,28 @@ const handleApprovalDecision = async (req, res, next) => {
         }
 
         const nextLevelRes = await client.query(
-          `UPDATE approvals SET is_active = TRUE
-           WHERE request_id = $1 AND approval_level = $2 AND is_active = FALSE
-           RETURNING id, approver_id`,
-          [approval.request_id, approval.approval_level + 1],
+          `UPDATE approvals
+              SET is_active = TRUE
+            WHERE request_id = $1
+              AND status = 'Pending'
+              AND is_active = FALSE
+              AND approval_level = (
+                SELECT MIN(approval_level)
+                  FROM approvals
+                 WHERE request_id = $1
+                   AND status = 'Pending'
+                   AND approval_level > $2
+              )
+            RETURNING id, approver_id, approval_level`,
+          [approval.request_id, approval.approval_level],
         );
 
         if (nextLevelRes.rowCount > 0) {
+          const nextApprovalLevel = nextLevelRes.rows[0].approval_level;
           await client.query(
             `INSERT INTO request_logs (request_id, action, actor_id, comments)
              VALUES ($1, $2, $3, NULL)`,
-            [approval.request_id, `Level ${approval.approval_level + 1} activated`, approver_id],
+            [approval.request_id, `Level ${nextApprovalLevel} activated`, approver_id],
           );
 
           const nextId = nextLevelRes.rows[0].id;
@@ -492,7 +503,7 @@ const handleApprovalDecision = async (req, res, next) => {
                 requestId: approval.request_id,
                 requestType: request.request_type,
                 action: 'approval_required',
-                level: approval.approval_level + 1,
+                level: nextApprovalLevel,
               },
             });
           }

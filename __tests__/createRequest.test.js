@@ -112,6 +112,8 @@ describe('createRequest controller', () => {
       .mockResolvedValueOnce({ rows: [{ id: 100, request_type: 'Non-Stock', temporary_requester_name: null }] })
       .mockResolvedValueOnce({ rows: [{ id: 200 }] })
       .mockResolvedValueOnce({ rows: [{ id: 2, email: 'hod@example.com' }] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})

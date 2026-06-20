@@ -46,6 +46,7 @@ describe('Supabase storage configuration utilities', () => {
       key: 'role-key',
       bucket: 'custom-bucket',
       prefix: 'custom/prefix',
+      fileSizeLimit: 50 * 1024 * 1024,
     });
     expect(storage.isStorageConfigured()).toBe(true);
   });
@@ -131,6 +132,54 @@ describe('Supabase storage configuration utilities', () => {
     });
   });
 
+
+  it('updates existing Supabase buckets to match the configured attachment size limit', async () => {
+    process.env.SUPABASE_URL = 'https://bucket.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'bucket-key';
+    process.env.ATTACHMENT_MAX_SIZE_MB = '75';
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'Updated',
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '',
+      });
+
+    global.fetch = fetchMock;
+
+    const storage = require('../utils/storage');
+    await storage.uploadBuffer({
+      file: { originalname: 'large.pdf', buffer: Buffer.from('hello'), mimetype: 'application/pdf' },
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://bucket.supabase.co/storage/v1/bucket/attachments',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ file_size_limit: 75 * 1024 * 1024 }),
+      })
+    );
+    expect(fetchMock.mock.calls[2][0]).toMatch(
+      /https:\/\/bucket\.supabase\.co\/storage\/v1\/object\/attachments\//
+    );
+  });
+
   it('creates the configured bucket automatically when it is missing', async () => {
     process.env.SUPABASE_URL = 'https://bucket.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'bucket-key';
@@ -184,6 +233,12 @@ describe('Supabase storage configuration utilities', () => {
         headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
       })
     );
+
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
+      name: 'attachments',
+      public: false,
+      file_size_limit: 50 * 1024 * 1024,
+    });
 
     expect(fetchMock.mock.calls[2][0]).toMatch(
       /https:\/\/bucket\.supabase\.co\/storage\/v1\/object\/attachments\//

@@ -174,7 +174,30 @@ const insertHistoricalRequest = async (req, res, next) => {
     supplyWarehouseId = parsedWarehouseId;
   }
 
+  const rawImportStatus = typeof req.body.status === 'string' ? req.body.status.trim().toLowerCase() : '';
   const markCompleted = parseBoolean(req.body.mark_completed || req.body.is_completed);
+  const validImportStatuses = new Set(['approved', 'received', 'completed']);
+  const importStatus = markCompleted ? 'Completed' : rawImportStatus ? `${rawImportStatus.charAt(0).toUpperCase()}${rawImportStatus.slice(1)}` : 'Approved';
+
+  if (!validImportStatuses.has(importStatus.toLowerCase())) {
+    return next(createHttpError(400, 'Historical request status must be Approved, Received, or Completed'));
+  }
+
+  let finalApproverId = null;
+  if (req.body.final_approver_id !== undefined && req.body.final_approver_id !== null && req.body.final_approver_id !== '') {
+    finalApproverId = Number(req.body.final_approver_id);
+    if (!Number.isInteger(finalApproverId)) {
+      return next(createHttpError(400, 'Final approver must be a valid user ID'));
+    }
+  }
+
+  let procurementUserId = null;
+  if (req.body.procurement_user_id !== undefined && req.body.procurement_user_id !== null && req.body.procurement_user_id !== '') {
+    procurementUserId = Number(req.body.procurement_user_id);
+    if (!Number.isInteger(procurementUserId)) {
+      return next(createHttpError(400, 'Procurement user must be a valid user ID'));
+    }
+  }
 
   const approvedAtInput = req.body.approved_at;
   const completionDateInput = req.body.completed_at || req.body.completion_date;
@@ -235,6 +258,31 @@ const insertHistoricalRequest = async (req, res, next) => {
       }
     }
 
+    if (finalApproverId) {
+      const approverRes = await client.query(
+        'SELECT id FROM users WHERE id = $1 AND is_active = true',
+        [finalApproverId],
+      );
+      if (approverRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(404, 'Final approver not found'));
+      }
+    }
+
+    if (procurementUserId) {
+      const procurementRes = await client.query(
+        `SELECT id FROM users
+         WHERE id = $1
+           AND role IN ('ProcurementSpecialist', 'SCM')
+           AND is_active = true`,
+        [procurementUserId],
+      );
+      if (procurementRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(404, 'Procurement user not found'));
+      }
+    }
+
     if (projectId) {
       const projectRes = await client.query(
         'SELECT id FROM projects WHERE id = $1',
@@ -268,8 +316,8 @@ const insertHistoricalRequest = async (req, res, next) => {
     const requestRes = await client.query(
       `INSERT INTO requests (
         request_type, requester_id, department_id, institute_id, justification, estimated_cost,
-        status, request_domain, temporary_requester_name, completed_at, project_id, supply_warehouse_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        status, request_domain, temporary_requester_name, completed_at, project_id, supply_warehouse_id, assigned_to
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
       [
         requestType,
         requesterId,
@@ -277,12 +325,13 @@ const insertHistoricalRequest = async (req, res, next) => {
         instituteId,
         req.body.justification || null,
         estimatedCost,
-        markCompleted ? 'completed' : 'approved',
+        importStatus,
         requestDomain,
         temporaryRequesterName || null,
         completionDate,
         projectId,
         supplyWarehouseId,
+        importStatus === 'Approved' ? procurementUserId : null,
       ],
     );
 
@@ -324,7 +373,7 @@ const insertHistoricalRequest = async (req, res, next) => {
     await client.query(
       `INSERT INTO approvals (request_id, approver_id, approval_level, status, approved_at, is_active)
          VALUES ($1, $2, 1, 'Approved', $3, FALSE)`,
-      [requestId, Number.isInteger(req.user?.id) ? req.user.id : null, approvedAt],
+      [requestId, finalApproverId || (Number.isInteger(req.user?.id) ? req.user.id : null), approvedAt],
     );
 
     await client.query(
@@ -333,9 +382,13 @@ const insertHistoricalRequest = async (req, res, next) => {
       [
         requestId,
         Number.isInteger(req.user?.id) ? req.user.id : null,
-        markCompleted
+        importStatus === 'Completed'
           ? 'Paper request recorded as completed for KPI analysis'
-          : 'Paper request recorded as approved for KPI analysis',
+          : importStatus === 'Received'
+            ? 'Paper request recorded as received for KPI analysis'
+            : procurementUserId
+              ? `Paper request recorded as approved and assigned to procurement user #${procurementUserId}`
+              : 'Paper request recorded as approved for procurement action',
       ],
     );
 
@@ -344,7 +397,7 @@ const insertHistoricalRequest = async (req, res, next) => {
     return res.status(201).json({
       message: '✅ Historical request recorded successfully',
       request_id: requestId,
-      status: markCompleted ? 'completed' : 'approved',
+      status: importStatus,
     });
   } catch (err) {
     await client.query('ROLLBACK');

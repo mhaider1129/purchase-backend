@@ -1076,8 +1076,8 @@ const getPendingApprovals = async (req, res, next) => {
 const getHodApprovers = async (req, res, next) => {
   const normalizedRole = (req.user?.role || '').toUpperCase();
 
-  if (normalizedRole !== 'SCM') {
-    return next(createHttpError(403, 'Only SCM users can fetch department HOD approvers'));
+  if (!['SCM', 'ADMIN'].includes(normalizedRole)) {
+    return next(createHttpError(403, 'Only SCM or Admin users can fetch department HOD approvers'));
   }
 
   try {

@@ -28,9 +28,20 @@ const ensureWarehouseSupplyTables = async (client = pool) => {
     `CREATE INDEX IF NOT EXISTS idx_wsi_request_id ON public.warehouse_supply_items(request_id)`,
     `CREATE INDEX IF NOT EXISTS idx_wsup_request_id ON public.warehouse_supplied_items(request_id)`,
 
-    `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES warehouse_item_batches(id)`,
+    `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS batch_id INTEGER`,
     `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS lot_number TEXT`,
     `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS expiry_date DATE`,
+    `DO $$
+     BEGIN
+       IF to_regclass('public.warehouse_item_batches') IS NOT NULL THEN
+         ALTER TABLE public.warehouse_supplied_items
+           ADD CONSTRAINT warehouse_supplied_items_batch_id_fkey
+           FOREIGN KEY (batch_id) REFERENCES public.warehouse_item_batches(id);
+       END IF;
+     EXCEPTION
+       WHEN duplicate_object THEN NULL;
+     END
+     $$`,
   ];
 
   for (const statement of statements) {

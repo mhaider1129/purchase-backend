@@ -187,4 +187,75 @@ describe('createRequest controller', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  test('assigns maintenance requests to the active requester for the selected department and section', async () => {
+    pool.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 77 }] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    const mockClient = { query: jest.fn(), release: jest.fn() };
+    pool.connect.mockResolvedValueOnce(mockClient);
+
+    mockClient.query.mockRejectedValueOnce(new Error('stop after auto requester check'));
+
+    const req = {
+      body: {
+        request_type: 'Maintenance',
+        justification: 'Replace part',
+        target_department_id: 20,
+        target_section_id: 5,
+        items: [{ item_name: 'Bearing', quantity: 1 }],
+      },
+      user: { id: 9, role: 'Maintenance Technician', department_id: 10, section_id: null, institute_id: 1 },
+      files: [],
+    };
+    const next = jest.fn();
+
+    await createRequest(req, createMockRes(), next);
+
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("LOWER(TRIM(u.role)) = 'requester'"),
+      [20, 5],
+    );
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('r.request_type = $3'),
+      [20, ['bearing'], 'Maintenance', null],
+    );
+    expect(next).toHaveBeenCalled();
+  });
+
+  test('allows a temporary requester name for maintenance when no active requester exists', async () => {
+    pool.query
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    const mockClient = { query: jest.fn(), release: jest.fn() };
+    pool.connect.mockResolvedValueOnce(mockClient);
+
+    mockClient.query.mockRejectedValueOnce(new Error('stop after temporary requester check'));
+
+    const req = {
+      body: {
+        request_type: 'Maintenance',
+        justification: 'Replace part',
+        target_department_id: 20,
+        target_section_id: 5,
+        temporary_requester_name: 'Paper Requester',
+        items: [{ item_name: 'Bearing', quantity: 1 }],
+      },
+      user: { id: 9, role: 'Maintenance Technician', department_id: 10, section_id: null, institute_id: 1 },
+      files: [],
+    };
+    const next = jest.fn();
+
+    await createRequest(req, createMockRes(), next);
+
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining("LOWER(TRIM(u.role)) = 'requester'"),
+      [20, 5],
+    );
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('r.request_type = $3'),
+      [20, ['bearing'], 'Maintenance', null],
+    );
+    expect(next).toHaveBeenCalled();
+  });
+
 });

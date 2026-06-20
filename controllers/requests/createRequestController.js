@@ -554,34 +554,39 @@ const createRequest = async (req, res, next) => {
     maintenance_ref_number = req.body.maintenance_ref_number || null;
     initiated_by_technician_id = req.user.id;
 
-    const selectedRequesterId = Number.parseInt(req.body.target_requester_id, 10);
-    if (!Number.isInteger(selectedRequesterId)) {
-      return next(createHttpError(400, "Select a requester for this maintenance request"));
-    }
-
-    const requesterFilterValues = [selectedRequesterId, department_id];
+    const requesterFilterValues = [department_id];
     let requesterSectionCondition = '';
     if (section_id) {
       requesterFilterValues.push(section_id);
-      requesterSectionCondition = 'AND u.section_id = $3';
+      requesterSectionCondition = 'AND u.section_id = $2';
     }
 
     const requesterLookup = await pool.query(
       `SELECT u.id
          FROM users u
-        WHERE u.id = $1
-          AND u.department_id = $2
+        WHERE u.department_id = $1
           ${requesterSectionCondition}
           AND u.is_active = TRUE
           AND LOWER(TRIM(u.role)) = 'requester'
+        ORDER BY u.id
         LIMIT 1`,
       requesterFilterValues,
     );
     if (requesterLookup.rowCount === 0) {
-      return next(createHttpError(400, "Selected requester is invalid for the selected department/section"));
+      temporaryRequesterName = typeof req.body.temporary_requester_name === 'string'
+        ? req.body.temporary_requester_name.trim()
+        : '';
+
+      if (!temporaryRequesterName) {
+        return next(createHttpError(400, "No active requester is available for the selected department/section; provide the requester name"));
+      }
+
+      requester_id = null;
+      effectiveRequesterId = null;
+    } else {
+      requester_id = requesterLookup.rows[0].id;
+      effectiveRequesterId = requester_id;
     }
-    requester_id = selectedRequesterId;
-    effectiveRequesterId = requester_id;
   }
 
   const itemNames = items.map((i) => i.item_name.toLowerCase());

@@ -23,7 +23,6 @@ const ensureRequestedItemApprovalColumns = async (client = pool) => {
     DO $$
     DECLARE
       column_info RECORD;
-      normalized_type TEXT;
     BEGIN
       SELECT
         CASE
@@ -36,11 +35,9 @@ const ensureRequestedItemApprovalColumns = async (client = pool) => {
         AND table_name = 'requested_items'
         AND column_name = 'approved_by';
 
-      normalized_type := column_info.resolved_type;
-
-      IF column_info IS NULL THEN
+      IF NOT FOUND THEN
         ALTER TABLE public.requested_items ADD COLUMN approved_by INTEGER;
-      ELSIF normalized_type NOT IN ('integer', 'int4', 'uuid', 'text', 'varchar', 'character varying') THEN
+      ELSIF column_info.resolved_type NOT IN ('integer', 'int4', 'uuid', 'text', 'varchar', 'character varying') THEN
         ALTER TABLE public.requested_items
           ALTER COLUMN approved_by DROP DEFAULT;
         ALTER TABLE public.requested_items

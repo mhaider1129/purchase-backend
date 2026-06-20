@@ -17,6 +17,7 @@ jest.mock('../services/financeCoreService', () => ({
 
 const pool = require('../config/db');
 const { fetchApprovalRoutes } = require('../controllers/utils/approvalRoutes');
+const { persistRequestAttachments } = require('../controllers/requests/saveRequestAttachments');
 const { createRequest } = require('../controllers/requests/createRequestController');
 
 const createMockRes = () => { const res = {}; res.status = jest.fn(() => res); res.json = jest.fn(() => res); return res; };
@@ -256,6 +257,68 @@ describe('createRequest controller', () => {
       [20, ['bearing'], 'Maintenance', null],
     );
     expect(next).toHaveBeenCalled();
+  });
+
+
+  test('uses the submitting technician as the actor for temporary maintenance request attachments and logs', async () => {
+    pool.query
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    const mockClient = { query: jest.fn(), release: jest.fn() };
+    pool.connect.mockResolvedValueOnce(mockClient);
+    fetchApprovalRoutes.mockResolvedValueOnce([]);
+
+    mockClient.query
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ rows: [{ type: 'operational', institute_id: 1 }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 102,
+          request_type: 'Maintenance',
+          scheduled_for: null,
+          is_urgent: false,
+          temporary_requester_name: 'Paper Requester',
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 202 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 3, email: 'scm@example.com' }] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ rows: [{ approval_level: 1, approver_id: 3, approver_name: 'SCM User', approver_role: 'SCM', approver_email: 'scm@example.com' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 202, item_name: 'Bearing', quantity: 1, purchased_quantity: 0 }] })
+      .mockResolvedValueOnce({});
+
+    const req = {
+      body: {
+        request_type: 'Maintenance',
+        justification: 'Replace part',
+        target_department_id: 20,
+        target_section_id: 5,
+        temporary_requester_name: 'Paper Requester',
+        items: [{ item_name: 'Bearing', quantity: 1 }],
+      },
+      user: { id: 9, role: 'Maintenance Technician', department_id: 10, section_id: null, institute_id: 1 },
+      files: [{ fieldname: 'attachments', originalname: 'photo.jpg' }],
+    };
+    const res = createMockRes();
+    const next = jest.fn();
+
+    await createRequest(req, res, next);
+
+    expect(mockClient.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO request_logs'),
+      [102, 9, 'Replace part'],
+    );
+    expect(persistRequestAttachments).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: 102,
+      requesterId: 9,
+      files: req.files,
+    }));
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(next).not.toHaveBeenCalled();
   });
 
 });

@@ -11,6 +11,7 @@ const ensureWarehouseInventoryTables = require("../../utils/ensureWarehouseInven
 const ensureProjectsTable = require("../../utils/ensureProjectsTable");
 const ensureRequestSchedulingColumns = require("../../utils/ensureRequestSchedulingColumns");
 const ensureRequestClientSubmissionKey = require("../../utils/ensureRequestClientSubmissionKey");
+const ensureMaintenanceRequestSchema = require("../../utils/ensureMaintenanceRequestSchema");
 const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
 const {
   evaluateBudgetCoverage,
@@ -287,6 +288,9 @@ const createRequest = async (req, res, next) => {
   await ensureWarehouseAssignments();
   await ensureProjectsTable();
   await ensureRequestClientSubmissionKey();
+  if (request_type === "Maintenance") {
+    await ensureMaintenanceRequestSchema();
+  }
 
   const rawProjectId = req.body?.project_id;
   let projectId = null;

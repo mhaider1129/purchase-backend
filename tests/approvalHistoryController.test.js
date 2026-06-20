@@ -41,6 +41,22 @@ describe('fetchRequestsController.getApprovalHistory', () => {
     expect(res.json).toHaveBeenCalledWith([]);
   });
 
+  it('ignores unsupported status filters instead of sending them to SQL', async () => {
+    const req = {
+      query: { status: 'Pending' },
+      user: { id: 7 },
+    };
+    const res = buildRes();
+    const next = jest.fn();
+
+    await getApprovalHistory(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(pool.query).toHaveBeenCalledWith(expect.any(String), [7]);
+    expect(pool.query.mock.calls[0][0]).not.toContain('a.status = $2');
+    expect(res.json).toHaveBeenCalledWith([]);
+  });
+
   it('only adds department and date filters when they are valid values', async () => {
     const req = {
       query: { department_id: '4', from_date: '2026-06-01', to_date: 'bad-date' },

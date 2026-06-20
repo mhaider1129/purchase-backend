@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const sanitize = require('sanitize-filename');
+const { getAttachmentMaxSizeBytes } = require('../config/uploadLimits');
 
 const bucketInitializationState = new Map();
 
@@ -21,6 +22,7 @@ function getStorageConfiguration() {
     key,
     bucket,
     prefix,
+    fileSizeLimit: getAttachmentMaxSizeBytes(),
     hasServiceRoleKey: Boolean(serviceRoleKey),
     usesAnonKeyOnly: Boolean(!serviceRoleKey && anonKey),
   };
@@ -125,6 +127,23 @@ function normalizeStatusCode(status, detail) {
   return undefined;
 }
 
+async function ensureBucketFileSizeLimit(bucket, config) {
+  const bucketUpdateUrl = `${config.url}/storage/v1/bucket/${encodeURIComponent(bucket)}`;
+  const response = await fetch(bucketUpdateUrl, {
+    method: 'PUT',
+    headers: buildAuthHeaders(config, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ file_size_limit: config.fileSizeLimit }),
+  });
+
+  if (!response.ok) {
+    const detail = await readResponseBody(response);
+    throw createStorageError(
+      `Failed to update Supabase storage bucket "${bucket}" upload limit: ${detail || response.statusText}`,
+      'SUPABASE_BUCKET_UPDATE_FAILED'
+    );
+  }
+}
+
 async function ensureBucketExists(bucket, config = getStorageConfiguration()) {
   if (!bucket) {
     throw createStorageError(
@@ -157,6 +176,7 @@ async function ensureBucketExists(bucket, config = getStorageConfiguration()) {
     });
 
     if (statusResponse.ok) {
+      await ensureBucketFileSizeLimit(bucket, config);
       bucketInitializationState.set(bucket, true);
       return;
     }
@@ -174,7 +194,7 @@ async function ensureBucketExists(bucket, config = getStorageConfiguration()) {
     const createResponse = await fetch(`${config.url}/storage/v1/bucket`, {
       method: 'POST',
       headers: buildAuthHeaders(config, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ name: bucket, public: false }),
+      body: JSON.stringify({ name: bucket, public: false, file_size_limit: config.fileSizeLimit }),
     });
 
     const createStatus =

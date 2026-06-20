@@ -509,7 +509,8 @@ const parseDateFilter = (value) => {
 };
 
 const getApprovalHistory = async (req, res, next) => {
-  const { status } = req.query;
+  const rawStatus = typeof req.query.status === 'string' ? req.query.status.trim() : req.query.status;
+  const status = ['Approved', 'Rejected'].includes(rawStatus) ? rawStatus : null;
   const departmentId = parsePositiveIntegerFilter(req.query.department_id);
   const fromDate = parseDateFilter(req.query.from_date);
   const toDate = parseDateFilter(req.query.to_date);

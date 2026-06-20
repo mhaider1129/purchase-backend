@@ -876,13 +876,13 @@ const createRequest = async (req, res, next) => {
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
        VALUES ($1, 'Created', $2, $3)`,
-      [request.id, requester_id, justification],
+      [request.id, req.user.id, justification],
     );
 
     const attachmentsStored = await persistRequestAttachments({
       client,
       requestId: request.id,
-      requesterId: requester_id,
+      requesterId: req.user.id,
       itemIdMap,
       files: req.files,
     });

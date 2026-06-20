@@ -22,7 +22,7 @@ const ensureWarehouseSupplyTables = async (client = pool) => {
       request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
       item_id INTEGER NOT NULL REFERENCES warehouse_supply_items(id) ON DELETE CASCADE,
       supplied_quantity INTEGER NOT NULL,
-      supplied_by UUID REFERENCES users(id),
+      supplied_by INTEGER REFERENCES users(id),
       supplied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE INDEX IF NOT EXISTS idx_wsi_request_id ON public.warehouse_supply_items(request_id)`,
@@ -64,7 +64,6 @@ const ensureWarehouseSupplyApprovalColumns = async (client = pool) => {
     DO $$
     DECLARE
       column_info RECORD;
-      normalized_type TEXT;
     BEGIN
       SELECT
         CASE
@@ -77,11 +76,9 @@ const ensureWarehouseSupplyApprovalColumns = async (client = pool) => {
         AND table_name = 'warehouse_supply_items'
         AND column_name = 'approved_by';
 
-      normalized_type := column_info.resolved_type;
-
-      IF column_info IS NULL THEN
+      IF NOT FOUND THEN
         ALTER TABLE public.warehouse_supply_items ADD COLUMN approved_by INTEGER;
-      ELSIF normalized_type NOT IN ('integer', 'int4', 'uuid', 'text', 'varchar', 'character varying') THEN
+      ELSIF column_info.resolved_type NOT IN ('integer', 'int4', 'uuid', 'text', 'varchar', 'character varying') THEN
         ALTER TABLE public.warehouse_supply_items
           ALTER COLUMN approved_by DROP DEFAULT;
         ALTER TABLE public.warehouse_supply_items

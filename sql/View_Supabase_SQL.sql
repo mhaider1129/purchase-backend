@@ -224,8 +224,10 @@ CREATE TABLE public.warehouse_supply_items (
   approval_comments text,
   approved_at timestamp with time zone,
   updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  approved_by integer,
   CONSTRAINT warehouse_supply_items_pkey PRIMARY KEY (id),
-  CONSTRAINT warehouse_supply_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id)
+  CONSTRAINT warehouse_supply_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
+  CONSTRAINT warehouse_supply_items_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.stock_items (
   id integer NOT NULL DEFAULT nextval('stock_items_id_seq'::regclass),
@@ -682,7 +684,7 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  supplier_type text NOT NULL DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
+  supplier_type text DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
   tax_number text,
   bank_info jsonb,
   currency text,

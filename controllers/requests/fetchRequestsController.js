@@ -497,8 +497,22 @@ const getMyRequests = async (req, res, next) => {
   }
 };
 
+const parsePositiveIntegerFilter = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const parseDateFilter = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? value : null;
+};
+
 const getApprovalHistory = async (req, res, next) => {
-  const { status, from_date, to_date, department_id } = req.query;
+  const { status } = req.query;
+  const departmentId = parsePositiveIntegerFilter(req.query.department_id);
+  const fromDate = parseDateFilter(req.query.from_date);
+  const toDate = parseDateFilter(req.query.to_date);
 
   const params = [req.user.id];
   const conditions = [
@@ -511,18 +525,18 @@ const getApprovalHistory = async (req, res, next) => {
     conditions.push(`a.status = $${params.length}`);
   }
 
-  if (department_id) {
-    params.push(department_id);
+  if (departmentId) {
+    params.push(departmentId);
     conditions.push(`r.department_id = $${params.length}`);
   }
 
-  if (from_date) {
-    params.push(from_date);
+  if (fromDate) {
+    params.push(fromDate);
     conditions.push(`a.approved_at >= $${params.length}`);
   }
 
-  if (to_date) {
-    params.push(to_date);
+  if (toDate) {
+    params.push(toDate);
     conditions.push(`a.approved_at <= $${params.length}`);
   }
 
@@ -555,7 +569,7 @@ const getApprovalHistory = async (req, res, next) => {
          COALESCE(approved_items.items, '[]'::json) AS approved_items
        FROM approvals a
        JOIN requests r ON a.request_id = r.id
-       JOIN departments d ON r.department_id = d.id
+       LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN users requester ON requester.id = r.requester_id
        LEFT JOIN projects p ON p.id = r.project_id
        LEFT JOIN LATERAL (

@@ -508,6 +508,27 @@ const parseDateFilter = (value) => {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? value : null;
 };
 
+const isSchemaMutationPermissionError = (err) => (
+  err?.code === '42501'
+  || /permission denied/i.test(err?.message || '')
+);
+
+const ensureApprovalHistorySchema = async () => {
+  try {
+    await ensureRequestedItemApprovalColumns();
+    await ensureWarehouseSupplyApprovalColumns();
+  } catch (err) {
+    if (!isSchemaMutationPermissionError(err)) {
+      throw err;
+    }
+
+    console.warn(
+      '⚠️ Skipping approval-history schema auto-migration because the database user cannot run DDL. Apply the Supabase SQL migrations instead.',
+      err.message,
+    );
+  }
+};
+
 const getApprovalHistory = async (req, res, next) => {
   const rawStatus = typeof req.query.status === 'string' ? req.query.status.trim() : req.query.status;
   const status = ['Approved', 'Rejected'].includes(rawStatus) ? rawStatus : null;
@@ -549,8 +570,7 @@ const getApprovalHistory = async (req, res, next) => {
   const whereSQL = conditions.join(' AND ');
 
   try {
-    await ensureRequestedItemApprovalColumns();
-    await ensureWarehouseSupplyApprovalColumns();
+    await ensureApprovalHistorySchema();
 
     const result = await pool.query(
       `SELECT

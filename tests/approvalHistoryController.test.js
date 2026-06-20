@@ -11,6 +11,8 @@ jest.mock('../controllers/requests/assignRequestController', () => ({
 }));
 
 const pool = require('../config/db');
+const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
+const { ensureWarehouseSupplyApprovalColumns } = require('../utils/ensureWarehouseSupplyTables');
 const { getApprovalHistory } = require('../controllers/requests/fetchRequestsController');
 
 const buildRes = () => {
@@ -22,6 +24,8 @@ const buildRes = () => {
 describe('fetchRequestsController.getApprovalHistory', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    ensureRequestedItemApprovalColumns.mockResolvedValue();
+    ensureWarehouseSupplyApprovalColumns.mockResolvedValue();
     pool.query.mockResolvedValue({ rows: [] });
   });
 
@@ -71,5 +75,27 @@ describe('fetchRequestsController.getApprovalHistory', () => {
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('r.department_id = $2'), [7, 4, '2026-06-01']);
     expect(pool.query.mock.calls[0][0]).toContain('a.approved_at >= $3');
     expect(pool.query.mock.calls[0][0]).not.toContain('a.approved_at <=');
+  });
+
+  it('continues when runtime schema checks are blocked by database DDL permissions', async () => {
+    ensureRequestedItemApprovalColumns.mockRejectedValueOnce(
+      Object.assign(new Error('permission denied for schema public'), { code: '42501' }),
+    );
+
+    const req = {
+      query: {},
+      user: { id: 7 },
+    };
+    const res = buildRes();
+    const next = jest.fn();
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await getApprovalHistory(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('FROM approvals a'), [7]);
+    expect(res.json).toHaveBeenCalledWith([]);
+
+    warnSpy.mockRestore();
   });
 });

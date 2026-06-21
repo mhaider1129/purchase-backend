@@ -529,6 +529,64 @@ const ensureApprovalHistorySchema = async () => {
   }
 };
 
+const approvalHistoryTableExists = async (tableName) => {
+  const result = await pool.query('SELECT to_regclass($1) AS table_name', [`public.${tableName}`]);
+  return Boolean(result.rows?.[0]?.table_name);
+};
+
+const buildApprovalHistoryItemsSql = ({ includeWarehouseSupplyItems }) => {
+  const warehouseSupplyItemsSql = includeWarehouseSupplyItems ? `
+           UNION ALL
+           SELECT
+             wsi.id,
+             wsi.item_name,
+             wsi.quantity,
+             NULL::numeric AS unit_cost,
+             NULL::numeric AS total_cost,
+             wsi.approval_status,
+             wsi.approval_comments,
+             wsi.approved_at,
+             'warehouse_supply_items' AS source
+           FROM public.warehouse_supply_items wsi
+           WHERE wsi.request_id = r.id
+             AND wsi.approved_by::text = $1::text
+             AND wsi.approval_status IN ('Approved', 'Rejected')` : '';
+
+  return `
+       LEFT JOIN LATERAL (
+         SELECT json_agg(
+                  json_build_object(
+                    'id', item_rows.id,
+                    'item_name', item_rows.item_name,
+                    'quantity', item_rows.quantity,
+                    'unit_cost', item_rows.unit_cost,
+                    'total_cost', item_rows.total_cost,
+                    'approval_status', item_rows.approval_status,
+                    'approval_comments', item_rows.approval_comments,
+                    'approved_at', item_rows.approved_at,
+                    'source', item_rows.source
+                  )
+                  ORDER BY item_rows.approved_at DESC NULLS LAST, item_rows.id ASC
+                ) AS items
+         FROM (
+           SELECT
+             ri.id,
+             ri.item_name,
+             ri.quantity,
+             ri.unit_cost,
+             ri.total_cost,
+             ri.approval_status,
+             ri.approval_comments,
+             ri.approved_at,
+             'requested_items' AS source
+           FROM public.requested_items ri
+           WHERE ri.request_id = r.id
+             AND ri.approved_by::text = $1::text
+             AND ri.approval_status IN ('Approved', 'Rejected')${warehouseSupplyItemsSql}
+         ) item_rows
+       ) approved_items ON TRUE`;
+};
+
 const getApprovalHistory = async (req, res, next) => {
   const rawStatus = typeof req.query.status === 'string' ? req.query.status.trim() : req.query.status;
   const status = ['Approved', 'Rejected'].includes(rawStatus) ? rawStatus : null;
@@ -571,6 +629,8 @@ const getApprovalHistory = async (req, res, next) => {
 
   try {
     await ensureApprovalHistorySchema();
+    const includeWarehouseSupplyItems = await approvalHistoryTableExists('warehouse_supply_items');
+    const approvalHistoryItemsSql = buildApprovalHistoryItemsSql({ includeWarehouseSupplyItems });
 
     const result = await pool.query(
       `SELECT
@@ -593,53 +653,7 @@ const getApprovalHistory = async (req, res, next) => {
        LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN users requester ON requester.id = r.requester_id
        LEFT JOIN projects p ON p.id = r.project_id
-       LEFT JOIN LATERAL (
-         SELECT json_agg(
-                  json_build_object(
-                    'id', item_rows.id,
-                    'item_name', item_rows.item_name,
-                    'quantity', item_rows.quantity,
-                    'unit_cost', item_rows.unit_cost,
-                    'total_cost', item_rows.total_cost,
-                    'approval_status', item_rows.approval_status,
-                    'approval_comments', item_rows.approval_comments,
-                    'approved_at', item_rows.approved_at,
-                    'source', item_rows.source
-                  )
-                  ORDER BY item_rows.approved_at DESC NULLS LAST, item_rows.id ASC
-                ) AS items
-         FROM (
-           SELECT
-             ri.id,
-             ri.item_name,
-             ri.quantity,
-             ri.unit_cost,
-             ri.total_cost,
-             ri.approval_status,
-             ri.approval_comments,
-             ri.approved_at,
-             'requested_items' AS source
-           FROM public.requested_items ri
-           WHERE ri.request_id = r.id
-             AND ri.approved_by::text = $1::text
-             AND ri.approval_status IN ('Approved', 'Rejected')
-           UNION ALL
-           SELECT
-             wsi.id,
-             wsi.item_name,
-             wsi.quantity,
-             NULL::numeric AS unit_cost,
-             NULL::numeric AS total_cost,
-             wsi.approval_status,
-             wsi.approval_comments,
-             wsi.approved_at,
-             'warehouse_supply_items' AS source
-           FROM public.warehouse_supply_items wsi
-           WHERE wsi.request_id = r.id
-             AND wsi.approved_by::text = $1::text
-             AND wsi.approval_status IN ('Approved', 'Rejected')
-         ) item_rows
-       ) approved_items ON TRUE
+       ${approvalHistoryItemsSql}
        WHERE ${whereSQL}
        ORDER BY a.approved_at DESC`,
       params,

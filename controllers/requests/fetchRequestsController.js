@@ -436,7 +436,10 @@ const getMyRequests = async (req, res, next) => {
           OR EXISTS (
             SELECT 1 FROM public.requested_items ri
             WHERE ri.request_id = r.id
-              AND LOWER(ri.item_name) LIKE ${placeholder}
+              AND (
+                LOWER(ri.item_name) LIKE ${placeholder}
+                OR LOWER(COALESCE(ri.specs, '')) LIKE ${placeholder}
+              )
           )
         )`);
     }
@@ -480,7 +483,29 @@ const getMyRequests = async (req, res, next) => {
         EXISTS (
           SELECT 1 FROM approvals a
           WHERE a.request_id = r.id AND a.is_urgent = true
-        ) AS is_urgent
+        ) AS is_urgent,
+        COALESCE(
+          (
+            SELECT JSON_AGG(
+              JSON_BUILD_OBJECT(
+                'id', ri.id,
+                'item_name', ri.item_name,
+                'brand', ri.brand,
+                'quantity', ri.quantity,
+                'purchased_quantity', ri.purchased_quantity,
+                'available_quantity', ri.available_quantity,
+                'unit_cost', ri.unit_cost,
+                'total_cost', ri.total_cost,
+                'specs', ri.specs,
+                'procurement_status', ri.procurement_status
+              )
+              ORDER BY ri.id
+            )
+            FROM public.requested_items ri
+            WHERE ri.request_id = r.id
+          ),
+          '[]'::json
+        ) AS items
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
@@ -529,41 +554,7 @@ const ensureApprovalHistorySchema = async () => {
   }
 };
 
-const approvalHistoryTableExists = async (tableName) => {
-  try {
-    const result = await pool.query('SELECT to_regclass($1) AS table_name', [`public.${tableName}`]);
-    return Boolean(result.rows?.[0]?.table_name);
-  } catch (err) {
-    console.warn(`⚠️ Unable to check whether ${tableName} exists for approval history item details.`, err.message);
-    return false;
-  }
-};
-
-const getApprovalHistoryTableColumns = async (tableName) => {
-  try {
-    const result = await pool.query(
-      `SELECT column_name
-       FROM information_schema.columns
-       WHERE table_schema = 'public'
-         AND table_name = $1`,
-      [tableName],
-    );
-
-    return new Set((result.rows || []).map((row) => row.column_name));
-  } catch (err) {
-    console.warn(`⚠️ Unable to inspect ${tableName} columns for approval history item details.`, err.message);
-    return new Set();
-  }
-};
-
-const isApprovalHistoryItemQueryError = (err) => (
-  err?.code === '42703'
-  || err?.code === '42P01'
-  || /column .* does not exist/i.test(err?.message || '')
-  || /relation .* does not exist/i.test(err?.message || '')
-);
-
-const buildApprovalHistoryQuery = ({ whereSQL, approvalHistoryItemsSql = '' }) => `SELECT
+const buildApprovalHistoryQuery = ({ whereSQL }) => `SELECT
          r.id AS request_id,
          r.request_type,
          r.justification,
@@ -577,82 +568,14 @@ const buildApprovalHistoryQuery = ({ whereSQL, approvalHistoryItemsSql = '' }) =
          requester.name AS requester_name,
          requester.role AS requester_role,
          p.name AS project_name,
-         ${approvalHistoryItemsSql ? "COALESCE(approved_items.items, '[]'::json)" : "'[]'::json"} AS approved_items
+         '[]'::json AS approved_items
        FROM approvals a
        JOIN requests r ON a.request_id = r.id
        LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN users requester ON requester.id = r.requester_id
        LEFT JOIN projects p ON p.id = r.project_id
-       ${approvalHistoryItemsSql}
        WHERE ${whereSQL}
        ORDER BY a.approved_at DESC`;
-
-const buildApprovalHistoryItemsSql = ({ requestedItemColumns, warehouseSupplyItemColumns }) => {
-  const hasRequestedItemApprovalStatus = requestedItemColumns.has('approval_status');
-  const hasRequestedItemApprovalComments = requestedItemColumns.has('approval_comments');
-  const hasRequestedItemApprovedAt = requestedItemColumns.has('approved_at');
-  const hasRequestedItemApprovedBy = requestedItemColumns.has('approved_by');
-  const hasRequestedItemUnitCost = requestedItemColumns.has('unit_cost');
-  const hasRequestedItemTotalCost = requestedItemColumns.has('total_cost');
-
-  const requestedItemsSql = hasRequestedItemApprovalStatus ? `
-           SELECT
-             ri.id,
-             ri.item_name,
-             ri.quantity,
-             ${hasRequestedItemUnitCost ? 'ri.unit_cost' : 'NULL::numeric'} AS unit_cost,
-             ${hasRequestedItemTotalCost ? 'ri.total_cost' : 'NULL::numeric'} AS total_cost,
-             ri.approval_status,
-             ${hasRequestedItemApprovalComments ? 'ri.approval_comments' : 'NULL::text'} AS approval_comments,
-             ${hasRequestedItemApprovedAt ? 'ri.approved_at' : 'NULL::timestamp'} AS approved_at,
-             'requested_items' AS source
-           FROM public.requested_items ri
-           WHERE ri.request_id = r.id
-             ${hasRequestedItemApprovedBy ? 'AND ri.approved_by::text = $1::text' : ''}
-             AND ri.approval_status IN ('Approved', 'Rejected')` : '';
-
-  const warehouseSupplyItemsSql = warehouseSupplyItemColumns?.has('approval_status') ? `
-           SELECT
-             wsi.id,
-             wsi.item_name,
-             wsi.quantity,
-             NULL::numeric AS unit_cost,
-             NULL::numeric AS total_cost,
-             wsi.approval_status,
-             ${warehouseSupplyItemColumns.has('approval_comments') ? 'wsi.approval_comments' : 'NULL::text'} AS approval_comments,
-             ${warehouseSupplyItemColumns.has('approved_at') ? 'wsi.approved_at' : 'NULL::timestamp'} AS approved_at,
-             'warehouse_supply_items' AS source
-           FROM public.warehouse_supply_items wsi
-           WHERE wsi.request_id = r.id
-             ${warehouseSupplyItemColumns.has('approved_by') ? 'AND wsi.approved_by::text = $1::text' : ''}
-             AND wsi.approval_status IN ('Approved', 'Rejected')` : '';
-
-  const itemSourcesSql = [requestedItemsSql, warehouseSupplyItemsSql].filter(Boolean).join('\n           UNION ALL');
-
-  if (!itemSourcesSql) {
-    return '';
-  }
-
-  return `
-       LEFT JOIN LATERAL (
-         SELECT json_agg(
-                  json_build_object(
-                    'id', item_rows.id,
-                    'item_name', item_rows.item_name,
-                    'quantity', item_rows.quantity,
-                    'unit_cost', item_rows.unit_cost,
-                    'total_cost', item_rows.total_cost,
-                    'approval_status', item_rows.approval_status,
-                    'approval_comments', item_rows.approval_comments,
-                    'approved_at', item_rows.approved_at,
-                    'source', item_rows.source
-                  )
-                  ORDER BY item_rows.approved_at DESC NULLS LAST, item_rows.id ASC
-                ) AS items
-         FROM (${itemSourcesSql}
-         ) item_rows
-       ) approved_items ON TRUE`;
-};
 
 const getApprovalHistory = async (req, res, next) => {
   const rawStatus = typeof req.query.status === 'string' ? req.query.status.trim() : req.query.status;
@@ -696,36 +619,10 @@ const getApprovalHistory = async (req, res, next) => {
 
   try {
     await ensureApprovalHistorySchema();
-    const requestedItemColumns = await getApprovalHistoryTableColumns('requested_items');
-    const includeWarehouseSupplyItems = await approvalHistoryTableExists('warehouse_supply_items');
-    const warehouseSupplyItemColumns = includeWarehouseSupplyItems
-      ? await getApprovalHistoryTableColumns('warehouse_supply_items')
-      : null;
-    const approvalHistoryItemsSql = buildApprovalHistoryItemsSql({
-      requestedItemColumns,
-      warehouseSupplyItemColumns,
-    });
-
-    let result;
-    try {
-      result = await pool.query(
-        buildApprovalHistoryQuery({ whereSQL, approvalHistoryItemsSql }),
-        params,
-      );
-    } catch (err) {
-      if (!approvalHistoryItemsSql || !isApprovalHistoryItemQueryError(err)) {
-        throw err;
-      }
-
-      console.warn(
-        '⚠️ Approval history item details query failed; retrying history without item details.',
-        err.message,
-      );
-      result = await pool.query(
-        buildApprovalHistoryQuery({ whereSQL }),
-        params,
-      );
-    }
+    const result = await pool.query(
+      buildApprovalHistoryQuery({ whereSQL }),
+      params,
+    );
 
     res.json(result.rows);
   } catch (err) {

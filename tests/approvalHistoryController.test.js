@@ -21,12 +21,20 @@ const buildRes = () => {
   return res;
 };
 
+const getApprovalHistoryQuery = () => pool.query.mock.calls.find(([sql]) => String(sql).includes('FROM approvals a'));
+
 describe('fetchRequestsController.getApprovalHistory', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     ensureRequestedItemApprovalColumns.mockResolvedValue();
     ensureWarehouseSupplyApprovalColumns.mockResolvedValue();
-    pool.query.mockResolvedValue({ rows: [] });
+    pool.query.mockImplementation((sql) => {
+      if (String(sql).includes('to_regclass')) {
+        return Promise.resolve({ rows: [{ table_name: 'warehouse_supply_items' }] });
+      }
+
+      return Promise.resolve({ rows: [] });
+    });
   });
 
   it('ignores blank optional filters sent by the approval history page', async () => {
@@ -41,7 +49,7 @@ describe('fetchRequestsController.getApprovalHistory', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(pool.query).toHaveBeenCalledWith(expect.any(String), [7, 3]);
-    expect(pool.query.mock.calls[0][0]).not.toContain("AND r.department_id = $");
+    expect(getApprovalHistoryQuery()[0]).not.toContain("AND r.department_id = $");
     expect(res.json).toHaveBeenCalledWith([]);
   });
 
@@ -57,7 +65,7 @@ describe('fetchRequestsController.getApprovalHistory', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(pool.query).toHaveBeenCalledWith(expect.any(String), [7]);
-    expect(pool.query.mock.calls[0][0]).not.toContain('a.status = $2');
+    expect(getApprovalHistoryQuery()[0]).not.toContain('a.status = $2');
     expect(res.json).toHaveBeenCalledWith([]);
   });
 
@@ -73,8 +81,33 @@ describe('fetchRequestsController.getApprovalHistory', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('r.department_id = $2'), [7, 4, '2026-06-01']);
-    expect(pool.query.mock.calls[0][0]).toContain('a.approved_at >= $3');
-    expect(pool.query.mock.calls[0][0]).not.toContain('a.approved_at <=');
+    expect(getApprovalHistoryQuery()[0]).toContain('a.approved_at >= $3');
+    expect(getApprovalHistoryQuery()[0]).not.toContain('a.approved_at <=');
+  });
+
+  it('omits warehouse supply item history when the table is unavailable', async () => {
+    pool.query.mockImplementation((sql) => {
+      if (String(sql).includes('to_regclass')) {
+        return Promise.resolve({ rows: [{ table_name: null }] });
+      }
+
+      return Promise.resolve({ rows: [] });
+    });
+
+    const req = {
+      query: {},
+      user: { id: 7 },
+    };
+    const res = buildRes();
+    const next = jest.fn();
+
+    await getApprovalHistory(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(pool.query).toHaveBeenCalledWith('SELECT to_regclass($1) AS table_name', ['public.warehouse_supply_items']);
+    expect(getApprovalHistoryQuery()[0]).toContain('FROM public.requested_items ri');
+    expect(getApprovalHistoryQuery()[0]).not.toContain('FROM public.warehouse_supply_items wsi');
+    expect(res.json).toHaveBeenCalledWith([]);
   });
 
   it('continues when runtime schema checks are blocked by database DDL permissions', async () => {

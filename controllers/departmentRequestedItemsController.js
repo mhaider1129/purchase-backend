@@ -106,6 +106,7 @@ const buildWhereClause = (query = {}, user) => {
       ri.item_name ILIKE ${placeholder}
       OR COALESCE(ri.brand, '') ILIKE ${placeholder}
       OR COALESCE(ri.intended_use, '') ILIKE ${placeholder}
+      OR COALESCE(ri.specs, '') ILIKE ${placeholder}
       OR COALESCE(r.justification, '') ILIKE ${placeholder}
       OR COALESCE(d.name, '') ILIKE ${placeholder}
       OR COALESCE(s.name, '') ILIKE ${placeholder}
@@ -159,6 +160,7 @@ const baseSelect = whereSql => `
       ri.id AS item_id,
       ri.item_name,
       ri.brand,
+      ri.specs,
       NULL::text AS category,
       NULL::text AS sub_category,
       COALESCE(ri.quantity, 0) AS requested_quantity,

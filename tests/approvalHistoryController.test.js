@@ -32,6 +32,18 @@ describe('fetchRequestsController.getApprovalHistory', () => {
       if (String(sql).includes('to_regclass')) {
         return Promise.resolve({ rows: [{ table_name: 'warehouse_supply_items' }] });
       }
+      if (String(sql).includes('information_schema.columns')) {
+        return Promise.resolve({
+          rows: [
+            { column_name: 'approval_status' },
+            { column_name: 'approval_comments' },
+            { column_name: 'approved_at' },
+            { column_name: 'approved_by' },
+            { column_name: 'unit_cost' },
+            { column_name: 'total_cost' },
+          ],
+        });
+      }
 
       return Promise.resolve({ rows: [] });
     });
@@ -90,6 +102,18 @@ describe('fetchRequestsController.getApprovalHistory', () => {
       if (String(sql).includes('to_regclass')) {
         return Promise.resolve({ rows: [{ table_name: null }] });
       }
+      if (String(sql).includes('information_schema.columns')) {
+        return Promise.resolve({
+          rows: [
+            { column_name: 'approval_status' },
+            { column_name: 'approval_comments' },
+            { column_name: 'approved_at' },
+            { column_name: 'approved_by' },
+            { column_name: 'unit_cost' },
+            { column_name: 'total_cost' },
+          ],
+        });
+      }
 
       return Promise.resolve({ rows: [] });
     });
@@ -108,6 +132,85 @@ describe('fetchRequestsController.getApprovalHistory', () => {
     expect(getApprovalHistoryQuery()[0]).toContain('FROM public.requested_items ri');
     expect(getApprovalHistoryQuery()[0]).not.toContain('FROM public.warehouse_supply_items wsi');
     expect(res.json).toHaveBeenCalledWith([]);
+  });
+
+
+  it('omits item history joins when approval item columns are not available', async () => {
+    pool.query.mockImplementation((sql) => {
+      if (String(sql).includes('to_regclass')) {
+        return Promise.resolve({ rows: [{ table_name: 'warehouse_supply_items' }] });
+      }
+      if (String(sql).includes('information_schema.columns')) {
+        return Promise.resolve({ rows: [] });
+      }
+
+      return Promise.resolve({ rows: [] });
+    });
+
+    const req = {
+      query: {},
+      user: { id: 7 },
+    };
+    const res = buildRes();
+    const next = jest.fn();
+
+    await getApprovalHistory(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(getApprovalHistoryQuery()[0]).not.toContain('approved_items.items');
+    expect(getApprovalHistoryQuery()[0]).not.toContain('FROM public.requested_items ri');
+    expect(res.json).toHaveBeenCalledWith([]);
+  });
+
+
+  it('retries approval history without item details when item-detail SQL fails at runtime', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let historyQueryCount = 0;
+
+    pool.query.mockImplementation((sql) => {
+      const sqlText = String(sql);
+      if (sqlText.includes('to_regclass')) {
+        return Promise.resolve({ rows: [{ table_name: 'warehouse_supply_items' }] });
+      }
+      if (sqlText.includes('information_schema.columns')) {
+        return Promise.resolve({
+          rows: [
+            { column_name: 'approval_status' },
+            { column_name: 'approval_comments' },
+            { column_name: 'approved_at' },
+            { column_name: 'approved_by' },
+            { column_name: 'unit_cost' },
+            { column_name: 'total_cost' },
+          ],
+        });
+      }
+      if (sqlText.includes('FROM approvals a')) {
+        historyQueryCount += 1;
+        if (historyQueryCount === 1) {
+          return Promise.reject(Object.assign(new Error('column ri.approved_by does not exist'), { code: '42703' }));
+        }
+      }
+
+      return Promise.resolve({ rows: [] });
+    });
+
+    const req = {
+      query: {},
+      user: { id: 7 },
+    };
+    const res = buildRes();
+    const next = jest.fn();
+
+    await getApprovalHistory(req, res, next);
+
+    const historyQueries = pool.query.mock.calls.filter(([sql]) => String(sql).includes('FROM approvals a'));
+    expect(next).not.toHaveBeenCalled();
+    expect(historyQueries).toHaveLength(2);
+    expect(historyQueries[0][0]).toContain('approved_items.items');
+    expect(historyQueries[1][0]).not.toContain('approved_items.items');
+    expect(res.json).toHaveBeenCalledWith([]);
+
+    warnSpy.mockRestore();
   });
 
   it('continues when runtime schema checks are blocked by database DDL permissions', async () => {

@@ -34,6 +34,7 @@ const {
   getPendingMaintenanceApprovals,
   markRequestAsCompleted,
   markRequestAsReceived,
+  reportReceiptIssue,
   updateRequestCost,
   updateRequestBeforeApproval,
   deleteRequestCompletely,
@@ -76,6 +77,7 @@ router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
 router.post('/:id/request-hod-approval', requestHodApproval); // Insert additional HOD approval step
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
+router.patch('/:id/report-receipt-issue', authenticateUser, reportReceiptIssue);
 router.put('/:id/cost', authenticateUser, updateRequestCost);
 router.put('/:id/edit', upload.any(), updateRequestBeforeApproval);
 router.post('/:requestId/items/:itemId/procurement-events', addProcurementItemEvent);
@@ -234,9 +236,9 @@ router.get('/export/csv', async (req, res) => {
     const result = await pool.query(sql, values);
     const parser = new Parser();
     const csv = parser.parse(result.rows);
-    res.header('Content-Type', 'text/csv');
+    res.header('Content-Type', 'text/csv; charset=utf-8');
     res.attachment('purchase_requests.csv');
-    return res.send(csv);
+    return res.send(`\uFEFF${csv}`);
   } catch (err) {
     console.error('❌ CSV export failed:', err);
     res.status(500).json({ error: 'CSV export failed' });

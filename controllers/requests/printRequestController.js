@@ -8,21 +8,39 @@ const ordinalSuffix = (n) => {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 };
 
+const normalizePrintLanguage = (language) => (String(language || '').toLowerCase() === 'en' ? 'en' : 'ar');
+
+const buildPrintMessage = (count, shouldIncrementPrintCount, language) => {
+  if (!shouldIncrementPrintCount) {
+    return language === 'en' ? 'Request ready for printing.' : 'الطلب جاهز للطباعة.';
+  }
+
+  return language === 'en'
+    ? `Request printed for the ${ordinalSuffix(count)} time`
+    : `تمت طباعة الطلب للمرة ${count}`;
+};
+
 const printRequest = async (req, res, next) => {
   const { id } = req.params;
   const userId = req.user.id;
+  const hasAuditPrintAccess =
+    typeof req.user.hasPermission === 'function' &&
+    (req.user.hasPermission('requests.view-audit') || req.user.hasPermission('requests.view-all'));
   const shouldIncrementPrintCount = req.query?.incrementPrintCount !== 'false';
-
+  const printLanguage = normalizePrintLanguage(req.query?.language);
+  
   try {
     const accessRes = await pool.query(
-      `SELECT r.*, COALESCE(r.print_count, 0) AS print_count, d.name AS department_name, requester.name AS requester_name, requester.role AS requester_role
+      `SELECT r.*, COALESCE(r.print_count, 0) AS print_count, d.name AS department_name, sec.name AS section_name, p.name AS project_name, requester.name AS requester_name, requester.role AS requester_role
        FROM requests r
        LEFT JOIN approvals a ON r.id = a.request_id
       LEFT JOIN departments d ON r.department_id = d.id
+      LEFT JOIN sections sec ON r.section_id = sec.id
+      LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN users requester ON r.requester_id = requester.id
-      WHERE r.id = $1 AND (r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
+      WHERE r.id = $1 AND ($3::boolean OR r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
        LIMIT 1`,
-      [id, userId]
+      [id, userId, hasAuditPrintAccess]
     );
 
     if (accessRes.rowCount === 0)
@@ -70,6 +88,7 @@ const printRequest = async (req, res, next) => {
     if (request) {
       request.project_name = accessRes.rows[0]?.project_name || null;
       request.department_name = accessRes.rows[0]?.department_name || null;
+      request.section_name = accessRes.rows[0]?.section_name || null;
       request.requester_name = accessRes.rows[0]?.requester_name || null;
       request.requester_role = accessRes.rows[0]?.requester_role || null;
       request.final_approval = finalApproval
@@ -135,9 +154,7 @@ const printRequest = async (req, res, next) => {
     }
 
     res.json({
-      message: shouldIncrementPrintCount
-        ? `Request printed for the ${ordinalSuffix(count)} time`
-        : 'Request ready for printing.',
+      message: buildPrintMessage(count, shouldIncrementPrintCount, printLanguage),
       request,
       items: itemsRes?.rows || [],
       assigned_user: assignedUser,
@@ -149,4 +166,4 @@ const printRequest = async (req, res, next) => {
   }
 };
 
-module.exports = { printRequest };
+module.exports = { printRequest, normalizePrintLanguage, buildPrintMessage };

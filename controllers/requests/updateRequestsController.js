@@ -1552,7 +1552,166 @@ const reassignMaintenanceRequestToRequester = async (req, res, next) => {
   }
 };
 
+
+const notifyProcurementReceiptIssue = async (client, { assignedTo, requestId, itemName, issueType, actualQuantity, expectedQuantity, requesterName }) => {
+  if (!assignedTo) return;
+
+  const issueLabel = issueType === 'quantity_mismatch' ? 'quantity mismatch' : 'not received';
+  await createNotifications([
+    {
+      userId: assignedTo,
+      title: 'Receipt issue reported',
+      message: `${requesterName || 'Requester'} reported ${issueLabel} for '${itemName}' on request ${requestId}. Expected ${expectedQuantity}; received ${actualQuantity ?? 0}.`,
+      link: `/requests/${requestId}`,
+      metadata: {
+        requestId,
+        itemName,
+        issueType,
+        expectedQuantity,
+        actualQuantity: actualQuantity ?? 0,
+        action: 'requester_receipt_issue_reported',
+      },
+    },
+  ], client);
+};
+
+const reportReceiptIssue = async (req, res, next) => {
+  const { id } = req.params;
+  const { item_id, issue_type = 'not_received', actual_quantity = 0, notes } = req.body || {};
+  const { id: user_id, name: requesterName } = req.user;
+
+  const normalizedIssueType = String(issue_type || '').trim().toLowerCase();
+  if (!['not_received', 'quantity_mismatch'].includes(normalizedIssueType)) {
+    return next(createHttpError(400, 'issue_type must be not_received or quantity_mismatch'));
+  }
+
+  const actualQuantity = Number(actual_quantity || 0);
+  if (!Number.isFinite(actualQuantity) || actualQuantity < 0) {
+    return next(createHttpError(400, 'actual_quantity must be zero or a positive number'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await ensureRequestedItemReceivedColumns(client);
+
+    const requestRes = await client.query(
+      'SELECT requester_id, assigned_to, status FROM requests WHERE id = $1 FOR UPDATE',
+      [id],
+    );
+
+    if (requestRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Request not found'));
+    }
+
+    const request = requestRes.rows[0];
+    const normalizedStatus = (request.status || '').trim().toLowerCase();
+    if (!['completed', 'received'].includes(normalizedStatus)) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Request must be completed before receipt issues can be reported'));
+    }
+
+    if (request.requester_id !== user_id) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'Unauthorized to report receipt issue'));
+    }
+
+    const itemId = Number(item_id);
+    if (!Number.isInteger(itemId)) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Valid item_id is required'));
+    }
+
+    const itemRes = await client.query(
+      `SELECT id, item_name, quantity, purchased_quantity
+         FROM public.requested_items
+        WHERE request_id = $1 AND id = $2
+        FOR UPDATE`,
+      [id, itemId],
+    );
+
+    if (itemRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Requested item not found for this request'));
+    }
+
+    const item = itemRes.rows[0];
+    const expectedQuantity = Number(item.purchased_quantity ?? item.quantity ?? 0);
+
+    if (normalizedIssueType === 'quantity_mismatch' && actualQuantity >= expectedQuantity) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Use received confirmation when the actual quantity matches the expected quantity'));
+    }
+
+    await client.query(
+      `UPDATE public.requested_items
+          SET is_received = FALSE,
+              received_quantity = $1,
+              received_by = $2,
+              received_at = CURRENT_TIMESTAMP,
+              receipt_issue_status = $3,
+              receipt_issue_quantity = $1,
+              receipt_issue_notes = $4,
+              receipt_issue_reported_at = CURRENT_TIMESTAMP,
+              receipt_issue_resolved_at = NULL
+        WHERE id = $5`,
+      [actualQuantity, user_id, normalizedIssueType, notes || null, itemId],
+    );
+
+    if (normalizedStatus === 'received') {
+      await client.query(
+        "UPDATE requests SET status = 'Completed', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [id],
+      );
+    }
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, 'Receipt Issue Reported', $2, $3)`,
+      [
+        id,
+        user_id,
+        `Requester reported ${normalizedIssueType.replace('_', ' ')} for '${item.item_name}'. Expected ${expectedQuantity}, received ${actualQuantity}. ${notes || ''}`.trim(),
+      ],
+    );
+
+    await notifyProcurementReceiptIssue(client, {
+      assignedTo: request.assigned_to,
+      requestId: id,
+      itemName: item.item_name,
+      issueType: normalizedIssueType,
+      actualQuantity,
+      expectedQuantity,
+      requesterName,
+    });
+
+    await client.query('COMMIT');
+    res.json({
+      message: 'Receipt issue reported to procurement',
+      request_status: normalizedStatus === 'received' ? 'Completed' : request.status,
+      item: {
+        id: itemId,
+        is_received: false,
+        received_quantity: actualQuantity,
+        receipt_issue_status: normalizedIssueType,
+        receipt_issue_quantity: actualQuantity,
+        receipt_issue_notes: notes || null,
+        receipt_issue_reported_at: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.statusCode || err.expose) return next(err);
+    console.error('Failed to report receipt issue:', err);
+    next(createHttpError(500, 'Failed to report receipt issue'));
+  } finally {
+    client.release();
+  }
+};
+
 const markRequestAsReceived = async (req, res, next) => {
+
   const { id } = req.params;
   const { item_id, received_quantity } = req.body || {};
   const { id: user_id } = req.user;
@@ -1658,8 +1817,16 @@ const markRequestAsReceived = async (req, res, next) => {
         `UPDATE public.requested_items
          SET is_received = $3,
              received_quantity = $4,
+             receipt_issue_status = NULL,
+             receipt_issue_quantity = NULL,
+             receipt_issue_notes = NULL,
+             receipt_issue_resolved_at = CASE WHEN receipt_issue_status IS NULL THEN receipt_issue_resolved_at ELSE CURRENT_TIMESTAMP END,
              received_by = $1,
-             received_at = CURRENT_TIMESTAMP
+             received_at = CURRENT_TIMESTAMP,
+             receipt_issue_status = NULL,
+             receipt_issue_quantity = NULL,
+             receipt_issue_notes = NULL,
+             receipt_issue_resolved_at = CASE WHEN receipt_issue_status IS NULL THEN receipt_issue_resolved_at ELSE CURRENT_TIMESTAMP END
          WHERE id = $2`,
         [user_id, targetItemId, isFullyReceived, newReceivedQuantity]
       );
@@ -1689,7 +1856,11 @@ const markRequestAsReceived = async (req, res, next) => {
         `UPDATE public.requested_items
          SET is_received = TRUE,
              received_by = $1,
-             received_at = CURRENT_TIMESTAMP
+             received_at = CURRENT_TIMESTAMP,
+             receipt_issue_status = NULL,
+             receipt_issue_quantity = NULL,
+             receipt_issue_notes = NULL,
+             receipt_issue_resolved_at = CASE WHEN receipt_issue_status IS NULL THEN receipt_issue_resolved_at ELSE CURRENT_TIMESTAMP END
          WHERE id = $2`,
         [user_id, targetItemId]
       );
@@ -1755,6 +1926,7 @@ module.exports = {
   requestHodApproval,
   markRequestAsCompleted,
   markRequestAsReceived,
+  reportReceiptIssue,
   updateRequestCost,
   updateRequestBeforeApproval,
   approveMaintenanceRequest,

@@ -4,6 +4,7 @@ const pool = require('../config/db');
 const router = express.Router();
 
 const STATUSES = new Set(['submitted', 'accepted', 'completed', 'claimed', 'cancelled']);
+const PRINT_QUEUE_SETTING_KEY = 'print_service_queue_department_id';
 
 let ensurePrintServiceTablePromise;
 
@@ -32,6 +33,13 @@ const ensurePrintServiceTables = async () => {
       CREATE INDEX IF NOT EXISTS idx_print_service_requests_status ON print_service_requests (status);
       CREATE INDEX IF NOT EXISTS idx_print_service_requests_accepted_by ON print_service_requests (accepted_by);
       CREATE INDEX IF NOT EXISTS idx_print_service_requests_created_at ON print_service_requests (created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS print_service_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
   }
 
@@ -40,9 +48,41 @@ const ensurePrintServiceTables = async () => {
 
 const normalize = (value) => String(value || '').trim().toLowerCase();
 
-const isItUser = async (user) => {
+const canManagePrintServiceSettings = (user) => {
   const role = normalize(user?.role);
-  if (role.includes('it')) return true;
+  return role === 'admin' || role === 'scm' || Boolean(user?.hasPermission?.('departments.manage'));
+};
+
+const getPrintServiceSettings = async () => {
+  await ensurePrintServiceTables();
+  const { rows } = await pool.query(
+    `SELECT s.value AS department_id,
+            d.name AS department_name,
+            s.updated_at,
+            u.name AS updated_by_name
+     FROM print_service_settings s
+     LEFT JOIN departments d ON d.id = NULLIF(s.value, '')::INTEGER
+     LEFT JOIN users u ON u.id = s.updated_by
+     WHERE s.key = $1`,
+    [PRINT_QUEUE_SETTING_KEY]
+  );
+
+  const setting = rows[0] || {};
+  return {
+    department_id: setting.department_id ? Number(setting.department_id) : null,
+    department_name: setting.department_name || '',
+    updated_at: setting.updated_at || null,
+    updated_by_name: setting.updated_by_name || '',
+  };
+};
+
+const isItUser = async (user) => {
+  const { department_id: linkedDepartmentId } = await getPrintServiceSettings();
+  const userDepartmentId = Number(user?.department_id);
+
+  if (linkedDepartmentId) {
+    return Number.isInteger(userDepartmentId) && userDepartmentId === Number(linkedDepartmentId);
+  }
 
   const { rows } = await pool.query(
     `SELECT d.name AS department_name
@@ -84,6 +124,56 @@ const selectSql = `
   LEFT JOIN users accepted_user ON accepted_user.id = psr.accepted_by
   LEFT JOIN users completed_user ON completed_user.id = psr.completed_by
 `;
+
+
+router.get('/settings', async (req, res) => {
+  try {
+    const settings = await getPrintServiceSettings();
+    return res.json({ success: true, settings });
+  } catch (err) {
+    console.error('❌ load print service settings error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to load print service settings.' });
+  }
+});
+
+router.put('/settings', async (req, res) => {
+  if (!canManagePrintServiceSettings(req.user)) {
+    return res.status(403).json({ success: false, message: 'Only Admin, SCM, or department managers can link the IT Department Queue.' });
+  }
+
+  const departmentId = req.body?.department_id === null || req.body?.department_id === ''
+    ? null
+    : Number(req.body?.department_id);
+
+  if (departmentId !== null && !Number.isInteger(departmentId)) {
+    return res.status(400).json({ success: false, message: 'A valid department is required.' });
+  }
+
+  try {
+    await ensurePrintServiceTables();
+
+    if (departmentId !== null) {
+      const department = await pool.query('SELECT id FROM departments WHERE id = $1', [departmentId]);
+      if (!department.rowCount) {
+        return res.status(404).json({ success: false, message: 'Department not found.' });
+      }
+    }
+
+    await pool.query(
+      `INSERT INTO print_service_settings (key, value, updated_by, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (key)
+       DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+      [PRINT_QUEUE_SETTING_KEY, departmentId === null ? null : String(departmentId), req.user.id]
+    );
+
+    const settings = await getPrintServiceSettings();
+    return res.json({ success: true, settings, message: 'IT Department Queue department link saved.' });
+  } catch (err) {
+    console.error('❌ save print service settings error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to save print service settings.' });
+  }
+});
 
 router.post('/', async (req, res) => {
   const formName = typeof req.body?.form_name === 'string' ? req.body.form_name.trim() : '';

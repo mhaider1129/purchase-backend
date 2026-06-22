@@ -75,8 +75,8 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id)
 );
 CREATE TABLE public.requested_items (
   id integer NOT NULL DEFAULT nextval('requested_items_id_seq'::regclass),
@@ -111,6 +111,11 @@ CREATE TABLE public.requested_items (
   assigned_by integer,
   assigned_at timestamp with time zone,
   assignment_notes text,
+  receipt_issue_status text,
+  receipt_issue_quantity numeric,
+  receipt_issue_notes text,
+  receipt_issue_reported_at timestamp with time zone,
+  receipt_issue_resolved_at timestamp with time zone,
   CONSTRAINT requested_items_pkey PRIMARY KEY (id),
   CONSTRAINT requested_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT requested_items_marked_by_fkey FOREIGN KEY (marked_by) REFERENCES public.users(id),

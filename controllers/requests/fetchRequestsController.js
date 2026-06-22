@@ -199,7 +199,12 @@ const getRequestDetails = async (req, res, next) => {
 const getRequestItemsOnly = async (req, res, next) => {
   const { id } = req.params;
   const { id: userId } = req.user;
-  const isPrivilegedViewer = req.user.hasPermission('requests.view-all');
+  const normalizedRole = (req.user.role || '').toString().trim().toLowerCase();
+  const isPrivilegedViewer =
+    req.user.hasPermission('requests.view-all') ||
+    req.user.hasPermission('requests.view-audit') ||
+    req.user.hasPermission('requests.view-incomplete') ||
+    normalizedRole === 'audit';
   const userWarehouseId = req.user?.warehouse_id;
 
   try {

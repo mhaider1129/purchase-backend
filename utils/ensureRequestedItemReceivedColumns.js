@@ -18,6 +18,11 @@ const ensureRequestedItemReceivedColumns = async (client = pool) => {
     `UPDATE public.requested_items SET received_quantity = COALESCE(received_quantity, 0)`,
     `ALTER TABLE public.requests ADD COLUMN IF NOT EXISTS receipt_prompt_sent_at TIMESTAMPTZ`,
     `ALTER TABLE public.requests ADD COLUMN IF NOT EXISTS auto_received_at TIMESTAMPTZ`,
+    `ALTER TABLE public.requested_items ADD COLUMN IF NOT EXISTS receipt_issue_status TEXT`,
+    `ALTER TABLE public.requested_items ADD COLUMN IF NOT EXISTS receipt_issue_quantity NUMERIC(14,2)`,
+    `ALTER TABLE public.requested_items ADD COLUMN IF NOT EXISTS receipt_issue_notes TEXT`,
+    `ALTER TABLE public.requested_items ADD COLUMN IF NOT EXISTS receipt_issue_reported_at TIMESTAMPTZ`,
+    `ALTER TABLE public.requested_items ADD COLUMN IF NOT EXISTS receipt_issue_resolved_at TIMESTAMPTZ`,
   ];
 
   for (const statement of statements) {

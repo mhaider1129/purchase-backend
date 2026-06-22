@@ -93,6 +93,46 @@ router.get('/:id/requesters', async (req, res) => {
   }
 });
 
+
+router.get('/:id/hods', async (req, res) => {
+  const departmentId = Number.parseInt(req.params.id, 10);
+
+  if (!Number.isInteger(departmentId)) {
+    return res.status(400).json({ message: 'Invalid department ID.' });
+  }
+
+  try {
+    if (Number.isInteger(req.user?.institute_id)) {
+      const { rows } = await pool.query(
+        'SELECT institute_id FROM departments WHERE id = $1',
+        [departmentId]
+      );
+      const instituteId = rows[0]?.institute_id;
+      if (!Number.isInteger(instituteId)) {
+        return res.status(404).json({ message: 'Department not found.' });
+      }
+      if (instituteId !== req.user.institute_id) {
+        return res.status(403).json({ message: 'Department is outside your institute.' });
+      }
+    }
+
+    const { rows } = await pool.query(
+      `SELECT id, name, section_id
+         FROM users
+        WHERE is_active = TRUE
+          AND LOWER(TRIM(role)) = 'hod'
+          AND department_id = $1
+        ORDER BY name`,
+      [departmentId]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Error fetching HODs:', err);
+    res.status(500).json({ message: 'Failed to load HODs.' });
+  }
+});
+
 router.post('/:id/sections', createSection); // POST /api/departments/:id/sections
 
 module.exports = router;

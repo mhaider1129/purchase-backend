@@ -577,16 +577,48 @@ const createRequest = async (req, res, next) => {
       requesterFilterValues,
     );
     if (requesterLookup.rowCount === 0) {
-      temporaryRequesterName = typeof req.body.temporary_requester_name === 'string'
-        ? req.body.temporary_requester_name.trim()
-        : '';
+      const requesterMode = typeof req.body.maintenance_requester_mode === 'string'
+        ? req.body.maintenance_requester_mode.trim().toLowerCase()
+        : 'manual';
 
-      if (!temporaryRequesterName) {
-        return next(createHttpError(400, "No active requester is available for the selected department/section; provide the requester name"));
+      if (requesterMode === 'hod') {
+        const hodRequesterId = parseOptionalPositiveInteger(
+          req.body.hod_requester_id,
+          'HOD requester',
+        );
+        if (!hodRequesterId) {
+          return next(createHttpError(400, 'Select an active HOD requester for this maintenance request'));
+        }
+
+        const hodLookup = await pool.query(
+          `SELECT u.id
+             FROM users u
+            WHERE u.id = $1
+              AND u.department_id = $2
+              AND u.is_active = TRUE
+              AND LOWER(TRIM(u.role)) = 'hod'
+            LIMIT 1`,
+          [hodRequesterId, department_id],
+        );
+
+        if (hodLookup.rowCount === 0) {
+          return next(createHttpError(400, 'Selected HOD is not active for the selected department'));
+        }
+
+        requester_id = hodRequesterId;
+        effectiveRequesterId = hodRequesterId;
+      } else {
+        temporaryRequesterName = typeof req.body.temporary_requester_name === 'string'
+          ? req.body.temporary_requester_name.trim()
+          : '';
+
+        if (!temporaryRequesterName) {
+          return next(createHttpError(400, "No active requester is available for the selected department/section; provide the requester name"));
+        }
+
+        requester_id = null;
+        effectiveRequesterId = null;
       }
-
-      requester_id = null;
-      effectiveRequesterId = null;
     } else {
       requester_id = requesterLookup.rows[0].id;
       effectiveRequesterId = requester_id;

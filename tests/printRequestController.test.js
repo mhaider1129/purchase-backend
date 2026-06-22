@@ -33,7 +33,7 @@ describe('printRequestController.printRequest', () => {
     pool.query.mockReset();
   });
 
-  it('increments the print count by default', async () => {
+  it('increments the print count in Arabic by default', async () => {
     pool.query
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ ...requestRow }] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ ...requestRow, print_count: 4 }] })
@@ -51,12 +51,12 @@ describe('printRequestController.printRequest', () => {
       [4, '42']
     );
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Request printed for the 4th time',
+      message: 'تمت طباعة الطلب للمرة 4',
       print_count: 4,
     }));
   });
 
-  it('does not increment the print count when requested', async () => {
+  it('does not increment the print count when requested and defaults to Arabic', async () => {
     pool.query
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ ...requestRow }] })
       .mockResolvedValueOnce({ rowCount: 0, rows: [] })
@@ -74,8 +74,27 @@ describe('printRequestController.printRequest', () => {
       ])
     );
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'Request ready for printing.',
+      message: 'الطلب جاهز للطباعة.',
       print_count: 3,
+    }));
+  });
+
+  it('returns English print messages when requested', async () => {
+    pool.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ ...requestRow }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ ...requestRow, print_count: 4 }] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await printRequest(buildRequest({ language: 'en' }), res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Request printed for the 4th time',
+      print_count: 4,
     }));
   });
 });

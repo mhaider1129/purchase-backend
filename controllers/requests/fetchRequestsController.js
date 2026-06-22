@@ -1354,13 +1354,22 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
               r.justification,
               r.status,
               r.project_id,
+              r.department_id,
+              r.section_id,
+              COALESCE(r.print_count, 0) AS print_count,
+              COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), requester.name) AS requester_name,
+              d.name AS department_name,
+              s.name AS section_name,
               p.name AS project_name,
               COALESCE(MAX(a.approved_at), r.updated_at, r.created_at) AS approval_timestamp
          FROM requests r
          LEFT JOIN projects p ON r.project_id = p.id
+         LEFT JOIN users requester ON r.requester_id = requester.id
+         LEFT JOIN departments d ON r.department_id = d.id
+         LEFT JOIN sections s ON r.section_id = s.id
          LEFT JOIN approvals a ON r.id = a.request_id
         WHERE LOWER(TRIM(r.status)) = ANY($1::text[])
-        GROUP BY r.id, r.request_type, r.justification, r.status, p.name
+        GROUP BY r.id, r.request_type, r.justification, r.status, p.name, requester.name, d.name, s.name
         ORDER BY approval_timestamp DESC`,
       [statusFilter]
     );
@@ -1405,7 +1414,12 @@ const getClosedRequests = async (req, res, next) => {
                'procurement_status', ri.procurement_status,
                'is_received', ri.is_received,
                'received_at', ri.received_at,
-               'received_by', ri.received_by
+               'received_by', ri.received_by,
+               'received_quantity', ri.received_quantity,
+               'receipt_issue_status', ri.receipt_issue_status,
+               'receipt_issue_quantity', ri.receipt_issue_quantity,
+               'receipt_issue_notes', ri.receipt_issue_notes,
+               'receipt_issue_reported_at', ri.receipt_issue_reported_at
              )
              ORDER BY ri.id
            ) FILTER (WHERE ri.id IS NOT NULL),

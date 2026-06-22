@@ -304,6 +304,7 @@ const budgetControlRoutes = require('./routes/budgetControl');
 const requestAutoAssignmentRulesRoutes = require('./routes/requestAutoAssignmentRules');
 const departmentRequestedItemsRoutes = require('./routes/departmentRequestedItems');
 const procurementEvaluationsRoutes = require('./routes/procurementEvaluations');
+const printServiceRequestsRoutes = require('./routes/printServiceRequests');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -366,6 +367,7 @@ const protectedApiRoutes = [
   { path: '/request-auto-assignment-rules', router: requestAutoAssignmentRulesRoutes },
   { path: '/department-requested-items', router: departmentRequestedItemsRoutes },
   { path: '/procurement-evaluations', router: procurementEvaluationsRoutes },
+  { path: '/print-service-requests', router: printServiceRequestsRoutes },
 ];
 
 const mountApiRoutes = router => {

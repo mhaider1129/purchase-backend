@@ -66,8 +66,7 @@ const assignApprover = async (
   requestDomain = null,
   preferredWarehouseId = null,
 ) => {
-  const globalRoles = ["CMO", "COO", "SCM", "CEO", "CFO"];
-  const normalizedRole = role?.trim().toLowerCase();
+  const globalRoles = ["CMO", "COO", "SCM", "CEO", "CFO", "MEDICAL DEVICES"];  const normalizedRole = role?.trim().toLowerCase();
   let targetDepartmentId = departmentId;
   let roleToAssign = role;
 

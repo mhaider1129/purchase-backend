@@ -1214,6 +1214,7 @@ const createPurchaseOrder = async (req, res, next) => {
       throw createHttpError(400, `Purchase order is missing mandatory data: ${validationErrors.join('; ')}`);
     }
 
+    const poNumber = `PO-${requestIdOrNull ? String(requestIdOrNull) : 'DIRECT'}-${Math.floor(Date.now() / 1000)}`;
     const poStatus = requiresApproval ? 'PO_PENDING_APPROVAL' : 'PO_ISSUED';
     const approvalRouteValue = requiresApproval ? (approval_route || (requestIdOrNull ? 'PROCUREMENT_OFFICER,SCM_APPROVAL_AUTHORITY' : 'PROCUREMENT_OFFICER')) : null;
     const approvedAt = requiresApproval ? null : new Date();
@@ -1248,12 +1249,13 @@ const createPurchaseOrder = async (req, res, next) => {
       )
        VALUES (
         $1,
-        CONCAT('PO-', COALESCE($1::text, 'DIRECT'), '-', EXTRACT(EPOCH FROM NOW())::bigint),
-        $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+        $2,
+        $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
       )
        RETURNING *`,
       [
         requestIdOrNull,
+        poNumber,
         supplierRef.supplierId,
         supplierRef.supplierName || null,
         sourceType,
@@ -1387,6 +1389,9 @@ const listPurchaseOrders = async (req, res, next) => {
                     'item_name', poi.item_name,
                     'quantity', poi.quantity,
                     'unit_price', poi.unit_price,
+                    'received_quantity', poi.received_quantity,
+                    'remaining_quantity', GREATEST(poi.quantity - poi.received_quantity, 0),
+                    'receiving_status', CASE WHEN poi.received_quantity <= 0 THEN 'NOT_RECEIVED' WHEN poi.received_quantity < poi.quantity THEN 'PARTIAL' ELSE 'FULLY_RECEIVED' END,
                     'line_total', (poi.quantity * poi.unit_price)
                   )
                   ORDER BY poi.id

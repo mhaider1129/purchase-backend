@@ -31,9 +31,9 @@ const PURCHASE_ORDER_STATUS_MAP = Object.freeze({
   PO_DRAFT: { business_status: 'Draft', system_code: 'PO_DRAFT', lifecycle_state: LIFECYCLE_STATES.PO_DRAFT },
   PO_PENDING_APPROVAL: { business_status: 'Pending Approval', system_code: 'PO_PENDING_APPROVAL', lifecycle_state: LIFECYCLE_STATES.PO_PENDING_APPROVAL },
   PO_APPROVED: { business_status: 'Approved', system_code: 'PO_APPROVED', lifecycle_state: LIFECYCLE_STATES.PO_APPROVED },
-  PO_ISSUED: { business_status: 'Open', system_code: 'PO_ISSUED', lifecycle_state: LIFECYCLE_STATES.PO_ISSUED },
-  PO_PARTIAL: { business_status: 'Partially Delivered', system_code: 'PO_PARTIAL', lifecycle_state: LIFECYCLE_STATES.PO_PARTIAL },
-  PO_DELIVERED: { business_status: 'Delivered', system_code: 'PO_DELIVERED', lifecycle_state: LIFECYCLE_STATES.PO_DELIVERED },
+  PO_ISSUED: { business_status: 'Issued / Sent to Supplier', system_code: 'PO_ISSUED', lifecycle_state: LIFECYCLE_STATES.PO_ISSUED },
+  PO_PARTIAL: { business_status: 'Partially Received', system_code: 'PO_PARTIAL', lifecycle_state: LIFECYCLE_STATES.PO_PARTIAL },
+  PO_DELIVERED: { business_status: 'Fully Received', system_code: 'PO_DELIVERED', lifecycle_state: LIFECYCLE_STATES.PO_DELIVERED },
   PO_CLOSED: { business_status: 'Closed', system_code: 'PO_CLOSED', lifecycle_state: LIFECYCLE_STATES.PO_CLOSED },
   PO_CANCELLED: { business_status: 'Cancelled', system_code: 'PO_CANCELLED', lifecycle_state: LIFECYCLE_STATES.PO_CANCELLED },
 });

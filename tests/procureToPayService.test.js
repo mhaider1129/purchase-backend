@@ -60,10 +60,10 @@ describe('procureToPayService', () => {
 
   test('maps business and system PO statuses', () => {
     expect(getPurchaseOrderStatusMetadata('PO_ISSUED')).toEqual(
-      expect.objectContaining({ business_status: 'Open', system_code: 'PO_ISSUED' })
+      expect.objectContaining({ business_status: 'Issued / Sent to Supplier', system_code: 'PO_ISSUED' })
     );
     expect(getPurchaseOrderStatusMetadata('PO_PARTIAL')).toEqual(
-      expect.objectContaining({ business_status: 'Partially Delivered', system_code: 'PO_PARTIAL' })
+      expect.objectContaining({ business_status: 'Partially Received', system_code: 'PO_PARTIAL' })
     );
   });
 

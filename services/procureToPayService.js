@@ -43,6 +43,11 @@ const MATCH_POLICIES = Object.freeze({
   THREE_WAY: 'THREE_WAY',
 });
 
+const DEFAULT_MATCH_TOLERANCES = Object.freeze({
+  quantity: 0,
+  amount: 0,
+});
+
 const ALLOWED_TRANSITIONS = Object.freeze({
   [LIFECYCLE_STATES.DRAFT_PR]: [LIFECYCLE_STATES.SUBMITTED_PR, LIFECYCLE_STATES.CANCELLED],
   [LIFECYCLE_STATES.SUBMITTED_PR]: [LIFECYCLE_STATES.UNDER_APPROVAL, LIFECYCLE_STATES.CANCELLED],
@@ -86,27 +91,45 @@ const summarizeItems = (items = []) =>
     { quantity: 0, total: 0 }
   );
 
-const performInvoiceMatch = ({ policy = MATCH_POLICIES.THREE_WAY, requestItems = [], receiptItems = [], invoiceItems = [] }) => {
+const withinTolerance = (actual, expected, tolerance = 0) => actual <= expected + Math.max(Number(tolerance) || 0, 0);
+
+const performInvoiceMatch = ({
+  policy = MATCH_POLICIES.THREE_WAY,
+  requestItems = [],
+  purchaseOrderItems = [],
+  receiptItems = [],
+  invoiceItems = [],
+  tolerances = DEFAULT_MATCH_TOLERANCES,
+}) => {
   const requestSummary = summarizeItems(requestItems);
+  const purchaseOrderSummary = summarizeItems(purchaseOrderItems);
   const receiptSummary = summarizeItems(receiptItems);
   const invoiceSummary = summarizeItems(invoiceItems);
+  const commercialBaseline = purchaseOrderSummary.quantity > 0 ? purchaseOrderSummary : requestSummary;
+  const commercialBaselineLabel = purchaseOrderSummary.quantity > 0 ? 'PO' : 'requested';
+  const commercialBaselineTotal = normalizeNumber(commercialBaseline.total);
+  const invoiceTotal = normalizeNumber(invoiceSummary.total);
+  const discountAmount = Math.max(commercialBaselineTotal - invoiceTotal, 0);
+  const overageAmount = Math.max(invoiceTotal - commercialBaselineTotal, 0);
+  const quantityTolerance = tolerances.quantity ?? DEFAULT_MATCH_TOLERANCES.quantity;
+  const amountTolerance = tolerances.amount ?? DEFAULT_MATCH_TOLERANCES.amount;
 
   const mismatches = [];
 
-  if (invoiceSummary.quantity > requestSummary.quantity) {
-    mismatches.push('Invoice quantity exceeds requested quantity');
+  if (!withinTolerance(invoiceSummary.quantity, commercialBaseline.quantity, quantityTolerance)) {
+    mismatches.push(`Invoice quantity exceeds ${commercialBaselineLabel} quantity`);
   }
 
-  if (invoiceSummary.total > requestSummary.total) {
+  if (!withinTolerance(invoiceSummary.total, commercialBaseline.total, amountTolerance)) {
     mismatches.push('Invoice total exceeds requested/PO total');
   }
 
   if (policy === MATCH_POLICIES.THREE_WAY) {
-    if (invoiceSummary.quantity > receiptSummary.quantity) {
+    if (!withinTolerance(invoiceSummary.quantity, receiptSummary.quantity, quantityTolerance)) {
       mismatches.push('Invoice quantity exceeds received quantity');
     }
 
-    if (invoiceSummary.total > receiptSummary.total && receiptSummary.total > 0) {
+    if (receiptSummary.total > 0 && !withinTolerance(invoiceSummary.total, receiptSummary.total, amountTolerance)) {
       mismatches.push('Invoice total exceeds received value');
     }
   }
@@ -116,8 +139,17 @@ const performInvoiceMatch = ({ policy = MATCH_POLICIES.THREE_WAY, requestItems =
     matched: mismatches.length === 0,
     mismatch_reasons: mismatches,
     request_summary: requestSummary,
+    purchase_order_summary: purchaseOrderSummary,
     receipt_summary: receiptSummary,
     invoice_summary: invoiceSummary,
+    match_basis: purchaseOrderSummary.quantity > 0 ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST',
+    price_variance: {
+      discount_amount: discountAmount,
+      overage_amount: overageAmount,
+      is_supplier_discount: mismatches.length === 0 && discountAmount > 0,
+      requires_supplier_discussion: overageAmount > (Number(amountTolerance) || 0),
+    },
+    tolerances: { quantity: Number(quantityTolerance) || 0, amount: Number(amountTolerance) || 0 },
   };
 };
 
@@ -213,6 +245,7 @@ module.exports = {
   LIFECYCLE_STATES,
   PURCHASE_ORDER_STATUS_MAP,
   MATCH_POLICIES,
+  DEFAULT_MATCH_TOLERANCES,
   ALLOWED_TRANSITIONS,
   performInvoiceMatch,
   canTransitionState,

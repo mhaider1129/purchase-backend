@@ -123,7 +123,7 @@ const createGoodsReceipt = async (req, res, next) => {
       }
 
       const poResult = await client.query(
-        `SELECT id, request_id FROM purchase_orders WHERE id = $1 FOR UPDATE`,
+        `SELECT id, request_id, status FROM purchase_orders WHERE id = $1 FOR UPDATE`,
         [purchaseOrderId]
       );
 
@@ -133,6 +133,9 @@ const createGoodsReceipt = async (req, res, next) => {
 
       if (Number(poResult.rows[0].request_id) !== requestId) {
         throw createHttpError(400, 'purchase_order_id does not belong to the provided request');
+      }
+      if (!['PO_APPROVED', 'PO_ISSUED', 'PO_PARTIAL'].includes(poResult.rows[0].status)) {
+        throw createHttpError(400, 'Goods receipt can only be recorded after SCM approval when the PO is active');
       }
     }
 
@@ -442,6 +445,45 @@ const submitInvoice = async (req, res, next) => {
 
     const requestMeta = requestMetaRes.rows[0];
 
+    let resolvedPurchaseOrderId = purchase_order_id || null;
+    let resolvedReceiptId = receipt_id || null;
+
+    if (resolvedReceiptId) {
+      const receiptRes = await client.query(
+        `SELECT id, request_id, purchase_order_id
+           FROM goods_receipts
+          WHERE id = $1 AND request_id = $2
+          FOR UPDATE`,
+        [resolvedReceiptId, requestId]
+      );
+      if (receiptRes.rowCount === 0) {
+        throw createHttpError(404, 'Goods receipt not found for this request');
+      }
+      resolvedPurchaseOrderId = resolvedPurchaseOrderId || receiptRes.rows[0].purchase_order_id || null;
+      if (!resolvedPurchaseOrderId) {
+        throw createHttpError(400, 'Invoice must be linked to a PO-backed goods receipt for 3-way matching');
+      }
+      if (Number(receiptRes.rows[0].purchase_order_id) !== Number(resolvedPurchaseOrderId)) {
+        throw createHttpError(400, 'receipt_id does not belong to the provided purchase_order_id');
+      }
+    }
+
+    if (resolvedPurchaseOrderId) {
+      const poRes = await client.query(
+        `SELECT id, request_id, status
+           FROM purchase_orders
+          WHERE id = $1 AND request_id = $2
+          FOR UPDATE`,
+        [resolvedPurchaseOrderId, requestId]
+      );
+      if (poRes.rowCount === 0) {
+        throw createHttpError(404, 'Purchase order not found for this request');
+      }
+      if (!resolvedReceiptId) {
+        throw createHttpError(400, 'A goods receipt is required before entering an invoice against a PO');
+      }
+    }
+
     const budgetCheck = await assertBudgetCanCover(client, {
       departmentId: requestMeta.department_id,
       projectId: requestMeta.project_id || null,
@@ -467,9 +509,9 @@ const submitInvoice = async (req, res, next) => {
       extraCharges: extra_charges,
       totalAmount: total_amount,
       currency,
-      purchaseOrderId: purchase_order_id,
+      purchaseOrderId: resolvedPurchaseOrderId,
       poEquivalentNumber: po_equivalent_number,
-      receiptId: receipt_id,
+      receiptId: resolvedReceiptId,
       attachmentMetadata: attachment_metadata,
       items,
     });
@@ -477,8 +519,8 @@ const submitInvoice = async (req, res, next) => {
 
     await linkDocuments(client, {
       requestId,
-      sourceType: receipt_id ? 'GOODS_RECEIPT_PO' : (purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST'),
-      sourceId: receipt_id || purchase_order_id || requestId,
+      sourceType: resolvedReceiptId ? 'GOODS_RECEIPT_PO' : (resolvedPurchaseOrderId ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST'),
+      sourceId: resolvedReceiptId || resolvedPurchaseOrderId || requestId,
       targetType: 'AP_INVOICE',
       targetId: invoice.id,
       metadata: { invoice_number: invoice.invoice_number },
@@ -543,16 +585,40 @@ const runInvoiceMatch = async (req, res, next) => {
     await client.query('BEGIN');
     await ensureProcureToPayTables(client);
 
+    const invoiceHeaderRes = await client.query(
+      `SELECT si.id, si.receipt_id, si.purchase_order_id, po.created_by AS po_created_by, po.po_number
+         FROM supplier_invoices si
+         LEFT JOIN purchase_orders po ON po.id = si.purchase_order_id
+        WHERE si.id = $1 AND si.request_id = $2
+        FOR UPDATE OF si`,
+      [supplierInvoiceId, requestId]
+    );
+    if (invoiceHeaderRes.rowCount === 0) {
+      throw createHttpError(404, 'Invoice not found for this request');
+    }
+    const invoiceHeader = invoiceHeaderRes.rows[0];
+    if (!invoiceHeader.purchase_order_id || !invoiceHeader.receipt_id) {
+      throw createHttpError(400, '3-way matching requires the invoice to be linked to both a PO and a goods receipt');
+    }
+
     const requestItemsRes = await client.query(
       `SELECT quantity, unit_cost FROM requested_items WHERE request_id = $1`,
       [requestId]
+    );
+    const purchaseOrderItemsRes = await client.query(
+      `SELECT poi.quantity, poi.unit_price
+       FROM purchase_order_items poi
+       JOIN supplier_invoices si ON si.purchase_order_id = poi.purchase_order_id
+       WHERE si.id = $1`,
+      [supplierInvoiceId]
     );
     const receiptItemsRes = await client.query(
       `SELECT gri.received_quantity AS quantity, gri.unit_price
        FROM goods_receipt_items gri
        JOIN goods_receipts gr ON gr.id = gri.goods_receipt_id
-       WHERE gr.request_id = $1`,
-      [requestId]
+       WHERE gr.request_id = $1
+         AND ($2::bigint IS NULL OR gr.id = $2::bigint)`,
+      [requestId, invoiceHeader.receipt_id]
     );
     const invoiceItemsRes = await client.query(
       `SELECT quantity, unit_price FROM invoice_items WHERE supplier_invoice_id = $1`,
@@ -562,8 +628,10 @@ const runInvoiceMatch = async (req, res, next) => {
     const result = performInvoiceMatch({
       policy,
       requestItems: requestItemsRes.rows,
+      purchaseOrderItems: purchaseOrderItemsRes.rows,
       receiptItems: receiptItemsRes.rows,
       invoiceItems: invoiceItemsRes.rows,
+      tolerances: req.body?.tolerances || undefined,
     });
 
     const saved = await client.query(
@@ -580,15 +648,27 @@ const runInvoiceMatch = async (req, res, next) => {
       ]
     );
 
+    const discrepancyOwnerId = result.matched ? null : invoiceHeader.po_created_by;
+    const enrichedResult = {
+      ...result,
+      po_number: invoiceHeader.po_number || null,
+      discrepancy_owner_id: discrepancyOwnerId || null,
+      discrepancy_resolution: result.matched
+        ? (result.price_variance?.is_supplier_discount ? 'SUPPLIER_DISCOUNT_ACCEPTED' : 'READY_FOR_FINANCE_REVIEW')
+        : 'PROCUREMENT_PO_CREATOR_REVIEW_REQUIRED',
+    };
+
     if (result.matched) {
-      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'Invoice matched', result);
-      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'Ready for finance review');
+      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'Invoice matched', enrichedResult);
+      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, req.user.id, 'Ready for finance review');
+    } else {
+      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'Invoice match exception assigned to PO creator', enrichedResult);
     }
 
-    await logFinanceAction(client, requestId, req.user.id, 'INVOICE_MATCH_EXECUTED', { invoice_match_result_id: saved.rows[0].id, ...result });
+    await logFinanceAction(client, requestId, req.user.id, 'INVOICE_MATCH_EXECUTED', { invoice_match_result_id: saved.rows[0].id, ...enrichedResult });
 
     await client.query('COMMIT');
-    res.json({ match_result: { ...saved.rows[0], ...result } });
+    res.json({ match_result: { ...saved.rows[0], ...enrichedResult } });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -618,19 +698,70 @@ const approveMatchOverride = async (req, res, next) => {
            override_reason = $3,
            override_at = NOW(),
            match_status = 'OVERRIDDEN'
-       WHERE id = $1
+       WHERE id = $1 AND request_id = $4
        RETURNING *`,
-      [matchResultId, req.user.id, reason]
+      [matchResultId, req.user.id, reason, requestId]
     );
 
     if (updated.rowCount === 0) {
       throw createHttpError(404, 'Match result not found');
     }
 
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'Mismatch override approved');
-    await logFinanceAction(client, requestId, req.user.id, 'MISMATCH_OVERRIDE_APPROVED', { match_result_id: matchResultId, reason });
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'SCM accepted invoice price variance', { match_result_id: matchResultId, reason });
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, req.user.id, 'Ready for finance review after SCM variance acceptance');
+    await logFinanceAction(client, requestId, req.user.id, 'MISMATCH_OVERRIDE_APPROVED', { match_result_id: matchResultId, reason, resolution: 'SCM_ACCEPTED_SUPPLIER_PRICE_CHANGE' });
     await client.query('COMMIT');
     res.json({ message: 'Override approved', match_result: updated.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+};
+
+const declineInvoiceMatch = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    requirePermission(req, 'finance.override-mismatch', ['scm', 'admin', 'financeapprover']);
+    const requestId = Number(req.params.requestId);
+    const matchResultId = Number(req.params.matchResultId);
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) {
+      throw createHttpError(400, 'Decline reason is required');
+    }
+
+    await client.query('BEGIN');
+    await ensureProcureToPayTables(client);
+
+    const updated = await client.query(
+      `UPDATE invoice_match_results
+       SET override_approved = FALSE,
+           override_by = $2,
+           override_reason = $3,
+           override_at = NOW(),
+           match_status = 'DECLINED'
+       WHERE id = $1 AND request_id = $4
+       RETURNING *`,
+      [matchResultId, req.user.id, reason, requestId]
+    );
+
+    if (updated.rowCount === 0) {
+      throw createHttpError(404, 'Match result not found');
+    }
+
+    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'SCM declined supplier invoice variance; supplier must issue a corrected invoice', {
+      match_result_id: matchResultId,
+      reason,
+      resolution: 'SUPPLIER_CORRECTED_INVOICE_REQUIRED',
+    });
+    await logFinanceAction(client, requestId, req.user.id, 'INVOICE_VARIANCE_DECLINED', {
+      match_result_id: matchResultId,
+      reason,
+      resolution: 'SUPPLIER_CORRECTED_INVOICE_REQUIRED',
+    });
+    await client.query('COMMIT');
+    res.json({ message: 'Invoice variance declined; request a corrected supplier invoice', match_result: updated.rows[0] });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -858,7 +989,7 @@ const submitPurchaseOrderForApproval = async (req, res, next) => {
       `UPDATE purchase_orders
           SET status = 'PO_PENDING_APPROVAL',
               approval_required = TRUE,
-              approval_route = COALESCE($2, approval_route, 'PROCUREMENT_OFFICER,SCM_APPROVAL_AUTHORITY'),
+              approval_route = COALESCE($2, approval_route, 'SCM_APPROVAL_AUTHORITY'),
               updated_at = NOW()
         WHERE id = $1
         RETURNING *`,
@@ -883,7 +1014,7 @@ const submitPurchaseOrderForApproval = async (req, res, next) => {
 const approvePurchaseOrder = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['procurementofficer', 'scm', 'admin']);
+    requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['scm', 'admin']);
     const poId = Number(req.params.poId);
     await client.query('BEGIN');
     await ensureProcureToPayTables(client);
@@ -1156,14 +1287,25 @@ const createPurchaseOrder = async (req, res, next) => {
         await client.query(
           `SELECT ri.id AS requested_item_id,
                   ri.item_name,
-                  ri.quantity,
+                  GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) AS quantity,
+                  COALESCE(ri.quantity, 0) AS requested_quantity,
+                  COALESCE(po_allocated.ordered_quantity, 0) AS po_allocated_quantity,
                   COALESCE(ri.unit_cost, 0) AS unit_price,
                   rif.contract_id,
                   c.reference_number AS contract_reference
            FROM requested_items ri
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(SUM(poi.quantity), 0) AS ordered_quantity
+               FROM purchase_order_items poi
+               JOIN purchase_orders po ON po.id = poi.purchase_order_id
+              WHERE po.request_id = ri.request_id
+                AND poi.requested_item_id = ri.id
+                AND po.status <> 'PO_CANCELLED'
+           ) po_allocated ON TRUE
            LEFT JOIN requested_item_financials rif ON rif.requested_item_id = ri.id
            LEFT JOIN contracts c ON c.id = rif.contract_id
            WHERE ri.request_id = $1
+             AND GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) > 0
            ORDER BY ri.id ASC`,
           [requestIdOrNull]
         )
@@ -1195,9 +1337,20 @@ const createPurchaseOrder = async (req, res, next) => {
       unit_price: Number(item.unit_price) || 0,
     })).filter((item) => item.item_name && item.quantity > 0);
 
-    const requiresApproval = approval_required === null
-      ? !requestIdOrNull || normalizedItems.some((item) => item.unit_price * item.quantity >= 10000)
-      : Boolean(approval_required);
+    if (requestIdOrNull) {
+      const remainingByRequestedItem = new Map(
+        requestItems.map((item) => [Number(item.requested_item_id), Number(item.quantity) || 0])
+      );
+      for (const item of normalizedItems) {
+        if (!item.requested_item_id) continue;
+        const remainingQuantity = remainingByRequestedItem.get(Number(item.requested_item_id)) || 0;
+        if (item.quantity > remainingQuantity) {
+          throw createHttpError(400, `${item.item_name} exceeds the remaining purchase request quantity available for new POs`);
+        }
+      }
+    }
+
+    const requiresApproval = true;
 
     const validationErrors = validatePurchaseOrderForIssuance({
       supplierId: supplierRef.supplierId,
@@ -1216,7 +1369,7 @@ const createPurchaseOrder = async (req, res, next) => {
 
     const poNumber = `PO-${requestIdOrNull ? String(requestIdOrNull) : 'DIRECT'}-${Math.floor(Date.now() / 1000)}`;
     const poStatus = requiresApproval ? 'PO_PENDING_APPROVAL' : 'PO_ISSUED';
-    const approvalRouteValue = requiresApproval ? (approval_route || (requestIdOrNull ? 'PROCUREMENT_OFFICER,SCM_APPROVAL_AUTHORITY' : 'PROCUREMENT_OFFICER')) : null;
+    const approvalRouteValue = requiresApproval ? (approval_route || 'SCM_APPROVAL_AUTHORITY') : null;
     const approvedAt = requiresApproval ? null : new Date();
     const issuedAt = requiresApproval ? null : new Date();
 
@@ -1418,7 +1571,7 @@ const getProcureToPayDashboard = async (req, res, next) => {
       pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status = 'approved' AND id NOT IN (SELECT request_id FROM purchase_orders)`),
       pool.query(`SELECT COUNT(*)::int AS count FROM purchase_orders po WHERE NOT EXISTS (SELECT 1 FROM goods_receipts gr WHERE gr.purchase_order_id = po.id)`),
       pool.query(`SELECT COUNT(*)::int AS count FROM supplier_invoices si LEFT JOIN invoice_match_results imr ON imr.supplier_invoice_id = si.id WHERE imr.id IS NULL OR imr.match_status = 'PENDING_MATCH'`),
-      pool.query(`SELECT COUNT(*)::int AS count FROM invoice_match_results WHERE match_status = 'EXCEPTION'`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM invoice_match_results WHERE match_status IN ('MISMATCH', 'OVERRIDDEN')`),
       pool.query(`SELECT COUNT(*)::int AS count FROM ap_payables WHERE open_balance > 0 AND due_date = CURRENT_DATE`),
       pool.query(`SELECT COUNT(*)::int AS count FROM ap_payables WHERE open_balance > 0 AND due_date < CURRENT_DATE`),
       pool.query(`SELECT COALESCE(SUM(amount_paid), 0) AS total FROM payment_records WHERE paid_at >= date_trunc('week', NOW())`),
@@ -1445,7 +1598,20 @@ const getPoSourceRequests = async (req, res, next) => {
     const values = [];
     const filters = [
       `LOWER(r.status) = 'approved'`,
-      `NOT EXISTS (SELECT 1 FROM purchase_orders po WHERE po.request_id = r.id)`,
+      `EXISTS (
+        SELECT 1
+          FROM requested_items ri
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(SUM(poi.quantity), 0) AS ordered_quantity
+              FROM purchase_order_items poi
+              JOIN purchase_orders po ON po.id = poi.purchase_order_id
+             WHERE po.request_id = ri.request_id
+               AND poi.requested_item_id = ri.id
+               AND po.status <> 'PO_CANCELLED'
+          ) po_allocated ON TRUE
+         WHERE ri.request_id = r.id
+           AND GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) > 0
+      )`,
     ];
 
     if (search) {
@@ -1460,8 +1626,44 @@ const getPoSourceRequests = async (req, res, next) => {
 
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
-      `SELECT r.id, r.request_type, r.status, r.created_at
+      `SELECT r.id,
+              r.request_type,
+              r.status,
+              r.created_at,
+              COALESCE(remaining_items.items, '[]'::json) AS remaining_items
        FROM requests r
+       LEFT JOIN LATERAL (
+         SELECT json_agg(
+                  json_build_object(
+                    'requested_item_id', remaining.requested_item_id,
+                    'item_name', remaining.item_name,
+                    'requested_quantity', remaining.requested_quantity,
+                    'po_allocated_quantity', remaining.po_allocated_quantity,
+                    'remaining_quantity', remaining.remaining_quantity,
+                    'unit_price', remaining.unit_price
+                  )
+                  ORDER BY remaining.requested_item_id
+                ) AS items
+           FROM (
+             SELECT ri.id AS requested_item_id,
+                    ri.item_name,
+                    COALESCE(ri.quantity, 0) AS requested_quantity,
+                    COALESCE(po_allocated.ordered_quantity, 0) AS po_allocated_quantity,
+                    GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) AS remaining_quantity,
+                    COALESCE(ri.unit_cost, 0) AS unit_price
+               FROM requested_items ri
+               LEFT JOIN LATERAL (
+                 SELECT COALESCE(SUM(poi.quantity), 0) AS ordered_quantity
+                   FROM purchase_order_items poi
+                   JOIN purchase_orders po ON po.id = poi.purchase_order_id
+                  WHERE po.request_id = ri.request_id
+                    AND poi.requested_item_id = ri.id
+                    AND po.status <> 'PO_CANCELLED'
+               ) po_allocated ON TRUE
+              WHERE ri.request_id = r.id
+                AND GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) > 0
+           ) remaining
+       ) remaining_items ON TRUE
        ${whereClause}
        ORDER BY r.created_at DESC
        LIMIT 200`,
@@ -1890,6 +2092,7 @@ module.exports = {
   submitInvoice,
   runInvoiceMatch,
   approveMatchOverride,
+  declineInvoiceMatch,
   postPayableFromInvoice,
   listAccountsPayable,
   listPayments,

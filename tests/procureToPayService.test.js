@@ -44,6 +44,63 @@ describe('procureToPayService', () => {
     expect(result.mismatch_reasons).toContain('Invoice total exceeds requested/PO total');
   });
 
+  test('uses purchase order as ERP commercial baseline when invoice is linked to a PO', () => {
+    const result = performInvoiceMatch({
+      policy: MATCH_POLICIES.TWO_WAY,
+      requestItems: [{ quantity: 10, unit_cost: 5 }],
+      purchaseOrderItems: [{ quantity: 8, unit_price: 5 }],
+      invoiceItems: [{ quantity: 9, unit_price: 5 }],
+    });
+
+    expect(result.matched).toBe(false);
+    expect(result.match_basis).toBe('PURCHASE_ORDER');
+    expect(result.mismatch_reasons).toContain('Invoice quantity exceeds PO quantity');
+  });
+
+  test('supports configured quantity and amount tolerances for ERP invoice matching', () => {
+    const result = performInvoiceMatch({
+      policy: MATCH_POLICIES.THREE_WAY,
+      purchaseOrderItems: [{ quantity: 10, unit_price: 10 }],
+      receiptItems: [{ quantity: 10, unit_price: 10 }],
+      invoiceItems: [{ quantity: 10.5, unit_price: 10 }],
+      tolerances: { quantity: 0.5, amount: 5 },
+    });
+
+    expect(result.matched).toBe(true);
+    expect(result.tolerances).toEqual({ quantity: 0.5, amount: 5 });
+  });
+
+  test('treats invoice totals below PO value as a supplier discount, not a mismatch', () => {
+    const result = performInvoiceMatch({
+      policy: MATCH_POLICIES.THREE_WAY,
+      purchaseOrderItems: [{ quantity: 10, unit_price: 10 }],
+      receiptItems: [{ quantity: 10, unit_price: 10 }],
+      invoiceItems: [{ quantity: 10, unit_price: 9 }],
+    });
+
+    expect(result.matched).toBe(true);
+    expect(result.price_variance).toEqual(expect.objectContaining({
+      discount_amount: 10,
+      overage_amount: 0,
+      is_supplier_discount: true,
+    }));
+  });
+
+  test('flags invoice totals above PO value for supplier discussion', () => {
+    const result = performInvoiceMatch({
+      policy: MATCH_POLICIES.TWO_WAY,
+      purchaseOrderItems: [{ quantity: 10, unit_price: 10 }],
+      invoiceItems: [{ quantity: 10, unit_price: 12 }],
+    });
+
+    expect(result.matched).toBe(false);
+    expect(result.price_variance).toEqual(expect.objectContaining({
+      discount_amount: 0,
+      overage_amount: 20,
+      requires_supplier_discussion: true,
+    }));
+  });
+
   test('finance verification transition path', () => {
     expect(canTransitionState(LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, LIFECYCLE_STATES.FINANCE_VERIFIED)).toBe(true);
     expect(canTransitionState(LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, LIFECYCLE_STATES.PAID)).toBe(false);

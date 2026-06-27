@@ -28,6 +28,7 @@ const {
   submitInvoice,
   runInvoiceMatch,
   approveMatchOverride,
+  declineInvoiceMatch,
   postPayableFromInvoice,
   listAccountsPayable,
   listPayments,
@@ -66,6 +67,7 @@ router.get('/requests/:requestId/receipts', listReceiptsByRequest);
 router.post('/requests/:requestId/invoices', submitInvoice);
 router.post('/requests/:requestId/invoices/:invoiceId/match', runInvoiceMatch);
 router.post('/requests/:requestId/match-results/:matchResultId/override', approveMatchOverride);
+router.post('/requests/:requestId/match-results/:matchResultId/decline', declineInvoiceMatch);
 router.post('/ap-invoices/:invoiceId/post-payable', postPayableFromInvoice);
 router.post('/accounts-payable/:payableId/payments', recordPayablePayment);
 router.get('/document-flow/request/:requestId', getDocumentFlow);

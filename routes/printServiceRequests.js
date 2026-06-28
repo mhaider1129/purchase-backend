@@ -1,5 +1,6 @@
 const express = require('express');
 const pool = require('../config/db');
+const { sendWorkflowEmail } = require('../utils/workflowEmailNotifications');
 
 const router = express.Router();
 
@@ -250,7 +251,13 @@ router.patch('/:id/status', async (req, res) => {
       return res.status(403).json({ success: false, message: 'Only IT Department users can update print service workflow status.' });
     }
 
-    const existing = await pool.query('SELECT * FROM print_service_requests WHERE id = $1', [id]);
+    const existing = await pool.query(
+      `SELECT psr.*, requester.email AS requester_email
+         FROM print_service_requests psr
+         JOIN users requester ON requester.id = psr.requester_id
+        WHERE psr.id = $1`,
+      [id]
+    );
     if (!existing.rowCount) {
       return res.status(404).json({ success: false, message: 'Print service request not found.' });
     }
@@ -272,6 +279,16 @@ router.patch('/:id/status', async (req, res) => {
        RETURNING *`,
       [nextStatus, req.user.id, id]
     );
+
+    await sendWorkflowEmail({
+      to: existing.rows[0].requester_email,
+      subject: `Print service request #${id} ${nextStatus}`,
+      message: [
+        `${req.user?.name || 'A team member'} updated your print service request for "${existing.rows[0].form_name}" to "${nextStatus}".`,
+        `Quantity: ${existing.rows[0].quantity}`,
+      ].join('\n'),
+      logLabel: 'print service status notification',
+    });
 
     return res.json({ success: true, request: rows[0] });
   } catch (err) {

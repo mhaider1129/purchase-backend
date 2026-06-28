@@ -24,6 +24,10 @@ const {
   resolveBudgetEnvelope,
   getBudgetSnapshot,
 } = require('../services/financeCoreService');
+const {
+  sendRequestWorkflowEmail,
+  sendWorkflowEmail,
+} = require('../utils/workflowEmailNotifications');
 
 
 const requirePermission = (req, permissionCode, fallbackRoles = []) => {
@@ -366,6 +370,20 @@ const createGoodsReceipt = async (req, res, next) => {
     });
     await client.query('COMMIT');
 
+    await sendRequestWorkflowEmail({
+      requestId,
+      subject: `Goods receipt captured for request #${requestId}`,
+      message: [
+        `${req.user?.name || 'A warehouse user'} captured goods receipt ${receipt.receipt_number} for request #${requestId}.`,
+        purchase_order_id ? `Purchase order: #${purchase_order_id}` : 'This was captured as a non-PO goods receipt and may require additional approvals.',
+        inventoryUpdates.length > 0
+          ? `Warehouse stock updated for ${inventoryUpdates.length} item(s).`
+          : 'No warehouse stock quantities were updated.',
+        inventoryWarnings.length > 0 ? `Warnings: ${inventoryWarnings.join('; ')}` : '',
+      ].filter(Boolean).join('\n'),
+      logLabel: 'goods receipt notification',
+    });
+
     res.status(201).json({
       message: 'Goods receipt captured',
       receipt,
@@ -559,6 +577,18 @@ const submitInvoice = async (req, res, next) => {
     });
 
     await client.query('COMMIT');
+    await sendRequestWorkflowEmail({
+      requestId,
+      subject: `Supplier invoice submitted for request #${requestId}`,
+      message: [
+        `${req.user?.name || 'A procurement user'} submitted supplier invoice ${invoice.invoice_number} for request #${requestId}.`,
+        `Supplier: ${invoice.supplier || supplierRef.supplierName}`,
+        `Amount: ${invoice.total_amount || total_amount} ${invoice.currency || currency}`,
+        'The invoice is ready for matching and finance review.',
+      ].join('\n'),
+      logLabel: 'supplier invoice notification',
+    });
+
     res.status(201).json({
       message: 'Invoice submitted',
       invoice,
@@ -1002,6 +1032,12 @@ const submitPurchaseOrderForApproval = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    await sendRequestWorkflowEmail({
+      requestId: po.request_id,
+      subject: `Purchase order submitted for approval for request #${po.request_id}`,
+      message: `${req.user?.name || 'A procurement user'} submitted purchase order ${updated.rows[0].po_number || `#${poId}`} for approval on request #${po.request_id}.`,
+      logLabel: 'purchase order submission notification',
+    });
     res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1047,6 +1083,12 @@ const approvePurchaseOrder = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    await sendRequestWorkflowEmail({
+      requestId: po.request_id,
+      subject: `Purchase order approved for request #${po.request_id}`,
+      message: `${req.user?.name || 'An approver'} approved purchase order ${updated.rows[0].po_number || `#${poId}`} for request #${po.request_id}.`,
+      logLabel: 'purchase order approval notification',
+    });
     res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1112,7 +1154,29 @@ const issuePurchaseOrder = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
-    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
+    const issuedPurchaseOrder = annotatePurchaseOrder(updated.rows[0]);
+    await sendRequestWorkflowEmail({
+      requestId: po.request_id,
+      subject: `Purchase order issued for request #${po.request_id}`,
+      message: [
+        `${req.user?.name || 'A procurement user'} issued purchase order ${issuedPurchaseOrder.po_number || `#${poId}`} to ${issuedPurchaseOrder.supplier_name || 'the supplier'}.`,
+        issuedPurchaseOrder.supplier_contact_email ? `Supplier email: ${issuedPurchaseOrder.supplier_contact_email}` : '',
+      ].filter(Boolean).join('\n'),
+      logLabel: 'purchase order issuance notification',
+    });
+    if (issuedPurchaseOrder.supplier_contact_email) {
+      await sendWorkflowEmail({
+        to: issuedPurchaseOrder.supplier_contact_email,
+        subject: `Purchase order ${issuedPurchaseOrder.po_number || `#${poId}`} issued`,
+        message: [
+          `Purchase order ${issuedPurchaseOrder.po_number || `#${poId}`} has been issued by the Procurement System.`,
+          issuedPurchaseOrder.expected_delivery_date ? `Expected delivery date: ${issuedPurchaseOrder.expected_delivery_date}` : '',
+          issuedPurchaseOrder.delivery_location ? `Delivery location: ${issuedPurchaseOrder.delivery_location}` : '',
+        ].filter(Boolean).join('\n'),
+        logLabel: 'supplier purchase order email',
+      });
+    }
+    res.json({ purchase_order: issuedPurchaseOrder });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -1159,6 +1223,15 @@ const cancelPurchaseOrder = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    await sendRequestWorkflowEmail({
+      requestId: po.request_id,
+      subject: `Purchase order cancelled for request #${po.request_id}`,
+      message: [
+        `${req.user?.name || 'A procurement user'} cancelled purchase order ${updated.rows[0].po_number || `#${poId}`} for request #${po.request_id}.`,
+        `Reason: ${reason}`,
+      ].join('\n'),
+      logLabel: 'purchase order cancellation notification',
+    });
     res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1220,6 +1293,15 @@ const closePurchaseOrder = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    await sendRequestWorkflowEmail({
+      requestId: po.request_id,
+      subject: `Purchase order closed for request #${po.request_id}`,
+      message: [
+        `${req.user?.name || 'A procurement user'} closed purchase order ${updated.rows[0].po_number || `#${poId}`} for request #${po.request_id}.`,
+        reason ? `Reason: ${reason}` : 'The purchase order was closed after delivery.',
+      ].join('\n'),
+      logLabel: 'purchase order closure notification',
+    });
     res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
   } catch (error) {
     await client.query('ROLLBACK');

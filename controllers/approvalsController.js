@@ -187,15 +187,15 @@ const handleApprovalDecision = async (req, res, next) => {
       });
     };
 
+    const initiatingTechnicianId = Number(request.initiated_by_technician_id) || null;
     let technicianEmail = null;
     if (
       request.request_type === 'Maintenance' &&
-      request.initiated_by_technician_id &&
-      request.initiated_by_technician_id !== request.requester_id
+      initiatingTechnicianId
     ) {
       const techRes = await client.query(
         `SELECT email FROM users WHERE id = $1`,
-        [request.initiated_by_technician_id],
+        [initiatingTechnicianId],
       );
       technicianEmail = techRes.rows[0]?.email || null;
     }
@@ -284,6 +284,24 @@ const handleApprovalDecision = async (req, res, next) => {
       VALUES ($1, $2, $3, $4, $5)`,
       [approvalId, approval.request_id, approver_id, status, comments || null]
     );
+
+    if (request.request_type === 'Maintenance' && initiatingTechnicianId) {
+      const statusLower = status.toLowerCase();
+      enqueueNotification({
+        userId: initiatingTechnicianId,
+        title: `Maintenance request ${approval.request_id} ${statusLower}`,
+        message: `Approval level ${approval.approval_level} for the maintenance request you initiated (ID: ${approval.request_id}) was ${statusLower}.`,
+        link: `/requests/${approval.request_id}`,
+        metadata: {
+          requestId: approval.request_id,
+          requestType: request.request_type,
+          action: status === 'Approved' ? 'maintenance_step_approved' : 'maintenance_step_rejected',
+          level: approval.approval_level,
+          approvalId,
+          approverId: approver_id,
+        },
+      });
+    }
 
     if (routedHodContext) {
       if (status === 'Approved') {

@@ -17,6 +17,15 @@ describe('emailService', () => {
     delete process.env.EMAIL_PORT;
     delete process.env.EMAIL_SECURE;
     delete process.env.EMAIL_FROM;
+    delete process.env.EMAIL_REPLY_TO;
+    delete process.env.EMAIL_DRY_RUN;
+    delete process.env.EMAIL_SERVICE;
+    delete process.env.EMAIL_POOL;
+    delete process.env.EMAIL_MAX_CONNECTIONS;
+    delete process.env.EMAIL_REQUIRE_TLS;
+    delete process.env.EMAIL_RETRY_ATTEMPTS;
+    delete process.env.EMAIL_RETRY_DELAY_MS;
+    delete process.env.FRONTEND_URL;
   };
 
   const loadService = () => {
@@ -169,6 +178,82 @@ describe('emailService', () => {
     expect(payload.text).toBe(`Hello world${footer.text}`);
     expect(payload.html).toContain(`Hello world`);
     expect(payload.html).toContain(footer.html);
+  });
+
+  it('supports templates, deduplicated recipients, default reply-to, and HTML layout', async () => {
+    process.env.EMAIL_HOST = 'smtp.example.com';
+    process.env.EMAIL_USER = 'mailer@example.com';
+    process.env.EMAIL_PASS = 'secret';
+    process.env.EMAIL_REPLY_TO = 'helpdesk@example.com';
+    process.env.FRONTEND_URL = 'https://procurement.example.com/';
+
+    const { sendEmail } = loadService();
+
+    await sendEmail('user@example.com; user@example.com, second@example.com', 'Request {{id}}', null, {
+      template: 'Hello {{user.name}}, request {{id}} needs attention.',
+      templateData: { id: 42, user: { name: 'Aisha' } },
+      preheader: 'Request 42 needs attention',
+    });
+
+    const payload = sendMailMock.mock.calls[0][0];
+
+    expect(payload.to).toEqual(['user@example.com', 'second@example.com']);
+    expect(payload.replyTo).toBe('helpdesk@example.com');
+    expect(payload.text).toContain('Hello Aisha, request 42 needs attention.');
+    expect(payload.text).toContain('https://procurement.example.com');
+    expect(payload.html).toContain('<!doctype html>');
+    expect(payload.html).toContain('Request 42 needs attention');
+    expect(payload.html).toContain('Hello Aisha, request 42 needs attention.');
+  });
+
+  it('returns a dry-run payload without creating a transporter', async () => {
+    process.env.EMAIL_HOST = 'smtp.example.com';
+    process.env.EMAIL_USER = 'mailer@example.com';
+    process.env.EMAIL_PASS = 'secret';
+    process.env.EMAIL_DRY_RUN = 'true';
+
+    const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { sendEmail } = loadService();
+
+    const result = await sendEmail('user@example.com', 'Subject', 'Body');
+
+    expect(nodemailer.createTransport).not.toHaveBeenCalled();
+    expect(sendMailMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      dryRun: true,
+      envelope: { to: ['user@example.com'] },
+      message: { subject: 'Subject' },
+    });
+    expect(infoSpy).toHaveBeenCalledWith(
+      '📨 Email dry-run payload',
+      expect.objectContaining({ to: ['user@example.com'], subject: 'Subject' }),
+    );
+
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('builds advanced SMTP transport configuration from environment variables', () => {
+    process.env.EMAIL_HOST = 'smtp.example.com';
+    process.env.EMAIL_PORT = '465';
+    process.env.EMAIL_USER = 'mailer@example.com';
+    process.env.EMAIL_PASS = 'secret';
+    process.env.EMAIL_POOL = 'true';
+    process.env.EMAIL_MAX_CONNECTIONS = '3';
+    process.env.EMAIL_REQUIRE_TLS = 'true';
+
+    const { _private } = loadService();
+
+    expect(_private.buildTransportConfig()).toMatchObject({
+      host: 'smtp.example.com',
+      port: 465,
+      secure: true,
+      auth: { user: 'mailer@example.com', pass: 'secret' },
+      pool: true,
+      maxConnections: 3,
+      requireTLS: true,
+    });
   });
 
   describe('normalizeDocumentation', () => {

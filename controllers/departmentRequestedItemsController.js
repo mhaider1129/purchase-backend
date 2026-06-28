@@ -141,11 +141,31 @@ const baseSelect = whereSql => `
       created_at
     FROM public.department_item_follow_up_notes
     ORDER BY requested_item_id, created_at DESC, id DESC
+  ), approval_timelines AS (
+    SELECT
+      a.request_id,
+      MIN(a.updated_at) AS approval_started_at,
+      MIN(a.approved_at) FILTER (WHERE a.approved_at IS NOT NULL) AS first_approval_at,
+      MAX(a.approved_at) FILTER (WHERE a.status = 'Approved' AND a.approved_at IS NOT NULL) AS final_approval_at,
+      STRING_AGG(
+        CONCAT(
+          'Level ', COALESCE(a.approval_level::text, '—'),
+          ': ', COALESCE(NULLIF(a.status, ''), 'Pending'),
+          CASE WHEN approver.name IS NOT NULL THEN CONCAT(' by ', approver.name) ELSE '' END,
+          CASE WHEN approver.role IS NOT NULL THEN CONCAT(' (', approver.role, ')') ELSE '' END,
+          CASE WHEN a.approved_at IS NOT NULL THEN CONCAT(' on ', TO_CHAR(a.approved_at, 'YYYY-MM-DD HH24:MI')) ELSE '' END
+        ),
+        ' | ' ORDER BY a.approval_level ASC NULLS LAST, a.id ASC
+      ) AS approval_timeline
+    FROM public.approvals a
+    LEFT JOIN public.users approver ON approver.id = a.approver_id
+    GROUP BY a.request_id
   ), item_rows AS (
     SELECT
       r.id AS request_id,
       r.id::text AS request_number,
       r.created_at AS request_date,
+      CONCAT('Submitted on ', TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI'), ' by ', COALESCE(r.temporary_requester_name, requester.name, 'Unknown requester')) AS submission_timeline,
       r.request_type,
       r.status AS request_status,
       ri.approval_status,
@@ -174,6 +194,14 @@ const baseSelect = whereSql => `
       COALESCE(r.is_urgent, FALSE) AS emergency_flag,
       r.justification,
       ri.intended_use,
+      at.approval_started_at,
+      at.first_approval_at,
+      at.final_approval_at,
+      at.approval_timeline,
+      CASE
+        WHEN at.final_approval_at IS NULL THEN NULL
+        ELSE ROUND(EXTRACT(EPOCH FROM (at.final_approval_at - r.created_at)) / 86400.0, 2)
+      END AS approval_duration_days,
       COALESCE(le.created_at, ri.procurement_updated_at, ri.marked_at) AS last_procurement_update,
       GREATEST(0, DATE_PART('day', CURRENT_TIMESTAMP - r.created_at)::int) AS days_since_request,
       ln.note AS latest_follow_up_note,
@@ -189,6 +217,7 @@ const baseSelect = whereSql => `
     LEFT JOIN public.users assigned_user ON assigned_user.id = COALESCE(ri.assigned_to, r.assigned_to)
     LEFT JOIN latest_events le ON le.requested_item_id = ri.id
     LEFT JOIN latest_notes ln ON ln.requested_item_id = ri.id
+    LEFT JOIN approval_timelines at ON at.request_id = r.id
     WHERE ${whereSql}
   )
 `;

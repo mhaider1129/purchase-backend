@@ -4,6 +4,7 @@ const createHttpError = require('../utils/httpError');
 const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
 const ensureRequestedItemPoIssuanceColumn = require('../utils/ensureRequestedItemPoIssuanceColumn');
 const { ensureRequestedItemFinancialsTable } = require('../utils/ensureRequestedItemFinancialsTable');
+const { sendRequestWorkflowEmail } = require('../utils/workflowEmailNotifications');
 
 const parseOptionalNumber = (value, fieldLabel) => {
   if (value === undefined || value === null || value === '') {
@@ -528,6 +529,18 @@ const updateItemProcurementStatus = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+
+    await sendRequestWorkflowEmail({
+      requestId: item.request_id,
+      subject: `Procurement item status updated for request #${item.request_id}`,
+      message: [
+        `${req.user?.name || 'A procurement user'} updated "${item.item_name}" to "${procurement_status}".`,
+        procurement_comment ? `Comment: ${procurement_comment}` : '',
+        po_issuance_method ? `PO issuance: ${po_issuance_method}` : '',
+        invoice_number ? `Invoice: ${invoice_number}` : '',
+      ].filter(Boolean).join('\n'),
+      logLabel: 'procurement item status notification',
+    });
 
     res.json({ message: '✅ Procurement status updated successfully' });
   } catch (err) {

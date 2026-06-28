@@ -1124,12 +1124,33 @@ const getHodApprovers = async (req, res, next) => {
 const getMyMaintenanceRequests = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT
+      `WITH approval_timelines AS (
+         SELECT
+           ap.request_id,
+           MIN(ap.updated_at) AS approval_started_at,
+           MIN(ap.approved_at) FILTER (WHERE ap.approved_at IS NOT NULL) AS first_approval_at,
+           MAX(ap.approved_at) FILTER (WHERE ap.status = 'Approved' AND ap.approved_at IS NOT NULL) AS final_approval_at,
+           STRING_AGG(
+             CONCAT(
+               'Level ', COALESCE(ap.approval_level::text, '—'),
+               ': ', COALESCE(NULLIF(ap.status, ''), 'Pending'),
+               CASE WHEN approver.name IS NOT NULL THEN CONCAT(' by ', approver.name) ELSE '' END,
+               CASE WHEN approver.role IS NOT NULL THEN CONCAT(' (', approver.role, ')') ELSE '' END,
+               CASE WHEN ap.approved_at IS NOT NULL THEN CONCAT(' on ', TO_CHAR(ap.approved_at, 'YYYY-MM-DD HH24:MI')) ELSE '' END
+             ),
+             ' | ' ORDER BY ap.approval_level ASC NULLS LAST, ap.id ASC
+           ) AS approval_timeline
+         FROM approvals ap
+         LEFT JOIN users approver ON approver.id = ap.approver_id
+         GROUP BY ap.request_id
+       )
+       SELECT
          r.id,
          r.justification,
          r.maintenance_ref_number,
          r.status,
          r.created_at,
+         CONCAT('Submitted on ', TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI'), ' by ', COALESCE(r.temporary_requester_name, u.name, 'Unknown requester')) AS submission_timeline,
          r.project_id,
          r.is_urgent,
          p.name AS project_name,
@@ -1200,6 +1221,14 @@ const getMyMaintenanceRequests = async (req, res, next) => {
            )
            ELSE NULL
          END AS final_approver_name,
+         at.approval_started_at,
+         at.first_approval_at,
+         at.final_approval_at,
+         at.approval_timeline,
+         CASE
+           WHEN at.final_approval_at IS NULL THEN NULL
+           ELSE ROUND(EXTRACT(EPOCH FROM (at.final_approval_at - r.created_at)) / 86400.0, 2)
+         END AS approval_duration_days,
          (
            SELECT COUNT(*)
            FROM attachments att
@@ -1209,6 +1238,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN users u ON r.requester_id = u.id
+       LEFT JOIN approval_timelines at ON at.request_id = r.id
        LEFT JOIN public.requested_items ri ON ri.request_id = r.id
        WHERE r.request_type = 'Maintenance'
          AND r.initiated_by_technician_id = $1
@@ -1223,7 +1253,11 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          p.name,
          d.name,
          u.name,
-         r.temporary_requester_name
+         r.temporary_requester_name,
+         at.approval_started_at,
+         at.first_approval_at,
+         at.final_approval_at,
+         at.approval_timeline
        ORDER BY r.created_at DESC`,
       [req.user.id],
     );

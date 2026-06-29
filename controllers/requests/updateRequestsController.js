@@ -10,6 +10,7 @@ const ensureWarehouseAssignments = require('../../utils/ensureWarehouseAssignmen
 const ensureWarehouseInventoryTables = require('../../utils/ensureWarehouseInventoryTables');
 const recalculateAvailableQuantity = require('../../utils/recalculateAvailableQuantity');
 const { getInspectionSummaryForRequest } = require('../../utils/technicalInspectionStatus');
+const ensureRequestEditApprovalsTable = require('../../utils/ensureRequestEditApprovalsTable');
 
 const assignRequestToProcurement = async (req, res, next) => {
   const { request_id, user_id } = req.body;
@@ -1280,6 +1281,98 @@ const updateRequestBeforeApproval = async (req, res, next) => {
           : requestRow.temporary_requester_name || null
         : null;
 
+    if (isMaintenanceTechnicianEdit) {
+      await ensureRequestEditApprovalsTable(client);
+
+      const scmRes = await client.query(
+        `SELECT id
+           FROM users
+          WHERE role = 'SCM'
+            AND is_active = true
+            AND ($1::INT IS NULL OR department_id = $1)
+          ORDER BY id ASC
+          LIMIT 1`,
+        [requestRow.department_id || null],
+      );
+
+      const scmApproverId = scmRes.rows[0]?.id || null;
+      if (!scmApproverId) {
+        await client.query('ROLLBACK');
+        transactionActive = false;
+        return next(createHttpError(400, 'No active SCM user is available to review this edit'));
+      }
+
+      await client.query(
+        `UPDATE approvals
+            SET is_active = FALSE,
+                updated_at = NOW()
+          WHERE request_id = $1
+            AND status = 'Pending'
+            AND comments = 'Edit Approval'`,
+        [requestId],
+      );
+
+      await client.query(
+        `UPDATE request_edit_approvals
+            SET status = 'Superseded',
+                decided_at = NOW()
+          WHERE request_id = $1
+            AND status = 'Pending'`,
+        [requestId],
+      );
+
+      const approvalRes = await client.query(
+        `INSERT INTO approvals (request_id, approver_id, approval_level, is_active, status, approved_at, comments)
+         VALUES ($1, $2, 0, TRUE, 'Pending', NULL, 'Edit Approval')
+         RETURNING id`,
+        [requestId, scmApproverId],
+      );
+
+      await client.query(
+        `INSERT INTO request_edit_approvals (
+            request_id,
+            approval_id,
+            requested_by,
+            payload
+          )
+          VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          requestId,
+          approvalRes.rows[0].id,
+          req.user.id,
+          JSON.stringify({
+            justification: justification || requestRow.justification || null,
+            estimated_cost: estimatedCost,
+            temporary_requester_name: normalizedTempRequesterName,
+            project_id: projectId,
+            supply_warehouse_id: supplyWarehouseId,
+            request_type: requestRow.request_type,
+            items: sanitizedItems,
+          }),
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, 'Edit Approval Requested', $2, $3)`,
+        [
+          requestId,
+          req.user.id,
+          justification || 'Maintenance edit submitted for SCM approval',
+        ],
+      );
+
+      await client.query('COMMIT');
+      transactionActive = false;
+
+      return res.json({
+        message: '✅ Request edit submitted for SCM approval',
+        request_id: requestId,
+        estimated_cost: estimatedCost,
+        pending_edit_approval: true,
+      });
+    }
+
     await client.query(
       `UPDATE requests
           SET justification = $1,
@@ -1339,20 +1432,6 @@ const updateRequestBeforeApproval = async (req, res, next) => {
           ],
         );
       }
-    }
-
-    if (isMaintenanceTechnicianEdit) {
-      await client.query(`UPDATE approvals SET is_active = false WHERE request_id = $1`, [requestId]);
-      await client.query(`UPDATE requests SET status = 'Submitted', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [requestId]);
-      await assignApprover(
-        client,
-        'SCM',
-        requestRow.department_id,
-        requestId,
-        requestRow.request_type,
-        1,
-        requestRow.request_domain,
-      );
     }
 
     await client.query(
@@ -1524,7 +1603,7 @@ const reassignMaintenanceRequestToRequester = async (req, res, next) => {
 
     if (designatedRes.rowCount === 0) {
       await client.query('ROLLBACK');
-      return next(createHttpError(404, 'No active department requester found for this request'));
+      return next(createHttpError(409, 'No active department requester found for this request'));
     }
 
     const designatedRequester = designatedRes.rows[0];

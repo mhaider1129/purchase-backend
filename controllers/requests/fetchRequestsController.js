@@ -1074,9 +1074,15 @@ const getPendingApprovals = async (req, res, next) => {
          r.id AS request_id,
          r.request_type,
          r.justification,
+         r.maintenance_ref_number,
          r.estimated_cost,
          r.status,
          r.is_urgent,
+         a.comments AS approval_comments,
+         CASE
+           WHEN a.comments = 'Edit Approval' THEN TRUE
+           ELSE FALSE
+         END AS is_edit_approval,
          budget_snapshot.budget_envelope_id,
          budget_snapshot.allocated_amount AS budget_allocated_amount,
          budget_snapshot.available_amount AS budget_available_amount,

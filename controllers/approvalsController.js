@@ -10,6 +10,7 @@ const getColumnType = require('../utils/getColumnType');
 const { assignApprover } = require('./requests/createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('./utils/approvalRoutes');
 const { applyAutoAssignmentForApprovedRequest } = require('../services/requestAutoAssignmentService');
+const ensureRequestEditApprovalsTable = require('../utils/ensureRequestEditApprovalsTable');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -79,6 +80,7 @@ const handleApprovalDecision = async (req, res, next) => {
     }
     if (!approval.is_active) return rollbackWithError(client, res, next, 403, 'This approval is not yet active for your action.');
     if (approval.approver_id !== approver_id) return rollbackWithError(client, res, next, 403, 'You are not authorized to act on this approval.');
+    const isEditApproval = approval.comments === 'Edit Approval';
 
     // 2. Fetch Request
     const requestRes = await client.query(
@@ -96,6 +98,10 @@ const handleApprovalDecision = async (req, res, next) => {
       await ensureWarehouseSupplyApprovalColumns(client);
     } else {
       await ensureRequestedItemApprovalColumns(client);
+    }
+
+    if (isEditApproval) {
+      await ensureRequestEditApprovalsTable(client);
     }
 
     const routedHodRes = await client.query(
@@ -285,6 +291,129 @@ const handleApprovalDecision = async (req, res, next) => {
       VALUES ($1, $2, $3, $4, $5)`,
       [approvalId, approval.request_id, approver_id, status, comments || null]
     );
+
+    if (isEditApproval) {
+      const editRes = await client.query(
+        `SELECT id, payload
+           FROM request_edit_approvals
+          WHERE approval_id = $1
+            AND status = 'Pending'
+          FOR UPDATE`,
+        [approvalId],
+      );
+
+      const pendingEdit = editRes.rows[0] || null;
+      if (!pendingEdit) {
+        return rollbackWithError(client, res, next, 404, 'Pending edit request not found');
+      }
+
+      if (status === 'Approved') {
+        const payload = pendingEdit.payload || {};
+        const editedItems = Array.isArray(payload.items) ? payload.items : [];
+        const editedEstimatedCost = Number(payload.estimated_cost) || 0;
+
+        await client.query(
+          `UPDATE requests
+              SET justification = $1,
+                  estimated_cost = $2,
+                  updated_at = NOW(),
+                  temporary_requester_name = $3,
+                  project_id = $4,
+                  supply_warehouse_id = $5
+            WHERE id = $6`,
+          [
+            payload.justification || null,
+            editedEstimatedCost,
+            payload.temporary_requester_name || null,
+            payload.project_id || null,
+            payload.supply_warehouse_id || null,
+            approval.request_id,
+          ],
+        );
+
+        if (request.request_type === 'Warehouse Supply') {
+          await client.query(`DELETE FROM warehouse_supply_items WHERE request_id = $1`, [approval.request_id]);
+
+          for (const item of editedItems) {
+            await client.query(
+              `INSERT INTO warehouse_supply_items (request_id, item_name, quantity)
+                 VALUES ($1, $2, $3)`,
+              [approval.request_id, item.item_name, item.quantity],
+            );
+          }
+        } else {
+          await client.query(`UPDATE attachments SET item_id = NULL WHERE request_id = $1`, [approval.request_id]);
+          await client.query(`DELETE FROM requested_items WHERE request_id = $1`, [approval.request_id]);
+
+          for (const item of editedItems) {
+            await client.query(
+              `INSERT INTO public.requested_items (
+                  request_id,
+                  item_name,
+                  brand,
+                  quantity,
+                  unit_cost,
+                  total_cost,
+                  available_quantity,
+                  intended_use,
+                  specs
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [
+                approval.request_id,
+                item.item_name,
+                item.brand || null,
+                item.quantity,
+                item.unit_cost,
+                item.total_cost,
+                item.available_quantity,
+                item.intended_use,
+                item.specs,
+              ],
+            );
+          }
+        }
+
+        await client.query(
+          `UPDATE request_edit_approvals
+              SET status = 'Approved',
+                  decided_at = NOW()
+            WHERE id = $1`,
+          [pendingEdit.id],
+        );
+
+        await client.query(
+          `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, 'Edit Approval Approved', $2, $3)`,
+          [approval.request_id, approver_id, comments || 'SCM approved the submitted edit'],
+        );
+      } else {
+        await client.query(
+          `UPDATE request_edit_approvals
+              SET status = 'Rejected',
+                  decided_at = NOW()
+            WHERE id = $1`,
+          [pendingEdit.id],
+        );
+
+        await client.query(
+          `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, 'Edit Approval Rejected', $2, $3)`,
+          [approval.request_id, approver_id, comments || 'SCM rejected the submitted edit'],
+        );
+      }
+
+      if (notificationsToCreate.length > 0) {
+        await createNotifications(notificationsToCreate, client);
+      }
+
+      await client.query('COMMIT');
+
+      return res.json({
+        message: `✅ Edit approval ${status.toLowerCase()} successfully`,
+        updatedRequestStatus: request.status || 'Submitted',
+        editApproval: true,
+      });
+    }
 
     if (request.request_type === 'Maintenance' && initiatingTechnicianId) {
       const statusLower = status.toLowerCase();

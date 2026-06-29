@@ -48,4 +48,28 @@ describe('assignApprover', () => {
       [311, 46, 3, false, 'Pending', null],
     );
   });
+
+  it('skips later approval levels when the same approver already approved the request', async () => {
+    const client = { query: jest.fn() };
+    client.query
+      .mockResolvedValueOnce({ rows: [{ id: 12, email: 'hod@example.com' }] })
+      .mockResolvedValueOnce({ rowCount: 1 });
+
+    const result = await assignApprover(
+      client,
+      'HOD',
+      5,
+      340,
+      'Maintenance',
+      2,
+      'operational',
+    );
+
+    expect(result).toEqual({ skipped: true, reason: 'duplicate_approver' });
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO approvals'),
+      expect.any(Array),
+    );
+  });
 });

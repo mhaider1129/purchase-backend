@@ -187,7 +187,7 @@ const assignApprover = async (
     );
 
     if (duplicateApproverRes.rowCount > 0) {
-      shouldAutoApprove = true;
+      return { skipped: true, reason: 'duplicate_approver' };
     } else {
       const requesterRes = await client.query(
         `SELECT 1
@@ -213,6 +213,8 @@ const assignApprover = async (
       shouldAutoApprove ? new Date() : null,
     ],
   );
+
+  return { skipped: false, approverId, status: shouldAutoApprove ? 'Approved' : 'Pending' };
 };
 
 const normalizeClientSubmissionKey = (value) => {

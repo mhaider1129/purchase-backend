@@ -190,7 +190,7 @@ const updateApprovalStatus = async (req, res, next) => {
     const request_id = currentApproval.request_id;
 
     const requestInfoRes = await client.query(
-      `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent, requester_id
+      `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent, requester_id, status
          FROM requests
         WHERE id = $1
         FOR UPDATE`,
@@ -401,7 +401,13 @@ const updateApprovalStatus = async (req, res, next) => {
 
         activeApproversToNotify = activePendingApprovals.filter((approval) => approval?.approver_id);
       } else {
-        await client.query(`UPDATE requests SET status = 'Approved' WHERE id = $1`, [request_id]);
+        await client.query(
+          `UPDATE requests
+              SET status = 'Approved'
+            WHERE id = $1
+              AND COALESCE(NULLIF(LOWER(TRIM(status)), ''), 'pending') <> 'completed'`,
+          [request_id],
+        );
 
         const { rowCount } = await client.query(
           `UPDATE public.requested_items
@@ -1157,7 +1163,7 @@ const updateRequestBeforeApproval = async (req, res, next) => {
     transactionActive = true;
 
     const requestRes = await client.query(
-      `SELECT id, requester_id, status, request_type, department_id, request_domain, temporary_requester_name, project_id, supply_warehouse_id
+      `SELECT id, requester_id, initiated_by_technician_id, status, request_type, department_id, request_domain, temporary_requester_name, project_id, supply_warehouse_id
          FROM requests
         WHERE id = $1
         FOR UPDATE`,
@@ -1172,38 +1178,46 @@ const updateRequestBeforeApproval = async (req, res, next) => {
 
     const requestRow = requestRes.rows[0];
 
-    if (requestRow.requester_id !== req.user.id) {
+    const normalizedStatus = (requestRow.status || '').trim().toLowerCase();
+    const finalApprovalStatuses = ['approved', 'completed', 'received', 'cancelled'];
+    const isMaintenanceTechnicianEdit =
+      requestRow.request_type === 'Maintenance' &&
+      requestRow.initiated_by_technician_id === req.user.id &&
+      !finalApprovalStatuses.includes(normalizedStatus);
+
+    if (requestRow.requester_id !== req.user.id && !isMaintenanceTechnicianEdit) {
       await client.query('ROLLBACK');
       transactionActive = false;
       return next(createHttpError(403, 'Only the requester can edit this submission'));
     }
 
-    const normalizedStatus = (requestRow.status || '').trim().toLowerCase();
-    if (['approved', 'rejected', 'completed', 'received', 'cancelled'].includes(normalizedStatus)) {
+    if (!isMaintenanceTechnicianEdit && ['approved', 'rejected', 'completed', 'received', 'cancelled'].includes(normalizedStatus)) {
       await client.query('ROLLBACK');
       transactionActive = false;
       return next(createHttpError(400, 'This request can no longer be edited'));
     }
 
-    const approvalLogs = await client.query(
-      `SELECT 1 FROM approval_logs WHERE request_id = $1 LIMIT 1`,
-      [requestId],
-    );
+    if (!isMaintenanceTechnicianEdit) {
+      const approvalLogs = await client.query(
+        `SELECT 1 FROM approval_logs WHERE request_id = $1 LIMIT 1`,
+        [requestId],
+      );
 
-    const approvalsProgressed = await client.query(
-      `SELECT 1
-         FROM approvals
-        WHERE request_id = $1
-          AND status IN ('Approved', 'Rejected')
-          AND approver_id IS DISTINCT FROM $2
-        LIMIT 1`,
-      [requestId, requestRow.requester_id],
-    );
+      const approvalsProgressed = await client.query(
+        `SELECT 1
+           FROM approvals
+          WHERE request_id = $1
+            AND status IN ('Approved', 'Rejected')
+            AND approver_id IS DISTINCT FROM $2
+          LIMIT 1`,
+        [requestId, requestRow.requester_id],
+      );
 
-    if (approvalLogs.rowCount > 0 || approvalsProgressed.rowCount > 0) {
-      await client.query('ROLLBACK');
-      transactionActive = false;
-      return next(createHttpError(400, 'You can only edit a request before any approvals have occurred'));
+      if (approvalLogs.rowCount > 0 || approvalsProgressed.rowCount > 0) {
+        await client.query('ROLLBACK');
+        transactionActive = false;
+        return next(createHttpError(400, 'You can only edit a request before any approvals have occurred'));
+      }
     }
 
     let projectId = requestRow.project_id;
@@ -1327,10 +1341,29 @@ const updateRequestBeforeApproval = async (req, res, next) => {
       }
     }
 
+    if (isMaintenanceTechnicianEdit) {
+      await client.query(`UPDATE approvals SET is_active = false WHERE request_id = $1`, [requestId]);
+      await client.query(`UPDATE requests SET status = 'Submitted', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [requestId]);
+      await assignApprover(
+        client,
+        'SCM',
+        requestRow.department_id,
+        requestId,
+        requestRow.request_type,
+        1,
+        requestRow.request_domain,
+      );
+    }
+
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, 'Updated by Requester', $2, $3)`,
-      [requestId, req.user.id, justification || 'Edited before approvals started'],
+         VALUES ($1, $2, $3, $4)`,
+      [
+        requestId,
+        isMaintenanceTechnicianEdit ? 'Maintenance Request Edited Before Final Approval' : 'Updated by Requester',
+        req.user.id,
+        justification || (isMaintenanceTechnicianEdit ? 'Edited before final approval; SCM approval restarted' : 'Edited before approvals started'),
+      ],
     );
 
     await client.query('COMMIT');
@@ -1822,11 +1855,7 @@ const markRequestAsReceived = async (req, res, next) => {
              receipt_issue_notes = NULL,
              receipt_issue_resolved_at = CASE WHEN receipt_issue_status IS NULL THEN receipt_issue_resolved_at ELSE CURRENT_TIMESTAMP END,
              received_by = $1,
-             received_at = CURRENT_TIMESTAMP,
-             receipt_issue_status = NULL,
-             receipt_issue_quantity = NULL,
-             receipt_issue_notes = NULL,
-             receipt_issue_resolved_at = CASE WHEN receipt_issue_status IS NULL THEN receipt_issue_resolved_at ELSE CURRENT_TIMESTAMP END
+             received_at = CURRENT_TIMESTAMP
          WHERE id = $2`,
         [user_id, targetItemId, isFullyReceived, newReceivedQuantity]
       );

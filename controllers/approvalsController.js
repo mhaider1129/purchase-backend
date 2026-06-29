@@ -3,6 +3,7 @@ const pool = require('../config/db');
 const { sendEmail, buildApprovalActionLinks, verifyApprovalActionToken } = require('../utils/emailService');
 const { createNotifications } = require('../utils/notificationService');
 const createHttpError = require('../utils/httpError');
+const ensureApprovalReminderColumn = require('../utils/ensureApprovalReminderColumn');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
 const { ensureWarehouseSupplyApprovalColumns } = require('../utils/ensureWarehouseSupplyTables');
 const getColumnType = require('../utils/getColumnType');
@@ -1280,6 +1281,147 @@ const getApprovalSummary = async (req, res, next) => {
   }
 };
 
+// 🔔 Send an on-demand email reminder to the current active approver for a request
+const notifyCurrentApprovalByEmail = async (req, res, next) => {
+  const { request_id: requestIdParam } = req.params;
+
+  if (!/^\d+$/.test(String(requestIdParam || ''))) {
+    return next(createHttpError(400, 'Invalid request ID'));
+  }
+
+  const requestId = Number(requestIdParam);
+  const actorId = req.user?.id ?? null;
+
+  if (!Number.isInteger(actorId)) {
+    return next(createHttpError(403, 'Unable to identify the current user'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await ensureApprovalReminderColumn(client);
+
+    const { rows } = await client.query(
+      `SELECT
+          a.id AS approval_id,
+          a.request_id,
+          a.approver_id,
+          a.approval_level,
+          a.status AS approval_status,
+          u.email AS approver_email,
+          u.name AS approver_name,
+          r.request_type,
+          r.requester_id,
+          r.assigned_to,
+          r.status AS request_status
+         FROM approvals a
+         JOIN requests r ON r.id = a.request_id
+         LEFT JOIN users u ON u.id = a.approver_id
+        WHERE a.request_id = $1
+          AND a.status IN ('Pending', 'On Hold')
+          AND a.is_active = TRUE
+        ORDER BY a.approval_level ASC, a.id ASC
+        LIMIT 1
+        FOR UPDATE OF a`,
+      [requestId],
+    );
+
+    const currentApproval = rows[0];
+    if (!currentApproval) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'No active pending approval found for this request'));
+    }
+
+    if (String(req.user?.role || '').trim().toUpperCase() !== 'SCM') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(403, 'Only SCM users can remind the current approver'));
+    }
+
+    if (!currentApproval.approver_email) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'The current approver does not have an email address'));
+    }
+
+    const actionLinks = currentApproval.approver_id
+      ? buildApprovalActionLinks({
+          approvalId: currentApproval.approval_id,
+          approverId: currentApproval.approver_id,
+        })
+      : null;
+
+    const approverName = currentApproval.approver_name || 'Approver';
+    const baseMessage = [
+      `Hello ${approverName},`,
+      '',
+      `${req.user?.name || 'A procurement user'} sent you a reminder to review ${currentApproval.request_type} request ${currentApproval.request_id}.`,
+      `Approval level: ${currentApproval.approval_level}`,
+      `Current approval status: ${currentApproval.approval_status}`,
+      '',
+      'Please log in to review the full request details and take action.',
+    ];
+
+    if (actionLinks) {
+      baseMessage.push(
+        '',
+        'Quick actions:',
+        `Approve: ${actionLinks.approveUrl}`,
+        `Reject: ${actionLinks.rejectUrl}`,
+      );
+    }
+
+    await sendEmail(
+      currentApproval.approver_email,
+      `Reminder: request ${currentApproval.request_id} is waiting for your approval`,
+      baseMessage.join('\n'),
+    );
+
+    await client.query(
+      `UPDATE approvals
+          SET reminder_sent_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $1`,
+      [currentApproval.approval_id],
+    );
+
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, 'Approval reminder emailed', $2, $3)`,
+      [
+        currentApproval.request_id,
+        actorId,
+        `Reminder sent to approval level ${currentApproval.approval_level}`,
+      ],
+    );
+
+    await client.query(
+      `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
+       VALUES ($1, $2, $3, 'Reminder Sent', $4)`,
+      [
+        currentApproval.approval_id,
+        currentApproval.request_id,
+        actorId,
+        `Email reminder sent to ${currentApproval.approver_email}`,
+      ],
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Approval reminder email sent successfully',
+      request_id: currentApproval.request_id,
+      approval_id: currentApproval.approval_id,
+      approver_id: currentApproval.approver_id,
+      approval_level: currentApproval.approval_level,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ Failed to send current approval reminder:', err);
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 
 const handleEmailApprovalAction = async (req, res, next) => {
   try {
@@ -1320,6 +1462,7 @@ const handleEmailApprovalAction = async (req, res, next) => {
 module.exports = {
   handleApprovalDecision,
   handleEmailApprovalAction,
+  notifyCurrentApprovalByEmail,
   getApprovalSummary,
   getApprovalDetailsForRequest,
   setApprovalHoldStatus,

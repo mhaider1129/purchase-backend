@@ -431,6 +431,7 @@ const getMyRequests = async (req, res, next) => {
       conditions.push(`r.created_at <= $${params.length}`);
     }
 
+
     if (search) {
       params.push(`%${search.toLowerCase()}%`);
       const placeholder = `$${params.length}`;
@@ -673,6 +674,8 @@ const getAllRequests = async (req, res, next) => {
     section_id,
     assigned_to,
     request_id,
+    maintenance_ref_number,
+    current_step,
     page = 1,
     limit = 10,
   } = req.query;
@@ -722,6 +725,58 @@ const getAllRequests = async (req, res, next) => {
   if (trimmedRequestId) {
     params.push(trimmedRequestId);
     whereClauses.push(`CAST(r.id AS TEXT) = $${params.length}`);
+  }
+
+
+  const trimmedMaintenanceRefNumber =
+    typeof maintenance_ref_number === 'string' ? maintenance_ref_number.trim() : '';
+  if (trimmedMaintenanceRefNumber) {
+    params.push(`%${trimmedMaintenanceRefNumber.toLowerCase()}%`);
+    whereClauses.push(`LOWER(COALESCE(r.maintenance_ref_number, '')) LIKE $${params.length}`);
+  }
+
+  if (current_step) {
+    const currentStepValue = Array.isArray(current_step) ? current_step[0] : current_step;
+    const normalizedCurrentStep = String(currentStepValue).trim();
+    const normalizedCurrentStepLower = normalizedCurrentStep.toLowerCase();
+    if (normalizedCurrentStepLower) {
+      const activeApprovalExists = `EXISTS (
+        SELECT 1
+        FROM approvals step_ap
+        JOIN users step_user ON step_user.id = step_ap.approver_id
+        WHERE step_ap.request_id = r.id
+          AND step_ap.is_active = true`;
+      switch (normalizedCurrentStepLower) {
+        case 'rejected':
+          whereClauses.push(`LOWER(TRIM(r.status)) = 'rejected'`);
+          break;
+        case 'completed':
+          whereClauses.push(`LOWER(TRIM(r.status)) = 'completed'`);
+          break;
+        case 'technical inspection pending':
+          whereClauses.push(`LOWER(TRIM(r.status)) = 'technical_inspection_pending'`);
+          break;
+        case 'received':
+          whereClauses.push(`LOWER(TRIM(r.status)) = 'received'`);
+          break;
+        case 'partially procured':
+          whereClauses.push(`LOWER(TRIM(r.status)) = 'partially procured'`);
+          break;
+        case 'approved':
+          whereClauses.push(`LOWER(TRIM(r.status)) = 'approved' AND NOT EXISTS (
+            SELECT 1 FROM approvals approved_ap
+            WHERE approved_ap.request_id = r.id AND approved_ap.is_active = true
+          )`);
+          break;
+        case 'submitted':
+          whereClauses.push(`COALESCE(NULLIF(TRIM(r.status), ''), 'Submitted') = 'Submitted'`);
+          break;
+        default:
+          params.push(normalizedCurrentStep);
+          whereClauses.push(`${activeApprovalExists} AND step_user.role = $${params.length})`);
+          break;
+      }
+    }
   }
 
   if (search) {

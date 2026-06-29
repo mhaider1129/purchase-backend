@@ -113,6 +113,8 @@ const buildFilteredQuery = (queryParams) => {
     section_id,
     assigned_to,
     request_id,
+    maintenance_ref_number,
+    current_step,
   } = queryParams;
   let sql = `
     SELECT
@@ -148,6 +150,59 @@ const buildFilteredQuery = (queryParams) => {
   if (trimmedRequestId) {
     values.push(trimmedRequestId);
     sql += ` AND CAST(r.id AS TEXT) = $${values.length}`;
+  }
+
+
+
+  const trimmedMaintenanceRefNumber =
+    typeof maintenance_ref_number === 'string' ? maintenance_ref_number.trim() : '';
+  if (trimmedMaintenanceRefNumber) {
+    values.push(`%${trimmedMaintenanceRefNumber}%`);
+    sql += ` AND r.maintenance_ref_number ILIKE $${values.length}`;
+  }
+
+  if (current_step) {
+    const currentStepValue = Array.isArray(current_step) ? current_step[0] : current_step;
+    const normalizedCurrentStep = String(currentStepValue).trim();
+    const normalizedCurrentStepLower = normalizedCurrentStep.toLowerCase();
+    if (normalizedCurrentStepLower) {
+      const activeApprovalExists = `EXISTS (
+        SELECT 1
+        FROM approvals step_ap
+        JOIN users step_user ON step_user.id = step_ap.approver_id
+        WHERE step_ap.request_id = r.id
+          AND step_ap.is_active = true`;
+      switch (normalizedCurrentStepLower) {
+        case 'rejected':
+          sql += ` AND LOWER(TRIM(r.status)) = 'rejected'`;
+          break;
+        case 'completed':
+          sql += ` AND LOWER(TRIM(r.status)) = 'completed'`;
+          break;
+        case 'technical inspection pending':
+          sql += ` AND LOWER(TRIM(r.status)) = 'technical_inspection_pending'`;
+          break;
+        case 'received':
+          sql += ` AND LOWER(TRIM(r.status)) = 'received'`;
+          break;
+        case 'partially procured':
+          sql += ` AND LOWER(TRIM(r.status)) = 'partially procured'`;
+          break;
+        case 'approved':
+          sql += ` AND LOWER(TRIM(r.status)) = 'approved' AND NOT EXISTS (
+            SELECT 1 FROM approvals approved_ap
+            WHERE approved_ap.request_id = r.id AND approved_ap.is_active = true
+          )`;
+          break;
+        case 'submitted':
+          sql += ` AND COALESCE(NULLIF(TRIM(r.status), ''), 'Submitted') = 'Submitted'`;
+          break;
+        default:
+          values.push(normalizedCurrentStep);
+          sql += ` AND ${activeApprovalExists} AND step_user.role = $${values.length})`;
+          break;
+      }
+    }
   }
 
   if (search) {

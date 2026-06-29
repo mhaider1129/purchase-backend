@@ -10,6 +10,7 @@ const {
   getApprovalSummary,
   updateApprovalItems,
   setApprovalHoldStatus,
+  notifyCurrentApprovalByEmail,
 } = require('../controllers/approvalsController');
 
 // 📊 GET /api/approvals/summary
@@ -19,6 +20,10 @@ router.get('/summary', authenticateUser, getApprovalSummary);
 // 📝 GET /api/approvals/request/:request_id/approvals
 // → Get all approvals for a specific request
 router.get('/request/:request_id/approvals', authenticateUser, getApprovalDetailsForRequest);
+
+// 🔔 POST /api/approvals/request/:request_id/remind-current
+// → Email the current active approver to remind them about this request
+router.post('/request/:request_id/remind-current', authenticateUser, notifyCurrentApprovalByEmail);
 
 // ✅ PATCH /api/approvals/:id/decision
 // → Submit an approval or rejection for a specific approval entry

@@ -1068,6 +1068,15 @@ const updateApprovalItems = async (req, res, next) => {
       ? approverIdAsInteger ?? null
       : approverIdAsInteger ?? approverIdAsString ?? null;
 
+    const approvedByParameterCast = (() => {
+      if (!approvedByColumnType) return '::INTEGER';
+      if (['uuid'].includes(approvedByColumnType)) return '::UUID';
+      if (['text', 'varchar', 'character varying'].includes(approvedByColumnType)) return '::TEXT';
+      if (['bigint', 'int8'].includes(approvedByColumnType)) return '::BIGINT';
+      if (['smallint', 'int2'].includes(approvedByColumnType)) return '::SMALLINT';
+      return '::INTEGER';
+    })();
+
     for (const itemDecision of items) {
       const rawItemId = itemDecision?.item_id ?? itemDecision?.id;
       if (!/^\d+$/.test(String(rawItemId || ''))) {
@@ -1212,16 +1221,16 @@ const updateApprovalItems = async (req, res, next) => {
           ? `UPDATE public.warehouse_supply_items
                SET approval_status = $1,
                    approval_comments = $2,
-                   approved_by = $3,
-                   approved_at = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE NULL END,
+                   approved_by = $3${approvedByParameterCast},
+                   approved_at = CASE WHEN $3${approvedByParameterCast} IS NOT NULL THEN NOW() ELSE NULL END,
                    updated_at = NOW()
              WHERE id = $4 AND request_id = $5
              RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, NULL::numeric AS total_cost, NULL::numeric AS unit_cost`
           : `UPDATE public.requested_items
                SET approval_status = $1,
                    approval_comments = $2,
-                   approved_by = $3,
-                   approved_at = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE NULL END
+                   approved_by = $3${approvedByParameterCast},
+                   approved_at = CASE WHEN $3${approvedByParameterCast} IS NOT NULL THEN NOW() ELSE NULL END
              WHERE id = $4 AND request_id = $5
              RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, total_cost, unit_cost`,
         [

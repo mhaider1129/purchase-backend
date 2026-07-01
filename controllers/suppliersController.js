@@ -49,6 +49,195 @@ const ALLOWED_SUPPLIER_TYPES = [
   'Contractor',
 ];
 
+const SUPPLIER_CONTACT_SELECT_COLUMNS = `id, supplier_id, name, phone_number, email, position, responsibility, notes, is_primary, created_at, updated_at`;
+
+let supplierContactsEnsured = false;
+let supplierContactsEnsuringPromise = null;
+
+const ensureSupplierContactsTable = async () => {
+  if (supplierContactsEnsured) return;
+
+  if (!supplierContactsEnsuringPromise) {
+    supplierContactsEnsuringPromise = (async () => {
+      try {
+        await ensureSuppliersTable();
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS supplier_contacts (
+            id SERIAL PRIMARY KEY,
+            supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            phone_number TEXT,
+            email TEXT,
+            position TEXT,
+            responsibility TEXT,
+            notes TEXT,
+            is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS phone_number TEXT`);
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS email TEXT`);
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS position TEXT`);
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS responsibility TEXT`);
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS notes TEXT`);
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS supplier_contacts_supplier_id_idx ON supplier_contacts (supplier_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS supplier_contacts_name_ci_idx ON supplier_contacts (supplier_id, LOWER(name))`);
+        supplierContactsEnsured = true;
+      } finally {
+        supplierContactsEnsuringPromise = null;
+      }
+    })();
+  }
+
+  await supplierContactsEnsuringPromise;
+};
+
+const normalizeSupplierContactPayload = (body = {}, { partial = false } = {}) => {
+  const payload = {};
+  const fields = ['name', 'phone_number', 'email', 'position', 'responsibility', 'notes'];
+
+  fields.forEach((field) => {
+    if (!partial || Object.prototype.hasOwnProperty.call(body, field)) {
+      payload[field] = normalizeText(body[field]) || null;
+    }
+  });
+
+  if (!partial || Object.prototype.hasOwnProperty.call(body, 'is_primary')) {
+    payload.is_primary = body.is_primary === true || body.is_primary === 'true';
+  }
+
+  return payload;
+};
+
+const requireManageSuppliers = (req, next, action) => {
+  const canManageSuppliers = req.user?.hasPermission && req.user.hasPermission('contracts.manage');
+  if (!canManageSuppliers) {
+    next(createHttpError(403, `You are not authorized to ${action} supplier contacts`));
+    return false;
+  }
+  return true;
+};
+
+const getSupplierContactById = async (supplierId, contactId) => {
+  const { rows } = await pool.query(
+    `SELECT ${SUPPLIER_CONTACT_SELECT_COLUMNS}
+       FROM supplier_contacts
+      WHERE supplier_id = $1 AND id = $2
+      LIMIT 1`,
+    [supplierId, contactId]
+  );
+  return rows[0] || null;
+};
+
+const listSupplierContacts = async (req, res, next) => {
+  const supplierId = Number(req.params.id);
+  if (!Number.isInteger(supplierId) || supplierId <= 0) {
+    return next(createHttpError(400, 'Invalid supplier id'));
+  }
+
+  try {
+    await ensureSupplierContactsTable();
+    const supplier = await getSupplierById(pool, supplierId);
+    if (!supplier) return next(createHttpError(404, 'Supplier not found'));
+
+    const { rows } = await pool.query(
+      `SELECT ${SUPPLIER_CONTACT_SELECT_COLUMNS}
+         FROM supplier_contacts
+        WHERE supplier_id = $1
+        ORDER BY is_primary DESC, LOWER(name) ASC, id ASC`,
+      [supplierId]
+    );
+    return res.json(rows);
+  } catch (err) {
+    console.error('❌ Failed to list supplier contacts:', err);
+    return next(createHttpError(500, 'Failed to load supplier contacts'));
+  }
+};
+
+const createSupplierContact = async (req, res, next) => {
+  if (!requireManageSuppliers(req, next, 'create')) return;
+  const supplierId = Number(req.params.id);
+  if (!Number.isInteger(supplierId) || supplierId <= 0) return next(createHttpError(400, 'Invalid supplier id'));
+  const payload = normalizeSupplierContactPayload(req.body);
+  if (!payload.name) return next(createHttpError(400, 'Contact name is required'));
+
+  try {
+    await ensureSupplierContactsTable();
+    const supplier = await getSupplierById(pool, supplierId);
+    if (!supplier) return next(createHttpError(404, 'Supplier not found'));
+
+    const { rows } = await pool.query(
+      `INSERT INTO supplier_contacts (supplier_id, name, phone_number, email, position, responsibility, notes, is_primary)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING ${SUPPLIER_CONTACT_SELECT_COLUMNS}`,
+      [supplierId, payload.name, payload.phone_number, payload.email, payload.position, payload.responsibility, payload.notes, payload.is_primary]
+    );
+    return res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error('❌ Failed to create supplier contact:', err);
+    return next(createHttpError(500, 'Failed to create supplier contact'));
+  }
+};
+
+const updateSupplierContact = async (req, res, next) => {
+  if (!requireManageSuppliers(req, next, 'update')) return;
+  const supplierId = Number(req.params.id);
+  const contactId = Number(req.params.contactId);
+  if (!Number.isInteger(supplierId) || supplierId <= 0) return next(createHttpError(400, 'Invalid supplier id'));
+  if (!Number.isInteger(contactId) || contactId <= 0) return next(createHttpError(400, 'Invalid contact id'));
+
+  try {
+    await ensureSupplierContactsTable();
+    const existing = await getSupplierContactById(supplierId, contactId);
+    if (!existing) return next(createHttpError(404, 'Supplier contact not found'));
+
+    const payload = normalizeSupplierContactPayload(req.body, { partial: true });
+    const updates = [];
+    const values = [];
+    Object.entries(payload).forEach(([field, value]) => {
+      if (field === 'name' && !value) throw createHttpError(400, 'Contact name is required');
+      updates.push(`${field} = $${updates.length + 1}`);
+      values.push(value);
+    });
+    if (updates.length === 0) return res.json(existing);
+    updates.push('updated_at = NOW()');
+    values.push(supplierId, contactId);
+    const { rows } = await pool.query(
+      `UPDATE supplier_contacts SET ${updates.join(', ')}
+        WHERE supplier_id = $${values.length - 1} AND id = $${values.length}
+        RETURNING ${SUPPLIER_CONTACT_SELECT_COLUMNS}`,
+      values
+    );
+    return res.json(rows[0]);
+  } catch (err) {
+    if (err.statusCode) return next(err);
+    console.error('❌ Failed to update supplier contact:', err);
+    return next(createHttpError(500, 'Failed to update supplier contact'));
+  }
+};
+
+const deleteSupplierContact = async (req, res, next) => {
+  if (!requireManageSuppliers(req, next, 'delete')) return;
+  const supplierId = Number(req.params.id);
+  const contactId = Number(req.params.contactId);
+  if (!Number.isInteger(supplierId) || supplierId <= 0) return next(createHttpError(400, 'Invalid supplier id'));
+  if (!Number.isInteger(contactId) || contactId <= 0) return next(createHttpError(400, 'Invalid contact id'));
+
+  try {
+    await ensureSupplierContactsTable();
+    const result = await pool.query('DELETE FROM supplier_contacts WHERE supplier_id = $1 AND id = $2', [supplierId, contactId]);
+    if (result.rowCount === 0) return next(createHttpError(404, 'Supplier contact not found'));
+    return res.status(204).send();
+  } catch (err) {
+    console.error('❌ Failed to delete supplier contact:', err);
+    return next(createHttpError(500, 'Failed to delete supplier contact'));
+  }
+};
 
 const SUPPLIER_SELECT_COLUMNS = `id, name, contact_email, contact_phone, supplier_type,
        is_manufacturer, is_authorized_agent, is_authorized_distributor,
@@ -159,6 +348,8 @@ const ensureSuppliersTable = async () => {
 const resetSuppliersTableCacheForTests = () => {
   suppliersEnsured = false;
   ensuringPromise = null;
+  supplierContactsEnsured = false;
+  supplierContactsEnsuringPromise = null;
   getColumnType.resetColumnTypeCacheForTests?.();
 };
 
@@ -631,5 +822,10 @@ module.exports = {
   getSuppliersDashboard,
   updateSupplier,
   deleteSupplier,
+  ensureSupplierContactsTable,
+  listSupplierContacts,
+  createSupplierContact,
+  updateSupplierContact,
+  deleteSupplierContact,
   resetSuppliersTableCacheForTests,
 };

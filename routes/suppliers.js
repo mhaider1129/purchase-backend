@@ -5,6 +5,10 @@ const {
   updateSupplier,
   deleteSupplier,
   getSuppliersDashboard,
+  listSupplierContacts,
+  createSupplierContact,
+  updateSupplierContact,
+  deleteSupplierContact,
 } = require('../controllers/suppliersController');
 const {
   getSupplierProfile,
@@ -24,6 +28,10 @@ router.get('/dashboard', getSuppliersDashboard);
 router.get('/:id/profile', getSupplierProfile);
 router.patch('/:id/classification', updateSupplierClassification);
 router.get('/:id/principals', listSupplierPrincipals);
+router.get('/:id/contacts', listSupplierContacts);
+router.post('/:id/contacts', createSupplierContact);
+router.patch('/:id/contacts/:contactId', updateSupplierContact);
+router.delete('/:id/contacts/:contactId', deleteSupplierContact);
 router.post('/:id/principals', createSupplierPrincipal);
 router.patch('/:id/principals/:principalId/verify', verifySupplierPrincipal);
 router.patch('/:id/principals/:principalId/suspend', suspendSupplierPrincipal);

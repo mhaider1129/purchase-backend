@@ -1037,6 +1037,7 @@ const updateApprovalItems = async (req, res, next) => {
     };
 
     const updatedItems = [];
+    const convertedWarehouseSupplyItems = [];
     const quantityChanges = [];
     const summaryAdjustments = { Approved: 0, Rejected: 0, Pending: 0 };
     const lockedItems = [];
@@ -1083,7 +1084,8 @@ const updateApprovalItems = async (req, res, next) => {
       const normalizedStatus = String(itemDecision.status || '')
         .trim()
         .toLowerCase();
-      const finalStatus = statusMap[normalizedStatus];
+      const convertToWarehouseSupply = Boolean(itemDecision.convert_to_warehouse_supply);
+      const finalStatus = convertToWarehouseSupply ? 'Rejected' : statusMap[normalizedStatus];
 
       if (!finalStatus) {
         await client.query('ROLLBACK');
@@ -1185,6 +1187,26 @@ const updateApprovalItems = async (req, res, next) => {
 
       const approvedByValue = isFinalDecision ? resolvedApproverValue : null;
 
+      if (convertToWarehouseSupply) {
+        if (isWarehouseSupply) {
+          await client.query('ROLLBACK');
+          return next(createHttpError(400, 'Warehouse supply items cannot be converted again'));
+        }
+        if ((req.user?.role || '').toUpperCase() !== 'WAREHOUSEMANAGER') {
+          await client.query('ROLLBACK');
+          return next(createHttpError(403, 'Only Warehouse Managers can convert purchase items to warehouse supply requests'));
+        }
+        if (!Number.isInteger(req.user?.warehouse_id)) {
+          await client.query('ROLLBACK');
+          return next(createHttpError(400, 'Your user account must be linked to a warehouse to convert items'));
+        }
+        convertedWarehouseSupplyItems.push({
+          item_id: itemId,
+          item_name: existingItem.item_name,
+          quantity: parsedQuantity ?? existingItem.quantity,
+        });
+      }
+
       const updateRes = await client.query(
         isWarehouseSupply
           ? `UPDATE public.warehouse_supply_items
@@ -1204,7 +1226,9 @@ const updateApprovalItems = async (req, res, next) => {
              RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, total_cost, unit_cost`,
         [
           finalStatus,
-          itemDecision.comments ?? null,
+          (convertToWarehouseSupply
+            ? itemDecision.comments || 'Converted to warehouse supply request because stock is available.'
+            : itemDecision.comments) ?? null,
           approvedByValue,
           itemId,
           approval.request_id,
@@ -1222,11 +1246,61 @@ const updateApprovalItems = async (req, res, next) => {
         quantity: updated.quantity,
         total_cost: updated.total_cost,
         unit_cost: updated.unit_cost,
+        converted_to_warehouse_supply: convertToWarehouseSupply,
       });
 
       if (statusChanged) {
         summaryAdjustments[finalStatus] += 1;
       }
+    }
+
+    let warehouseSupplyRequestId = null;
+    if (convertedWarehouseSupplyItems.length > 0) {
+      const originalReqRes = await client.query(
+        `SELECT requester_id, department_id, institute_id, section_id, project_id, request_domain, justification
+           FROM requests WHERE id = $1`,
+        [approval.request_id],
+      );
+      const originalReq = originalReqRes.rows[0];
+      const wsReqRes = await client.query(
+        `INSERT INTO requests (
+            request_type, requester_id, department_id, institute_id, section_id, justification,
+            estimated_cost, request_domain, status, project_id, supply_warehouse_id
+         ) VALUES ('Warehouse Supply', $1, $2, $3, $4, $5, 0, $6, 'Submitted', $7, $8)
+         RETURNING id`,
+        [
+          originalReq.requester_id,
+          originalReq.department_id,
+          originalReq.institute_id,
+          originalReq.section_id,
+          `Converted from Purchase Request #${approval.request_id}: ${originalReq.justification || 'items available in warehouse stock'}`,
+          originalReq.request_domain || 'operational',
+          originalReq.project_id,
+          req.user.warehouse_id,
+        ],
+      );
+      warehouseSupplyRequestId = wsReqRes.rows[0].id;
+
+      for (const convertedItem of convertedWarehouseSupplyItems) {
+        await client.query(
+          `INSERT INTO warehouse_supply_items (request_id, requested_item_id, item_name, quantity)
+           VALUES ($1, $2, $3, $4)`,
+          [warehouseSupplyRequestId, convertedItem.item_id, convertedItem.item_name, convertedItem.quantity],
+        );
+      }
+
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Converted to Warehouse Supply', $2, $3),
+                ($4, 'Created from Purchase Request', $2, $5)`,
+        [
+          approval.request_id,
+          approverId,
+          `${convertedWarehouseSupplyItems.length} item(s) converted to Warehouse Supply Request #${warehouseSupplyRequestId}`,
+          warehouseSupplyRequestId,
+          `Created from Purchase Request #${approval.request_id} by Warehouse Manager`,
+        ],
+      );
     }
 
     const summaryRes = await client.query(
@@ -1310,6 +1384,7 @@ const updateApprovalItems = async (req, res, next) => {
       summary,
       lockedItems,
       updatedEstimatedCost,
+      warehouseSupplyRequestId,
     });
   } catch (err) {
     await client.query('ROLLBACK');

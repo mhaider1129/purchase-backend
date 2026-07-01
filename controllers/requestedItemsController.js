@@ -470,13 +470,19 @@ const updateItemProcurementStatus = async (req, res, next) => {
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'fulfill this order item');
 
+    const closesWithoutPurchase = ['not_procured', 'canceled'].includes(procurement_status);
+
     await client.query(
       `UPDATE public.requested_items
        SET procurement_status = $1,
            procurement_comment = $2,
            procurement_updated_by = $3,
            procurement_updated_at = CURRENT_TIMESTAMP,
-           po_issuance_method = COALESCE($5, po_issuance_method)
+           po_issuance_method = COALESCE($5, po_issuance_method),
+           purchased_quantity = CASE
+             WHEN $6 THEN COALESCE(purchased_quantity, 0)
+             ELSE purchased_quantity
+           END
        WHERE id = $4`,
       [
         procurement_status,
@@ -484,6 +490,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
         user_id,
         item_id,
         po_issuance_method || null,
+        closesWithoutPurchase,
       ]
     );
 

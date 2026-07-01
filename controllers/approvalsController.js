@@ -1274,8 +1274,8 @@ const updateApprovalItems = async (req, res, next) => {
       const wsReqRes = await client.query(
         `INSERT INTO requests (
             request_type, requester_id, department_id, institute_id, section_id, justification,
-            estimated_cost, request_domain, status, project_id, supply_warehouse_id
-         ) VALUES ('Warehouse Supply', $1, $2, $3, $4, $5, 0, $6, 'Submitted', $7, $8)
+            estimated_cost, request_domain, status, project_id, supply_warehouse_id, assigned_to
+         ) VALUES ('Warehouse Supply', $1, $2, $3, $4, $5, 0, $6, 'Submitted', $7, $8, $9)
          RETURNING id`,
         [
           originalReq.requester_id,
@@ -1286,6 +1286,7 @@ const updateApprovalItems = async (req, res, next) => {
           originalReq.request_domain || 'operational',
           originalReq.project_id,
           req.user.warehouse_id,
+          req.user.id,
         ],
       );
       warehouseSupplyRequestId = wsReqRes.rows[0].id;
@@ -1307,7 +1308,7 @@ const updateApprovalItems = async (req, res, next) => {
           approverId,
           `${convertedWarehouseSupplyItems.length} item(s) converted to Warehouse Supply Request #${warehouseSupplyRequestId}`,
           warehouseSupplyRequestId,
-          `Created from Purchase Request #${approval.request_id} by Warehouse Manager`,
+          `Created from Purchase Request #${approval.request_id} and assigned to ${req.user.name || 'the converting Warehouse Manager'}`,
         ],
       );
     }

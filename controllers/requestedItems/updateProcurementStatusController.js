@@ -4,9 +4,16 @@ const createHttpError = require('../../utils/httpError');
 
 const updateItemProcurementStatus = async (req, res, next) => {
   const { item_id } = req.params;
-  const { status, comment } = req.body;
+  const requestedStatus = req.body.status ?? req.body.procurement_status;
+  const comment = req.body.comment ?? req.body.procurement_comment ?? '';
   const updater_id = req.user.id;
-  const allowedStatuses = ['pending', 'purchased', 'completed', 'canceled'];
+  const statusAliases = {
+    cancelled: 'canceled',
+    unable_to_procure: 'not_procured',
+  };
+  const normalizedRequestedStatus = String(requestedStatus || '').trim().toLowerCase();
+  const status = statusAliases[normalizedRequestedStatus] || normalizedRequestedStatus;
+  const allowedStatuses = ['pending', 'partially_procured', 'purchased', 'completed', 'not_procured', 'canceled'];
 
   if (!req.user.hasPermission('procurement.update-status')) {
     return next(createHttpError(403, 'You do not have permission to update procurement status'));

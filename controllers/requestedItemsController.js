@@ -399,6 +399,8 @@ const updateItemProcurementStatus = async (req, res, next) => {
   const {
     procurement_status,
     procurement_comment,
+    status,
+    comment,
     po_issuance_method,
     invoice_number,
     paid_cost,
@@ -412,6 +414,17 @@ const updateItemProcurementStatus = async (req, res, next) => {
   } = req.body;
   const { id: user_id } = req.user;
 
+  const statusAliases = {
+    cancelled: 'canceled',
+    unable_to_procure: 'not_procured',
+    'partially procured': 'partially_procured',
+    fully_procured: 'completed',
+    'fully procured': 'completed',
+  };
+  const requestedProcurementStatus = procurement_status ?? status;
+  const normalizedRequestedStatus = String(requestedProcurementStatus || '').trim().toLowerCase();
+  const normalizedProcurementStatus = statusAliases[normalizedRequestedStatus] || normalizedRequestedStatus;
+  const normalizedProcurementComment = procurement_comment ?? comment ?? null;
   const allowedStatuses = [
     'pending',
     'purchased',
@@ -441,7 +454,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
     return next(createHttpError(403, 'You do not have permission to update procurement status'));
   }
 
-  if (!procurement_status || !allowedStatuses.includes(procurement_status)) {
+  if (!allowedStatuses.includes(normalizedProcurementStatus)) {
     return next(
       createHttpError(400, 'Invalid procurement status provided'),
     );
@@ -470,7 +483,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'fulfill this order item');
 
-    const closesWithoutPurchase = ['not_procured', 'canceled'].includes(procurement_status);
+    const closesWithoutPurchase = ['not_procured', 'canceled'].includes(normalizedProcurementStatus);
 
     await client.query(
       `UPDATE public.requested_items
@@ -485,8 +498,8 @@ const updateItemProcurementStatus = async (req, res, next) => {
            END
        WHERE id = $4`,
       [
-        procurement_status,
-        procurement_comment || null,
+        normalizedProcurementStatus,
+        normalizedProcurementComment,
         user_id,
         item_id,
         po_issuance_method || null,
@@ -530,8 +543,8 @@ const updateItemProcurementStatus = async (req, res, next) => {
         item.request_id,
         user_id,
         po_issuance_method
-          ? `Updated status of item '${item.item_name}' to '${procurement_status}' (PO issuance: ${po_issuance_method})`
-          : `Updated status of item '${item.item_name}' to '${procurement_status}'`,
+          ? `Updated status of item '${item.item_name}' to '${normalizedProcurementStatus}' (PO issuance: ${po_issuance_method})`
+          : `Updated status of item '${item.item_name}' to '${normalizedProcurementStatus}'`,
       ]
     );
 
@@ -541,8 +554,8 @@ const updateItemProcurementStatus = async (req, res, next) => {
       requestId: item.request_id,
       subject: `Procurement item status updated for request #${item.request_id}`,
       message: [
-        `${req.user?.name || 'A procurement user'} updated "${item.item_name}" to "${procurement_status}".`,
-        procurement_comment ? `Comment: ${procurement_comment}` : '',
+        `${req.user?.name || 'A procurement user'} updated "${item.item_name}" to "${normalizedProcurementStatus}".`,
+        normalizedProcurementComment ? `Comment: ${normalizedProcurementComment}` : '',
         po_issuance_method ? `PO issuance: ${po_issuance_method}` : '',
         invoice_number ? `Invoice: ${invoice_number}` : '',
       ].filter(Boolean).join('\n'),

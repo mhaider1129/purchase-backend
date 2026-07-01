@@ -231,7 +231,7 @@ router.post('/login', async (req, res) => {
     const normalizedPhone = loginIdentifier.replace(/[^0-9+]/g, '');
     const numericId = Number.parseInt(loginIdentifier, 10);
     const result = await pool.query(
-      `SELECT * FROM users WHERE email = $1 OR employee_id = $2 OR phone_number = $3 OR (id = $4 AND $4 IS NOT NULL)`,
+      `SELECT * FROM users WHERE LOWER(email) = $1 OR employee_id = $2 OR phone_number = $3 OR (id = $4 AND $4 IS NOT NULL)`,
       [normalizedEmail, loginIdentifier, normalizedPhone, Number.isNaN(numericId) ? null : numericId]
     );
     if (result.rows.length === 0) {

@@ -173,6 +173,7 @@ const getItems = async (requestId) => {
             ri.total_cost,
             ri.available_quantity,
             ri.procurement_status,
+            ri.specs,
             ri.intended_use,
             COALESCE(ri.procurement_updated_at, pie.latest_procurement_update) AS last_procurement_update,
             COALESCE(pie.procurement_events_count, 0)::int AS procurement_events_count,
@@ -427,7 +428,10 @@ const buildAvailableActions = (user, request, approvals, items) => {
     actions.add('mark_item_unable_to_procure');
   }
 
-  if (isPrivileged || (isProcurement && items.every((item) => Number(item.remaining_quantity || 0) <= 0))) {
+  const finalizedStatuses = new Set(['purchased', 'completed', 'not_procured', 'canceled']);
+  const allItemsFinalized = items.length > 0 && items.every((item) => finalizedStatuses.has(normalize(item.procurement_status)));
+
+  if (isPrivileged || (isProcurement && allItemsFinalized)) {
     actions.add('mark_request_completed');
   }
 

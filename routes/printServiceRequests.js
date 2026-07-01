@@ -4,7 +4,7 @@ const { sendWorkflowEmail } = require('../utils/workflowEmailNotifications');
 
 const router = express.Router();
 
-const STATUSES = new Set(['submitted', 'accepted', 'completed', 'claimed', 'cancelled']);
+const STATUSES = new Set(['submitted', 'accepted', 'completed', 'claimed', 'cancelled', 'rejected']);
 const PRINT_QUEUE_SETTING_KEY = 'print_service_queue_department_id';
 
 let ensurePrintServiceTablePromise;
@@ -227,7 +227,7 @@ router.get('/queue', async (req, res) => {
     }
 
     const { rows } = await pool.query(
-      `${selectSql} ORDER BY CASE psr.status WHEN 'submitted' THEN 1 WHEN 'accepted' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END, psr.created_at ASC`
+      `${selectSql} ORDER BY CASE psr.status WHEN 'submitted' THEN 1 WHEN 'accepted' THEN 2 WHEN 'completed' THEN 3 WHEN 'rejected' THEN 4 ELSE 5 END, psr.created_at ASC`
     );
     return res.json({ success: true, requests: rows.map(mapRow) });
   } catch (err) {

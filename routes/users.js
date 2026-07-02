@@ -6,6 +6,7 @@ const createHttpError = require('http-errors');
 const { authenticateUser } = require('../middleware/authMiddleware');
 const { deactivateUser, assignUser } = require('../controllers/usersController');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
+const ensureRequesterSectionAssignments = require('../utils/ensureRequesterSectionAssignments');
 
 let employeeIdColumnChecked = false;
 let employeeIdColumnAvailable = false;
@@ -47,18 +48,25 @@ router.get('/me', authenticateUser, async (req, res, next) => {
     const userId = req.user.id;
     const employeeIdSelect = await buildEmployeeIdSelect('u');
     await ensureWarehouseAssignments();
+    await ensureRequesterSectionAssignments();
     const result = await pool.query(
       `SELECT u.id, u.name, u.email, u.role,
               ${employeeIdSelect},
               u.department_id, d.name AS department_name,
               u.institute_id, i.name AS institute_name,
               u.section_id, s.name AS section_name,
+              COALESCE(assigned_sections.section_ids, '[]'::json) AS assigned_section_ids,
               u.warehouse_id, w.name AS warehouse_name,
               u.can_request_medication
         FROM users u
         LEFT JOIN departments d ON u.department_id = d.id
         LEFT JOIN institutes i ON u.institute_id = i.id
         LEFT JOIN sections s ON u.section_id = s.id
+        LEFT JOIN LATERAL (
+          SELECT json_agg(usa.section_id ORDER BY usa.section_id) AS section_ids
+            FROM user_section_assignments usa
+           WHERE usa.user_id = u.id
+        ) assigned_sections ON TRUE
         LEFT JOIN warehouses w ON u.warehouse_id = w.id
         WHERE u.id = $1`,
       [userId]
@@ -90,12 +98,20 @@ router.get('/', authenticateUser, async (req, res, next) => {
   try {
     const employeeIdSelect = await buildEmployeeIdSelect();
     await ensureWarehouseAssignments();
+    await ensureRequesterSectionAssignments();
     const result = await pool.query(
       `SELECT u.id, u.name, u.email, u.role, ${employeeIdSelect},
-              u.department_id, u.section_id, u.is_active, u.can_request_medication,
+              u.department_id, u.section_id,
+              COALESCE(assigned_sections.section_ids, '[]'::json) AS assigned_section_ids,
+              u.is_active, u.can_request_medication,
               u.warehouse_id, w.name AS warehouse_name
          FROM users u
          LEFT JOIN warehouses w ON u.warehouse_id = w.id
+         LEFT JOIN LATERAL (
+           SELECT json_agg(usa.section_id ORDER BY usa.section_id) AS section_ids
+             FROM user_section_assignments usa
+            WHERE usa.user_id = u.id
+         ) assigned_sections ON TRUE
         ORDER BY u.role, u.name`
     );
     res.json(result.rows);

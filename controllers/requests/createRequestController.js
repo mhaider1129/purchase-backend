@@ -12,6 +12,7 @@ const ensureProjectsTable = require("../../utils/ensureProjectsTable");
 const ensureRequestSchedulingColumns = require("../../utils/ensureRequestSchedulingColumns");
 const ensureRequestClientSubmissionKey = require("../../utils/ensureRequestClientSubmissionKey");
 const ensureMaintenanceRequestSchema = require("../../utils/ensureMaintenanceRequestSchema");
+const ensureRequesterSectionAssignments = require("../../utils/ensureRequesterSectionAssignments");
 const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
 const {
   evaluateBudgetCoverage,
@@ -563,12 +564,15 @@ const createRequest = async (req, res, next) => {
     let requesterSectionCondition = '';
     if (section_id) {
       requesterFilterValues.push(section_id);
-      requesterSectionCondition = 'AND u.section_id = $2';
+      requesterSectionCondition = 'AND (u.section_id = $2 OR usa.section_id = $2)';
     }
+
+    await ensureRequesterSectionAssignments();
 
     const requesterLookup = await pool.query(
       `SELECT u.id
          FROM users u
+        LEFT JOIN user_section_assignments usa ON usa.user_id = u.id
         WHERE u.department_id = $1
           ${requesterSectionCondition}
           AND u.is_active = TRUE

@@ -20,11 +20,11 @@ const generateRfx = async (req, res, next) => {
   try {
     const requestRes = await pool.query(
       `SELECT r.*, d.name AS department_name, p.name AS project_name,
-              COALESCE(r.temporary_requester_name, u.name) AS requester_name
+              COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name, 'Unknown requester') AS requester_name
        FROM requests r
-       JOIN departments d ON r.department_id = d.id
+       LEFT JOIN departments d ON r.department_id = d.id
        LEFT JOIN projects p ON r.project_id = p.id
-       JOIN users u ON r.requester_id = u.id
+       LEFT JOIN users u ON r.requester_id = u.id
        WHERE r.id = $1`,
       [id]
     );
@@ -37,10 +37,13 @@ const generateRfx = async (req, res, next) => {
     await ensureRequestedItemApprovalColumns();
 
     const itemsRes = await pool.query(
-      `SELECT item_name, quantity, unit, description
+      `SELECT item_name,
+              quantity,
+              NULL::text AS unit,
+              COALESCE(NULLIF(TRIM(specs), ''), NULLIF(TRIM(intended_use), ''), NULLIF(TRIM(brand), '')) AS description
        FROM public.requested_items
        WHERE request_id = $1
-         AND (approval_status IS NULL OR approval_status = 'Approved')`,
+         AND LOWER(COALESCE(approval_status, 'approved')) <> 'rejected'`,
       [id]
     );
 

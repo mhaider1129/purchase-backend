@@ -39,10 +39,17 @@ const getAccessScope = user => {
   const role = normalizeRole(user?.role);
   if (PRIVILEGED_ROLES.has(role)) return { type: 'all' };
   if (DEPARTMENT_ROLES.has(role) && Number.isInteger(user?.department_id)) {
+    const assignedSectionIds = Array.isArray(user?.assigned_section_ids)
+      ? user.assigned_section_ids.filter(Number.isInteger)
+      : [];
+    const sectionIds = role === 'requester'
+      ? Array.from(new Set([user.section_id, ...assignedSectionIds].filter(Number.isInteger)))
+      : [];
     return {
-      type: role === 'requester' && Number.isInteger(user?.section_id) ? 'department-section' : 'department',
+      type: role === 'requester' && sectionIds.length > 0 ? 'department-section' : 'department',
       departmentId: user.department_id,
       sectionId: role === 'requester' ? user.section_id : null,
+      sectionIds,
     };
   }
   return null;
@@ -64,8 +71,12 @@ const buildWhereClause = (query = {}, user) => {
 
   if (scope.type !== 'all') {
     where.push(`r.department_id = ${addParam(values, scope.departmentId)}`);
-    if (scope.type === 'department-section' && Number.isInteger(scope.sectionId)) {
-      where.push(`r.section_id = ${addParam(values, scope.sectionId)}`);
+    if (scope.type === 'department-section' && Array.isArray(scope.sectionIds) && scope.sectionIds.length > 0) {
+      if (scope.sectionIds.length === 1) {
+        where.push(`r.section_id = ${addParam(values, scope.sectionIds[0])}`);
+      } else {
+        where.push(`r.section_id = ANY(${addParam(values, scope.sectionIds)}::int[])`);
+      }
     }
   }
 

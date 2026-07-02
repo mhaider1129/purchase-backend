@@ -8,6 +8,7 @@ const {
   getDefaultPermissionsForRole,
 } = require('../utils/permissionService');
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
+const ensureRequesterSectionAssignments = require('../utils/ensureRequesterSectionAssignments');
 
 // 🔧 Reusable error generator
 function createHttpError(statusCode, message) {
@@ -70,11 +71,20 @@ const attachUserFromToken = async (token) => {
 
   // Ensure required warehouse-related columns exist before querying
   await ensureWarehouseAssignments();
+  await ensureRequesterSectionAssignments();
 
   // 🔎 Fetch user from DB
   const userRes = await pool.query(
-    `SELECT id, name, role, department_id, institute_id, warehouse_id, is_active, can_request_medication
-         FROM users WHERE id = $1`,
+    `SELECT u.id, u.name, u.role, u.department_id, u.section_id, u.institute_id, u.warehouse_id,
+            u.is_active, u.can_request_medication,
+            COALESCE(assigned_sections.section_ids, '[]'::json) AS assigned_section_ids
+       FROM users u
+       LEFT JOIN LATERAL (
+         SELECT json_agg(usa.section_id ORDER BY usa.section_id) AS section_ids
+           FROM user_section_assignments usa
+          WHERE usa.user_id = u.id
+       ) assigned_sections ON TRUE
+      WHERE u.id = $1`,
     [decoded.user_id]
   );
 
@@ -110,6 +120,8 @@ const attachUserFromToken = async (token) => {
     name: user.name,
     role: user.role,
     department_id: user.department_id,
+    section_id: user.section_id,
+    assigned_section_ids: user.assigned_section_ids || [],
     institute_id: user.institute_id,
     warehouse_id: user.warehouse_id,
     can_request_medication: user.can_request_medication,

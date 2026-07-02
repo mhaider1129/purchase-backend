@@ -7,6 +7,7 @@ const {
 } = require('../controllers/departmentsController');
 const pool = require('../config/db');
 const { authenticateUser } = require('../middleware/authMiddleware');
+const ensureRequesterSectionAssignments = require('../utils/ensureRequesterSectionAssignments');
 router.use(authenticateUser); // 🔐 Protect all department routes
 
 
@@ -70,14 +71,17 @@ router.get('/:id/requesters', async (req, res) => {
       }
     }
 
+    await ensureRequesterSectionAssignments();
+
     const query = sectionId
-      ? `SELECT id, name, section_id
-           FROM users
-          WHERE is_active = TRUE
-            AND LOWER(TRIM(role)) = 'requester'
-            AND department_id = $1
-            AND section_id = $2
-          ORDER BY name`
+      ? `SELECT DISTINCT u.id, u.name, u.section_id
+           FROM users u
+           LEFT JOIN user_section_assignments usa ON usa.user_id = u.id
+          WHERE u.is_active = TRUE
+            AND LOWER(TRIM(u.role)) = 'requester'
+            AND u.department_id = $1
+            AND (u.section_id = $2 OR usa.section_id = $2)
+          ORDER BY u.name`
       : `SELECT id, name, section_id
            FROM users
           WHERE is_active = TRUE

@@ -142,13 +142,31 @@ if (allowedOrigins.length > 0) {
 
 const allowedOriginsSet = new Set(allowedOrigins);
 
-const allowOrigin = origin =>
-  allowedOriginsSet.has('*') || allowedOriginsSet.has(normalizeOrigin(origin));
+const parseHostName = hostHeader => String(hostHeader || '').split(':')[0].toLowerCase();
+
+const isSameHostFrontendOrigin = (origin, req) => {
+  try {
+    const parsedOrigin = new URL(origin);
+    const requestHostName = parseHostName(req.headers.host);
+
+    return (
+      parsedOrigin.hostname.toLowerCase() === requestHostName &&
+      ['3000', '5173'].includes(parsedOrigin.port)
+    );
+  } catch (_error) {
+    return false;
+  }
+};
+
+const allowOrigin = (origin, req) =>
+  allowedOriginsSet.has('*') ||
+  allowedOriginsSet.has(normalizeOrigin(origin)) ||
+  isSameHostFrontendOrigin(origin, req);
 
 const appendCorsHeaders = (req, res) => {
   const origin = req.headers.origin;
 
-  if (origin && allowOrigin(origin)) {
+  if (origin && allowOrigin(origin, req)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
   }
@@ -173,7 +191,7 @@ app.use(requestTracingMiddleware);
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  if (origin && !allowOrigin(origin)) {
+  if (origin && !allowOrigin(origin, req)) {
     log('warn', 'cors_origin_blocked', { origin });
 
     if (req.method === 'OPTIONS') {

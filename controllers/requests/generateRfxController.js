@@ -51,9 +51,10 @@ const generateRfx = async (req, res, next) => {
     const doc = new PDFDocument();
 
     res.setHeader('Content-Type', 'application/pdf');
+    const dispositionType = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename=${type.toUpperCase()}_${id}.pdf`
+      `${dispositionType}; filename=${type.toUpperCase()}_${id}.pdf`
     );
 
     doc.pipe(res);

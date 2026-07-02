@@ -60,5 +60,35 @@ describe('generateRfxController.generateRfx', () => {
     expect(pool.query.mock.calls[1][0]).toContain('NULL::text AS unit');
     expect(pool.query.mock.calls[1][0]).not.toContain('SELECT item_name, quantity, unit, description');
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'inline; filename=RFQ_252.pdf'
+    );
+  });
+
+  it('allows explicit attachment disposition for non-XHR downloads', async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          id: 252,
+          department_name: 'Procurement',
+          requester_name: 'Temporary Requester',
+          justification: 'Needed for operations',
+          project_name: null,
+        }],
+      })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await generateRfx(buildRequest({ query: { type: 'rfp', disposition: 'attachment' } }), res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename=RFP_252.pdf'
+    );
   });
 });

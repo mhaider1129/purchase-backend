@@ -1339,10 +1339,15 @@ const updateRequestBeforeApproval = async (req, res, next) => {
       const scmRes = await client.query(
         `SELECT id
            FROM users
-          WHERE role = 'SCM'
+          WHERE UPPER(role) = 'SCM'
             AND is_active = true
-            AND ($1::INT IS NULL OR department_id = $1)
-          ORDER BY id ASC
+          ORDER BY
+            CASE
+              WHEN $1::INT IS NOT NULL AND department_id = $1 THEN 0
+              WHEN department_id IS NULL THEN 1
+              ELSE 2
+            END,
+            id ASC
           LIMIT 1`,
         [departmentId || null],
       );

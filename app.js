@@ -144,6 +144,32 @@ const allowedOriginsSet = new Set(allowedOrigins);
 
 const parseHostName = hostHeader => String(hostHeader || '').split(':')[0].toLowerCase();
 
+const isPrivateHostName = hostName => {
+  const normalizedHost = String(hostName || '').toLowerCase();
+
+  return (
+    normalizedHost === 'localhost' ||
+    normalizedHost === '127.0.0.1' ||
+    normalizedHost === '0.0.0.0' ||
+    normalizedHost.startsWith('10.') ||
+    normalizedHost.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(normalizedHost)
+  );
+};
+
+const isAllowedLanFrontendOrigin = origin => {
+  try {
+    const parsedOrigin = new URL(origin);
+
+    return (
+      ['3000', '5173'].includes(parsedOrigin.port) &&
+      isPrivateHostName(parsedOrigin.hostname)
+    );
+  } catch (_error) {
+    return false;
+  }
+};
+
 const isSameHostFrontendOrigin = (origin, req) => {
   try {
     const parsedOrigin = new URL(origin);
@@ -161,7 +187,8 @@ const isSameHostFrontendOrigin = (origin, req) => {
 const allowOrigin = (origin, req) =>
   allowedOriginsSet.has('*') ||
   allowedOriginsSet.has(normalizeOrigin(origin)) ||
-  isSameHostFrontendOrigin(origin, req);
+  isSameHostFrontendOrigin(origin, req) ||
+  isAllowedLanFrontendOrigin(origin);
 
 const appendCorsHeaders = (req, res) => {
   const origin = req.headers.origin;
@@ -172,6 +199,7 @@ const appendCorsHeaders = (req, res) => {
   }
 
   res.header('Vary', 'Origin');
+  res.header('Access-Control-Expose-Headers', 'Content-Disposition, Content-Type');
 
   const requestHeaders = req.header('Access-Control-Request-Headers');
   if (requestHeaders) {

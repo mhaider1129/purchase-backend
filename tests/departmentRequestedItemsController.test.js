@@ -26,6 +26,18 @@ describe('departmentRequestedItemsController helpers', () => {
     expect(result.values.slice(0, 2)).toEqual([12, 3]);
   });
 
+  test('Requester scope supports multiple assigned sections', () => {
+    const result = buildWhereClause({}, {
+      role: 'Requester',
+      department_id: 12,
+      section_id: 3,
+      assigned_section_ids: [3, 4, 5],
+    });
+
+    expect(result.whereSql).toContain('r.section_id = ANY($2::int[])');
+    expect(result.values.slice(0, 2)).toEqual([12, [3, 4, 5]]);
+  });
+
   test('unsupported roles are forbidden', () => {
     const result = buildWhereClause({}, { role: 'Finance' });
 

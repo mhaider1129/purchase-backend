@@ -570,7 +570,10 @@ const buildApprovalHistoryQuery = ({ whereSQL }) => `SELECT
          a.comments,
          a.approval_level,
          a.approved_at AS approved_at,
+         r.department_id,
+         r.section_id,
          d.name AS department_name,
+         s.name AS section_name,
          requester.name AS requester_name,
          requester.role AS requester_role,
          p.name AS project_name,
@@ -578,6 +581,7 @@ const buildApprovalHistoryQuery = ({ whereSQL }) => `SELECT
        FROM approvals a
        JOIN requests r ON a.request_id = r.id
        LEFT JOIN departments d ON r.department_id = d.id
+       LEFT JOIN sections s ON r.section_id = s.id
        LEFT JOIN users requester ON requester.id = r.requester_id
        LEFT JOIN projects p ON p.id = r.project_id
        WHERE ${whereSQL}
@@ -1001,6 +1005,7 @@ const getAssignedRequests = async (req, res) => {
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN departments d ON r.department_id = d.id
+       LEFT JOIN sections s ON r.section_id = s.id
        LEFT JOIN users u ON r.requester_id = u.id
        WHERE (
            r.assigned_to = $1
@@ -1109,7 +1114,10 @@ const getPendingApprovals = async (req, res, next) => {
          ), '[]'::json) AS previous_approvers,
          r.project_id,
          p.name AS project_name,
+         r.department_id,
+         r.section_id,
          d.name AS department_name,
+         s.name AS section_name,
          s.name AS section_name,
          COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), requester.name) AS requester_name,
          CASE
@@ -1215,7 +1223,10 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          r.project_id,
          r.is_urgent,
          p.name AS project_name,
+         r.department_id,
+         r.section_id,
          d.name AS department_name,
+         s.name AS section_name,
          COALESCE(r.temporary_requester_name, u.name) AS requester_name,
          COALESCE(
            JSON_AGG(
@@ -1298,6 +1309,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN departments d ON r.department_id = d.id
+       LEFT JOIN sections s ON r.section_id = s.id
        LEFT JOIN users u ON r.requester_id = u.id
        LEFT JOIN approval_timelines at ON at.request_id = r.id
        LEFT JOIN public.requested_items ri ON ri.request_id = r.id
@@ -1312,7 +1324,10 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          r.project_id,
          r.is_urgent,
          p.name,
+         r.department_id,
+         r.section_id,
          d.name,
+         s.name,
          u.name,
          r.temporary_requester_name,
          at.approval_started_at,

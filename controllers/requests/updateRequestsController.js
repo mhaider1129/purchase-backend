@@ -1,4 +1,5 @@
 const pool = require('../../config/db');
+const ensureRequesterSectionAssignments = require('../../utils/ensureRequesterSectionAssignments');
 const createHttpError = require('../../utils/httpError');
 const ensureProjectsTable = require('../../utils/ensureProjectsTable');
 const { sendEmail } = require('../../utils/emailService');
@@ -1079,6 +1080,8 @@ const updateRequestBeforeApproval = async (req, res, next) => {
   const projectIdInput = req.body?.project_id;
   const temporaryRequesterName = req.body?.temporary_requester_name;
   const supplyWarehouseInput = req.body?.supply_warehouse_id;
+  const departmentIdInput = req.body?.department_id ?? req.body?.target_department_id;
+  const sectionIdInput = req.body?.section_id ?? req.body?.target_section_id;
 
   if (!Number.isInteger(requestId)) {
     return next(createHttpError(400, 'Invalid request ID'));
@@ -1164,7 +1167,7 @@ const updateRequestBeforeApproval = async (req, res, next) => {
     transactionActive = true;
 
     const requestRes = await client.query(
-      `SELECT id, requester_id, initiated_by_technician_id, status, request_type, department_id, request_domain, temporary_requester_name, project_id, supply_warehouse_id
+      `SELECT id, requester_id, initiated_by_technician_id, status, request_type, department_id, section_id, request_domain, temporary_requester_name, project_id, supply_warehouse_id, justification
          FROM requests
         WHERE id = $1
         FOR UPDATE`,
@@ -1264,6 +1267,55 @@ const updateRequestBeforeApproval = async (req, res, next) => {
       supplyWarehouseId = parsedWarehouseId;
     }
 
+
+    let departmentId = requestRow.department_id;
+    let sectionId = requestRow.section_id;
+    if (requestRow.request_type === 'Maintenance') {
+      if (departmentIdInput !== undefined && departmentIdInput !== null && departmentIdInput !== '') {
+        const parsedDepartmentId = Number(departmentIdInput);
+        if (!Number.isInteger(parsedDepartmentId)) {
+          await client.query('ROLLBACK');
+          transactionActive = false;
+          return next(createHttpError(400, 'Department must be a valid department ID'));
+        }
+
+        const departmentCheck = await client.query(
+          `SELECT id FROM departments WHERE id = $1`,
+          [parsedDepartmentId],
+        );
+        if (departmentCheck.rowCount === 0) {
+          await client.query('ROLLBACK');
+          transactionActive = false;
+          return next(createHttpError(400, 'Selected department does not exist'));
+        }
+        departmentId = parsedDepartmentId;
+      }
+
+      if (sectionIdInput !== undefined) {
+        if (sectionIdInput === null || sectionIdInput === '') {
+          sectionId = null;
+        } else {
+          const parsedSectionId = Number(sectionIdInput);
+          if (!Number.isInteger(parsedSectionId)) {
+            await client.query('ROLLBACK');
+            transactionActive = false;
+            return next(createHttpError(400, 'Section must be a valid section ID'));
+          }
+
+          const sectionCheck = await client.query(
+            `SELECT id FROM sections WHERE id = $1 AND department_id = $2`,
+            [parsedSectionId, departmentId],
+          );
+          if (sectionCheck.rowCount === 0) {
+            await client.query('ROLLBACK');
+            transactionActive = false;
+            return next(createHttpError(400, 'Selected section does not belong to the selected department'));
+          }
+          sectionId = parsedSectionId;
+        }
+      }
+    }
+
     const estimatedCost =
       requestRow.request_type === 'Stock'
         ? 0
@@ -1292,7 +1344,7 @@ const updateRequestBeforeApproval = async (req, res, next) => {
             AND ($1::INT IS NULL OR department_id = $1)
           ORDER BY id ASC
           LIMIT 1`,
-        [requestRow.department_id || null],
+        [departmentId || null],
       );
 
       const scmApproverId = scmRes.rows[0]?.id || null;
@@ -1346,6 +1398,8 @@ const updateRequestBeforeApproval = async (req, res, next) => {
             temporary_requester_name: normalizedTempRequesterName,
             project_id: projectId,
             supply_warehouse_id: supplyWarehouseId,
+            department_id: departmentId,
+            section_id: sectionId,
             request_type: requestRow.request_type,
             items: sanitizedItems,
           }),
@@ -1380,14 +1434,18 @@ const updateRequestBeforeApproval = async (req, res, next) => {
               updated_at = CURRENT_TIMESTAMP,
               temporary_requester_name = $3,
               project_id = $4,
-              supply_warehouse_id = $5
-        WHERE id = $6`,
+              supply_warehouse_id = $5,
+              department_id = $6,
+              section_id = $7
+        WHERE id = $8`,
       [
         justification || requestRow.justification || null,
         estimatedCost,
         normalizedTempRequesterName,
         projectId,
         supplyWarehouseId,
+        departmentId,
+        sectionId,
         requestId,
       ],
     );
@@ -1589,14 +1647,17 @@ const reassignMaintenanceRequestToRequester = async (req, res, next) => {
       return next(createHttpError(403, 'You are not the active approver for this request'));
     }
 
+    await ensureRequesterSectionAssignments();
+
     const designatedRes = await client.query(
-      `SELECT id, name
-         FROM users
-        WHERE LOWER(role) = 'requester'
-          AND department_id = $1
-          AND ($2::INT IS NULL OR section_id = $2)
-          AND is_active = true
-        ORDER BY id
+      `SELECT u.id, u.name
+         FROM users u
+        LEFT JOIN user_section_assignments usa ON usa.user_id = u.id
+        WHERE LOWER(u.role) = 'requester'
+          AND u.department_id = $1
+          AND ($2::INT IS NULL OR u.section_id = $2 OR usa.section_id = $2)
+          AND u.is_active = true
+        ORDER BY u.id
         LIMIT 1`,
       [approval.department_id, approval.section_id],
     );

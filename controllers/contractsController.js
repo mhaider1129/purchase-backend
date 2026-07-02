@@ -1441,6 +1441,7 @@ const listContracts = async (req, res, next) => {
   try {
     await ensureContractsTable();
     await ensureContractsPhaseTwoTables();
+    await ensureContractsPhaseFiveTables();
 
     const filters = [];
     const values = [];
@@ -1454,7 +1455,7 @@ const listContracts = async (req, res, next) => {
         return next(createHttpError(400, 'Invalid status filter'));
       }
       values.push(normalizedStatus);
-      filters.push(`status = $${values.length}`);
+      filters.push(`c.status = $${values.length}`);
     }
 
     if (search) {
@@ -1462,28 +1463,34 @@ const listContracts = async (req, res, next) => {
       const baseIndex = values.length;
       values.push(searchTerm, searchTerm, searchTerm);
       filters.push(
-        `(LOWER(title) LIKE $${baseIndex + 1} OR LOWER(vendor) LIKE $${
+        `(LOWER(c.title) LIKE $${baseIndex + 1} OR LOWER(c.vendor) LIKE $${
           baseIndex + 2
-        } OR LOWER(reference_number) LIKE $${baseIndex + 3})`
+        } OR LOWER(c.reference_number) LIKE $${baseIndex + 3})`
       );
     }
 
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
-      `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date,
-              contract_value, amount_paid, status, description, delivery_terms, warranty_terms, performance_management,
-              commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
-              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
-              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
-              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
-              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
-              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
-              end_user_department_id, contract_manager_id, technical_department_ids,
-              created_by, created_at, updated_at
-         FROM contracts
+      `SELECT c.id, c.title, c.vendor, c.supplier_id, c.source_request_id, c.reference_number, c.start_date, c.signing_date, c.end_date,
+              c.contract_value, COALESCE(payment_totals.total_paid, c.amount_paid) AS amount_paid, c.status, c.description, c.delivery_terms, c.warranty_terms, c.performance_management,
+              c.commercial_terms, c.compliance_legal_terms, c.financial_payment_control, c.risk_dispute_management, c.digital_attachments_tracking,
+              c.institute, c.contract_category, c.renewal_type, c.renewal_notice_days, c.contract_owner, c.currency,
+              c.estimated_contract_value, c.actual_consumed_value, c.first_party, c.second_party, c.authorized_signatory,
+              c.vendor_contact_person, c.vendor_contact_email, c.vendor_contact_phone, c.vendor_tax_id, c.vendor_address,
+              c.scope_summary, c.deliverables, c.technical_specifications, c.service_coverage, c.exclusions, c.sla_requirements,
+              c.payment_terms_details, c.delivery_logistics_details, c.sla_details, c.penalties_incentives,
+              c.change_management_terms, c.termination_exit_terms, c.alert_rules, c.clm_additional_payload,
+              c.end_user_department_id, c.contract_manager_id, c.technical_department_ids,
+              c.created_by, c.created_at, c.updated_at
+         FROM contracts c
+         LEFT JOIN (
+           SELECT contract_id, SUM(amount) AS total_paid
+             FROM contract_payments
+            WHERE status NOT IN ('rejected', 'cancelled')
+            GROUP BY contract_id
+         ) payment_totals ON payment_totals.contract_id = c.id
          ${whereClause}
-        ORDER BY updated_at DESC NULLS LAST, title ASC`,
+        ORDER BY c.updated_at DESC NULLS LAST, c.title ASC`,
       values
     );
 
@@ -1516,20 +1523,27 @@ const getContractById = async (req, res, next) => {
 
   try {
     await ensureContractsTable();
+    await ensureContractsPhaseFiveTables();
     const { rows } = await pool.query(
-      `SELECT id, title, vendor, supplier_id, source_request_id, reference_number, start_date, signing_date, end_date,
-              contract_value, amount_paid, status, description, delivery_terms, warranty_terms, performance_management,
-              commercial_terms, compliance_legal_terms, financial_payment_control, risk_dispute_management, digital_attachments_tracking,
-              institute, contract_category, renewal_type, renewal_notice_days, contract_owner, currency,
-              estimated_contract_value, actual_consumed_value, first_party, second_party, authorized_signatory,
-              vendor_contact_person, vendor_contact_email, vendor_contact_phone, vendor_tax_id, vendor_address,
-              scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
-              payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
-              change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
-              end_user_department_id, contract_manager_id, technical_department_ids,
-              created_by, created_at, updated_at
-         FROM contracts
-        WHERE id = $1
+      `SELECT c.id, c.title, c.vendor, c.supplier_id, c.source_request_id, c.reference_number, c.start_date, c.signing_date, c.end_date,
+              c.contract_value, COALESCE(payment_totals.total_paid, c.amount_paid) AS amount_paid, c.status, c.description, c.delivery_terms, c.warranty_terms, c.performance_management,
+              c.commercial_terms, c.compliance_legal_terms, c.financial_payment_control, c.risk_dispute_management, c.digital_attachments_tracking,
+              c.institute, c.contract_category, c.renewal_type, c.renewal_notice_days, c.contract_owner, c.currency,
+              c.estimated_contract_value, c.actual_consumed_value, c.first_party, c.second_party, c.authorized_signatory,
+              c.vendor_contact_person, c.vendor_contact_email, c.vendor_contact_phone, c.vendor_tax_id, c.vendor_address,
+              c.scope_summary, c.deliverables, c.technical_specifications, c.service_coverage, c.exclusions, c.sla_requirements,
+              c.payment_terms_details, c.delivery_logistics_details, c.sla_details, c.penalties_incentives,
+              c.change_management_terms, c.termination_exit_terms, c.alert_rules, c.clm_additional_payload,
+              c.end_user_department_id, c.contract_manager_id, c.technical_department_ids,
+              c.created_by, c.created_at, c.updated_at
+         FROM contracts c
+         LEFT JOIN (
+           SELECT contract_id, SUM(amount) AS total_paid
+             FROM contract_payments
+            WHERE status NOT IN ('rejected', 'cancelled')
+            GROUP BY contract_id
+         ) payment_totals ON payment_totals.contract_id = c.id
+        WHERE c.id = $1
         LIMIT 1`,
       [contractId]
     );

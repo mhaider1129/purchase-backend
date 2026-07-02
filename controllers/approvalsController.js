@@ -319,14 +319,18 @@ const handleApprovalDecision = async (req, res, next) => {
                   updated_at = NOW(),
                   temporary_requester_name = $3,
                   project_id = $4,
-                  supply_warehouse_id = $5
-            WHERE id = $6`,
+                  supply_warehouse_id = $5,
+                  department_id = $6,
+                  section_id = $7
+            WHERE id = $8`,
           [
             payload.justification || null,
             editedEstimatedCost,
             payload.temporary_requester_name || null,
             payload.project_id || null,
             payload.supply_warehouse_id || null,
+            payload.department_id || request.department_id || null,
+            payload.section_id || null,
             approval.request_id,
           ],
         );

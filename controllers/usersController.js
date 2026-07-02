@@ -2,6 +2,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { applyDefaultRolePermissions } = require('../utils/permissionService');
+const ensureRequesterSectionAssignments = require('../utils/ensureRequesterSectionAssignments');
 
 const ensureInstituteMatch = async (client, instituteId, { departmentId, warehouseId }) => {
   if (!Number.isInteger(instituteId)) {
@@ -87,7 +88,7 @@ const deactivateUser = async (req, res, next) => {
 const assignUser = async (req, res, next) => {
   const { id } = req.params;
   const { role: actingRole } = req.user;
-  const { role, role_id, department_id, section_id, warehouse_id, can_request_medication } = req.body;
+  const { role, role_id, department_id, section_id, section_ids, warehouse_id, can_request_medication } = req.body;
 
   if (!req.user.hasPermission('users.manage')) {
     return next(createHttpError(403, 'You do not have permission to manage users'));
@@ -112,6 +113,27 @@ const assignUser = async (req, res, next) => {
     if (Number.isNaN(sectionId)) {
       return next(createHttpError(400, 'Invalid section ID'));
     }
+  }
+
+
+  const parseSectionIds = (value) => {
+    if (typeof value === 'undefined') return null;
+    const rawValues = Array.isArray(value) ? value : [value];
+    const parsed = [];
+    for (const raw of rawValues) {
+      if (raw === null || raw === undefined || raw === '') continue;
+      const sectionIdValue = parseInt(raw, 10);
+      if (Number.isNaN(sectionIdValue)) {
+        return undefined;
+      }
+      if (!parsed.includes(sectionIdValue)) parsed.push(sectionIdValue);
+    }
+    return parsed;
+  };
+
+  const assignedSectionIds = parseSectionIds(section_ids);
+  if (assignedSectionIds === undefined) {
+    return next(createHttpError(400, 'Invalid section IDs'));
   }
 
   let warehouseId = null;
@@ -140,6 +162,8 @@ const assignUser = async (req, res, next) => {
   }
 
   try {
+    await ensureRequesterSectionAssignments();
+
     await ensureInstituteMatch(pool, req.user?.institute_id, {
       departmentId,
       warehouseId,
@@ -211,6 +235,20 @@ const assignUser = async (req, res, next) => {
       }
     }
 
+    const sectionsToAssign = assignedSectionIds || (sectionId ? [sectionId] : []);
+    if (sectionsToAssign.length > 0) {
+      if (!Number.isInteger(departmentId)) {
+        return next(createHttpError(400, 'Department is required when assigning sections'));
+      }
+      const sectionCheck = await pool.query(
+        `SELECT id FROM sections WHERE department_id = $1 AND id = ANY($2::int[])`,
+        [departmentId, sectionsToAssign],
+      );
+      if (sectionCheck.rowCount !== sectionsToAssign.length) {
+        return next(createHttpError(400, 'One or more sections do not belong to the selected department'));
+      }
+    }
+
     const result = await pool.query(
       `UPDATE users
          SET role = $1,
@@ -231,6 +269,16 @@ const assignUser = async (req, res, next) => {
 
     if (result.rowCount === 0) {
       return next(createHttpError(404, 'User not found'));
+    }
+
+    await pool.query('DELETE FROM user_section_assignments WHERE user_id = $1', [userId]);
+    if (sectionsToAssign.length > 0) {
+      await pool.query(
+        `INSERT INTO user_section_assignments (user_id, section_id)
+         SELECT $1, unnest($2::int[])
+         ON CONFLICT DO NOTHING`,
+        [userId, sectionsToAssign],
+      );
     }
 
     if (roleChanged) {

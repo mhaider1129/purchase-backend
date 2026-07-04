@@ -20,6 +20,7 @@ const { notifyCurrentApprovalByEmail } = require('../controllers/approvalsContro
 
 const buildRes = () => {
   const res = {};
+  res.status = jest.fn(() => res);
   res.json = jest.fn(() => res);
   return res;
 };
@@ -75,6 +76,7 @@ describe('notifyCurrentApprovalByEmail', () => {
       'approver@example.com',
       'Reminder: request 44 is waiting for your approval',
       expect.stringContaining('SCM User sent you a reminder to review Stock request 44.'),
+      { throwOnError: true },
     );
     expect(sendEmail.mock.calls[0][2]).toContain('Approve: https://app.example.com/approve');
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE approvals'), [12]);
@@ -146,6 +148,40 @@ describe('notifyCurrentApprovalByEmail', () => {
     expect(sendEmail).not.toHaveBeenCalled();
     expect(client.query).toHaveBeenCalledWith('ROLLBACK');
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403, message: 'Only SCM users can remind the current approver' }));
+  });
+
+  it('returns an error when the email service does not confirm delivery', async () => {
+    const client = buildClient({
+      approval_id: 12,
+      request_id: 44,
+      approver_id: 8,
+      approval_level: 2,
+      approval_status: 'Pending',
+      approver_email: 'approver@example.com',
+      approver_name: 'Approver User',
+      request_type: 'Stock',
+      requester_id: 7,
+      assigned_to: null,
+      request_status: 'Submitted',
+    });
+    sendEmail.mockResolvedValueOnce(null);
+
+    const req = {
+      params: { request_id: '44' },
+      user: { id: 5, name: 'SCM User', role: 'SCM', hasPermission: jest.fn(() => false) },
+    };
+    const res = buildRes();
+    const next = jest.fn();
+
+    await notifyCurrentApprovalByEmail(req, res, next);
+
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE approvals'), [12]);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 503,
+      message: 'Approval reminder email could not be sent because email delivery is not configured or was rejected',
+    }));
+    expect(res.json).not.toHaveBeenCalled();
   });
 
 });

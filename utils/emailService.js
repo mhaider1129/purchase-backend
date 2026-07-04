@@ -1,6 +1,10 @@
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
-require('dotenv').config();
+const path = require('path');
+const dotenv = require('dotenv');
+
+dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const DEFAULT_APP_URL = 'https://wici-procurement.org';
 const DEFAULT_RETRY_ATTEMPTS = 2;
@@ -18,41 +22,63 @@ const parseInteger = (value, defaultValue) => {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 };
 
-const EMAIL_FROM = process.env.EMAIL_FROM || process.env.EMAIL_USER || 'no-reply@localhost';
-const EMAIL_REPLY_TO = process.env.EMAIL_REPLY_TO || undefined;
-const EMAIL_DRY_RUN = parseBoolean(process.env.EMAIL_DRY_RUN, false);
+const getEnv = (...keys) => {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const EMAIL_HOST = getEnv('EMAIL_HOST', 'SMTP_HOST', 'MAIL_HOST');
+const EMAIL_SERVICE = getEnv('EMAIL_SERVICE', 'SMTP_SERVICE', 'MAIL_SERVICE');
+const EMAIL_PORT = getEnv('EMAIL_PORT', 'SMTP_PORT', 'MAIL_PORT');
+const EMAIL_USER = getEnv('EMAIL_USER', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER', 'MAIL_USERNAME');
+const EMAIL_PASS = getEnv('EMAIL_PASS', 'SMTP_PASS', 'SMTP_PASSWORD', 'MAIL_PASS', 'MAIL_PASSWORD');
+const EMAIL_FROM = getEnv('EMAIL_FROM', 'SMTP_FROM', 'MAIL_FROM') || EMAIL_USER || 'no-reply@localhost';
+const EMAIL_REPLY_TO = getEnv('EMAIL_REPLY_TO', 'SMTP_REPLY_TO', 'MAIL_REPLY_TO');
+const EMAIL_DRY_RUN = parseBoolean(getEnv('EMAIL_DRY_RUN', 'SMTP_DRY_RUN', 'MAIL_DRY_RUN'), false);
 const EMAIL_APP_URL = (process.env.FRONTEND_URL || process.env.APP_PUBLIC_URL || process.env.APP_URL || DEFAULT_APP_URL).replace(/\/$/, '');
 const EMAIL_RETRY_ATTEMPTS = Math.max(1, parseInteger(process.env.EMAIL_RETRY_ATTEMPTS, DEFAULT_RETRY_ATTEMPTS));
 const EMAIL_RETRY_DELAY_MS = Math.max(0, parseInteger(process.env.EMAIL_RETRY_DELAY_MS, DEFAULT_RETRY_DELAY_MS));
 
-const hasEmailHost = Boolean(process.env.EMAIL_HOST || process.env.EMAIL_SERVICE);
-const hasEmailCredentials = Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS);
+const hasEmailHost = Boolean(EMAIL_HOST || EMAIL_SERVICE);
+const hasEmailCredentials = Boolean(EMAIL_USER && EMAIL_PASS);
 
 const buildTransportConfig = () => {
   if (!hasEmailHost) return null;
 
-  const config = process.env.EMAIL_SERVICE
-    ? { service: process.env.EMAIL_SERVICE }
+  const config = EMAIL_SERVICE
+    ? { service: EMAIL_SERVICE }
     : {
-        host: process.env.EMAIL_HOST,
-        port: parseInteger(process.env.EMAIL_PORT, 587),
-        secure: parseBoolean(process.env.EMAIL_SECURE, parseInteger(process.env.EMAIL_PORT, 587) === 465),
+        host: EMAIL_HOST,
+        port: parseInteger(EMAIL_PORT, 587),
+        secure: parseBoolean(getEnv('EMAIL_SECURE', 'SMTP_SECURE', 'MAIL_SECURE'), parseInteger(EMAIL_PORT, 587) === 465),
       };
 
   if (hasEmailCredentials) {
     config.auth = {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      user: EMAIL_USER,
+      pass: EMAIL_PASS,
     };
   }
 
-  if (process.env.EMAIL_POOL) config.pool = parseBoolean(process.env.EMAIL_POOL);
-  if (process.env.EMAIL_MAX_CONNECTIONS) config.maxConnections = parseInteger(process.env.EMAIL_MAX_CONNECTIONS, 5);
-  if (process.env.EMAIL_MAX_MESSAGES) config.maxMessages = parseInteger(process.env.EMAIL_MAX_MESSAGES, 100);
-  if (process.env.EMAIL_REQUIRE_TLS) config.requireTLS = parseBoolean(process.env.EMAIL_REQUIRE_TLS);
-  if (process.env.EMAIL_IGNORE_TLS) config.ignoreTLS = parseBoolean(process.env.EMAIL_IGNORE_TLS);
-  if (process.env.EMAIL_TLS_REJECT_UNAUTHORIZED) {
-    config.tls = { rejectUnauthorized: parseBoolean(process.env.EMAIL_TLS_REJECT_UNAUTHORIZED, true) };
+  const emailPool = getEnv('EMAIL_POOL', 'SMTP_POOL', 'MAIL_POOL');
+  const emailMaxConnections = getEnv('EMAIL_MAX_CONNECTIONS', 'SMTP_MAX_CONNECTIONS', 'MAIL_MAX_CONNECTIONS');
+  const emailMaxMessages = getEnv('EMAIL_MAX_MESSAGES', 'SMTP_MAX_MESSAGES', 'MAIL_MAX_MESSAGES');
+  const emailRequireTls = getEnv('EMAIL_REQUIRE_TLS', 'SMTP_REQUIRE_TLS', 'MAIL_REQUIRE_TLS');
+  const emailIgnoreTls = getEnv('EMAIL_IGNORE_TLS', 'SMTP_IGNORE_TLS', 'MAIL_IGNORE_TLS');
+  const emailTlsRejectUnauthorized = getEnv('EMAIL_TLS_REJECT_UNAUTHORIZED', 'SMTP_TLS_REJECT_UNAUTHORIZED', 'MAIL_TLS_REJECT_UNAUTHORIZED');
+
+  if (emailPool) config.pool = parseBoolean(emailPool);
+  if (emailMaxConnections) config.maxConnections = parseInteger(emailMaxConnections, 5);
+  if (emailMaxMessages) config.maxMessages = parseInteger(emailMaxMessages, 100);
+  if (emailRequireTls) config.requireTLS = parseBoolean(emailRequireTls);
+  if (emailIgnoreTls) config.ignoreTLS = parseBoolean(emailIgnoreTls);
+  if (emailTlsRejectUnauthorized) {
+    config.tls = { rejectUnauthorized: parseBoolean(emailTlsRejectUnauthorized, true) };
   }
 
   return config;
@@ -365,5 +391,6 @@ module.exports = {
     wrapHtmlLayout,
     buildTransportConfig,
     parseBoolean,
+    getEnv,
   },
 };

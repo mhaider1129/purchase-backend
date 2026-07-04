@@ -1587,11 +1587,17 @@ const notifyCurrentApprovalByEmail = async (req, res, next) => {
       );
     }
 
-    await sendEmail(
+    const emailResult = await sendEmail(
       currentApproval.approver_email,
       `Reminder: request ${currentApproval.request_id} is waiting for your approval`,
       baseMessage.join('\n'),
+      { throwOnError: true },
     );
+
+    if (!emailResult) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(503, 'Approval reminder email could not be sent because email delivery is not configured or was rejected'));
+    }
 
     await client.query(
       `UPDATE approvals

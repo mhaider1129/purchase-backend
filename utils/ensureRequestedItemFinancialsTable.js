@@ -25,6 +25,7 @@ const ensureRequestedItemFinancialsTable = async (client = pool) => {
       savings_notes text,
       savings_baseline numeric(14, 2),
       contract_id integer,
+      contract_item_id integer,
       contract_value_snapshot numeric(14, 2),
       created_by integer,
       created_at timestamp with time zone NOT NULL DEFAULT now(),
@@ -47,7 +48,13 @@ const ensureRequestedItemFinancialsTable = async (client = pool) => {
     `CREATE INDEX IF NOT EXISTS requested_item_financials_request_idx ON public.requested_item_financials (request_id)`,
   );
   await runner.query(
+    `ALTER TABLE public.requested_item_financials ADD COLUMN IF NOT EXISTS contract_item_id integer`,
+  );
+  await runner.query(
     `CREATE INDEX IF NOT EXISTS requested_item_financials_contract_idx ON public.requested_item_financials (contract_id)`,
+  );
+  await runner.query(
+    `CREATE INDEX IF NOT EXISTS requested_item_financials_contract_item_idx ON public.requested_item_financials (contract_item_id)`,
   );
 
   tableEnsured = true;

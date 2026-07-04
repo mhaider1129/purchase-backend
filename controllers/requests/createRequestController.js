@@ -14,6 +14,7 @@ const ensureRequestClientSubmissionKey = require("../../utils/ensureRequestClien
 const ensureMaintenanceRequestSchema = require("../../utils/ensureMaintenanceRequestSchema");
 const ensureRequesterSectionAssignments = require("../../utils/ensureRequesterSectionAssignments");
 const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
+const { ensureRequestedItemFinancialsTable } = require("../../utils/ensureRequestedItemFinancialsTable");
 const {
   evaluateBudgetCoverage,
   recordCommitment,
@@ -55,6 +56,12 @@ const parseOptionalPositiveInteger = (value, fieldName) => {
   }
 
   return parsed;
+};
+
+
+const ensureContractsPhaseTwoForRequests = async () => {
+  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS requested_quantity NUMERIC(14,2)`);
+  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS delivered_quantity NUMERIC(14,2) NOT NULL DEFAULT 0`);
 };
 
 const assignApprover = async (
@@ -441,6 +448,8 @@ const createRequest = async (req, res, next) => {
       ...item,
       item_name: normalizedItemName,
       quantity: parsedQuantity,
+      contract_id: parseOptionalPositiveInteger(item.contract_id, "Contract"),
+      contract_item_id: parseOptionalPositiveInteger(item.contract_item_id, "Contracted item"),
       unit_cost: parsedUnitCost,
       total_cost:
         parsedUnitCost !== null ? parsedQuantity * parsedUnitCost : null,
@@ -487,6 +496,41 @@ const createRequest = async (req, res, next) => {
           `The following items are not available in the selected warehouse: ${missingFromWarehouse.join(", ")}`,
         ),
       );
+    }
+  }
+
+
+  if (request_type === "Stock") {
+    const contractedItems = items.filter((item) => item.contract_id || item.contract_item_id);
+    if (contractedItems.length > 0) {
+      await ensureContractsPhaseTwoForRequests();
+    }
+    for (const [idx, item] of contractedItems.entries()) {
+      if (!item.contract_id || !item.contract_item_id) {
+        return next(createHttpError(400, `Item ${idx + 1} must include both contract and contracted item selections`));
+      }
+      const { rows } = await pool.query(
+        `SELECT ci.id, ci.contract_id, ci.item_name, ci.contracted_price, ci.currency, c.contract_value
+           FROM contract_items ci
+           JOIN contracts c ON c.id = ci.contract_id
+          WHERE ci.id = $1
+            AND ci.contract_id = $2
+            AND ci.is_active = TRUE
+            AND c.status IN ('active', 'renewed', 'expiring_soon')
+            AND (ci.price_valid_from IS NULL OR ci.price_valid_from <= CURRENT_DATE)
+            AND (ci.price_valid_to IS NULL OR ci.price_valid_to >= CURRENT_DATE)
+          LIMIT 1`,
+        [item.contract_item_id, item.contract_id],
+      );
+      if (!rows.length) {
+        return next(createHttpError(400, `Selected contracted item for ${item.item_name} is not active or does not belong to the selected contract`));
+      }
+      item.contract_value_snapshot = rows[0].contract_value;
+      if (item.unit_cost === null && rows[0].contracted_price !== null && rows[0].contracted_price !== undefined) {
+        item.unit_cost = Number(rows[0].contracted_price);
+        item.total_cost = item.quantity * item.unit_cost;
+      }
+      item.contract_currency = rows[0].currency || null;
     }
   }
 
@@ -774,6 +818,10 @@ const createRequest = async (req, res, next) => {
         available_quantity,
         intended_use,
         specs,
+        contract_id,
+        contract_item_id,
+        contract_value_snapshot,
+        contract_currency,
       } = items[idx];
       let requestedItemId = null;
       if (request_type !== "Warehouse Supply") {
@@ -830,6 +878,31 @@ const createRequest = async (req, res, next) => {
           );
         }
         requestedItemId = insertedReq.rows[0].id;
+        if (request_type === "Stock" && requestedItemId && contract_id && contract_item_id) {
+          await ensureRequestedItemFinancialsTable(client);
+          await client.query(
+            `INSERT INTO public.requested_item_financials (
+               requested_item_id, request_id, committed_cost, currency, contract_id, contract_item_id, contract_value_snapshot, created_by
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+             ON CONFLICT (requested_item_id) DO UPDATE SET
+               committed_cost = EXCLUDED.committed_cost,
+               currency = EXCLUDED.currency,
+               contract_id = EXCLUDED.contract_id,
+               contract_item_id = EXCLUDED.contract_item_id,
+               contract_value_snapshot = EXCLUDED.contract_value_snapshot,
+               updated_at = NOW()`,
+            [
+              requestedItemId,
+              request.id,
+              unit_cost !== null ? quantity * unit_cost : null,
+              contract_currency || null,
+              contract_id,
+              contract_item_id,
+              contract_value_snapshot ?? null,
+              req.user.id,
+            ],
+          );
+        }
         itemIdMap[idx] = requestedItemId;
       }
 

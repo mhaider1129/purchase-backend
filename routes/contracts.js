@@ -28,6 +28,7 @@ const {
   getDocumentChecklist,
   updateDocumentChecklist,
   getContractConsumption,
+  listActiveContractItems,
   getContractRisk,
   getContractRiskHistory,
   recalculateContractRisk,
@@ -76,6 +77,7 @@ const { getContractHealth, updateContractGovernanceFields } = require('../contro
 const router = express.Router();
 
 router.get('/', listContracts);
+router.get('/items/active', listActiveContractItems);
 router.get('/:contractId/evaluation-candidates', getEvaluationCandidates);
 router.get('/pending-approvals', authenticateUser, listPendingContractApprovals);
 router.get('/approval-stage-monitor', authenticateUser, listContractApprovalStageMonitor);

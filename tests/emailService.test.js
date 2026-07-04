@@ -25,6 +25,27 @@ describe('emailService', () => {
     delete process.env.EMAIL_REQUIRE_TLS;
     delete process.env.EMAIL_RETRY_ATTEMPTS;
     delete process.env.EMAIL_RETRY_DELAY_MS;
+    delete process.env.SMTP_HOST;
+    delete process.env.SMTP_PORT;
+    delete process.env.SMTP_USER;
+    delete process.env.SMTP_USERNAME;
+    delete process.env.SMTP_PASS;
+    delete process.env.SMTP_PASSWORD;
+    delete process.env.SMTP_SECURE;
+    delete process.env.SMTP_FROM;
+    delete process.env.SMTP_REPLY_TO;
+    delete process.env.SMTP_POOL;
+    delete process.env.SMTP_MAX_CONNECTIONS;
+    delete process.env.SMTP_REQUIRE_TLS;
+    delete process.env.MAIL_HOST;
+    delete process.env.MAIL_PORT;
+    delete process.env.MAIL_USER;
+    delete process.env.MAIL_USERNAME;
+    delete process.env.MAIL_PASS;
+    delete process.env.MAIL_PASSWORD;
+    delete process.env.MAIL_SECURE;
+    delete process.env.MAIL_FROM;
+    delete process.env.MAIL_REPLY_TO;
     delete process.env.FRONTEND_URL;
   };
 
@@ -253,6 +274,55 @@ describe('emailService', () => {
       pool: true,
       maxConnections: 3,
       requireTLS: true,
+    });
+  });
+
+  it('supports SMTP_* aliases used by common hosting providers', async () => {
+    process.env.SMTP_HOST = 'smtp.alias.example.com';
+    process.env.SMTP_PORT = '465';
+    process.env.SMTP_USER = 'smtp-user@example.com';
+    process.env.SMTP_PASS = 'smtp-secret';
+    process.env.SMTP_FROM = 'procurement@example.com';
+    process.env.SMTP_REPLY_TO = 'support@example.com';
+    process.env.SMTP_REQUIRE_TLS = 'true';
+
+    const { sendEmail } = loadService();
+
+    await sendEmail('recipient@example.com', 'Alias subject', 'Alias body');
+
+    expect(nodemailer.createTransport).toHaveBeenCalledWith({
+      host: 'smtp.alias.example.com',
+      port: 465,
+      secure: true,
+      auth: { user: 'smtp-user@example.com', pass: 'smtp-secret' },
+      requireTLS: true,
+    });
+    expect(sendMailMock).toHaveBeenCalledTimes(1);
+    expect(sendMailMock.mock.calls[0][0]).toMatchObject({
+      from: 'procurement@example.com',
+      replyTo: 'support@example.com',
+      to: ['recipient@example.com'],
+      subject: 'Alias subject',
+    });
+  });
+
+  it('keeps EMAIL_* settings ahead of SMTP_* aliases when both are provided', () => {
+    process.env.EMAIL_HOST = 'smtp.email.example.com';
+    process.env.EMAIL_PORT = '587';
+    process.env.EMAIL_USER = 'email-user@example.com';
+    process.env.EMAIL_PASS = 'email-secret';
+    process.env.SMTP_HOST = 'smtp.alias.example.com';
+    process.env.SMTP_PORT = '465';
+    process.env.SMTP_USER = 'smtp-user@example.com';
+    process.env.SMTP_PASS = 'smtp-secret';
+
+    const { _private } = loadService();
+
+    expect(_private.buildTransportConfig()).toMatchObject({
+      host: 'smtp.email.example.com',
+      port: 587,
+      secure: false,
+      auth: { user: 'email-user@example.com', pass: 'email-secret' },
     });
   });
 

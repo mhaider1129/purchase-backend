@@ -5,6 +5,11 @@ const dotenv = require('dotenv');
 const path = require('path');
 const os = require('os');
 const morgan = require('morgan');
+
+// Load environment variables before importing modules that read process.env at module load time.
+dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+
 const reassignPendingApprovals = require('./controllers/utils/reassignPendingApprovals');
 const remindPendingApprovals = require('./controllers/utils/remindPendingApprovals');
 const remindPendingReceipts = require('./controllers/utils/remindPendingReceipts');
@@ -22,8 +27,6 @@ const {
   errorBudgetHandler,
 } = require('./utils/observability');
 
-// Load environment variables
-dotenv.config();
 const environmentConfig = loadEnvironmentConfig();
 
 // Initialize Express app

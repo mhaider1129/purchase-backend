@@ -31,14 +31,21 @@ const printRequest = async (req, res, next) => {
   
   try {
     const accessRes = await pool.query(
-      `SELECT r.*, COALESCE(r.print_count, 0) AS print_count, d.name AS department_name, sec.name AS section_name, p.name AS project_name, requester.name AS requester_name, requester.role AS requester_role
+      `SELECT r.*, COALESCE(r.print_count, 0) AS print_count, d.name AS department_name, sec.name AS section_name, p.name AS project_name, requester.name AS requester_name, requester.role AS requester_role,
+              EXISTS (
+                SELECT 1 FROM public.requested_items assigned_ri
+                WHERE assigned_ri.request_id = r.id AND assigned_ri.assigned_to = $2
+              ) AS user_has_item_assignments
        FROM requests r
        LEFT JOIN approvals a ON r.id = a.request_id
       LEFT JOIN departments d ON r.department_id = d.id
       LEFT JOIN sections sec ON r.section_id = sec.id
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN users requester ON r.requester_id = requester.id
-      WHERE r.id = $1 AND ($3::boolean OR r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2)
+      WHERE r.id = $1 AND ($3::boolean OR r.requester_id = $2 OR a.approver_id = $2 OR r.assigned_to = $2 OR EXISTS (
+          SELECT 1 FROM public.requested_items access_ri
+          WHERE access_ri.request_id = r.id AND access_ri.assigned_to = $2
+        ))
        LIMIT 1`,
       [id, userId, hasAuditPrintAccess]
     );
@@ -99,6 +106,10 @@ const printRequest = async (req, res, next) => {
           }
         : null;
     }
+    const shouldLimitToAssignedItems = Boolean(accessRes.rows[0]?.user_has_item_assignments)
+      && Number(request.assigned_to) !== Number(userId)
+      && !hasAuditPrintAccess;
+
     let itemsRes;
     if (request.request_type === 'Warehouse Supply') {
       itemsRes = await pool.query(
@@ -118,10 +129,12 @@ const printRequest = async (req, res, next) => {
            approval_status,
            approval_comments,
            approved_by,
-           approved_at
+           approved_at,
+           assigned_to
          FROM public.requested_items
-         WHERE request_id = $1`,
-        [id]
+         WHERE request_id = $1
+           AND ($2::boolean = false OR assigned_to = $3)`,
+        [id, shouldLimitToAssignedItems, userId]
       );
     } else {
       await ensureRequestedItemApprovalColumns();
@@ -137,10 +150,12 @@ const printRequest = async (req, res, next) => {
            approval_status,
            approval_comments,
            approved_by,
-           approved_at
+           approved_at,
+           assigned_to
          FROM public.requested_items
-         WHERE request_id = $1`,
-        [id]
+         WHERE request_id = $1
+           AND ($2::boolean = false OR assigned_to = $3)`,
+        [id, shouldLimitToAssignedItems, userId]
       );
     }
 

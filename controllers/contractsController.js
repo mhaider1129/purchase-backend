@@ -1032,6 +1032,7 @@ const ensureContractsPhaseTwoTables = (() => {
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
         `);
+        await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS item_id INTEGER`);
         await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS requested_quantity NUMERIC(14,2)`);
         await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS delivered_quantity NUMERIC(14,2) NOT NULL DEFAULT 0`);
         await pool.query(`
@@ -3368,6 +3369,10 @@ const listContractItems = async (req, res, next) => {
 };
 
 const upsertContractItemValidation = (payload = {}) => {
+  if (payload.item_id !== undefined && payload.item_id !== null && payload.item_id !== '') {
+    const itemId = Number(payload.item_id);
+    if (!Number.isInteger(itemId) || itemId <= 0) throw createHttpError(400, 'item_id must be a positive integer');
+  }
   if (!normalizeText(payload.item_name)) throw createHttpError(400, 'item_name is required');
   if (payload.contracted_price !== undefined && payload.contracted_price !== null && payload.contracted_price !== '' && Number.isNaN(Number(payload.contracted_price))) throw createHttpError(400, 'contracted_price must be numeric');
   for (const field of ['requested_quantity', 'delivered_quantity']) {
@@ -3404,8 +3409,8 @@ const updateContractItem = async (req, res, next) => {
   try {
     await ensureContractsPhaseTwoTables(); upsertContractItemValidation(req.body || {}); await client.query('BEGIN'); await assertContractExists(client, contractId);
     const b = req.body || {};
-    const { rows } = await client.query(`UPDATE contract_items SET item_name=$1,generic_name=$2,brand_name=$3,unit=$4,contracted_price=$5,currency=$6,minimum_order_quantity=$7,lead_time_days=$8,warranty_terms=$9,price_valid_from=$10,price_valid_to=$11,is_active=$12,notes=$13,requested_quantity=$14,delivered_quantity=$15,updated_at=NOW() WHERE id=$16 AND contract_id=$17 RETURNING *`,
-      [normalizeText(b.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null, b.requested_quantity === '' ? null : b.requested_quantity ?? null, b.delivered_quantity === '' ? 0 : b.delivered_quantity ?? 0, itemId, contractId]);
+    const { rows } = await client.query(`UPDATE contract_items SET item_id=$1,item_name=$2,generic_name=$3,brand_name=$4,unit=$5,contracted_price=$6,currency=$7,minimum_order_quantity=$8,lead_time_days=$9,warranty_terms=$10,price_valid_from=$11,price_valid_to=$12,is_active=$13,notes=$14,requested_quantity=$15,delivered_quantity=$16,updated_at=NOW() WHERE id=$17 AND contract_id=$18 RETURNING *`,
+      [b.item_id || null, normalizeText(b.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null, b.requested_quantity === '' ? null : b.requested_quantity ?? null, b.delivered_quantity === '' ? 0 : b.delivered_quantity ?? 0, itemId, contractId]);
     if (!rows.length) return next(createHttpError(404, 'Contract item not found'));
     await recordContractLog(client, { contractId, action: 'contract_item_updated', actorId: req.user?.id || null, details: { item_id: itemId } });
     await client.query('COMMIT'); res.json(rows[0]);

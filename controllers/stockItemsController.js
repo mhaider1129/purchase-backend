@@ -13,12 +13,13 @@ const getStockItems = async (req, res, next) => {
          si.id,
          si.name,
          si.brand,
+         si.unit,
          COALESCE(SUM(wsl.quantity), si.available_quantity, 0) AS available_quantity,
          si.category,
          si.sub_category
        FROM stock_items si
        LEFT JOIN warehouse_stock_levels wsl ON wsl.stock_item_id = si.id
-       GROUP BY si.id, si.name, si.brand, si.category, si.sub_category
+       GROUP BY si.id, si.name, si.brand, si.unit, si.category, si.sub_category
        ORDER BY si.name`
     );
     res.json(result.rows);
@@ -41,6 +42,7 @@ const getUnassignedStockItems = async (req, res, next) => {
          si.id,
          si.name,
          si.brand,
+         si.unit,
          COALESCE(si.available_quantity, 0) AS available_quantity,
          si.category,
          si.sub_category

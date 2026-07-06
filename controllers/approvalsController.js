@@ -1279,7 +1279,7 @@ const updateApprovalItems = async (req, res, next) => {
         `INSERT INTO requests (
             request_type, requester_id, department_id, institute_id, section_id, justification,
             estimated_cost, request_domain, status, project_id, supply_warehouse_id, assigned_to
-         ) VALUES ('Warehouse Supply', $1, $2, $3, $4, $5, 0, $6, 'Submitted', $7, $8, $9)
+         ) VALUES ('Warehouse Supply', $1, $2, $3, $4, $5, 0, $6, 'Approved', $7, $8, $9)
          RETURNING id`,
         [
           originalReq.requester_id,
@@ -1297,9 +1297,9 @@ const updateApprovalItems = async (req, res, next) => {
 
       for (const convertedItem of convertedWarehouseSupplyItems) {
         await client.query(
-          `INSERT INTO warehouse_supply_items (request_id, requested_item_id, item_name, quantity)
-           VALUES ($1, $2, $3, $4)`,
-          [warehouseSupplyRequestId, convertedItem.item_id, convertedItem.item_name, convertedItem.quantity],
+          `INSERT INTO warehouse_supply_items (request_id, requested_item_id, item_name, quantity, approval_status, approved_by, approved_at)
+           VALUES ($1, $2, $3, $4, 'Approved', $5, NOW())`,
+          [warehouseSupplyRequestId, convertedItem.item_id, convertedItem.item_name, convertedItem.quantity, resolvedApproverValue],
         );
       }
 

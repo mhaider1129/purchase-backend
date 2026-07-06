@@ -6,7 +6,7 @@ const service = require('../services/procurementEvaluationService');
 describe('procurement evaluation service', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  test('calculates KIT_OWNERSHIP effective cost with normalized percentages', () => {
+  test('calculates KIT_OWNERSHIP effective cost with per-test QC, calibrator, and fixed consumables', () => {
     const result = service.calculateKitOwnershipCost({
       kit_price: 1000,
       tests_per_kit: 100,
@@ -18,8 +18,8 @@ describe('procurement evaluation service', () => {
       other_kit_related_cost: 0,
     }, 1200);
 
-    expect(result.calculated_effective_cost_per_reported_test).toBeCloseTo(12.8655, 4);
-    expect(result.annual_test_cost).toBe(15438.6);
+    expect(result.calculated_effective_cost_per_reported_test).toBeCloseTo(111.6959, 4);
+    expect(result.annual_test_cost).toBe(134035.09);
   });
 
   test('calculates PAY_PER_REPORTABLE without waste, QC, or repeat uplift', () => {

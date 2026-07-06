@@ -46,15 +46,16 @@ const calculateKitOwnershipCost = (testCost, annualVolume) => {
 
   const totalKitCost =
     kitPrice +
-    toNumber(testCost.qc_cost_per_kit) +
-    toNumber(testCost.calibrator_cost_per_kit) +
-    toNumber(testCost.fixed_consumable_cost_per_kit) +
     toNumber(testCost.other_kit_related_cost);
   const effectiveUsableTests = usableTests > 0
     ? usableTests
     : testsPerKit * (1 - normalizePercent(testCost.expected_waste_percentage)) * (1 - normalizePercent(testCost.repeat_rate_percentage));
   if (effectiveUsableTests <= 0) throw new Error('KIT_OWNERSHIP effective usable tests must be greater than 0');
-  const effectiveCost = totalKitCost / effectiveUsableTests;
+  const effectiveCost =
+    (totalKitCost / effectiveUsableTests) +
+    toNumber(testCost.qc_cost_per_kit) +
+    toNumber(testCost.calibrator_cost_per_kit) +
+    toNumber(testCost.fixed_consumable_cost_per_kit);
   return {
     calculated_effective_cost_per_reported_test: Number(effectiveCost.toFixed(4)),
     annual_test_cost: money(toNumber(annualVolume) * effectiveCost),

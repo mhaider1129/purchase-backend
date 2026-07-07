@@ -958,6 +958,27 @@ const setApprovalHoldStatus = async (req, res, next) => {
   }
 };
 
+
+const buildItemApprovalComments = ({ existingComments, incomingComments, existingApprovedBy, currentApproverId }) => {
+  const normalizedIncoming = String(incomingComments ?? '').trim();
+  const normalizedExisting = String(existingComments ?? '').trim();
+
+  if (!normalizedIncoming) {
+    return normalizedExisting || null;
+  }
+
+  const existingApprover = existingApprovedBy != null ? String(existingApprovedBy) : null;
+  const currentApprover = currentApproverId != null ? String(currentApproverId) : null;
+
+  if (!normalizedExisting || !existingApprover || existingApprover === currentApprover) {
+    return normalizedIncoming;
+  }
+
+  return `${normalizedExisting}
+
+Approver ${currentApprover || 'current'}: ${normalizedIncoming}`;
+};
+
 // 🔘 Allow approvers to record decisions for individual items before final approval
 const updateApprovalItems = async (req, res, next) => {
   const { id } = req.params;
@@ -1220,6 +1241,15 @@ const updateApprovalItems = async (req, res, next) => {
         });
       }
 
+      const nextApprovalComments = buildItemApprovalComments({
+        existingComments: existingItem.approval_comments,
+        incomingComments: convertToWarehouseSupply
+          ? itemDecision.comments || 'Converted to warehouse supply request because stock is available.'
+          : itemDecision.comments,
+        existingApprovedBy: existingItem.approved_by,
+        currentApproverId: resolvedApproverValue,
+      });
+
       const updateRes = await client.query(
         isWarehouseSupply
           ? `UPDATE public.warehouse_supply_items
@@ -1239,9 +1269,7 @@ const updateApprovalItems = async (req, res, next) => {
              RETURNING id, item_name, approval_status, approval_comments, approved_at, approved_by, quantity, total_cost, unit_cost`,
         [
           finalStatus,
-          (convertToWarehouseSupply
-            ? itemDecision.comments || 'Converted to warehouse supply request because stock is available.'
-            : itemDecision.comments) ?? null,
+          nextApprovalComments,
           approvedByValue,
           itemId,
           approval.request_id,

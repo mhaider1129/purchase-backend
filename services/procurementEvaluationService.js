@@ -18,6 +18,14 @@ const money = value => Number(toNumber(value).toFixed(2));
 const score = value => Number(Math.max(0, Math.min(100, toNumber(value))).toFixed(4));
 
 
+const hasFilledTestCost = testCost => (
+  toNumber(testCost?.annual_test_cost) > 0 ||
+  toNumber(testCost?.calculated_effective_cost_per_reported_test) > 0 ||
+  toNumber(testCost?.kit_price) > 0 ||
+  toNumber(testCost?.unit_cost) > 0 ||
+  toNumber(testCost?.price_per_reportable_test) > 0
+);
+
 const FILLED_TEST_COST_SQL = `(
   COALESCE(tc.annual_test_cost, 0) > 0 OR
   COALESCE(tc.calculated_effective_cost_per_reported_test, 0) > 0 OR
@@ -152,6 +160,7 @@ const calculateOfferAnnualVariableCost = async (caseId, offerId, options = {}) =
   const tests = [];
 
   for (const row of rows) {
+    if (!hasFilledTestCost(row)) continue;
     const method = row.pricing_method || 'KIT_OWNERSHIP';
     if (!PRICING_METHODS.has(method)) throw new Error(`Invalid pricing_method: ${method}`);
     const annualVolume = toNumber(row.expected_monthly_volume) * 12 * volumeMultiplier;
@@ -616,6 +625,7 @@ module.exports = {
   SCORING_METHODS,
   normalizePercent,
   FILLED_TEST_COST_SQL,
+  hasFilledTestCost,
   offerHasFilledTestCost,
   listOffersWithFilledTestCosts,
   calculateInitialCost,

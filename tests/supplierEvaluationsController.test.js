@@ -34,7 +34,7 @@ describe('supplierEvaluationsController', () => {
         role: 'Requester',
         hasPermission: jest.fn().mockReturnValue(false),
       },
-      body: { supplier_name: 'Acme Corp' },
+      body: { supplier_id: 1, supplier_name: 'Acme Corp' },
     };
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
     const next = jest.fn();
@@ -47,13 +47,13 @@ describe('supplierEvaluationsController', () => {
     expect(pool.query).not.toHaveBeenCalled();
   });
 
-  it('validates that supplier_name is provided', async () => {
+  it('validates that supplier_id is provided', async () => {
     const req = {
       user: {
         role: 'ADMIN',
         hasPermission: jest.fn().mockImplementation(code => code === 'evaluations.manage'),
       },
-      body: { quality_score: 80 },
+      body: { supplier_name: 'Legacy Supplier', quality_score: 80 },
     };
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
     const next = jest.fn();
@@ -75,6 +75,7 @@ describe('supplierEvaluationsController', () => {
         hasPermission: jest.fn().mockImplementation(code => code === 'evaluations.manage'),
       },
       body: {
+        supplier_id: 8,
         supplier_name: 'Globex',
         evaluation_date: '2024-01-01',
         quality_score: 80,
@@ -89,13 +90,17 @@ describe('supplierEvaluationsController', () => {
 
     pool.query
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure table
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure index
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure supplier name index
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure supplier id index
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure extended columns
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure constraints
+      .mockResolvedValueOnce({ rows: [{ id: 8, name: 'Globex' }], rowCount: 1 }) // supplier lookup
       .mockResolvedValueOnce({ rows: [{ latest_date: null }], rowCount: 1 }) // cadence check
       .mockResolvedValueOnce({
         rows: [
           {
             id: 1,
+            supplier_id: 8,
             supplier_name: 'Globex',
             evaluation_date: '2024-01-01',
             quality_score: '80',
@@ -121,7 +126,7 @@ describe('supplierEvaluationsController', () => {
 
     await createSupplierEvaluation(req, res, next);
 
-    expect(pool.query).toHaveBeenCalledTimes(5);
+    expect(pool.query).toHaveBeenCalledTimes(8);
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -142,6 +147,7 @@ describe('supplierEvaluationsController', () => {
         hasPermission: jest.fn().mockImplementation(code => code === 'evaluations.manage'),
       },
       body: {
+        supplier_id: 12,
         supplier_name: 'Acme Corp',
         evaluation_date: '2024-02-02',
         quality_score: 75,
@@ -172,6 +178,7 @@ describe('supplierEvaluationsController', () => {
         hasPermission: jest.fn().mockImplementation(code => code === 'evaluations.manage'),
       },
       body: {
+        supplier_id: 9,
         supplier_name: 'Initech',
         otif_score: 92,
         corrective_actions_score: 60,
@@ -184,13 +191,13 @@ describe('supplierEvaluationsController', () => {
     const next = jest.fn();
 
     pool.query
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ id: 9, name: 'Initech' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ latest_date: null }], rowCount: 1 })
       .mockResolvedValueOnce({
         rows: [
           {
             id: 42,
+            supplier_id: 9,
             supplier_name: 'Initech',
             evaluation_date: expect.any(String),
             quality_score: null,
@@ -226,12 +233,12 @@ describe('supplierEvaluationsController', () => {
     );
     expect(insertCall).toBeDefined();
     const insertParams = insertCall[1];
-    expect(insertParams[6]).toBe(92);
-    expect(insertParams[7]).toBe(60);
-    expect(insertParams[8]).toBe(88);
-    expect(insertParams[9]).toBe(79.8);
+    expect(insertParams[7]).toBe(92);
+    expect(insertParams[8]).toBe(60);
+    expect(insertParams[9]).toBe(88);
     expect(insertParams[10]).toBe(79.8);
-    expect(JSON.parse(insertParams[11])).toEqual(
+    expect(insertParams[11]).toBe(79.8);
+    expect(JSON.parse(insertParams[12])).toEqual(
       expect.objectContaining({
         otif: expect.any(Number),
         corrective_actions: expect.any(Number),

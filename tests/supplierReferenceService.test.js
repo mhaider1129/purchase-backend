@@ -21,17 +21,18 @@ describe('supplierReferenceService', () => {
     expect(findOrCreateSupplierByName).not.toHaveBeenCalled();
   });
 
-  it('creates or finds supplier by name when id is not provided', async () => {
+  it('creates or finds supplier by name only when supplier is optional', async () => {
     findOrCreateSupplierByName.mockResolvedValueOnce({ id: 5, name: 'Global Med' });
 
-    const result = await resolveSupplierReference({}, { supplierName: ' Global Med ', requireSupplier: true });
+    const result = await resolveSupplierReference({}, { supplierName: ' Global Med ', requireSupplier: false });
 
     expect(result.supplierId).toBe(5);
     expect(result.supplierName).toBe('Global Med');
     expect(findOrCreateSupplierByName).toHaveBeenCalledWith({}, 'Global Med');
   });
 
-  it('throws when supplier is required but missing', async () => {
-    await expect(resolveSupplierReference({}, { requireSupplier: true })).rejects.toThrow('supplier is required');
+  it('throws when supplier_id is required but missing', async () => {
+    await expect(resolveSupplierReference({}, { supplierName: 'Global Med', requireSupplier: true })).rejects.toThrow('supplier_id is required');
+    expect(findOrCreateSupplierByName).not.toHaveBeenCalled();
   });
 });

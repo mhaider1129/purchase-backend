@@ -75,8 +75,8 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id)
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
 );
 CREATE TABLE public.requested_items (
   id integer NOT NULL DEFAULT nextval('requested_items_id_seq'::regclass),
@@ -459,8 +459,10 @@ CREATE TABLE public.supplier_evaluations (
   compliance_alignment numeric CHECK (compliance_alignment IS NULL OR compliance_alignment >= 1::numeric AND compliance_alignment <= 5::numeric),
   operations_effectiveness_rating numeric CHECK (operations_effectiveness_rating IS NULL OR operations_effectiveness_rating >= 1::numeric AND operations_effectiveness_rating <= 5::numeric),
   payment_terms_comfort numeric CHECK (payment_terms_comfort IS NULL OR payment_terms_comfort >= 1::numeric AND payment_terms_comfort <= 5::numeric),
+  supplier_id integer,
   CONSTRAINT supplier_evaluations_pkey PRIMARY KEY (id),
-  CONSTRAINT supplier_evaluations_evaluator_id_fkey FOREIGN KEY (evaluator_id) REFERENCES public.users(id)
+  CONSTRAINT supplier_evaluations_evaluator_id_fkey FOREIGN KEY (evaluator_id) REFERENCES public.users(id),
+  CONSTRAINT supplier_evaluations_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id)
 );
 CREATE TABLE public.evaluation_criteria (
   id integer NOT NULL DEFAULT nextval('evaluation_criteria_id_seq'::regclass),
@@ -952,6 +954,7 @@ CREATE TABLE public.requested_item_financials (
   created_by integer,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  contract_item_id integer,
   CONSTRAINT requested_item_financials_pkey PRIMARY KEY (id),
   CONSTRAINT requested_item_financials_requested_item_id_fkey FOREIGN KEY (requested_item_id) REFERENCES public.requested_items(id),
   CONSTRAINT requested_item_financials_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),

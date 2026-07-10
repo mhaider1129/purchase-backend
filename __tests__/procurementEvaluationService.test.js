@@ -174,3 +174,14 @@ test('ignores unfilled test cost rows while calculating an offer', async () => {
   expect(result.total_expected_reported_tests).toBe(240);
   expect(result.tests).toHaveLength(1);
 });
+
+test('defaults missing offer pricing model to purchase during calculation', async () => {
+  pool.query
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, evaluation_period_years: 1, expected_annual_growth_rate: 0 }] })
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 2, pricing_model: null, device_price: 100 }] })
+    .mockResolvedValueOnce({ rows: [] });
+
+  const result = await service.calculateOfferTco(1, 2);
+  expect(result.pricing_model).toBe('PURCHASE');
+  expect(result.tco_period_cost).toBe(100);
+});

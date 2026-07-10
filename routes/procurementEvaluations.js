@@ -330,7 +330,20 @@ router.delete('/:id/criteria/:criteriaId', asyncHandler(async (req, res) => { fo
 router.get('/:id/scores', asyncHandler(async (req, res) => { forbidUnlessView(req); res.json({ data: (await pool.query('SELECT * FROM procurement_evaluation_scores WHERE evaluation_case_id = $1 ORDER BY offer_id, criteria_id', [req.params.id])).rows }); }));
 router.put('/:id/scores/bulk', asyncHandler(async (req, res) => { forbidUnlessEdit(req); await ensureEditableCase(req.params.id); const rows = Array.isArray(req.body?.items) ? req.body.items : []; const saved = []; for (const item of rows) { const payload = normalizePayload(item, SCORE_FIELDS); const weightResult = await pool.query('SELECT weight FROM procurement_evaluation_criteria WHERE id = $1 AND evaluation_case_id = $2', [item.criteria_id, req.params.id]); if (weightResult.rowCount === 0) badRequest('Invalid criteria_id'); payload.weighted_score = Number(((Number(payload.score || 0) * Number(weightResult.rows[0].weight || 0)) / 100).toFixed(4)); const data = { ...payload, evaluation_case_id: req.params.id, offer_id: item.offer_id, criteria_id: item.criteria_id, evaluator_id: userId(req) }; const fields = Object.keys(data); const result = await pool.query(`INSERT INTO procurement_evaluation_scores (${fields.join(',')}) VALUES (${fields.map((_, i) => '$' + (i + 1)).join(',')}) ON CONFLICT (offer_id, criteria_id) DO UPDATE SET raw_value=EXCLUDED.raw_value, score=EXCLUDED.score, weighted_score=EXCLUDED.weighted_score, evaluator_id=EXCLUDED.evaluator_id, comments=EXCLUDED.comments, updated_at=CURRENT_TIMESTAMP RETURNING *`, fields.map(f => data[f])); saved.push(result.rows[0]); } await audit('procurement_evaluation.scores.bulk_save', userId(req), req.params.id, { count: saved.length }); res.json({ data: saved }); }));
 
-router.post('/:id/calculate', asyncHandler(async (req, res) => { forbidUnlessEdit(req); await ensureEditableCase(req.params.id); const data = await service.calculateAllOfferResults(req.params.id); await audit('procurement_evaluation.calculate', userId(req), req.params.id, { results: data }); res.json({ data }); }));
+router.post('/:id/calculate', asyncHandler(async (req, res) => {
+  forbidUnlessEdit(req);
+  await ensureEditableCase(req.params.id);
+  try {
+    const data = await service.calculateAllOfferResults(req.params.id);
+    await audit('procurement_evaluation.calculate', userId(req), req.params.id, { results: data });
+    res.json({ data });
+  } catch (error) {
+    if (/requires|Invalid pricing_|effective usable tests|no filled item details/i.test(error.message)) {
+      badRequest(`Unable to calculate procurement evaluation: ${error.message}`);
+    }
+    throw error;
+  }
+}));
 router.get('/:id/results', asyncHandler(async (req, res) => { forbidUnlessView(req); res.json({ data: (await pool.query('SELECT r.*, o.offer_name, o.supplier_name FROM procurement_evaluation_results r JOIN procurement_evaluation_offers o ON o.id = r.offer_id WHERE r.evaluation_case_id = $1 ORDER BY rank NULLS LAST, final_weighted_score DESC', [req.params.id])).rows }); }));
 router.get('/:id/sensitivity', asyncHandler(async (req, res) => { forbidUnlessView(req); res.json({ data: await service.calculateSensitivityAnalysis(req.params.id) }); }));
 

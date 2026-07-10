@@ -198,7 +198,8 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   if (options.requireFilledOffer && !(await offerHasFilledTestCost(caseId, offerId))) {
     throw new Error('Evaluation offer has no filled item details');
   }
-  if (!PRICING_MODELS.has(offer.pricing_model)) throw new Error(`Invalid pricing_model: ${offer.pricing_model}`);
+  const pricingModel = offer.pricing_model || 'PURCHASE';
+  if (!PRICING_MODELS.has(pricingModel)) throw new Error(`Invalid pricing_model: ${pricingModel}`);
 
   const initialCost = calculateInitialCost({
     ...offer,
@@ -210,14 +211,14 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   const periodYears = Math.max(1, Math.trunc(toNumber(evaluationCase.evaluation_period_years) || 5));
   const growthRate = normalizePercent(options.growthRateOverride ?? evaluationCase.expected_annual_growth_rate);
   let modelAnnualCost = 0;
-  if (offer.pricing_model === 'LEASE') modelAnnualCost += toNumber(offer.lease_monthly_payment) * 12;
-  if (offer.pricing_model === 'SUBSCRIPTION') {
+  if (pricingModel === 'LEASE') modelAnnualCost += toNumber(offer.lease_monthly_payment) * 12;
+  if (pricingModel === 'SUBSCRIPTION') {
     const included = toNumber(offer.included_volume);
     const overage = Math.max(0, variable.total_expected_reported_tests - included);
     modelAnnualCost += toNumber(offer.subscription_base_fee) * 12 + overage * toNumber(offer.overage_price);
   }
-  if (offer.pricing_model === 'SERVICE_CONTRACT') modelAnnualCost += toNumber(offer.annual_service_contract_cost);
-  if (offer.pricing_model === 'OUTSOURCING') modelAnnualCost += variable.annual_variable_test_cost;
+  if (pricingModel === 'SERVICE_CONTRACT') modelAnnualCost += toNumber(offer.annual_service_contract_cost);
+  if (pricingModel === 'OUTSOURCING') modelAnnualCost += variable.annual_variable_test_cost;
   const baseAnnualCommercialCost = annualFixedCost + variable.annual_variable_test_cost + modelAnnualCost;
 
   let annualCommitmentAdjustment = 0;
@@ -225,7 +226,7 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   let shortfallTests = 0;
   let commitmentWarning = null;
   let firstYearAnnualCost = baseAnnualCommercialCost;
-  if (offer.pricing_model === 'REAGENT_RENTAL') {
+  if (pricingModel === 'REAGENT_RENTAL') {
     const minimumAmount = toNumber(offer.minimum_annual_commitment_amount);
     if (baseAnnualCommercialCost < minimumAmount) {
       annualCommitmentAdjustment = money(minimumAmount - baseAnnualCommercialCost);
@@ -244,7 +245,7 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   let recurringTco = 0;
   for (let year = 0; year < periodYears; year += 1) {
     const yearCost = baseAnnualCommercialCost * Math.pow(1 + growthRate, year);
-    if (offer.pricing_model === 'REAGENT_RENTAL') {
+    if (pricingModel === 'REAGENT_RENTAL') {
       recurringTco += Math.max(yearCost, toNumber(offer.minimum_annual_commitment_amount));
     } else {
       recurringTco += yearCost;
@@ -258,7 +259,7 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   return {
     evaluation_case_id: Number(caseId),
     offer_id: Number(offerId),
-    pricing_model: offer.pricing_model,
+    pricing_model: pricingModel,
     initial_cost: initialCost,
     annual_fixed_cost: annualFixedCost,
     annual_variable_test_cost: variable.annual_variable_test_cost,

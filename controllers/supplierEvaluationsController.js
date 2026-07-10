@@ -95,6 +95,7 @@ const ensureSupplierEvaluationsTable = (() => {
         await pool.query(`
           CREATE TABLE IF NOT EXISTS supplier_evaluations (
             id SERIAL PRIMARY KEY,
+            supplier_id INTEGER REFERENCES suppliers(id) ON DELETE RESTRICT,
             supplier_name TEXT NOT NULL,
             evaluation_date DATE NOT NULL DEFAULT CURRENT_DATE,
             quality_score NUMERIC(5, 2),
@@ -136,7 +137,13 @@ const ensureSupplierEvaluationsTable = (() => {
         `);
 
         await pool.query(`
+          CREATE INDEX IF NOT EXISTS supplier_evaluations_supplier_id_idx
+            ON supplier_evaluations (supplier_id);
+        `);
+
+        await pool.query(`
           ALTER TABLE supplier_evaluations
+            ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id) ON DELETE RESTRICT,
             ADD COLUMN IF NOT EXISTS otif_score NUMERIC(5, 2),
             ADD COLUMN IF NOT EXISTS corrective_actions_score NUMERIC(5, 2),
             ADD COLUMN IF NOT EXISTS esg_compliance_score NUMERIC(5, 2),
@@ -322,6 +329,19 @@ const parseDateStrict = (value, fieldName) => {
 
 const getTodayISODate = () => new Date().toISOString().slice(0, 10);
 
+const resolveSupplierForEvaluation = async (supplierId) => {
+  const parsedId = Number.parseInt(supplierId, 10);
+  if (!Number.isInteger(parsedId) || parsedId <= 0) {
+    return null;
+  }
+
+  const { rows } = await pool.query(
+    'SELECT id, name FROM suppliers WHERE id = $1 LIMIT 1',
+    [parsedId]
+  );
+  return rows[0] || null;
+};
+
 const parseBoolean = (value, fieldName, { required = false } = {}) => {
   if (value === undefined || value === null || value === '') {
     if (required) {
@@ -389,9 +409,17 @@ const parseCriteriaResponses = (payload) => {
   };
 };
 
-const assertAnnualCadence = async (supplierName, evaluationDate, excludeId = null) => {
-  const values = [supplierName.toLowerCase()];
-  let filter = 'LOWER(supplier_name) = $1';
+const assertAnnualCadence = async (supplierId, supplierName, evaluationDate, excludeId = null) => {
+  const values = [];
+  let filter;
+
+  if (supplierId) {
+    values.push(supplierId);
+    filter = 'supplier_id = $1';
+  } else {
+    values.push(supplierName.toLowerCase());
+    filter = 'LOWER(supplier_name) = $1';
+  }
 
   if (excludeId !== null && excludeId !== undefined) {
     values.push(excludeId);
@@ -501,6 +529,7 @@ const serializeEvaluation = (row) => {
 
   return {
     id: row.id,
+    supplier_id: row.supplier_id || null,
     supplier_name: row.supplier_name,
     evaluation_date: row.evaluation_date,
     quality_score: toNumber(row.quality_score),
@@ -650,7 +679,7 @@ const listSupplierEvaluations = async (req, res, next) => {
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
     const { rows } = await pool.query(
-      `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
+      `SELECT id, supplier_id, supplier_name, evaluation_date, quality_score, delivery_score,
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
               kpi_weights, strengths, weaknesses, action_items, criteria_responses,
@@ -772,7 +801,7 @@ const getSupplierEvaluationById = async (req, res, next) => {
     await ensureSupplierEvaluationsTable();
 
     const { rows } = await pool.query(
-      `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
+      `SELECT id, supplier_id, supplier_name, evaluation_date, quality_score, delivery_score,
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
               kpi_weights, strengths, weaknesses, action_items, criteria_responses,
@@ -1015,9 +1044,9 @@ const createSupplierEvaluation = async (req, res, next) => {
   }
 
   try {
-    const supplierName = sanitizeText(req.body?.supplier_name);
-    if (!supplierName) {
-      return next(createHttpError(400, 'supplier_name is required'));
+    const supplierId = Number.parseInt(req.body?.supplier_id, 10);
+    if (!Number.isInteger(supplierId) || supplierId <= 0) {
+      return next(createHttpError(400, 'supplier_id is required'));
     }
 
     const evaluationDate = req.body?.evaluation_date
@@ -1084,11 +1113,18 @@ const createSupplierEvaluation = async (req, res, next) => {
 
     await ensureSupplierEvaluationsTable();
 
-    await assertAnnualCadence(supplierName, evaluationDate);
+    const supplier = await resolveSupplierForEvaluation(supplierId);
+    if (!supplier) {
+      return next(createHttpError(404, `Supplier with id ${supplierId} was not found`));
+    }
+
+    const supplierName = supplier.name;
+
+    await assertAnnualCadence(supplierId, supplierName, evaluationDate);
 
     const { rows } = await pool.query(
       `INSERT INTO supplier_evaluations (
-         supplier_name, evaluation_date, quality_score, delivery_score, cost_score,
+         supplier_id, supplier_name, evaluation_date, quality_score, delivery_score, cost_score,
          compliance_score, otif_score, corrective_actions_score, esg_compliance_score,
          overall_score, weighted_overall_score, kpi_weights, strengths, weaknesses,
          action_items, scheduled_annually, travel_required, evaluation_criteria_notes,
@@ -1100,9 +1136,9 @@ const createSupplierEvaluation = async (req, res, next) => {
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
+         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31
        )
-       RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
+       RETURNING id, supplier_id, supplier_name, evaluation_date, quality_score, delivery_score,
                  cost_score, compliance_score, otif_score, corrective_actions_score,
                  esg_compliance_score, overall_score, weighted_overall_score,
                  kpi_weights, strengths, weaknesses, action_items, criteria_responses,
@@ -1114,6 +1150,7 @@ const createSupplierEvaluation = async (req, res, next) => {
                  compliance_alignment, operations_effectiveness_rating,
                  payment_terms_comfort`,
       [
+        supplierId,
         supplierName,
         evaluationDate,
         qualityScore,
@@ -1171,7 +1208,7 @@ const updateSupplierEvaluation = async (req, res, next) => {
     await ensureSupplierEvaluationsTable();
 
     const existingResult = await pool.query(
-      `SELECT id, supplier_name, evaluation_date, quality_score, delivery_score,
+      `SELECT id, supplier_id, supplier_name, evaluation_date, quality_score, delivery_score,
               cost_score, compliance_score, otif_score, corrective_actions_score,
               esg_compliance_score, overall_score, weighted_overall_score,
               kpi_weights, strengths, weaknesses, action_items, criteria_responses,
@@ -1208,11 +1245,25 @@ const updateSupplierEvaluation = async (req, res, next) => {
 
     const existingCriteria = buildCriteriaFromRow(existing);
 
+    let supplierId = existing.supplier_id || null;
     let supplierName = existing.supplier_name;
-    if (Object.prototype.hasOwnProperty.call(req.body, 'supplier_name')) {
+    if (Object.prototype.hasOwnProperty.call(req.body, 'supplier_id')) {
+      const parsedSupplierId = Number.parseInt(req.body.supplier_id, 10);
+      if (!Number.isInteger(parsedSupplierId) || parsedSupplierId <= 0) {
+        return next(createHttpError(400, 'supplier_id is required'));
+      }
+      const supplier = await resolveSupplierForEvaluation(parsedSupplierId);
+      if (!supplier) {
+        return next(createHttpError(404, `Supplier with id ${parsedSupplierId} was not found`));
+      }
+      supplierId = supplier.id;
+      supplierName = supplier.name;
+    } else if (!supplierId && Object.prototype.hasOwnProperty.call(req.body, 'supplier_name')) {
+      // Legacy evaluations may not be backfilled yet. Keep old rows editable without
+      // allowing supplier_name to become the canonical identity for new linked rows.
       const sanitized = sanitizeText(req.body.supplier_name);
       if (!sanitized) {
-        return next(createHttpError(400, 'supplier_name is required'));
+        return next(createHttpError(400, 'supplier_id is required'));
       }
       supplierName = sanitized;
     }
@@ -1318,43 +1369,44 @@ const updateSupplierEvaluation = async (req, res, next) => {
       ...(req.body?.criteria_responses || {}),
     });
 
-    await assertAnnualCadence(supplierName, evaluationDate, evaluationId);
+    await assertAnnualCadence(supplierId, supplierName, evaluationDate, evaluationId);
 
     const { rows } = await pool.query(
       `UPDATE supplier_evaluations
-          SET supplier_name = $1,
-              evaluation_date = $2,
-              quality_score = $3,
-              delivery_score = $4,
-              cost_score = $5,
-              compliance_score = $6,
-              otif_score = $7,
-              corrective_actions_score = $8,
-              esg_compliance_score = $9,
-              overall_score = $10,
-              weighted_overall_score = $11,
-              kpi_weights = $12,
-              strengths = $13,
-              weaknesses = $14,
-              action_items = $15,
-              scheduled_annually = $16,
-              travel_required = $17,
-              evaluation_criteria_notes = $18,
-              overall_supplier_happiness = $19,
-              price_satisfaction = $20,
-              delivery_as_scheduled = $21,
-              delivery_in_good_condition = $22,
-              delivery_meets_quality_expectations = $23,
-              communication_effectiveness = $24,
-              compliance_alignment = $25,
-              operations_effectiveness_rating = $26,
-              payment_terms_comfort = $27,
-              criteria_responses = $28,
-              evaluator_id = $29,
-              evaluator_name = $30,
+          SET supplier_id = $1,
+              supplier_name = $2,
+              evaluation_date = $3,
+              quality_score = $4,
+              delivery_score = $5,
+              cost_score = $6,
+              compliance_score = $7,
+              otif_score = $8,
+              corrective_actions_score = $9,
+              esg_compliance_score = $10,
+              overall_score = $11,
+              weighted_overall_score = $12,
+              kpi_weights = $13,
+              strengths = $14,
+              weaknesses = $15,
+              action_items = $16,
+              scheduled_annually = $17,
+              travel_required = $18,
+              evaluation_criteria_notes = $19,
+              overall_supplier_happiness = $20,
+              price_satisfaction = $21,
+              delivery_as_scheduled = $22,
+              delivery_in_good_condition = $23,
+              delivery_meets_quality_expectations = $24,
+              communication_effectiveness = $25,
+              compliance_alignment = $26,
+              operations_effectiveness_rating = $27,
+              payment_terms_comfort = $28,
+              criteria_responses = $29,
+              evaluator_id = $30,
+              evaluator_name = $31,
               updated_at = NOW()
-        WHERE id = $31
-      RETURNING id, supplier_name, evaluation_date, quality_score, delivery_score,
+        WHERE id = $32
+      RETURNING id, supplier_id, supplier_name, evaluation_date, quality_score, delivery_score,
                 cost_score, compliance_score, otif_score, corrective_actions_score,
                 esg_compliance_score, overall_score, weighted_overall_score,
                 kpi_weights, strengths, weaknesses, action_items, criteria_responses,
@@ -1366,6 +1418,7 @@ const updateSupplierEvaluation = async (req, res, next) => {
                 compliance_alignment, operations_effectiveness_rating,
                 payment_terms_comfort`,
       [
+        supplierId,
         supplierName,
         evaluationDate,
         qualityScore,

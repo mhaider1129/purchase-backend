@@ -9,10 +9,10 @@ const VIEW_ROLES = new Set([...EDIT_ROLES, 'cmo', 'cfo', 'coo', 'ceo', 'technica
 const EVALUATION_TYPES = new Set(['General', 'Laboratory Device', 'Medical Device', 'IT System', 'Service Contract', 'Maintenance Contract', 'Consumables', 'Medication', 'Capital Equipment', 'Construction Project', 'Outsourcing Agreement']);
 const STATUSES = new Set(['Draft', 'In Review', 'Finalized', 'Cancelled']);
 const CASE_FIELDS = ['title','description','category','request_id','department_id','section_id','evaluation_type','evaluation_period_years','expected_annual_growth_rate','currency','status','recommendation_summary'];
-const OFFER_FIELDS = ['supplier_id','supplier_name','offer_name','manufacturer_name','model_name','country_of_origin','pricing_model','device_price','installation_cost','training_cost','shipping_cost','customs_cost','other_initial_cost','device_discount_value','warranty_years','annual_maintenance_cost','annual_service_contract_cost','annual_fixed_consumables_cost','annual_calibration_qc_cost','annual_spare_parts_cost','expected_lifetime_years','delivery_time_days','payment_terms','minimum_annual_commitment_amount','minimum_annual_commitment_tests','reagent_rental_terms','free_device_included','commitment_penalty_terms','technical_notes','commercial_notes','risk_notes','technical_model','contract_model','package_model','service_model','risk_model','scenario_metadata','is_compliant','disqualification_reason'];
+const OFFER_FIELDS = ['supplier_id','supplier_name','offer_name','manufacturer_name','model_name','country_of_origin','pricing_model','is_disqualified','disqualification_reason','compliance_status','lease_monthly_payment','lease_term_months','subscription_base_fee','included_volume','overage_price','sla_penalty_amount','uptime_guarantee_percentage','downtime_cost','supplier_risk_premium','stockout_risk_cost','fx_risk_cost','obsolescence_risk_cost','penalty_or_sla_adjustment','device_price','installation_cost','training_cost','shipping_cost','customs_cost','other_initial_cost','device_discount_value','warranty_years','annual_maintenance_cost','annual_service_contract_cost','annual_fixed_consumables_cost','annual_calibration_qc_cost','annual_spare_parts_cost','expected_lifetime_years','delivery_time_days','payment_terms','minimum_annual_commitment_amount','minimum_annual_commitment_tests','reagent_rental_terms','free_device_included','commitment_penalty_terms','technical_notes','commercial_notes','risk_notes','technical_model','contract_model','package_model','service_model','risk_model','scenario_metadata','is_compliant','disqualification_reason'];
 const TEST_FIELDS = ['test_name','test_code','category','unit','expected_monthly_volume','growth_rate','is_required','dependency_risk','is_alternative','notes'];
 const COST_FIELDS = ['pricing_method','element_type','quantity','annual_quantity','unit_cost','dependency_group','alternative_group','kit_price','tests_per_kit','usable_tests_per_kit','open_vial_stability_days','onboard_stability_days','shelf_life_months','expected_waste_percentage','repeat_rate_percentage','qc_frequency_per_kit','qc_cost_per_kit','calibrator_frequency_per_kit','calibrator_cost_per_kit','fixed_consumable_cost_per_kit','other_kit_related_cost','price_per_reportable_test','company_absorbs_waste','company_absorbs_qc','company_absorbs_repeats','notes'];
-const CRITERIA_FIELDS = ['criteria_name','criteria_group','weight','scoring_type','higher_is_better','is_required'];
+const CRITERIA_FIELDS = ['criteria_name','criteria_group','weight','scoring_type','higher_is_better','is_required','metric_key','normalization_method','target_value','min_value','max_value','is_knockout','required_threshold'];
 const SCORE_FIELDS = ['raw_value','score','comments'];
 
 const defaultCriteria = [
@@ -105,7 +105,8 @@ const validateCasePayload = data => {
 };
 const validateOfferPayload = data => {
   if (data.pricing_model && !service.PRICING_MODELS.has(data.pricing_model)) badRequest('Invalid pricing_model');
-  ['minimum_annual_commitment_amount', 'minimum_annual_commitment_tests'].forEach(field => {
+  if (data.compliance_status && !['PENDING','COMPLIANT','NON_COMPLIANT','WAIVED'].includes(data.compliance_status)) badRequest('Invalid compliance_status');
+  ['minimum_annual_commitment_amount', 'minimum_annual_commitment_tests', 'lease_monthly_payment', 'lease_term_months', 'subscription_base_fee', 'included_volume', 'overage_price', 'sla_penalty_amount', 'uptime_guarantee_percentage', 'downtime_cost', 'supplier_risk_premium', 'stockout_risk_cost', 'fx_risk_cost', 'obsolescence_risk_cost', 'penalty_or_sla_adjustment'].forEach(field => {
     if (data[field] !== undefined && Number(data[field]) < 0) badRequest(`${field} cannot be negative`);
   });
 };
@@ -216,6 +217,16 @@ router.get('/:id/offer-test-costs', asyncHandler(async (req, res) => {
   res.json({ data: result.rows });
 }));
 
+router.delete('/:id/offer-test-costs/:offerId/:testId', asyncHandler(async (req, res) => {
+  forbidUnlessEdit(req); await ensureEditableCase(req.params.id);
+  const result = await pool.query(
+    'DELETE FROM procurement_evaluation_offer_test_costs WHERE evaluation_case_id = $1 AND offer_id = $2 AND test_id = $3 RETURNING *',
+    [req.params.id, req.params.offerId, req.params.testId]
+  );
+  await audit('procurement_evaluation.cost_matrix.clear_item', userId(req), req.params.id, { offerId: req.params.offerId, testId: req.params.testId, deleted: result.rowCount });
+  res.json({ message: 'Item details cleared', data: result.rows[0] || null });
+}));
+
 router.put('/:id/offer-test-costs/bulk', asyncHandler(async (req, res) => {
   forbidUnlessEdit(req); await ensureEditableCase(req.params.id);
   const rows = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -260,7 +271,7 @@ router.get('/:id/coverage', asyncHandler(async (req, res) => {
 
 router.get('/:id/item-comparison', asyncHandler(async (req, res) => {
   forbidUnlessView(req);
-  const rows = (await pool.query(`SELECT tc.*, o.offer_name, o.supplier_name, t.test_name, t.test_code FROM procurement_evaluation_offer_test_costs tc JOIN procurement_evaluation_offers o ON o.id = tc.offer_id JOIN procurement_evaluation_tests t ON t.id = tc.test_id WHERE tc.evaluation_case_id = $1 ORDER BY t.test_name, tc.annual_test_cost`, [req.params.id])).rows;
+  const rows = (await pool.query(`SELECT tc.*, o.offer_name, o.supplier_name, t.test_name, t.test_code FROM procurement_evaluation_offer_test_costs tc JOIN procurement_evaluation_offers o ON o.id = tc.offer_id JOIN procurement_evaluation_tests t ON t.id = tc.test_id WHERE tc.evaluation_case_id = $1 AND ${service.FILLED_TEST_COST_SQL} ORDER BY t.test_name, tc.annual_test_cost`, [req.params.id])).rows;
   const byItem = {};
   rows.forEach(row => { byItem[row.test_name] = byItem[row.test_name] || []; byItem[row.test_name].push(row); });
   const data = Object.entries(byItem).map(([test_name, offers]) => {
@@ -334,10 +345,36 @@ router.post('/:id/break-even', asyncHandler(async (req, res) => {
 router.get('/:id/optimization', asyncHandler(async (req, res) => { forbidUnlessView(req); res.json({ data: await service.optimizeResults(req.params.id) }); }));
 router.get('/:id/recommendation', asyncHandler(async (req, res) => { forbidUnlessView(req); res.json({ data: await service.generateRecommendationSummary(req.params.id) }); }));
 
+const buildFinalizationReview = async (caseId, selectedOfferId = null) => {
+  const warnings = [];
+  const weightTotal = Number((await pool.query('SELECT COALESCE(SUM(weight), 0)::numeric AS total FROM procurement_evaluation_criteria WHERE evaluation_case_id = $1', [caseId])).rows[0].total || 0);
+  if (weightTotal !== 100) warnings.push(`Criteria weights total ${weightTotal}, not 100.`);
+  const requiredCriteriaMissing = (await pool.query(`SELECT c.id, c.criteria_name FROM procurement_evaluation_criteria c WHERE c.evaluation_case_id = $1 AND COALESCE(c.is_required, false) = true AND c.scoring_type = 'manual' AND EXISTS (SELECT 1 FROM procurement_evaluation_offers o WHERE o.evaluation_case_id = c.evaluation_case_id AND COALESCE(o.is_disqualified,false)=false AND NOT EXISTS (SELECT 1 FROM procurement_evaluation_scores s WHERE s.criteria_id=c.id AND s.offer_id=o.id AND s.score IS NOT NULL))`, [caseId])).rows;
+  if (requiredCriteriaMissing.length) warnings.push('All required criteria must be scored.');
+  const uncovered = (await pool.query(`SELECT t.id, t.test_name FROM procurement_evaluation_tests t WHERE t.evaluation_case_id=$1 AND COALESCE(t.is_required,true)=true AND NOT EXISTS (SELECT 1 FROM procurement_evaluation_offer_test_costs c WHERE c.test_id=t.id)`, [caseId])).rows;
+  if (uncovered.length) warnings.push('All required items/tests/services must be covered or waived.');
+  let selected = null;
+  if (selectedOfferId) {
+    selected = (await pool.query('SELECT * FROM procurement_evaluation_offers WHERE id=$1 AND evaluation_case_id=$2', [selectedOfferId, caseId])).rows[0] || null;
+    if (!selected) warnings.push('Selected offer does not exist.');
+    if (selected?.is_disqualified || selected?.compliance_status === 'NON_COMPLIANT') warnings.push('Selected offer is disqualified or non-compliant.');
+    const result = (await pool.query('SELECT * FROM procurement_evaluation_results WHERE offer_id=$1 AND evaluation_case_id=$2', [selectedOfferId, caseId])).rows[0];
+    if (result?.knockout_failed || result?.compliance_passed === false) warnings.push('Selected offer failed compliance or knockout checks.');
+  }
+  return { valid: warnings.length === 0, warnings, weight_total: weightTotal, required_criteria_missing: requiredCriteriaMissing, uncovered_required_items: uncovered, selected_offer: selected };
+};
+
+router.get('/:id/compliance-matrix', asyncHandler(async (req, res) => { forbidUnlessView(req); res.json({ data: await buildFinalizationReview(req.params.id) }); }));
+router.get('/:id/disqualification-review', asyncHandler(async (req, res) => { forbidUnlessView(req); const rows = (await pool.query(`SELECT o.id AS offer_id, o.offer_name, o.supplier_name, o.is_disqualified, o.disqualification_reason, o.compliance_status, r.knockout_failed, r.compliance_passed, r.recommendation_reason FROM procurement_evaluation_offers o LEFT JOIN procurement_evaluation_results r ON r.offer_id=o.id WHERE o.evaluation_case_id=$1 ORDER BY o.id`, [req.params.id])).rows; res.json({ data: rows }); }));
+router.get('/:id/risk-adjusted-tco', asyncHandler(async (req, res) => { forbidUnlessView(req); let rows = (await pool.query(`SELECT r.*, o.offer_name, o.supplier_name FROM procurement_evaluation_results r JOIN procurement_evaluation_offers o ON o.id=r.offer_id WHERE r.evaluation_case_id=$1 ORDER BY r.risk_adjusted_tco NULLS LAST`, [req.params.id])).rows; if (!rows.length) rows = await service.calculateAllOfferResults(req.params.id); res.json({ data: rows }); }));
+router.get('/:id/report-summary', asyncHandler(async (req, res) => { forbidUnlessView(req); const [recommendation, review] = await Promise.all([service.generateRecommendationSummary(req.params.id), buildFinalizationReview(req.params.id)]); res.json({ data: { recommendation, finalization_readiness: review } }); }));
+
 router.patch('/:id/finalize', asyncHandler(async (req, res) => {
   forbidUnlessEdit(req); await ensureEditableCase(req.params.id);
   const { selected_offer_id, recommendation_summary } = req.body || {};
   if (!selected_offer_id) badRequest('selected_offer_id is required');
+  const review = await buildFinalizationReview(req.params.id, selected_offer_id);
+  if (!review.valid) badRequest(`Cannot finalize: ${review.warnings.join(' ')}`);
   const result = await pool.query(`UPDATE procurement_evaluation_cases SET selected_offer_id = $1, recommendation_summary = $2, status = 'Finalized', finalized_by = $3, finalized_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`, [selected_offer_id, recommendation_summary || null, userId(req), req.params.id]);
   await audit('procurement_evaluation.finalize', userId(req), req.params.id, { selected_offer_id, recommendation_summary });
   res.json({ data: result.rows[0] });

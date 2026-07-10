@@ -5,12 +5,61 @@ const PRICING_METHODS = new Set(COMMERCIAL_MODELS);
 const PRICING_MODELS = new Set(COMMERCIAL_MODELS);
 
 const toNumber = value => {
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[,$%\s]/g, '');
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
 const money = value => Number(toNumber(value).toFixed(2));
 const score = value => Number(Math.max(0, Math.min(100, toNumber(value))).toFixed(4));
+
+
+const FILLED_TEST_COST_SQL = `(
+  COALESCE(tc.annual_test_cost, 0) > 0 OR
+  COALESCE(tc.calculated_effective_cost_per_reported_test, 0) > 0 OR
+  COALESCE(tc.kit_price, 0) > 0 OR
+  COALESCE(tc.unit_cost, 0) > 0 OR
+  COALESCE(tc.price_per_reportable_test, 0) > 0
+)`;
+
+const offerHasFilledTestCost = async (caseId, offerId) => {
+  const result = await pool.query(
+    `SELECT 1
+       FROM procurement_evaluation_offer_test_costs tc
+      WHERE tc.evaluation_case_id = $1
+        AND tc.offer_id = $2
+        AND ${FILLED_TEST_COST_SQL}
+      LIMIT 1`,
+    [caseId, offerId]
+  );
+  return result.rowCount > 0;
+};
+
+const listOffersWithFilledTestCosts = async caseId => (await pool.query(
+  `SELECT DISTINCT o.*
+     FROM procurement_evaluation_offers o
+     JOIN procurement_evaluation_offer_test_costs tc ON tc.offer_id = o.id
+    WHERE o.evaluation_case_id = $1
+      AND tc.evaluation_case_id = $1
+      AND ${FILLED_TEST_COST_SQL}
+    ORDER BY o.id`,
+  [caseId]
+)).rows;
+
+const SCORING_METHODS = new Set(['lowest_best', 'highest_best', 'target_best', 'pass_fail', 'manual', 'range']);
+
+const riskAdjustmentFields = [
+  'downtime_cost',
+  'supplier_risk_premium',
+  'stockout_risk_cost',
+  'fx_risk_cost',
+  'obsolescence_risk_cost',
+  'penalty_or_sla_adjustment',
+];
 
 const normalizePercent = value => {
   const numeric = toNumber(value);
@@ -137,6 +186,9 @@ const getCaseAndOffer = async (caseId, offerId) => {
 
 const calculateOfferTco = async (caseId, offerId, options = {}) => {
   const { evaluationCase, offer } = await getCaseAndOffer(caseId, offerId);
+  if (options.requireFilledOffer && !(await offerHasFilledTestCost(caseId, offerId))) {
+    throw new Error('Evaluation offer has no filled item details');
+  }
   if (!PRICING_MODELS.has(offer.pricing_model)) throw new Error(`Invalid pricing_model: ${offer.pricing_model}`);
 
   const initialCost = calculateInitialCost({
@@ -148,7 +200,16 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   const variable = await calculateOfferAnnualVariableCost(caseId, offerId, options);
   const periodYears = Math.max(1, Math.trunc(toNumber(evaluationCase.evaluation_period_years) || 5));
   const growthRate = normalizePercent(options.growthRateOverride ?? evaluationCase.expected_annual_growth_rate);
-  const baseAnnualCommercialCost = annualFixedCost + variable.annual_variable_test_cost;
+  let modelAnnualCost = 0;
+  if (offer.pricing_model === 'LEASE') modelAnnualCost += toNumber(offer.lease_monthly_payment) * 12;
+  if (offer.pricing_model === 'SUBSCRIPTION') {
+    const included = toNumber(offer.included_volume);
+    const overage = Math.max(0, variable.total_expected_reported_tests - included);
+    modelAnnualCost += toNumber(offer.subscription_base_fee) * 12 + overage * toNumber(offer.overage_price);
+  }
+  if (offer.pricing_model === 'SERVICE_CONTRACT') modelAnnualCost += toNumber(offer.annual_service_contract_cost);
+  if (offer.pricing_model === 'OUTSOURCING') modelAnnualCost += variable.annual_variable_test_cost;
+  const baseAnnualCommercialCost = annualFixedCost + variable.annual_variable_test_cost + modelAnnualCost;
 
   let annualCommitmentAdjustment = 0;
   let commitmentVolumeShortfall = false;
@@ -182,7 +243,9 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   }
 
   const totalExpectedTestsOverPeriod = variable.total_expected_reported_tests * Array.from({ length: periodYears }).reduce((sum, _, index) => sum + Math.pow(1 + growthRate, index), 0);
+  const risk_adjustment_total = money(riskAdjustmentFields.reduce((sum, field) => sum + toNumber(offer[field]), 0));
   const tco = money(initialCost + recurringTco);
+  const risk_adjusted_tco = money(tco + risk_adjustment_total);
   return {
     evaluation_case_id: Number(caseId),
     offer_id: Number(offerId),
@@ -193,6 +256,8 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
     annual_commitment_adjustment: annualCommitmentAdjustment,
     total_annual_cost: money(firstYearAnnualCost),
     tco_period_cost: tco,
+    risk_adjustment_total,
+    risk_adjusted_tco,
     average_cost_per_reported_test: totalExpectedTestsOverPeriod > 0 ? Number((tco / totalExpectedTestsOverPeriod).toFixed(4)) : 0,
     total_expected_reported_tests: money(totalExpectedTestsOverPeriod),
     commitment_volume_shortfall: commitmentVolumeShortfall,
@@ -202,62 +267,132 @@ const calculateOfferTco = async (caseId, offerId, options = {}) => {
   };
 };
 
+const inferMetricKey = criterion => {
+  if (criterion.metric_key) return criterion.metric_key;
+  const name = String(criterion.criteria_name || '').toLowerCase();
+  if (name.includes('cost') || name.includes('tco')) return 'risk_adjusted_tco';
+  if (name.includes('delivery')) return 'delivery_time_days';
+  if (name.includes('warranty')) return 'warranty_years';
+  return name.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+};
+
+const metricValue = row => {
+  const keyAliases = { total_cost_of_ownership: 'risk_adjusted_tco', cost: 'risk_adjusted_tco', delivery_time: 'delivery_time_days', warranty: 'warranty_years', risk: 'supplier_risk_premium' };
+  const key = keyAliases[row.metric_key] || row.metric_key;
+  return ({
+  tco_period_cost: row.tco_period_cost,
+  risk_adjusted_tco: row.risk_adjusted_tco,
+  average_cost_per_reported_test: row.average_cost_per_reported_test,
+  total_annual_cost: row.total_annual_cost,
+  initial_cost: row.initial_cost,
+  annual_fixed_cost: row.annual_fixed_cost,
+  annual_variable_test_cost: row.annual_variable_test_cost,
+  delivery_time_days: row.offer.delivery_time_days,
+  warranty_years: row.offer.warranty_years,
+  uptime_guarantee_percentage: row.offer.uptime_guarantee_percentage,
+  compliance_status: row.offer.compliance_status,
+})[key];
+};
+
+const scoreByMethod = (method, value, values, criterion) => {
+  const numeric = toNumber(value);
+  if (method === 'manual') return null;
+  if (method === 'pass_fail') {
+    const threshold = criterion.required_threshold;
+    if (threshold !== null && threshold !== undefined && threshold !== '') {
+      return criterion.higher_is_better === false ? (numeric <= toNumber(threshold) ? 100 : 0) : (numeric >= toNumber(threshold) ? 100 : 0);
+    }
+    return ['pass', 'passed', 'compliant', 'yes', 'true'].includes(String(value).toLowerCase()) ? 100 : 0;
+  }
+  if (method === 'target_best') {
+    const target = toNumber(criterion.target_value);
+    if (!target) return 0;
+    return score((1 - (Math.abs(numeric - target) / Math.abs(target))) * 100);
+  }
+  if (method === 'range') {
+    const min = toNumber(criterion.min_value);
+    const max = toNumber(criterion.max_value);
+    if (max <= min) return 0;
+    if (numeric < min || numeric > max) return 0;
+    return score(((numeric - min) / (max - min)) * 100);
+  }
+  const positives = values.map(toNumber).filter(v => Number.isFinite(v));
+  if (!positives.length) return 0;
+  if (method === 'lowest_best') {
+    const lowest = Math.min(...positives.filter(v => v > 0));
+    return lowest > 0 && numeric > 0 ? score((lowest / numeric) * 100) : 0;
+  }
+  const highest = Math.max(...positives);
+  return highest > 0 ? score((numeric / highest) * 100) : 0;
+};
+
 const calculateCriteriaScores = async (caseId, calculatedRows) => {
   const criteria = (await pool.query('SELECT * FROM procurement_evaluation_criteria WHERE evaluation_case_id = $1', [caseId])).rows;
   const manualScores = (await pool.query('SELECT * FROM procurement_evaluation_scores WHERE evaluation_case_id = $1', [caseId])).rows;
-  const lowestTco = Math.min(...calculatedRows.map(row => toNumber(row.tco_period_cost)).filter(value => value > 0));
-  const fastestDelivery = Math.min(...calculatedRows.map(row => toNumber(row.offer.delivery_time_days)).filter(value => value > 0));
-  const highestWarranty = Math.max(...calculatedRows.map(row => toNumber(row.offer.warranty_years)));
 
   return calculatedRows.map(row => {
     let weightedSum = 0;
     let totalWeight = 0;
+    let compliancePassed = !row.offer.is_disqualified && row.offer.compliance_status !== 'NON_COMPLIANT';
+    let knockoutFailed = false;
     const breakdown = {};
     for (const criterion of criteria) {
       const weight = toNumber(criterion.weight);
-      const name = String(criterion.criteria_name || '').toLowerCase();
-      let normalizedScore = null;
-      if (criterion.scoring_type === 'automatic' && name.includes('cost')) normalizedScore = lowestTco > 0 ? (lowestTco / toNumber(row.tco_period_cost)) * 100 : 0;
-      else if (criterion.scoring_type === 'automatic' && name.includes('delivery')) normalizedScore = fastestDelivery > 0 && toNumber(row.offer.delivery_time_days) > 0 ? (fastestDelivery / toNumber(row.offer.delivery_time_days)) * 100 : 0;
-      else if (criterion.scoring_type === 'automatic' && name.includes('warranty')) normalizedScore = highestWarranty > 0 ? (toNumber(row.offer.warranty_years) / highestWarranty) * 100 : 0;
-      else {
-        const manual = manualScores.find(item => Number(item.offer_id) === Number(row.offer_id) && Number(item.criteria_id) === Number(criterion.id));
-        normalizedScore = manual ? toNumber(manual.score) : 0;
-      }
+      const metric_key = inferMetricKey(criterion);
+      const nameForDefault = String(criterion.criteria_name || '').toLowerCase();
+      const defaultMethod = criterion.scoring_type === 'automatic' ? ((criterion.higher_is_better === false || nameForDefault.includes('cost') || nameForDefault.includes('delivery') || nameForDefault.includes('risk')) ? 'lowest_best' : 'highest_best') : 'manual';
+      const method = criterion.normalization_method || defaultMethod;
+      const values = calculatedRows.map(item => metricValue({ ...item, metric_key }));
+      const rawValue = metricValue({ ...row, metric_key });
+      const manual = manualScores.find(item => Number(item.offer_id) === Number(row.offer_id) && Number(item.criteria_id) === Number(criterion.id));
+      let normalizedScore = method === 'manual' ? (manual ? toNumber(manual.score) : 0) : scoreByMethod(method, rawValue, values, criterion);
+      if (normalizedScore === null) normalizedScore = manual ? toNumber(manual.score) : 0;
       normalizedScore = score(normalizedScore);
-      breakdown[name] = normalizedScore;
+      const requiredThreshold = criterion.required_threshold;
+      const failedThreshold = requiredThreshold !== null && requiredThreshold !== undefined && requiredThreshold !== ''
+        ? (criterion.higher_is_better === false ? toNumber(rawValue) > toNumber(requiredThreshold) : toNumber(rawValue) < toNumber(requiredThreshold))
+        : false;
+      if (criterion.is_knockout && (normalizedScore <= 0 || failedThreshold)) knockoutFailed = true;
+      if (criterion.is_required && (manual || method !== 'manual') && normalizedScore <= 0) compliancePassed = false;
+      breakdown[metric_key || criterion.id] = { criteria_id: criterion.id, criteria_name: criterion.criteria_name, metric_key, normalization_method: method, raw_value: rawValue, score: normalizedScore, weight, weighted_score: Number(((weight * normalizedScore) / 100).toFixed(4)), is_knockout: !!criterion.is_knockout, required_threshold: criterion.required_threshold };
       weightedSum += weight * normalizedScore;
       totalWeight += weight;
     }
+    const disqualified = !!row.offer.is_disqualified || knockoutFailed || !compliancePassed;
     return {
       ...row,
-      cost_score: lowestTco > 0 ? score((lowestTco / toNumber(row.tco_period_cost)) * 100) : 0,
-      technical_score: breakdown['technical compliance'] || 0,
-      supplier_score: breakdown['supplier performance'] || 0,
-      risk_score: breakdown.risk || 0,
-      final_weighted_score: totalWeight > 0 ? Number((weightedSum / totalWeight).toFixed(4)) : 0,
+      cost_score: breakdown.tco_period_cost?.score || breakdown.risk_adjusted_tco?.score || 0,
+      technical_score: breakdown.technical_compliance?.score || 0,
+      supplier_score: breakdown.supplier_performance?.score || 0,
+      risk_score: breakdown.risk?.score || breakdown.supplier_risk?.score || 0,
+      compliance_passed: compliancePassed && !row.offer.is_disqualified,
+      knockout_failed: knockoutFailed,
+      scoring_breakdown: breakdown,
+      recommendation_reason: disqualified ? 'Offer is excluded from ranking because it is disqualified, non-compliant, or failed a knockout gate.' : 'Offer is eligible for ranking.',
+      final_weighted_score: disqualified ? 0 : (totalWeight > 0 ? Number((weightedSum / totalWeight).toFixed(4)) : 0),
+      rank_eligible: !disqualified,
     };
   });
 };
 
 const calculateAllOfferResults = async caseId => {
-  const offers = (await pool.query('SELECT * FROM procurement_evaluation_offers WHERE evaluation_case_id = $1 ORDER BY id', [caseId])).rows;
+  const offers = await listOffersWithFilledTestCosts(caseId);
   const calculatedRows = [];
   for (const offer of offers) {
     calculatedRows.push({ ...(await calculateOfferTco(caseId, offer.id)), offer });
   }
   const scored = await calculateCriteriaScores(caseId, calculatedRows);
-  scored.sort((a, b) => toNumber(b.final_weighted_score) - toNumber(a.final_weighted_score) || toNumber(a.tco_period_cost) - toNumber(b.tco_period_cost));
+  scored.sort((a, b) => Number(b.rank_eligible) - Number(a.rank_eligible) || toNumber(b.final_weighted_score) - toNumber(a.final_weighted_score) || toNumber(a.risk_adjusted_tco || a.tco_period_cost) - toNumber(b.risk_adjusted_tco || b.tco_period_cost));
 
   await pool.query('DELETE FROM procurement_evaluation_results WHERE evaluation_case_id = $1', [caseId]);
   for (let index = 0; index < scored.length; index += 1) {
     const row = scored[index];
-    row.rank = index + 1;
+    row.rank = row.rank_eligible ? scored.slice(0, index).filter(item => item.rank_eligible).length + 1 : null;
     await pool.query(
       `INSERT INTO procurement_evaluation_results
-       (evaluation_case_id, offer_id, pricing_model, initial_cost, annual_fixed_cost, annual_variable_test_cost, annual_commitment_adjustment, total_annual_cost, tco_period_cost, average_cost_per_reported_test, total_expected_reported_tests, cost_score, technical_score, supplier_score, risk_score, final_weighted_score, commitment_volume_shortfall, shortfall_tests, commitment_warning, rank)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
-      [caseId, row.offer_id, row.pricing_model, row.initial_cost, row.annual_fixed_cost, row.annual_variable_test_cost, row.annual_commitment_adjustment, row.total_annual_cost, row.tco_period_cost, row.average_cost_per_reported_test, row.total_expected_reported_tests, row.cost_score, row.technical_score, row.supplier_score, row.risk_score, row.final_weighted_score, row.commitment_volume_shortfall, row.shortfall_tests, row.commitment_warning, row.rank]
+       (evaluation_case_id, offer_id, pricing_model, initial_cost, annual_fixed_cost, annual_variable_test_cost, annual_commitment_adjustment, total_annual_cost, tco_period_cost, risk_adjusted_tco, average_cost_per_reported_test, total_expected_reported_tests, cost_score, technical_score, supplier_score, risk_score, final_weighted_score, commitment_volume_shortfall, shortfall_tests, commitment_warning, rank, compliance_passed, knockout_failed, scoring_breakdown, recommendation_reason)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+      [caseId, row.offer_id, row.pricing_model, row.initial_cost, row.annual_fixed_cost, row.annual_variable_test_cost, row.annual_commitment_adjustment, row.total_annual_cost, row.tco_period_cost, row.risk_adjusted_tco, row.average_cost_per_reported_test, row.total_expected_reported_tests, row.cost_score, row.technical_score, row.supplier_score, row.risk_score, row.final_weighted_score, row.commitment_volume_shortfall, row.shortfall_tests, row.commitment_warning, row.rank, row.compliance_passed, row.knockout_failed, JSON.stringify(row.scoring_breakdown), row.recommendation_reason]
     );
   }
   return scored.map(({ offer, tests, ...row }) => row);
@@ -271,7 +406,7 @@ const calculateCostPerReportedTest = async (caseId, offerId) => {
 };
 
 const calculateSensitivityAnalysis = async caseId => {
-  const offers = (await pool.query('SELECT * FROM procurement_evaluation_offers WHERE evaluation_case_id = $1 ORDER BY id', [caseId])).rows;
+  const offers = await listOffersWithFilledTestCosts(caseId);
   const scenarios = [
     { key: 'base', label: 'Base volume', options: {} },
     { key: 'low_volume', label: 'Low volume -20%', options: { volumeMultiplier: 0.8 } },
@@ -360,18 +495,18 @@ const generateRecommendationSummary = async caseId => {
   };
 };
 
-const canonical = value => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+const canonical = value => String(value || '').trim().toLowerCase().replace(/[^\p{L}0-9]+/gu, '_').replace(/^_|_$/g, '');
 const COLUMN_ALIASES = {
-  test_name: ['item','item_name','kit','kit_name','test','test_name','name'],
+  test_name: ['item','item_name','kit','kit_name','test','test_name','name','اسم_الصنف','الصنف','الاختبار','اسم_الاختبار'],
   test_code: ['code','item_code','kit_code','test_code'],
   category: ['category','type'],
   unit: ['unit','uom'],
-  kit_price: ['price','unit_price','kit_price','cost'],
+  kit_price: ['price','unit_price','kit_price','cost','السعر','سعر_الكيت','التكلفة'],
   tests_per_kit: ['tests_kit','tests_per_kit','kit_size','pack_size'],
   shelf_life_months: ['shelf_life','shelf_life_months'],
   open_vial_stability_days: ['stability','open_kit_stability','open_vial_stability','open_kit_stability_days'],
   onboard_stability_days: ['onboard_stability','onboard_stability_days'],
-  expected_monthly_volume: ['monthly_volume','volume','expected_monthly_volume'],
+  expected_monthly_volume: ['monthly_volume','volume','expected_monthly_volume','الحجم_الشهري','الكمية_الشهرية'],
   price_per_reportable_test: ['reportable_price','pay_per_reportable','price_per_reportable_test'],
   expected_waste_percentage: ['waste','waste_percent','waste_percentage'],
   repeat_rate_percentage: ['repeat','repeat_percent','repeat_percentage'],
@@ -393,12 +528,41 @@ const autoMapColumns = headers => {
 };
 
 const parseDelimitedText = text => {
-  const lines = String(text || '').trim().split(/\r?\n/).filter(Boolean);
-  if (!lines.length) return { headers: [], rows: [] };
-  const delimiter = lines[0].includes('\t') ? '\t' : ',';
-  const parseLine = line => line.split(delimiter).map(cell => cell.trim().replace(/^"|"$/g, ''));
-  const headers = parseLine(lines[0]);
-  return { headers, rows: lines.slice(1).map(line => Object.fromEntries(parseLine(line).map((value, index) => [headers[index], value]))) };
+  const input = String(text || '').trim();
+  if (!input) return { headers: [], rows: [] };
+  const firstLine = input.split(/\r?\n/)[0] || '';
+  const delimiter = firstLine.includes('\t') ? '\t' : ',';
+  const records = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    const next = input[i + 1];
+    if (char === '"') {
+      if (inQuotes && next === '"') { cell += '"'; i += 1; }
+      else inQuotes = !inQuotes;
+    } else if (char === delimiter && !inQuotes) {
+      row.push(cell.trim()); cell = '';
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') i += 1;
+      row.push(cell.trim());
+      if (row.some(value => value !== '')) records.push(row);
+      row = []; cell = '';
+    } else {
+      cell += char;
+    }
+  }
+  row.push(cell.trim());
+  if (row.some(value => value !== '')) records.push(row);
+  const headers = records[0] || [];
+  return { headers, rows: records.slice(1).map(values => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? '']))) };
+};
+
+const normalizeImportNumber = value => {
+  if (value === null || value === undefined || value === '') return value;
+  const cleaned = String(value).replace(/[\s,]/g, '').replace(/(SAR|AED|ر\.س|[$€£¥%])/gi, '');
+  return cleaned === '' ? value : cleaned;
 };
 
 const validateImportRows = (rows, columnMap = autoMapColumns(Object.keys(rows[0] || {}))) => {
@@ -414,6 +578,7 @@ const validateImportRows = (rows, columnMap = autoMapColumns(Object.keys(rows[0]
     seen.add(key);
     if (item.pricing_method && !PRICING_MODELS.has(item.pricing_method) && !PRICING_METHODS.has(item.pricing_method)) errors.push('invalid pricing method');
     ['kit_price','tests_per_kit','open_vial_stability_days','expected_monthly_volume','price_per_reportable_test','expected_waste_percentage','repeat_rate_percentage','qc_cost_per_kit','calibrator_cost_per_kit','fixed_consumable_cost_per_kit'].forEach(field => {
+      if (item[field] !== undefined && item[field] !== '') item[field] = normalizeImportNumber(item[field]);
       if (item[field] !== undefined && item[field] !== '' && !Number.isFinite(Number(item[field]))) errors.push(`invalid ${field}`);
     });
     if (item.tests_per_kit !== undefined && item.tests_per_kit !== '' && Number(item.tests_per_kit) <= 0) errors.push('invalid tests per kit');
@@ -448,7 +613,11 @@ module.exports = {
   COMMERCIAL_MODELS,
   PRICING_METHODS,
   PRICING_MODELS,
+  SCORING_METHODS,
   normalizePercent,
+  FILLED_TEST_COST_SQL,
+  offerHasFilledTestCost,
+  listOffersWithFilledTestCosts,
   calculateInitialCost,
   calculateAnnualFixedCost,
   calculateKitOwnershipCost,

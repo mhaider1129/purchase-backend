@@ -41,7 +41,8 @@ describe('procureToPayPersistenceService validation', () => {
     await expect(insertSupplierInvoice(client, {
       requestId: 1,
       userId: 2,
-      supplier: '',
+      supplierId: null,
+      supplier: 'Legacy Supplier',
       invoiceNumber: '',
       invoiceDate: '',
       totalAmount: 0,

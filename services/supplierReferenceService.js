@@ -18,6 +18,8 @@ const resolveSupplierReference = async (client, {
     if (!linkedSupplier) {
       throw createHttpError(404, `Supplier with id ${supplierId} was not found`);
     }
+  } else if (requireSupplier) {
+    throw createHttpError(400, 'supplier_id is required');
   } else {
     const sanitizedSupplierName = normalizeText(supplierName);
     if (sanitizedSupplierName) {
@@ -25,8 +27,8 @@ const resolveSupplierReference = async (client, {
     }
   }
 
-  if (requireSupplier && !linkedSupplier && !normalizeText(supplierName)) {
-    throw createHttpError(400, 'supplier is required');
+  if (requireSupplier && !linkedSupplier) {
+    throw createHttpError(400, 'supplier_id is required');
   }
 
   return {

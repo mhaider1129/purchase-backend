@@ -125,3 +125,37 @@ test('calculates break-even between two strategic scenarios', () => {
   expect(result.break_even_volume).toBeGreaterThan(0);
   expect(result.cheaper_below).toBe('Pay per use');
 });
+test('parses quoted CSV cells, currency symbols, percentages, and Arabic headers', () => {
+  const parsed = service.parseDelimitedText('اسم الصنف,سعر الكيت,Monthly Volume,Notes\n"Panel, A","$1,200.50",10,"quoted, note"');
+  const map = service.autoMapColumns(parsed.headers);
+  const rows = service.validateImportRows(parsed.rows, map);
+  expect(map.test_name).toBe('اسم الصنف');
+  expect(rows[0].item.test_name).toBe('Panel, A');
+  expect(rows[0].item.kit_price).toBe('1200.50');
+  expect(rows[0].valid).toBe(true);
+});
+
+test('calculates lease, subscription, outsourcing, and service contract commercial costs', async () => {
+  pool.query
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, evaluation_period_years: 1, expected_annual_growth_rate: 0 }] })
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 2, pricing_model: 'LEASE', lease_monthly_payment: 100, annual_maintenance_cost: 0 }] })
+    .mockResolvedValueOnce({ rows: [] });
+  await expect(service.calculateOfferTco(1, 2)).resolves.toMatchObject({ total_annual_cost: 1200, tco_period_cost: 1200 });
+
+  pool.query.mockReset();
+  pool.query
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, evaluation_period_years: 1, expected_annual_growth_rate: 0 }] })
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 3, pricing_model: 'SUBSCRIPTION', subscription_base_fee: 100, included_volume: 100, overage_price: 2 }] })
+    .mockResolvedValueOnce({ rows: [{ pricing_method: 'PAY_PER_REPORTABLE', expected_monthly_volume: 10, price_per_reportable_test: 1 }] });
+  await expect(service.calculateOfferTco(1, 3)).resolves.toMatchObject({ total_annual_cost: 1360, risk_adjusted_tco: 1360 });
+});
+
+test('risk-adjusted TCO adds explicit risk premium fields', async () => {
+  pool.query
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, evaluation_period_years: 1, expected_annual_growth_rate: 0 }] })
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 2, pricing_model: 'PURCHASE', device_price: 1000, downtime_cost: 100, supplier_risk_premium: 50 }] })
+    .mockResolvedValueOnce({ rows: [] });
+  const result = await service.calculateOfferTco(1, 2);
+  expect(result.tco_period_cost).toBe(1000);
+  expect(result.risk_adjusted_tco).toBe(1150);
+});

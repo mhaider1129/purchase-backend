@@ -74,8 +74,8 @@ const insertSupplierInvoice = async (client, {
   attachmentMetadata = null,
   items = [],
 }) => {
-  if (!supplier || !invoiceNumber || !invoiceDate || Number(totalAmount) <= 0) {
-    throw createHttpError(400, 'supplier, invoice_number, invoice_date, and total_amount are required');
+  if (!supplierId || !supplier || !invoiceNumber || !invoiceDate || Number(totalAmount) <= 0) {
+    throw createHttpError(400, 'supplier_id, invoice_number, invoice_date, and total_amount are required');
   }
 
   const invoiceRes = await client.query(

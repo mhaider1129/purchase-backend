@@ -34,7 +34,15 @@ const FILLED_TEST_COST_SQL = `(
   COALESCE(tc.price_per_reportable_test, 0) > 0
 )`;
 
+const ensureTestCostSchema = async () => {
+  await pool.query(`
+    ALTER TABLE IF EXISTS procurement_evaluation_offer_test_costs
+      ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(14,2)
+  `);
+};
+
 const offerHasFilledTestCost = async (caseId, offerId) => {
+  await ensureTestCostSchema();
   const result = await pool.query(
     `SELECT 1
        FROM procurement_evaluation_offer_test_costs tc
@@ -47,16 +55,19 @@ const offerHasFilledTestCost = async (caseId, offerId) => {
   return result.rowCount > 0;
 };
 
-const listOffersWithFilledTestCosts = async caseId => (await pool.query(
-  `SELECT DISTINCT o.*
-     FROM procurement_evaluation_offers o
-     JOIN procurement_evaluation_offer_test_costs tc ON tc.offer_id = o.id
-    WHERE o.evaluation_case_id = $1
-      AND tc.evaluation_case_id = $1
-      AND ${FILLED_TEST_COST_SQL}
-    ORDER BY o.id`,
-  [caseId]
-)).rows;
+const listOffersWithFilledTestCosts = async caseId => {
+  await ensureTestCostSchema();
+  return (await pool.query(
+    `SELECT DISTINCT o.*
+       FROM procurement_evaluation_offers o
+       JOIN procurement_evaluation_offer_test_costs tc ON tc.offer_id = o.id
+      WHERE o.evaluation_case_id = $1
+        AND tc.evaluation_case_id = $1
+        AND ${FILLED_TEST_COST_SQL}
+      ORDER BY o.id`,
+    [caseId]
+  )).rows;
+};
 
 const SCORING_METHODS = new Set(['lowest_best', 'highest_best', 'target_best', 'pass_fail', 'manual', 'range']);
 
@@ -661,6 +672,7 @@ module.exports = {
   SCORING_METHODS,
   normalizePercent,
   FILLED_TEST_COST_SQL,
+  ensureTestCostSchema,
   hasFilledTestCost,
   offerHasFilledTestCost,
   listOffersWithFilledTestCosts,

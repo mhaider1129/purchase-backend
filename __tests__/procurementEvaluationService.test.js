@@ -3,9 +3,9 @@ jest.mock('../config/db', () => ({ query: jest.fn() }));
 const pool = require('../config/db');
 const service = require('../services/procurementEvaluationService');
 
-describe('procurement evaluation service', () => {
-  beforeEach(() => jest.clearAllMocks());
+beforeEach(() => jest.clearAllMocks());
 
+describe('procurement evaluation service', () => {
   test('calculates KIT_OWNERSHIP effective cost with per-test QC, calibrator, and fixed consumables', () => {
     const result = service.calculateKitOwnershipCost({
       kit_price: 1000,
@@ -68,6 +68,7 @@ describe('procurement evaluation service', () => {
 
   test('ranks lowest TCO highest when weighted scores tie', async () => {
     pool.query
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ rows: [{ id: 10 }, { id: 20 }] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, evaluation_period_years: 1, expected_annual_growth_rate: 0 }] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 10, pricing_model: 'PAY_PER_REPORTABLE', device_price: 100, delivery_time_days: 10, warranty_years: 1 }] })
@@ -195,4 +196,14 @@ test('ensures procurement evaluation result persistence schema before storing ca
   expect(pool.query.mock.calls[0][0]).toContain('ALTER TABLE IF EXISTS procurement_evaluation_results');
   expect(pool.query.mock.calls[0][0]).toContain('ADD COLUMN IF NOT EXISTS risk_adjusted_tco');
   expect(pool.query.mock.calls[1][0]).toContain('CREATE INDEX IF NOT EXISTS idx_procurement_evaluation_results_case_rank');
+});
+
+test('ensures procurement evaluation offer test costs include generic unit cost pricing', async () => {
+  pool.query.mockResolvedValue({});
+
+  await service.ensureTestCostSchema();
+
+  expect(pool.query).toHaveBeenCalledTimes(1);
+  expect(pool.query.mock.calls[0][0]).toContain('ALTER TABLE IF EXISTS procurement_evaluation_offer_test_costs');
+  expect(pool.query.mock.calls[0][0]).toContain('ADD COLUMN IF NOT EXISTS unit_cost');
 });

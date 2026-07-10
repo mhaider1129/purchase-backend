@@ -185,3 +185,14 @@ test('defaults missing offer pricing model to purchase during calculation', asyn
   expect(result.pricing_model).toBe('PURCHASE');
   expect(result.tco_period_cost).toBe(100);
 });
+
+test('ensures procurement evaluation result persistence schema before storing calculations', async () => {
+  pool.query.mockResolvedValue({});
+
+  await service.ensureResultPersistenceSchema();
+
+  expect(pool.query).toHaveBeenCalledTimes(2);
+  expect(pool.query.mock.calls[0][0]).toContain('ALTER TABLE IF EXISTS procurement_evaluation_results');
+  expect(pool.query.mock.calls[0][0]).toContain('ADD COLUMN IF NOT EXISTS risk_adjusted_tco');
+  expect(pool.query.mock.calls[1][0]).toContain('CREATE INDEX IF NOT EXISTS idx_procurement_evaluation_results_case_rank');
+});

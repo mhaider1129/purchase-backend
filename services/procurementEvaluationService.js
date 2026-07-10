@@ -385,6 +385,40 @@ const calculateCriteriaScores = async (caseId, calculatedRows) => {
   });
 };
 
+
+const ensureResultPersistenceSchema = async () => {
+  await pool.query(`
+    ALTER TABLE IF EXISTS procurement_evaluation_results
+      ADD COLUMN IF NOT EXISTS pricing_model VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS initial_cost NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS annual_fixed_cost NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS annual_variable_test_cost NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS annual_commitment_adjustment NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS total_annual_cost NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS tco_period_cost NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS risk_adjusted_tco NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS average_cost_per_reported_test NUMERIC(14,4) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS total_expected_reported_tests NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS cost_score NUMERIC(8,4) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS technical_score NUMERIC(8,4) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS supplier_score NUMERIC(8,4) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS risk_score NUMERIC(8,4) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS final_weighted_score NUMERIC(8,4) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS commitment_volume_shortfall BOOLEAN DEFAULT false,
+      ADD COLUMN IF NOT EXISTS shortfall_tests NUMERIC(14,2) DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS commitment_warning TEXT,
+      ADD COLUMN IF NOT EXISTS rank INTEGER,
+      ADD COLUMN IF NOT EXISTS compliance_passed BOOLEAN DEFAULT true,
+      ADD COLUMN IF NOT EXISTS knockout_failed BOOLEAN DEFAULT false,
+      ADD COLUMN IF NOT EXISTS scoring_breakdown JSONB DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS recommendation_reason TEXT
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_procurement_evaluation_results_case_rank
+      ON procurement_evaluation_results (evaluation_case_id, rank)
+  `);
+};
+
 const calculateAllOfferResults = async caseId => {
   const offers = await listOffersWithFilledTestCosts(caseId);
   const calculatedRows = [];
@@ -394,6 +428,7 @@ const calculateAllOfferResults = async caseId => {
   const scored = await calculateCriteriaScores(caseId, calculatedRows);
   scored.sort((a, b) => Number(b.rank_eligible) - Number(a.rank_eligible) || toNumber(b.final_weighted_score) - toNumber(a.final_weighted_score) || toNumber(a.risk_adjusted_tco || a.tco_period_cost) - toNumber(b.risk_adjusted_tco || b.tco_period_cost));
 
+  await ensureResultPersistenceSchema();
   await pool.query('DELETE FROM procurement_evaluation_results WHERE evaluation_case_id = $1', [caseId]);
   for (let index = 0; index < scored.length; index += 1) {
     const row = scored[index];
@@ -637,6 +672,7 @@ module.exports = {
   calculateOfferAnnualVariableCost,
   calculateOfferTco,
   calculateAllOfferResults,
+  ensureResultPersistenceSchema,
   rankOffers,
   calculateCostPerReportedTest,
   calculateSensitivityAnalysis,

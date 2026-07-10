@@ -159,3 +159,18 @@ test('risk-adjusted TCO adds explicit risk premium fields', async () => {
   expect(result.tco_period_cost).toBe(1000);
   expect(result.risk_adjusted_tco).toBe(1150);
 });
+
+test('ignores unfilled test cost rows while calculating an offer', async () => {
+  pool.query
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, evaluation_period_years: 1, expected_annual_growth_rate: 0 }] })
+    .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 2, pricing_model: 'PAY_PER_REPORTABLE' }] })
+    .mockResolvedValueOnce({ rows: [
+      { pricing_method: 'KIT_OWNERSHIP', expected_monthly_volume: 10, kit_price: null, tests_per_kit: null, price_per_reportable_test: null, unit_cost: null, annual_test_cost: null, calculated_effective_cost_per_reported_test: null },
+      { pricing_method: 'PAY_PER_REPORTABLE', expected_monthly_volume: 20, price_per_reportable_test: 2 },
+    ] });
+
+  const result = await service.calculateOfferTco(1, 2);
+  expect(result.annual_variable_test_cost).toBe(480);
+  expect(result.total_expected_reported_tests).toBe(240);
+  expect(result.tests).toHaveLength(1);
+});

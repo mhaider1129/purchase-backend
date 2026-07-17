@@ -473,9 +473,17 @@ const getLifecycleAnalytics = async (req, res) => {
 
   try {
     const avgApprovalRes = await pool.query(`
-      SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) / 86400 AS avg_days
-      FROM requests
-      WHERE status = 'Approved' AND request_type <> 'Warehouse Supply'
+      WITH final_approvals AS (
+        SELECT request_id, MAX(approved_at) AS final_approved_at
+        FROM approvals
+        WHERE status = 'Approved' AND approved_at IS NOT NULL
+        GROUP BY request_id
+      )
+      SELECT AVG(EXTRACT(EPOCH FROM (fa.final_approved_at - r.created_at))) / 86400 AS avg_days
+      FROM final_approvals fa
+      JOIN requests r ON r.id = fa.request_id
+      WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
+        AND r.request_type <> 'Warehouse Supply'
     `);
 
     const stageDurationRes = await pool.query(`
@@ -508,6 +516,12 @@ const getLifecycleAnalytics = async (req, res) => {
 
     const prToPoRes = await pool.query(`
       WITH po_events AS (
+        SELECT request_id, MIN(created_at) AS po_timestamp
+        FROM public.purchase_orders
+        WHERE request_id IS NOT NULL
+          AND status <> 'PO_CANCELLED'
+        GROUP BY request_id
+        UNION ALL
         SELECT
           ri.request_id,
           MIN(ri.procurement_updated_at) AS po_timestamp
@@ -515,16 +529,22 @@ const getLifecycleAnalytics = async (req, res) => {
         WHERE ri.procurement_status IN ('purchased', 'completed')
           AND ri.procurement_updated_at IS NOT NULL
         GROUP BY ri.request_id
+      ), first_po_events AS (
+        SELECT request_id, MIN(po_timestamp) AS po_timestamp
+        FROM po_events
+        GROUP BY request_id
       )
       SELECT AVG(EXTRACT(EPOCH FROM (po.po_timestamp - r.created_at))) / 86400 AS avg_days
-      FROM po_events po
+      FROM first_po_events po
       JOIN requests r ON po.request_id = r.id
-      WHERE r.status = 'Approved'
+      WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
         AND r.request_type <> 'Warehouse Supply'
     `);
 
     res.json({
       avg_approval_time_days:
+        parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
+      avg_pr_to_final_approval_days:
         parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
       avg_pr_to_po_cycle_days:
         parseFloat(prToPoRes.rows[0]?.avg_days) || 0,

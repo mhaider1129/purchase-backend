@@ -15,12 +15,14 @@ const ensureMaintenanceRequestSchema = require("../../utils/ensureMaintenanceReq
 const ensureRequesterSectionAssignments = require("../../utils/ensureRequesterSectionAssignments");
 const { ensureFinanceCoreTables } = require("../../utils/ensureFinanceCoreTables");
 const { ensureRequestedItemFinancialsTable } = require("../../utils/ensureRequestedItemFinancialsTable");
+const ensureRequestedItemUnitOfMeasureColumn = require("../../utils/ensureRequestedItemUnitOfMeasureColumn");
 const {
   evaluateBudgetCoverage,
   recordCommitment,
 } = require("../../services/financeCoreService");
 
 const URGENT_REQUEST_PERMISSION = 'requests.mark-urgent-on-submit';
+const MAX_UNIT_OF_MEASURE_LENGTH = 80;
 
 const parseBooleanFlag = (value) => {
   if (value === true) return true;
@@ -445,6 +447,20 @@ const createRequest = async (req, res, next) => {
       }
     }
 
+    const rawUnitOfMeasure = item.unit_of_measure ?? item.unit ?? item.uom;
+    const unitOfMeasure = rawUnitOfMeasure === undefined || rawUnitOfMeasure === null
+      ? null
+      : String(rawUnitOfMeasure).trim();
+
+    if (unitOfMeasure && unitOfMeasure.length > MAX_UNIT_OF_MEASURE_LENGTH) {
+      return next(
+        createHttpError(
+          400,
+          `Item ${idx + 1} unit of measure must be ${MAX_UNIT_OF_MEASURE_LENGTH} characters or fewer`,
+        ),
+      );
+    }
+
     sanitizedItems.push({
       ...item,
       item_name: normalizedItemName,
@@ -452,6 +468,7 @@ const createRequest = async (req, res, next) => {
       contract_id: parseOptionalPositiveInteger(item.contract_id, "Contract"),
       contract_item_id: parseOptionalPositiveInteger(item.contract_item_id, "Contracted item"),
       unit_cost: parsedUnitCost,
+      unit_of_measure: unitOfMeasure || null,
       total_cost:
         parsedUnitCost !== null ? parsedQuantity * parsedUnitCost : null,
     });
@@ -809,6 +826,10 @@ const createRequest = async (req, res, next) => {
       }
     }
 
+    if (request_type !== "Warehouse Supply") {
+      await ensureRequestedItemUnitOfMeasureColumn(client);
+    }
+
     const itemIdMap = [];
     for (let idx = 0; idx < items.length; idx++) {
       const {
@@ -823,6 +844,7 @@ const createRequest = async (req, res, next) => {
         contract_item_id,
         contract_value_snapshot,
         contract_currency,
+        unit_of_measure,
       } = items[idx];
       let requestedItemId = null;
       if (request_type !== "Warehouse Supply") {
@@ -838,8 +860,9 @@ const createRequest = async (req, res, next) => {
               total_cost,
               available_quantity,
               intended_use,
-              specs
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+              specs,
+              unit_of_measure
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
             [
               request.id,
               item_name,
@@ -850,6 +873,7 @@ const createRequest = async (req, res, next) => {
               available_quantity || null,
               intended_use || null,
               specs || null,
+              unit_of_measure || null,
             ],
           );
         } else {
@@ -863,8 +887,9 @@ const createRequest = async (req, res, next) => {
               total_cost,
               available_quantity,
               intended_use,
-              specs
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+              specs,
+              unit_of_measure
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
             [
               request.id,
               item_name,
@@ -875,6 +900,7 @@ const createRequest = async (req, res, next) => {
               available_quantity || null,
               intended_use || null,
               specs || null,
+              unit_of_measure || null,
             ],
           );
         }

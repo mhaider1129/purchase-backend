@@ -7,7 +7,9 @@ jest.mock('../utils/ensureWarehouseAssignments', () => jest.fn(() => Promise.res
 jest.mock('../utils/ensureWarehouseInventoryTables', () => jest.fn(() => Promise.resolve()));
 jest.mock('../utils/ensureProjectsTable', () => jest.fn(() => Promise.resolve()));
 jest.mock('../utils/ensureRequestClientSubmissionKey', () => jest.fn(() => Promise.resolve()));
+jest.mock('../utils/ensureRequestedItemUnitOfMeasureColumn', () => jest.fn(() => Promise.resolve()));
 jest.mock('../utils/ensureRequestSchedulingColumns', () => jest.fn(() => Promise.resolve()));
+jest.mock('../utils/ensureMaintenanceRequestSchema', () => jest.fn(() => Promise.resolve()));
 jest.mock('../utils/ensureFinanceCoreTables', () => ({ ensureFinanceCoreTables: jest.fn(() => Promise.resolve()) }));
 jest.mock('../services/financeCoreService', () => ({
   assertBudgetCanCover: jest.fn(() => Promise.resolve({ envelope: { id: 1 } })),

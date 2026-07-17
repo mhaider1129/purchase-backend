@@ -9,6 +9,7 @@ const normalizeRoleKey = (role) =>
 
 const DEFAULT_ROLE_PERMISSIONS = {
   requester: ['stock-requests.create'],
+  engineer: ['stock-requests.create'],
   technician: [
     'warehouse.manage-supply',
     'warehouse.view-supply',

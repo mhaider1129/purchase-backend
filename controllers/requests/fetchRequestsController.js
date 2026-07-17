@@ -1191,6 +1191,14 @@ const getHodApprovers = async (req, res, next) => {
 };
 
 const getMyMaintenanceRequests = async (req, res, next) => {
+  const normalizedRole = (req.user?.role || '').toString().trim().toLowerCase();
+  const canViewAllMaintenanceRequests =
+    normalizedRole === 'engineer' || req.user.hasPermission?.('requests.view-all');
+  const viewerFilter = canViewAllMaintenanceRequests
+    ? ''
+    : 'AND r.initiated_by_technician_id = $1';
+  const queryParams = canViewAllMaintenanceRequests ? [] : [req.user.id];
+
   try {
     const result = await pool.query(
       `WITH approval_timelines AS (
@@ -1314,7 +1322,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
        LEFT JOIN approval_timelines at ON at.request_id = r.id
        LEFT JOIN public.requested_items ri ON ri.request_id = r.id
        WHERE r.request_type = 'Maintenance'
-         AND r.initiated_by_technician_id = $1
+         ${viewerFilter}
        GROUP BY
          r.id,
          r.justification,
@@ -1335,7 +1343,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          at.final_approval_at,
          at.approval_timeline
        ORDER BY r.created_at DESC`,
-      [req.user.id],
+      queryParams,
     );
     res.json(result.rows);
   } catch (err) {

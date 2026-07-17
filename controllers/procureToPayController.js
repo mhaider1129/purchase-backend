@@ -1332,6 +1332,7 @@ const createPurchaseOrder = async (req, res, next) => {
       source_document_id = null,
       approval_required = null,
       approval_route = null,
+      fulfillment_method = null,
       items = [],
     } = req.body || {};
 
@@ -1349,6 +1350,9 @@ const createPurchaseOrder = async (req, res, next) => {
     let derivedBudgetCostCenter = budget_cost_center || null;
     let sourceType = source_document_type || (requestIdOrNull ? 'PURCHASE_REQUEST' : 'MANUAL_PO');
     let sourceId = source_document_id || (requestIdOrNull ? String(requestIdOrNull) : null);
+    const normalizedFulfillmentMethod = ['DIRECT_PURCHASE', 'CSCC'].includes(String(fulfillment_method || '').toUpperCase())
+      ? String(fulfillment_method).toUpperCase()
+      : null;
 
     if (requestIdOrNull) {
       const requestRes = await client.query(
@@ -1402,12 +1406,31 @@ const createPurchaseOrder = async (req, res, next) => {
         currency: 'USD',
       });
       derivedBudgetCostCenter = derivedBudgetCostCenter || budgetEnvelope?.cost_center_code || budgetEnvelope?.cost_center_name || budgetEnvelope?.code || null;
-      sourceType = source_document_type || (derivedContractReference ? 'ACTIVE_CONTRACT' : 'PURCHASE_REQUEST');
+      sourceType = source_document_type || (normalizedFulfillmentMethod === 'CSCC' ? 'CSCC_REQUEST' : normalizedFulfillmentMethod === 'DIRECT_PURCHASE' ? 'DIRECT_PURCHASE_PO' : (derivedContractReference ? 'ACTIVE_CONTRACT' : 'PURCHASE_REQUEST'));
+    }
+
+    let resolvedSupplierId = supplier_id;
+    let resolvedSupplierName = supplier_name;
+    if (normalizedFulfillmentMethod === 'CSCC' && !resolvedSupplierId && !resolvedSupplierName) {
+      const csccRes = await client.query(
+        `SELECT id, name
+           FROM suppliers
+          WHERE LOWER(name) IN (LOWER('Central Supply Chain Center'), LOWER('CSCC'))
+             OR LOWER(name) LIKE LOWER('%Central Supply Chain Center%')
+          ORDER BY CASE WHEN LOWER(name) = LOWER('Central Supply Chain Center') THEN 0 ELSE 1 END, id
+          LIMIT 1`
+      );
+      if (csccRes.rowCount > 0) {
+        resolvedSupplierId = csccRes.rows[0].id;
+        resolvedSupplierName = csccRes.rows[0].name;
+      } else {
+        resolvedSupplierName = 'Central Supply Chain Center';
+      }
     }
 
     const supplierRef = await resolveSupplierReference(client, {
-      supplierId: supplier_id,
-      supplierName: supplier_name,
+      supplierId: resolvedSupplierId,
+      supplierName: resolvedSupplierName,
       requireSupplier: false,
     });
 
@@ -1432,9 +1455,10 @@ const createPurchaseOrder = async (req, res, next) => {
       }
     }
 
-    const requiresApproval = true;
+    const isKpiOnlyPo = Boolean(normalizedFulfillmentMethod);
+    const requiresApproval = !isKpiOnlyPo;
 
-    const validationErrors = validatePurchaseOrderForIssuance({
+    const validationErrors = isKpiOnlyPo ? [] : validatePurchaseOrderForIssuance({
       supplierId: supplierRef.supplierId,
       supplierName: supplierRef.supplierName,
       items: normalizedItems,
@@ -1449,7 +1473,8 @@ const createPurchaseOrder = async (req, res, next) => {
       throw createHttpError(400, `Purchase order is missing mandatory data: ${validationErrors.join('; ')}`);
     }
 
-    const poNumber = `PO-${requestIdOrNull ? String(requestIdOrNull) : 'DIRECT'}-${Math.floor(Date.now() / 1000)}`;
+    const poNumberPrefix = normalizedFulfillmentMethod === 'CSCC' ? 'CSCC' : normalizedFulfillmentMethod === 'DIRECT_PURCHASE' ? 'DP' : 'PO';
+    const poNumber = `${poNumberPrefix}-${requestIdOrNull ? String(requestIdOrNull) : 'DIRECT'}-${Math.floor(Date.now() / 1000)}`;
     const poStatus = requiresApproval ? 'PO_PENDING_APPROVAL' : 'PO_ISSUED';
     const approvalRouteValue = requiresApproval ? (approval_route || 'SCM_APPROVAL_AUTHORITY') : null;
     const approvedAt = requiresApproval ? null : new Date();
@@ -1541,7 +1566,7 @@ const createPurchaseOrder = async (req, res, next) => {
       });
 
       const lifecycleTarget = requiresApproval ? LIFECYCLE_STATES.PO_PENDING_APPROVAL : LIFECYCLE_STATES.PO_ISSUED;
-      await transitionLifecycleState(client, requestIdOrNull, lifecycleTarget, req.user.id, requiresApproval ? 'Purchase order submitted for approval' : 'Purchase order issued');
+      await transitionLifecycleState(client, requestIdOrNull, lifecycleTarget, req.user.id, normalizedFulfillmentMethod === 'CSCC' ? 'Request sent to Central Supply Chain Center' : requiresApproval ? 'Purchase order submitted for approval' : 'Direct purchase PO created');
       await logFinanceAction(client, requestIdOrNull, req.user.id, 'PURCHASE_ORDER_CREATED', {
         purchase_order_id: createdPo.id,
         supplier_id: supplierRef.supplierId,
@@ -1549,6 +1574,7 @@ const createPurchaseOrder = async (req, res, next) => {
         source_document_id: sourceId || requestIdOrNull,
         contract_reference: createdPo.contract_reference,
         approval_required: requiresApproval,
+        fulfillment_method: normalizedFulfillmentMethod,
       });
     }
 

@@ -47,7 +47,37 @@ const transitionLifecycleState = async (
   );
 };
 
+const advanceLifecycleToApprovedRequest = async (client, requestId, userId) => {
+  const { rows } = await client.query(
+    `SELECT procurement_state FROM procurement_lifecycle_states WHERE request_id = $1`,
+    [requestId]
+  );
+  const currentState = rows[0]?.procurement_state || null;
+  const approvalPath = [
+    LIFECYCLE_STATES.DRAFT_PR,
+    LIFECYCLE_STATES.SUBMITTED_PR,
+    LIFECYCLE_STATES.UNDER_APPROVAL,
+    LIFECYCLE_STATES.APPROVED_PR,
+  ];
+  const currentIndex = approvalPath.indexOf(currentState);
+
+  if (currentIndex < 0 || currentState === LIFECYCLE_STATES.APPROVED_PR) {
+    return;
+  }
+
+  for (const nextState of approvalPath.slice(currentIndex + 1)) {
+    await transitionLifecycleState(
+      client,
+      requestId,
+      nextState,
+      userId,
+      'Synchronized lifecycle for an already approved purchase request'
+    );
+  }
+};
+
 module.exports = {
   ensureLifecycleRow,
   transitionLifecycleState,
+  advanceLifecycleToApprovedRequest,
 };

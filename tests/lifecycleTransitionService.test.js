@@ -1,4 +1,8 @@
-const { ensureLifecycleRow, transitionLifecycleState } = require('../services/lifecycleTransitionService');
+const {
+  advanceLifecycleToApprovedRequest,
+  ensureLifecycleRow,
+  transitionLifecycleState,
+} = require('../services/lifecycleTransitionService');
 const { LIFECYCLE_STATES } = require('../services/procureToPayService');
 
 describe('lifecycleTransitionService', () => {
@@ -39,5 +43,31 @@ describe('lifecycleTransitionService', () => {
     await expect(
       transitionLifecycleState(client, 15, LIFECYCLE_STATES.DRAFT_PR, 1)
     ).rejects.toThrow('Invalid lifecycle transition');
+  });
+
+  it('advances a legacy approved request through the valid approval path', async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ procurement_state: LIFECYCLE_STATES.DRAFT_PR }] })
+        .mockResolvedValueOnce({ rows: [{ procurement_state: LIFECYCLE_STATES.DRAFT_PR }] })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ rows: [{ procurement_state: LIFECYCLE_STATES.SUBMITTED_PR }] })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ rows: [{ procurement_state: LIFECYCLE_STATES.UNDER_APPROVAL }] })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({}),
+    };
+
+    await advanceLifecycleToApprovedRequest(client, 52, 7);
+
+    const updateCalls = client.query.mock.calls.filter(([sql]) => sql.includes('UPDATE procurement_lifecycle_states'));
+    expect(updateCalls.map(([, values]) => values[1])).toEqual([
+      LIFECYCLE_STATES.SUBMITTED_PR,
+      LIFECYCLE_STATES.UNDER_APPROVAL,
+      LIFECYCLE_STATES.APPROVED_PR,
+    ]);
   });
 });

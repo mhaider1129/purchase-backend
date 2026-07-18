@@ -16,7 +16,7 @@ const insertGoodsReceipt = async (client, {
 
   const receiptRes = await client.query(
     `INSERT INTO goods_receipts (request_id, purchase_order_id, receipt_number, warehouse_location, received_by, received_at, notes, discrepancy_notes)
-     VALUES ($1, $2, CONCAT('GR-', $1, '-', EXTRACT(EPOCH FROM NOW())::bigint), $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7)
+     VALUES ($1, $2, CONCAT('GR-', $1::bigint, '-', EXTRACT(EPOCH FROM NOW())::bigint), $3, $4, COALESCE($5::timestamptz, NOW()), $6, $7)
      RETURNING *`,
     [requestId, purchaseOrderId, warehouseLocation, userId, receivedAt, notes, discrepancyNotes]
   );

@@ -34,6 +34,7 @@ describe('procureToPayPersistenceService validation', () => {
     expect(result.id).toBe(10);
     expect(result.items).toHaveLength(1);
     expect(result.items[0].item_name).toBe('Syringe');
+    expect(client.query.mock.calls[0][0]).toContain("CONCAT('GR-', $1::bigint");
   });
 
   test('insertSupplierInvoice rejects missing required fields', async () => {

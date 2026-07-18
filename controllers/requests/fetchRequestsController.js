@@ -898,7 +898,14 @@ const getAllRequests = async (req, res, next) => {
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN users u ON r.assigned_to = u.id
       LEFT JOIN users requester ON r.requester_id = requester.id
-      LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
+      LEFT JOIN LATERAL (
+        SELECT active_ap.*
+        FROM approvals active_ap
+        WHERE active_ap.request_id = r.id
+          AND active_ap.is_active = true
+        ORDER BY active_ap.approval_level DESC NULLS LAST, active_ap.id DESC
+        LIMIT 1
+      ) ap ON TRUE
       LEFT JOIN users au ON ap.approver_id = au.id
       ${whereSQL}
       ORDER BY ${orderBy}

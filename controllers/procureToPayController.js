@@ -13,7 +13,11 @@ const {
   validatePurchaseOrderForIssuance,
 } = require('../services/procureToPayService');
 const { insertGoodsReceipt, insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
-const { ensureLifecycleRow, transitionLifecycleState } = require('../services/lifecycleTransitionService');
+const {
+  advanceLifecycleToApprovedRequest,
+  ensureLifecycleRow,
+  transitionLifecycleState,
+} = require('../services/lifecycleTransitionService');
 const { resolveSupplierReference } = require('../services/supplierReferenceService');
 const { linkDocuments } = require('../services/documentFlowService');
 const { PAYABLE_STATUS, PAYMENT_STATUS } = require('../constants/statusCatalog');
@@ -1356,7 +1360,7 @@ const createPurchaseOrder = async (req, res, next) => {
 
     if (requestIdOrNull) {
       const requestRes = await client.query(
-        `SELECT r.id, r.department_id, r.project_id, r.supply_warehouse_id, w.name AS supply_warehouse_name
+        `SELECT r.id, r.status, r.department_id, r.project_id, r.supply_warehouse_id, w.name AS supply_warehouse_name
          FROM requests r
          LEFT JOIN warehouses w ON w.id = r.supply_warehouse_id
          WHERE r.id = $1
@@ -1369,6 +1373,17 @@ const createPurchaseOrder = async (req, res, next) => {
       }
 
       requestMeta = requestRes.rows[0];
+      const approvedRequestStatuses = new Set([
+        'approved',
+        'assigned',
+        'partially procured',
+        'technical_inspection_pending',
+        'completed',
+        'received',
+      ]);
+      if (approvedRequestStatuses.has(String(requestMeta.status || '').trim().toLowerCase())) {
+        await advanceLifecycleToApprovedRequest(client, requestIdOrNull, req.user.id);
+      }
       requestItems = (
         await client.query(
           `SELECT ri.id AS requested_item_id,

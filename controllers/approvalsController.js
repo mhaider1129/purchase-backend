@@ -11,6 +11,7 @@ const { assignApprover } = require('./requests/createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('./utils/approvalRoutes');
 const { applyAutoAssignmentForApprovedRequest } = require('../services/requestAutoAssignmentService');
 const ensureRequestEditApprovalsTable = require('../utils/ensureRequestEditApprovalsTable');
+const { buildMaintenanceApprovalNotification } = require('../utils/maintenanceNotifications');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -420,16 +421,22 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     if (request.request_type === 'Maintenance' && initiatingTechnicianId) {
-      const statusLower = status.toLowerCase();
+      const technicianNotification = buildMaintenanceApprovalNotification({
+        requestId: approval.request_id,
+        role: user_role,
+        level: approval.approval_level,
+        status,
+      });
       enqueueNotification({
         userId: initiatingTechnicianId,
-        title: `Maintenance request ${approval.request_id} ${statusLower}`,
-        message: `Approval level ${approval.approval_level} for the maintenance request you initiated (ID: ${approval.request_id}) was ${statusLower}.`,
+        title: technicianNotification.title,
+        message: technicianNotification.message,
         link: `/requests/${approval.request_id}`,
         metadata: {
           requestId: approval.request_id,
           requestType: request.request_type,
-          action: status === 'Approved' ? 'maintenance_step_approved' : 'maintenance_step_rejected',
+          action: technicianNotification.action,
+          approvalRole: technicianNotification.approvalLabel,
           level: approval.approval_level,
           approvalId,
           approverId: approver_id,

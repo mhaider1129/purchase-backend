@@ -5,6 +5,7 @@ const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyT
 const ensureRequestedItemPoIssuanceColumn = require('../utils/ensureRequestedItemPoIssuanceColumn');
 const { ensureRequestedItemFinancialsTable } = require('../utils/ensureRequestedItemFinancialsTable');
 const { sendRequestWorkflowEmail } = require('../utils/workflowEmailNotifications');
+const { createNotifications } = require('../utils/notificationService');
 
 const parseOptionalNumber = (value, fieldLabel) => {
   if (value === undefined || value === null || value === '') {
@@ -468,7 +469,8 @@ const updateItemProcurementStatus = async (req, res, next) => {
     await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
-      `SELECT ri.*, r.assigned_to, r.estimated_cost AS request_estimated_cost
+      `SELECT ri.*, r.assigned_to, r.estimated_cost AS request_estimated_cost,
+              r.request_type, r.initiated_by_technician_id
          FROM public.requested_items ri
          JOIN requests r ON ri.request_id = r.id
         WHERE ri.id = $1`,
@@ -547,6 +549,28 @@ const updateItemProcurementStatus = async (req, res, next) => {
           : `Updated status of item '${item.item_name}' to '${normalizedProcurementStatus}'`,
       ]
     );
+
+    if (
+      normalizedProcurementStatus === 'purchased' &&
+      item.procurement_status !== 'purchased' &&
+      item.request_type === 'Maintenance' &&
+      item.initiated_by_technician_id
+    ) {
+      await createNotifications([
+        {
+          userId: item.initiated_by_technician_id,
+          title: `Maintenance request ${item.request_id} purchased`,
+          message: `“${item.item_name}” from the maintenance request you submitted (ID: ${item.request_id}) has been purchased.`,
+          link: `/requests/${item.request_id}`,
+          metadata: {
+            requestId: item.request_id,
+            requestType: item.request_type,
+            requestedItemId: item.id,
+            action: 'maintenance_item_purchased',
+          },
+        },
+      ], client);
+    }
 
     await client.query('COMMIT');
 

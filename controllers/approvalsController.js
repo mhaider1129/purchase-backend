@@ -12,6 +12,7 @@ const { fetchApprovalRoutes, resolveRouteDomain } = require('./utils/approvalRou
 const { applyAutoAssignmentForApprovedRequest } = require('../services/requestAutoAssignmentService');
 const ensureRequestEditApprovalsTable = require('../utils/ensureRequestEditApprovalsTable');
 const { buildMaintenanceApprovalNotification } = require('../utils/maintenanceNotifications');
+const { REQUEST_STATUS } = require('../constants/statusCatalog');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -293,6 +294,58 @@ const handleApprovalDecision = async (req, res, next) => {
       [approvalId, approval.request_id, approver_id, status, comments || null]
     );
 
+    // Warehouse Managers can divert in-stock items to warehouse fulfillment while
+    // rejecting them from the purchase workflow. When every requested item was
+    // diverted, their decision is the terminal step regardless of whether the
+    // request-level decision is Approve or Reject.
+    let closedAsAvailableInStock = false;
+    if (
+      (user_role || '').toUpperCase() === 'WAREHOUSEMANAGER' &&
+      request.request_type !== 'Warehouse Supply'
+    ) {
+      const inStockItemsRes = await client.query(
+        `SELECT
+           COUNT(*) AS total,
+           COUNT(*) FILTER (
+             WHERE ri.approval_status = 'Rejected'
+               AND EXISTS (
+                 SELECT 1
+                   FROM public.warehouse_supply_items wsi
+                  WHERE wsi.requested_item_id = ri.id
+               )
+           ) AS available_in_stock
+         FROM public.requested_items ri
+         WHERE ri.request_id = $1`,
+        [approval.request_id],
+      );
+      const inStockSummary = inStockItemsRes.rows[0] || {};
+      const totalItems = Number(inStockSummary.total || 0);
+      closedAsAvailableInStock =
+        totalItems > 0 && Number(inStockSummary.available_in_stock || 0) === totalItems;
+
+      if (closedAsAvailableInStock) {
+        await client.query(
+          `UPDATE approvals
+              SET is_active = FALSE,
+                  updated_at = NOW()
+            WHERE request_id = $1
+              AND id <> $2
+              AND status IN ('Pending', 'On Hold')`,
+          [approval.request_id, approvalId],
+        );
+
+        await client.query(
+          `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, 'Request closed - Available in Stock', $2, $3)`,
+          [
+            approval.request_id,
+            approver_id,
+            'All requested items were rejected from purchasing and diverted to warehouse fulfillment',
+          ],
+        );
+      }
+    }
+
     if (isEditApproval) {
       const editRes = await client.query(
         `SELECT id, payload
@@ -444,7 +497,7 @@ const handleApprovalDecision = async (req, res, next) => {
       });
     }
 
-    if (routedHodContext) {
+    if (routedHodContext && !closedAsAvailableInStock) {
       if (status === 'Approved') {
         const resumedScmRes = await client.query(
           `UPDATE approvals
@@ -515,7 +568,7 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     // 8. Activate Next Approval Step (only when approved)
-    if (status === 'Approved') {
+    if (status === 'Approved' && !closedAsAvailableInStock) {
       const sameLevelPendingRes = await client.query(
         `SELECT COUNT(*) AS pending_count
            FROM approvals
@@ -686,7 +739,8 @@ const handleApprovalDecision = async (req, res, next) => {
     const statuses = statusesRes.rows.map(row => row.status);
 
     let newStatus = null;
-    if (statuses.includes('Rejected')) newStatus = 'Rejected';
+    if (closedAsAvailableInStock) newStatus = REQUEST_STATUS.AVAILABLE_IN_STOCK;
+    else if (statuses.includes('Rejected')) newStatus = 'Rejected';
     else if (statuses.every(s => s === 'Approved')) newStatus = 'Approved';
 
     let itemSummary = null;
@@ -728,7 +782,9 @@ const handleApprovalDecision = async (req, res, next) => {
       `, [approval.request_id, `Request marked ${newStatus}`, approver_id]);
 
       const statusLower = newStatus.toLowerCase();
-      const requesterMessage = `Your ${request.request_type} request (ID: ${approval.request_id}) has been ${statusLower}.`;
+      const requesterMessage = closedAsAvailableInStock
+        ? `Your ${request.request_type} request (ID: ${approval.request_id}) was closed because all items are available in warehouse stock.`
+        : `Your ${request.request_type} request (ID: ${approval.request_id}) has been ${statusLower}.`;
 
       enqueueNotification({
         userId: request.requester_id,
@@ -738,7 +794,9 @@ const handleApprovalDecision = async (req, res, next) => {
         metadata: {
           requestId: approval.request_id,
           requestType: request.request_type,
-          action: newStatus === 'Approved' ? 'request_approved' : 'request_rejected',
+          action: closedAsAvailableInStock
+            ? 'request_available_in_stock'
+            : newStatus === 'Approved' ? 'request_approved' : 'request_rejected',
         },
       });
 

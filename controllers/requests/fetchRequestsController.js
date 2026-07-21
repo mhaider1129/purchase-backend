@@ -1518,7 +1518,13 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
 
 const getClosedRequests = async (req, res, next) => {
   try {
-    const closedStatuses = ['completed', 'rejected', 'received', 'technical_inspection_pending'];
+    const closedStatuses = [
+      'completed',
+      'rejected',
+      'received',
+      'technical_inspection_pending',
+      'available in stock',
+    ];
 
     const result = await pool.query(
       `SELECT

@@ -6,6 +6,7 @@ const REQUEST_STATUS = Object.freeze({
   RECEIVED: 'Received',
   COMPLETED: 'Completed',
   CLOSED: 'Closed',
+  AVAILABLE_IN_STOCK: 'Available in Stock',
 });
 
 const APPROVAL_STATUS = Object.freeze({

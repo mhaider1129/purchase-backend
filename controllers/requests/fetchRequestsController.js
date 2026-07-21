@@ -684,7 +684,11 @@ const getAllRequests = async (req, res, next) => {
     limit = 10,
   } = req.query;
 
-  const offset = (page - 1) * limit;
+  const parsedPage = Number.parseInt(Array.isArray(page) ? page[0] : page, 10);
+  const parsedLimit = Number.parseInt(Array.isArray(limit) ? limit[0] : limit, 10);
+  const safePage = Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const safeLimit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10;
+  const offset = (safePage - 1) * safeLimit;
   const params = [];
   let whereClauses = [];
   const activeUrgentSort = `CASE
@@ -912,7 +916,7 @@ const getAllRequests = async (req, res, next) => {
       LIMIT $${params.length + 1}
       OFFSET $${params.length + 2}
       `,
-      [...params, limit, offset],
+      [...params, safeLimit, offset],
     );
 
     const totalCountRes = await pool.query(
@@ -928,8 +932,8 @@ const getAllRequests = async (req, res, next) => {
     return res.json({
       data: result.rows,
       total: parseInt(totalCountRes.rows[0].count, 10),
-      page: parseInt(page),
-      limit: parseInt(limit),
+      page: safePage,
+      limit: safeLimit,
     });
   } catch (err) {
     console.error('❌ Error in getAllRequests:', err);
@@ -1090,6 +1094,7 @@ const getPendingApprovals = async (req, res, next) => {
          r.estimated_cost,
          r.status,
          r.is_urgent,
+         a.status AS approval_status,
          a.comments AS approval_comments,
          CASE
            WHEN a.comments = 'Edit Approval' THEN TRUE
@@ -1157,7 +1162,7 @@ const getPendingApprovals = async (req, res, next) => {
        JOIN approvals a ON r.id = a.request_id
        WHERE a.approver_id = $1
          AND a.is_active = true
-         AND a.status = 'Pending'
+         AND a.status IN ('Pending', 'On Hold')
          ORDER BY r.created_at DESC`,
       [req.user.id],
     );

@@ -222,11 +222,19 @@ const createGoodsReceipt = async (req, res, next) => {
 
       let stockItem = null;
 
-      if (receiptItem.requested_item_id) {
+      if (receiptItem.generic_item_id) {
+        const byGenericId = await client.query(
+          'SELECT id, name, generic_item_id FROM stock_items WHERE generic_item_id = $1 ORDER BY id LIMIT 1',
+          [receiptItem.generic_item_id]
+        );
+        stockItem = byGenericId.rows[0] || null;
+      }
+
+      if (!stockItem && receiptItem.requested_item_id) {
         const fromRequested = await client.query(
-          `SELECT si.id, si.name
+          `SELECT si.id, si.name, si.generic_item_id
            FROM requested_items ri
-           JOIN stock_items si ON LOWER(si.name) = LOWER(ri.item_name)
+           JOIN stock_items si ON si.generic_item_id = ri.generic_item_id
            WHERE ri.id = $1 AND ri.request_id = $2
            LIMIT 1`,
           [receiptItem.requested_item_id, requestId]
@@ -235,6 +243,11 @@ const createGoodsReceipt = async (req, res, next) => {
       }
 
       if (!stockItem) {
+        console.warn('LEGACY_ITEM_NAME_FALLBACK', {
+          request_id: requestId,
+          requested_item_id: receiptItem.requested_item_id || null,
+          item_name: receiptItem.item_name,
+        });
         const fromItemName = await client.query(
           `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
           [receiptItem.item_name]
@@ -254,15 +267,16 @@ const createGoodsReceipt = async (req, res, next) => {
           item_name,
           quantity,
           updated_by,
-          updated_at
-        ) VALUES ($1, $2, $3, $4, $5, NOW())
+          updated_at,
+          generic_item_id
+        ) VALUES ($1, $2, $3, $4, $5, NOW(), $6)
         ON CONFLICT (warehouse_id, stock_item_id)
         DO UPDATE
           SET quantity = warehouse_stock_levels.quantity + EXCLUDED.quantity,
               item_name = EXCLUDED.item_name,
               updated_by = EXCLUDED.updated_by,
               updated_at = NOW()`,
-        [targetWarehouseId, stockItem.id, stockItem.name, netQuantity, req.user.id]
+        [targetWarehouseId, stockItem.id, stockItem.name, netQuantity, req.user.id, stockItem.generic_item_id || receiptItem.generic_item_id || null]
       );
 
       await recalculateAvailableQuantity(client, stockItem.id);
@@ -1388,6 +1402,8 @@ const createPurchaseOrder = async (req, res, next) => {
         await client.query(
           `SELECT ri.id AS requested_item_id,
                   ri.item_name,
+                  ri.generic_item_id,
+                  COALESCE(ri.mandatory_product_id, ri.preferred_product_id) AS approved_product_id,
                   GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) AS quantity,
                   COALESCE(ri.quantity, 0) AS requested_quantity,
                   COALESCE(po_allocated.ordered_quantity, 0) AS po_allocated_quantity,
@@ -1455,6 +1471,9 @@ const createPurchaseOrder = async (req, res, next) => {
       item_name: item.item_name,
       quantity: Number(item.quantity) || 0,
       unit_price: Number(item.unit_price) || 0,
+      generic_item_id: item.generic_item_id || null,
+      approved_product_id: item.approved_product_id || null,
+      supplier_catalog_item_id: item.supplier_catalog_item_id || null,
     })).filter((item) => item.item_name && item.quantity > 0);
 
     if (requestIdOrNull) {
@@ -1558,9 +1577,9 @@ const createPurchaseOrder = async (req, res, next) => {
 
     for (const item of normalizedItems) {
       await client.query(
-        `INSERT INTO purchase_order_items (purchase_order_id, requested_item_id, item_name, quantity, unit_price)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [poRes.rows[0].id, item.requested_item_id, item.item_name, item.quantity, item.unit_price]
+        `INSERT INTO purchase_order_items (purchase_order_id,requested_item_id,item_name,quantity,unit_price,generic_item_id,approved_product_id,supplier_catalog_item_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [poRes.rows[0].id,item.requested_item_id,item.item_name,item.quantity,item.unit_price,item.generic_item_id,item.approved_product_id,item.supplier_catalog_item_id]
       );
     }
 

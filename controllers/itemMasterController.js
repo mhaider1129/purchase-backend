@@ -164,7 +164,7 @@ const getItemById = async (req, res, next) => {
 };
 
 const createItem = async (req, res, next) => {
-  if (!req.user?.hasPermission('item-master.manage')) {
+  if (!req.user?.hasPermission('item-master.legacy-maintain')) {
     return next(createHttpError(403, 'You do not have permission to create item master records'));
   }
 
@@ -229,7 +229,7 @@ const createItem = async (req, res, next) => {
 };
 
 const updateItem = async (req, res, next) => {
-  if (!req.user?.hasPermission('item-master.manage')) {
+  if (!req.user?.hasPermission('item-master.legacy-maintain')) {
     return next(createHttpError(403, 'You do not have permission to update item master records'));
   }
 
@@ -316,7 +316,7 @@ const updateItem = async (req, res, next) => {
 };
 
 const submitForApproval = async (req, res, next) => {
-  if (!req.user?.hasPermission('item-master.manage')) {
+  if (!req.user?.hasPermission('item-master.legacy-maintain')) {
     return next(createHttpError(403, 'You do not have permission to submit item master records'));
   }
 
@@ -352,7 +352,7 @@ const submitForApproval = async (req, res, next) => {
 };
 
 const approveItem = async (req, res, next) => {
-  if (!req.user?.hasPermission('item-master.approve')) {
+  if (!req.user?.hasPermission('item-master.legacy-maintain')) {
     return next(createHttpError(403, 'You do not have permission to approve item master records'));
   }
 
@@ -388,7 +388,7 @@ const approveItem = async (req, res, next) => {
 };
 
 const rejectItem = async (req, res, next) => {
-  if (!req.user?.hasPermission('item-master.approve')) {
+  if (!req.user?.hasPermission('item-master.legacy-maintain')) {
     return next(createHttpError(403, 'You do not have permission to reject item master records'));
   }
 
@@ -427,7 +427,7 @@ const rejectItem = async (req, res, next) => {
 };
 
 const addDocument = async (req, res, next) => {
-  if (!req.user?.hasPermission('item-master.manage')) {
+  if (!req.user?.hasPermission('item-master.legacy-maintain')) {
     return next(createHttpError(403, 'You do not have permission to attach item documents'));
   }
 

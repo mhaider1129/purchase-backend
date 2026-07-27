@@ -28,11 +28,24 @@ const insertGoodsReceipt = async (client, {
       throw createHttpError(400, 'Each receipt item requires item_name and positive received_quantity');
     }
 
+    let identity = {
+      generic_item_id: item.generic_item_id || null,
+      approved_product_id: item.approved_product_id || null,
+      supplier_catalog_item_id: item.supplier_catalog_item_id || null,
+    };
+    if (item.requested_item_id && !identity.generic_item_id) {
+      const linked = await client.query(
+        'SELECT generic_item_id, COALESCE(mandatory_product_id, preferred_product_id) AS approved_product_id FROM requested_items WHERE id=$1 AND request_id=$2',
+        [item.requested_item_id, requestId]
+      );
+      identity = { ...identity, ...(linked.rows[0] || {}) };
+    }
     const insertedItem = await client.query(
       `INSERT INTO goods_receipt_items (
         goods_receipt_id, requested_item_id, item_name, ordered_quantity, received_quantity,
-        damaged_quantity, short_quantity, unit_price, line_notes
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        damaged_quantity, short_quantity, unit_price, line_notes,
+        generic_item_id, approved_product_id, supplier_catalog_item_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING *`,
       [
         receiptRes.rows[0].id,
@@ -44,6 +57,9 @@ const insertGoodsReceipt = async (client, {
         item.short_quantity || 0,
         item.unit_price || null,
         item.line_notes || null,
+        identity.generic_item_id,
+        identity.approved_product_id,
+        identity.supplier_catalog_item_id,
       ]
     );
 

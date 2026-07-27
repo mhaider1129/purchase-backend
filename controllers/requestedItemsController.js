@@ -6,6 +6,7 @@ const ensureRequestedItemPoIssuanceColumn = require('../utils/ensureRequestedIte
 const { ensureRequestedItemFinancialsTable } = require('../utils/ensureRequestedItemFinancialsTable');
 const { sendRequestWorkflowEmail } = require('../utils/workflowEmailNotifications');
 const { createNotifications } = require('../utils/notificationService');
+const { validateRequestItemIdentity } = require('../services/procurementItemIdentityService');
 
 const parseOptionalNumber = (value, fieldLabel) => {
   if (value === undefined || value === null || value === '') {
@@ -176,6 +177,9 @@ const addRequestedItems = async (req, res, next) => {
     }
 
     for (const item of items) {
+      const governedItem = reqType === 'Non-Stock' || item.request_mode
+        ? await validateRequestItemIdentity(client,item,req.user,{requireGovernedIdentity:true})
+        : item;
       const {
         item_name,
         brand = null,
@@ -186,8 +190,10 @@ const addRequestedItems = async (req, res, next) => {
         specs = null,
         device_info = null,
         purchase_type = null,
-        item_type = null
-      } = item;
+        item_type = null,
+        generic_item_id=null,preferred_product_id=null,mandatory_product_id=null,request_mode=null,catalog_status=null,
+        stocking_policy=null,restriction_justification=null,item_name_snapshot=null,canonical_description_snapshot=null,
+      } = governedItem;
 
       if (!item_name || !quantity || quantity <= 0) {
         console.warn(`⚠️ Skipping invalid item:`, item);
@@ -205,12 +211,11 @@ const addRequestedItems = async (req, res, next) => {
         );
         insertedItems.push(result.rows[0]);
       } else {
-        let result;
-        if (reqType === 'Stock') {
-          result = await client.query(
+        const result = await client.query(
             `INSERT INTO public.requested_items
-              (request_id, item_name, brand, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+              (request_id,item_name,brand,quantity,unit_cost,total_cost,available_quantity,intended_use,specs,device_info,purchase_type,item_type,
+               generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,stocking_policy,restriction_justification,item_name_snapshot,canonical_description_snapshot)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
              RETURNING *`,
             [
               request_id,
@@ -224,30 +229,10 @@ const addRequestedItems = async (req, res, next) => {
               specs,
               device_info,
               purchase_type,
-              item_type
+              item_type,generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,stocking_policy,
+              restriction_justification,item_name_snapshot||item_name,canonical_description_snapshot
             ]
           );
-        } else {
-          result = await client.query(
-            `INSERT INTO public.requested_items
-              (request_id, item_name, brand, quantity, unit_cost, total_cost, available_quantity, intended_use, specs, device_info, purchase_type, item_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-             RETURNING *`,
-            [
-              request_id,
-              item_name,
-              quantity,
-              unit_cost,
-              total_cost,
-              isNaN(available_quantity) ? null : available_quantity,
-              intended_use,
-              specs,
-              device_info,
-              purchase_type,
-              item_type
-            ]
-          );
-        }
         insertedItems.push(result.rows[0]);
       }
     }

@@ -12,6 +12,7 @@ describe('procureToPayPersistenceService validation', () => {
       query: jest
         .fn()
         .mockResolvedValueOnce({ rows: [{ id: 10, receipt_number: 'GR-1-1' }] })
+        .mockResolvedValueOnce({ rows: [{ generic_item_id: 7, approved_product_id: 8 }] })
         .mockResolvedValueOnce({
           rows: [{
             id: 20,

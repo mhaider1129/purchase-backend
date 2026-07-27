@@ -670,6 +670,7 @@ const getAllRequests = async (req, res, next) => {
     filter,
     sort,
     request_type,
+    request_domain,
     search,
     from_date,
     to_date,
@@ -727,6 +728,14 @@ const getAllRequests = async (req, res, next) => {
       params.push(request_type);
       whereClauses.push(`r.request_type = $${params.length}`);
     }
+  }
+
+  const normalizedRequestDomain = String(
+    Array.isArray(request_domain) ? request_domain[0] : request_domain || '',
+  ).trim().toLowerCase();
+  if (['operational', 'medical'].includes(normalizedRequestDomain)) {
+    params.push(normalizedRequestDomain);
+    whereClauses.push(`LOWER(TRIM(r.request_domain)) = $${params.length}`);
   }
 
   const trimmedRequestId = typeof request_id === 'string' ? request_id.trim() : '';

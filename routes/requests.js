@@ -105,6 +105,7 @@ router.get('/incomplete/operational', getOperationalIncomplete); // COO
 const buildFilteredQuery = (queryParams) => {
   const {
     request_type,
+    request_domain,
     search,
     from_date,
     to_date,
@@ -144,6 +145,14 @@ const buildFilteredQuery = (queryParams) => {
       values.push(request_type);
       sql += ` AND r.request_type = $${values.length}`;
     }
+  }
+
+  const normalizedRequestDomain = String(
+    Array.isArray(request_domain) ? request_domain[0] : request_domain || '',
+  ).trim().toLowerCase();
+  if (['operational', 'medical'].includes(normalizedRequestDomain)) {
+    values.push(normalizedRequestDomain);
+    sql += ` AND LOWER(TRIM(r.request_domain)) = $${values.length}`;
   }
 
   const trimmedRequestId = typeof request_id === 'string' ? request_id.trim() : '';

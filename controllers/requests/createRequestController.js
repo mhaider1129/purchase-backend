@@ -20,6 +20,7 @@ const {
   evaluateBudgetCoverage,
   recordCommitment,
 } = require("../../services/financeCoreService");
+const { validateRequestItemIdentity, auditItemMaster } = require('../../services/procurementItemIdentityService');
 
 const URGENT_REQUEST_PERMISSION = 'requests.mark-urgent-on-submit';
 const MAX_UNIT_OF_MEASURE_LENGTH = 80;
@@ -832,6 +833,12 @@ const createRequest = async (req, res, next) => {
 
     const itemIdMap = [];
     for (let idx = 0; idx < items.length; idx++) {
+      const governedItem = request_type === 'Warehouse Supply' || (request_type !== 'Non-Stock' && !items[idx].request_mode)
+        ? items[idx]
+        : await validateRequestItemIdentity(client, items[idx], req.user, {
+            requireGovernedIdentity: request_type === 'Non-Stock' || Boolean(items[idx].request_mode),
+          });
+      items[idx] = governedItem;
       const {
         item_name,
         brand,
@@ -845,7 +852,19 @@ const createRequest = async (req, res, next) => {
         contract_value_snapshot,
         contract_currency,
         unit_of_measure,
-      } = items[idx];
+        generic_item_id,
+        preferred_product_id,
+        mandatory_product_id,
+        request_mode,
+        catalog_status,
+        stocking_policy,
+        preferred_product_reason,
+        restriction_justification,
+        required_date,
+        item_name_snapshot,
+        canonical_description_snapshot,
+        pending_item,
+      } = governedItem;
       let requestedItemId = null;
       if (request_type !== "Warehouse Supply") {
         let insertedReq;
@@ -861,8 +880,9 @@ const createRequest = async (req, res, next) => {
               available_quantity,
               intended_use,
               specs,
-              unit_of_measure
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+              unit_of_measure,generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,
+              stocking_policy,preferred_product_reason,restriction_justification,required_date,item_name_snapshot,canonical_description_snapshot
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
             [
               request.id,
               item_name,
@@ -874,6 +894,9 @@ const createRequest = async (req, res, next) => {
               intended_use || null,
               specs || null,
               unit_of_measure || null,
+              generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,stocking_policy,
+              preferred_product_reason||null,restriction_justification||null,required_date||null,item_name_snapshot||item_name,
+              canonical_description_snapshot||null,
             ],
           );
         } else {
@@ -888,8 +911,9 @@ const createRequest = async (req, res, next) => {
               available_quantity,
               intended_use,
               specs,
-              unit_of_measure
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+              unit_of_measure,generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,
+              stocking_policy,preferred_product_reason,restriction_justification,required_date,item_name_snapshot,canonical_description_snapshot
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
             [
               request.id,
               item_name,
@@ -901,10 +925,31 @@ const createRequest = async (req, res, next) => {
               intended_use || null,
               specs || null,
               unit_of_measure || null,
+              generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,stocking_policy,
+              preferred_product_reason||null,restriction_justification||null,required_date||null,item_name_snapshot||item_name,
+              canonical_description_snapshot||null,
             ],
           );
         }
         requestedItemId = insertedReq.rows[0].id;
+        if (request_mode === 'pending_item_creation') {
+          const proposed = pending_item || {};
+          await client.query(
+            `INSERT INTO pending_item_requests
+             (request_id,requested_item_id,proposed_name,item_type,category,required_specifications,intended_use,
+              requested_quantity,requested_uom,justification,requester_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            [request.id,requestedItemId,String(proposed.proposed_name||item_name).trim(),String(proposed.item_type||'general_item').trim(),
+              proposed.category||null,proposed.required_specifications||{},intended_use||proposed.intended_use||'',quantity,
+              unit_of_measure||proposed.requested_uom||null,String(proposed.justification||restriction_justification).trim(),req.user.id],
+          );
+          await auditItemMaster(client,{entityType:'pending_item_request',action:'submitted',actorId:req.user.id,
+            reason:proposed.justification||restriction_justification,requestId:request.id,requestedItemId,
+            context:{institute_id:req.user.institute_id,department_id},next:{proposed_name:proposed.proposed_name||item_name}});
+        } else if (request_mode === 'approved_free_text_exception') {
+          await auditItemMaster(client,{entityType:'requested_item',entityId:requestedItemId,action:'free_text_exception',actorId:req.user.id,
+            reason:restriction_justification,requestId:request.id,requestedItemId,context:{institute_id:req.user.institute_id,department_id},next:governedItem});
+        }
         if (request_type === "Stock" && requestedItemId && contract_id && contract_item_id) {
           await ensureRequestedItemFinancialsTable(client);
           await client.query(

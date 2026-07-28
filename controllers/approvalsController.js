@@ -1429,6 +1429,73 @@ const updateApprovalItems = async (req, res, next) => {
       pending: Number(summaryRow.pending || 0),
     };
 
+    // Saving the item decisions is the action that diverts stock to warehouse
+    // fulfillment. Do not require a second request-level approval click after
+    // every item has been diverted: that click can be missed, allowing the next
+    // approval level to continue a purchase that the warehouse can fulfill.
+    let updatedRequestStatus = null;
+    if (convertedWarehouseSupplyItems.length > 0) {
+      const inStockItemsRes = await client.query(
+        `SELECT
+           COUNT(*) AS total,
+           COUNT(*) FILTER (
+             WHERE ri.approval_status = 'Rejected'
+               AND EXISTS (
+                 SELECT 1
+                   FROM public.warehouse_supply_items wsi
+                  WHERE wsi.requested_item_id = ri.id
+               )
+           ) AS available_in_stock
+         FROM public.requested_items ri
+         WHERE ri.request_id = $1`,
+        [approval.request_id],
+      );
+      const inStockSummary = inStockItemsRes.rows[0] || {};
+      const totalItems = Number(inStockSummary.total || 0);
+      const allItemsAvailableInStock =
+        totalItems > 0 && Number(inStockSummary.available_in_stock || 0) === totalItems;
+
+      if (allItemsAvailableInStock) {
+        updatedRequestStatus = REQUEST_STATUS.AVAILABLE_IN_STOCK;
+
+        await client.query(
+          `UPDATE approvals
+              SET status = 'Approved',
+                  comments = COALESCE(comments, 'All items available in warehouse stock'),
+                  approved_at = NOW(),
+                  is_active = FALSE,
+                  updated_at = NOW()
+            WHERE id = $1`,
+          [approval.id],
+        );
+        await client.query(
+          `UPDATE approvals
+              SET is_active = FALSE,
+                  updated_at = NOW()
+            WHERE request_id = $1
+              AND id <> $2
+              AND status IN ('Pending', 'On Hold')`,
+          [approval.request_id, approval.id],
+        );
+        await client.query(
+          `UPDATE requests
+              SET status = $1,
+                  updated_at = NOW()
+            WHERE id = $2`,
+          [updatedRequestStatus, approval.request_id],
+        );
+        await client.query(
+          `INSERT INTO request_logs (request_id, action, actor_id, comments)
+           VALUES ($1, 'Request closed - Available in Stock', $2, $3)`,
+          [
+            approval.request_id,
+            approverId,
+            'All requested items were diverted to warehouse fulfillment when item decisions were saved',
+          ],
+        );
+      }
+    }
+
     const commentFragments = [];
     if (summaryAdjustments.Approved > 0) {
       commentFragments.push(`${summaryAdjustments.Approved} item(s) approved`);
@@ -1492,6 +1559,7 @@ const updateApprovalItems = async (req, res, next) => {
       lockedItems,
       updatedEstimatedCost,
       warehouseSupplyRequestId,
+      updatedRequestStatus,
     });
   } catch (err) {
     await client.query('ROLLBACK');

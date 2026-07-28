@@ -40,6 +40,9 @@ describe('updateApprovalItems warehouse supply conversion', () => {
       if (/SELECT requester_id, department_id/.test(sql)) return { rowCount: 1, rows: [{ requester_id: 4, department_id: 2, institute_id: 1, section_id: 3, project_id: null, request_domain: 'operational', justification: 'Need wheelchair' }] };
       if (/INSERT INTO requests/.test(sql)) return { rowCount: 1, rows: [{ id: 380 }] };
       if (/INSERT INTO warehouse_supply_items/.test(sql)) return { rowCount: 1, rows: [] };
+      if (/COUNT\(\*\) AS total[\s\S]*available_in_stock/.test(sql)) return { rows: [{ total: '1', available_in_stock: '1' }] };
+      if (/UPDATE approvals/.test(sql)) return { rowCount: 1, rows: [] };
+      if (/UPDATE requests[\s\S]*SET status/.test(sql)) return { rowCount: 1, rows: [] };
       if (/INSERT INTO request_logs/.test(sql)) return { rowCount: 1, rows: [] };
       if (/SELECT\s+COUNT\(\*\) FILTER/.test(sql)) return { rowCount: 1, rows: [{ approved: 0, rejected: 1, pending: 0 }] };
       if (/INSERT INTO public\.request_logs/.test(sql)) return { rowCount: 1, rows: [] };
@@ -58,7 +61,22 @@ describe('updateApprovalItems warehouse supply conversion', () => {
     expect(next).not.toHaveBeenCalled();
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining("'Approved', $7, $8, $9"), expect.arrayContaining([5, 7]));
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('approval_status, approved_by, approved_at'), [380, 12, 'Wheelchair', 1, 7]);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ warehouseSupplyRequestId: 380 }));
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining("SET status = 'Approved'"),
+      [88],
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining("AND status IN ('Pending', 'On Hold')"),
+      [353, 88],
+    );
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('SET status = $1'),
+      ['Available in Stock', 353],
+    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      warehouseSupplyRequestId: 380,
+      updatedRequestStatus: 'Available in Stock',
+    }));
   });
 
   it.each(['Approved', 'Rejected'])(

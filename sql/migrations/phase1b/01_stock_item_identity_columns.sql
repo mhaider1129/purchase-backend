@@ -4,7 +4,8 @@ SET LOCAL statement_timeout = '60s';
 -- stock_items.id is INTEGER in the repository schema. This migration never rewrites rows.
 ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS generic_item_id BIGINT REFERENCES generic_items(id) ON DELETE RESTRICT ON UPDATE NO ACTION;
 ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT ON UPDATE NO ACTION;
-ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items(id) ON DELETE RESTRICT ON UPDATE NO ACTION;
+-- Supplier offers remain on sourcing and purchasing lines. An inventory identity
+-- is deliberately not coupled to one supplier catalog offer.
 ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS inventory_uom_id INTEGER REFERENCES item_uom(id) ON DELETE RESTRICT ON UPDATE NO ACTION;
 ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS mapping_status TEXT NOT NULL DEFAULT 'unmapped';
 ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS mapped_by INTEGER REFERENCES users(id) ON DELETE SET NULL;

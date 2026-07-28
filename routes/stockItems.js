@@ -9,8 +9,24 @@ const {
 router.get('/', getStockItems);
 router.get('/unassigned', getUnassignedStockItems);
 const identity = require('../controllers/stockItemIdentityController');
-router.post('/add-from-master', identity.requirePermission('inventory.add-from-master'), identity.add);
-router.post('/mappings/apply', identity.requirePermission('item-master.stock-map'), identity.map);
+const requirePermission = require('../middleware/requirePermission');
+const {
+  validateAddToInventory,
+  validateApplyMapping,
+} = require('../middleware/stockItemIdentityValidation');
+
+router.post(
+  '/add-from-master',
+  requirePermission('inventory.add-from-master'),
+  validateAddToInventory,
+  identity.add
+);
+router.post(
+  '/mappings/apply',
+  requirePermission('item-master.stock-map'),
+  validateApplyMapping,
+  identity.map
+);
 
 router.post('/assign-warehouses', assignStockItemToWarehouses);
 

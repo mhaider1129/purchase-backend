@@ -19,10 +19,11 @@ const canViewOrSupplyWarehouseRequests = (user) =>
 const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
   if (Number.isInteger(stockItemId)) {
     const { rows } = await client.query(
-      `SELECT id, name FROM stock_items WHERE id = $1`,
+      `SELECT id, name, generic_item_id FROM stock_items WHERE id = $1`,
       [stockItemId],
     );
-    if (rows[0]) return rows[0];
+    // A supplied stable ID is authoritative. Never fall back to a same-name item.
+    return rows[0] || null;
   }
 
   if (!itemName) return null;

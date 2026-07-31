@@ -64,6 +64,9 @@ CREATE TABLE public.requests (
   auto_received_at timestamp with time zone,
   scheduled_for timestamp with time zone,
   client_submission_key text,
+  approval_route_snapshot jsonb,
+  approval_route_snapshot_id text,
+  lifecycle_version bigint NOT NULL DEFAULT 0,
   CONSTRAINT requests_pkey PRIMARY KEY (id),
   CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
@@ -75,8 +78,8 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id)
 );
 CREATE TABLE public.requested_items (
   id integer NOT NULL DEFAULT nextval('requested_items_id_seq'::regclass),
@@ -150,6 +153,7 @@ CREATE TABLE public.approvals (
   is_urgent boolean DEFAULT false,
   reminder_sent_at timestamp with time zone,
   updated_at timestamp with time zone DEFAULT now(),
+  route_snapshot_id text,
   CONSTRAINT approvals_pkey PRIMARY KEY (id),
   CONSTRAINT approvals_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT approvals_approver_id_fkey FOREIGN KEY (approver_id) REFERENCES public.users(id)

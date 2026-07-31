@@ -42,7 +42,7 @@ describe('authenticateUser middleware', () => {
 
     await authenticateUser(req, res, next);
 
-    expect(jwt.verify).toHaveBeenCalledWith('token', process.env.JWT_SECRET);
+    expect(jwt.verify).toHaveBeenCalledWith('token', process.env.JWT_SECRET, { algorithms: ['HS256'] });
     expect(pool.query).toHaveBeenCalled();
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -102,7 +102,7 @@ describe('authenticateUser middleware', () => {
     );
   });
 
-  it('falls back to default role permissions when permission lookup tables are unavailable', async () => {
+  it('fails closed when permission lookup tables are unavailable', async () => {
     pool.query
       .mockResolvedValueOnce({
         rowCount: 1,
@@ -127,8 +127,10 @@ describe('authenticateUser middleware', () => {
 
     await authenticateUser(req, res, next);
 
-    expect(next).toHaveBeenCalledWith();
-    expect(req.user.permissions).toEqual(expect.arrayContaining(['requests.manage', 'procurement.update-status']));
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 503,
+      code: 'AUTHORIZATION_SERVICE_UNAVAILABLE',
+    }));
   });
 
   it('falls back to 500 for unexpected errors', async () => {

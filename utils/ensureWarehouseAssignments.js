@@ -1,73 +1,22 @@
 const pool = require('../config/db');
+let validationPromise;
 
-let columnsEnsured = false;
-
-/**
- * Ensure dedicated warehouse storage exists alongside the linking columns
- * used across the app (user warehouse assignment and request fulfillment
- * warehouse).
- */
-const ensureWarehouseAssignments = async (client = pool) => {
-  if (columnsEnsured || process.env.NODE_ENV === 'test') {
-    columnsEnsured = true;
-    return;
-  }
-
+/** Read-only compatibility validator. Schema changes belong in sql/manual. */
+module.exports = async function validateWarehouseAssignments(client = pool) {
+  if (process.env.NODE_ENV === 'test') return;
+  if (validationPromise) return validationPromise;
   const runner = client.query ? client : pool;
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS public.warehouses (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      type TEXT NOT NULL DEFAULT 'warehouse',
-      location TEXT,
-      description TEXT,
-      department_id INTEGER UNIQUE REFERENCES departments(id) ON DELETE SET NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await runner.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouses_lower_name ON public.warehouses (LOWER(name))`
-  );
-
-  // Ensure link columns exist before rewiring foreign keys
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.users ADD COLUMN IF NOT EXISTS warehouse_id INTEGER`
-  );
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS supply_warehouse_id INTEGER`
-  );
-
-  // Refresh foreign keys to point at the warehouses table
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.users DROP CONSTRAINT IF EXISTS users_warehouse_id_fkey`
-  );
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.requests DROP CONSTRAINT IF EXISTS requests_supply_warehouse_id_fkey`
-  );
-
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.users
-       ADD CONSTRAINT users_warehouse_id_fkey
-       FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id) ON DELETE SET NULL`
-  );
-
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.requests
-       ADD CONSTRAINT requests_supply_warehouse_id_fkey
-       FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id) ON DELETE SET NULL`
-  );
-
-  await runner.query(
-    `CREATE INDEX IF NOT EXISTS idx_users_warehouse_id ON public.users(warehouse_id)`
-  );
-  await runner.query(
-    `CREATE INDEX IF NOT EXISTS idx_requests_supply_warehouse ON public.requests(supply_warehouse_id)`
-  );
-
-  columnsEnsured = true;
+  validationPromise = runner.query(
+    `SELECT to_regclass('public.warehouses') AS warehouses,
+            EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='warehouse_id') AS user_column,
+            EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='requests' AND column_name='supply_warehouse_id') AS request_column`
+  ).then(({ rows }) => {
+    const schema = rows[0] || {};
+    if (!schema.warehouses || !schema.user_column || !schema.request_column) {
+      const error = new Error('Warehouse assignment schema is missing; review sql/manual/001_foundation_schema_requirements.sql');
+      error.code = 'SCHEMA_VALIDATION_FAILED';
+      throw error;
+    }
+  }).catch(error => { validationPromise = null; throw error; });
+  return validationPromise;
 };
-
-module.exports = ensureWarehouseAssignments;

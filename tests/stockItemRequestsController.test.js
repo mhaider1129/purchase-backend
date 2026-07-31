@@ -74,7 +74,6 @@ describe("stockItemRequestsController", () => {
           ],
         }) // capability check
         .mockResolvedValueOnce({}) // BEGIN
-        .mockResolvedValueOnce({ rows: [{ exists: false }] }) // approval trigger check
         .mockResolvedValueOnce({
           rowCount: 1,
           rows: [
@@ -88,6 +87,7 @@ describe("stockItemRequestsController", () => {
             },
           ],
         })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // normalized pre-check
         .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // insert conflict
         .mockResolvedValueOnce({
           rowCount: 1,
@@ -96,7 +96,6 @@ describe("stockItemRequestsController", () => {
         .mockResolvedValueOnce({}) // item master reuse audit
         .mockResolvedValueOnce({ rows: [{ id: 7, status: "approved" }] })
         .mockResolvedValueOnce({}) // audit log
-        .mockResolvedValueOnce({}) // notification
         .mockResolvedValueOnce({}); // COMMIT
 
       await updateStockItemRequestStatus(req, res, next);
@@ -104,7 +103,8 @@ describe("stockItemRequestsController", () => {
       expect(client.query).toHaveBeenCalledWith("BEGIN");
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          created_stock_item: expect.objectContaining({ id: 55 }),
+          stock_item: { id: 55, created: false, reused: true },
+          audit_action: "legacy_creation_reused",
         }),
       );
       expect(client.query).toHaveBeenCalledWith(
@@ -147,7 +147,6 @@ describe("stockItemRequestsController", () => {
           ],
         }) // capability check
         .mockResolvedValueOnce({}) // BEGIN
-        .mockResolvedValueOnce({ rows: [{ exists: false }] }) // approval trigger check
         .mockResolvedValueOnce({
           rowCount: 1,
           rows: [
@@ -161,6 +160,7 @@ describe("stockItemRequestsController", () => {
             },
           ],
         })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // normalized pre-check
         .mockResolvedValueOnce({
           rowCount: 1,
           rows: [{ id: 42, name: "Mask" }],
@@ -178,14 +178,14 @@ describe("stockItemRequestsController", () => {
           ],
         })
         .mockResolvedValueOnce({}) // audit log
-        .mockResolvedValueOnce({ rows: [{ id: 200 }] }) // notification insert
         .mockResolvedValueOnce({}); // COMMIT
 
       await updateStockItemRequestStatus(req, res, next);
 
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          created_stock_item: { id: 42, name: "Mask" },
+          stock_item: { id: 42, created: true, reused: false },
+          audit_action: "legacy_creation_approved",
         }),
       );
       expect(createNotification).toHaveBeenCalledWith(

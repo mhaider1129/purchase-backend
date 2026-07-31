@@ -1,9 +1,8 @@
 const pool = require("../config/db");
 const createHttpError = require("../utils/httpError");
-const { createNotification } = require("../utils/notificationService");
-const {
-  DatabaseCapabilityService,
-} = require("../services/databaseCapabilityService");
+const stockItemRequestService = require("../services/stockItemRequestService");
+const { validateReview } = require("../validators/stockItemRequestValidator");
+const { userHasPermission } = require("../utils/permissionService");
 
 const MAX_NAME_LENGTH = 120;
 const MAX_DESCRIPTION_LENGTH = 500;
@@ -14,22 +13,6 @@ const normalizeText = (value) => {
   return String(value).trim();
 };
 
-let ensureColumnsPromise = null;
-const ensureStockItemRequestColumns = async () => {
-  if (!ensureColumnsPromise) {
-    ensureColumnsPromise = (async () => {
-      await pool.query(
-        "ALTER TABLE stock_item_requests ADD COLUMN IF NOT EXISTS review_notes TEXT",
-      );
-    })().catch((err) => {
-      ensureColumnsPromise = null;
-      throw err;
-    });
-  }
-
-  return ensureColumnsPromise;
-};
-
 // Create a new stock item request (Warehouse Manager)
 const createStockItemRequest = async (req, res, next) => {
   const { name, description, unit } = req.body || {};
@@ -37,15 +20,6 @@ const createStockItemRequest = async (req, res, next) => {
   if (userId === undefined || userId === null || String(userId).trim() === "") {
     return next(createHttpError(401, "Unauthorized: Missing user context"));
   }
-  if (!req.user.hasPermission("stock-requests.create")) {
-    return next(
-      createHttpError(
-        403,
-        "You do not have permission to create stock item requests",
-      ),
-    );
-  }
-
   const normalizedName = normalizeText(name);
   if (!normalizedName) {
     return next(createHttpError(400, "Item name is required"));
@@ -142,11 +116,11 @@ const getStockItemRequests = async (req, res, next) => {
   const { id: userId } = req.user;
   try {
     let result;
-    if (req.user.hasPermission("stock-requests.review")) {
+    if (userHasPermission(req.user, "stock-requests.review")) {
       result = await pool.query(
         `SELECT * FROM stock_item_requests ORDER BY inserted_at DESC`,
       );
-    } else if (req.user.hasPermission("stock-requests.create")) {
+    } else if (userHasPermission(req.user, "stock-requests.create")) {
       result = await pool.query(
         `SELECT * FROM stock_item_requests WHERE requested_by = $1 ORDER BY inserted_at DESC`,
         [userId],
@@ -168,230 +142,19 @@ const getStockItemRequests = async (req, res, next) => {
 
 // Update request status (SCM approval)
 const updateStockItemRequestStatus = async (req, res, next) => {
-  const { id } = req.params;
-  const { status, review_notes: rawReviewNotes } = req.body || {}; // expected 'approved' or 'rejected'
-  const { id: userId } = req.user || {};
-
-  const parsedId = Number(id);
-  if (!Number.isInteger(parsedId)) {
-    return next(createHttpError(400, "Invalid request identifier"));
-  }
-
-  const canReview = req.user?.hasPermission?.("stock-requests.review");
-  const canManageStock = req.user?.hasPermission?.("stock-items.manage");
-
-  if (!canReview && !canManageStock) {
-    return next(
-      createHttpError(
-        403,
-        "You do not have permission to approve stock item requests",
-      ),
-    );
-  }
-
-  if (!["approved", "rejected"].includes(status)) {
-    return next(createHttpError(400, "Invalid status"));
-  }
-
-  const reviewNotes = normalizeText(rawReviewNotes) || null;
-  if (reviewNotes && reviewNotes.length > MAX_DESCRIPTION_LENGTH) {
-    return next(
-      createHttpError(
-        400,
-        `Review notes must be ${MAX_DESCRIPTION_LENGTH} characters or fewer`,
-      ),
-    );
-  }
-
-  await ensureStockItemRequestColumns();
-
-  const client = await pool.connect();
-  let transactionStarted = false;
   try {
-    if (status === "approved") {
-      const capabilities = new DatabaseCapabilityService(client, { ttlMs: 0 });
-      await capabilities.require("legacyStockItemExceptionAvailable");
-    }
-
-    await client.query("BEGIN");
-    transactionStarted = true;
-    const triggerExistsRes = await client.query(
-      `SELECT EXISTS (
-        SELECT 1
-          FROM pg_trigger
-         WHERE tgname = 'trg_approve_stock_item_request'
-           AND NOT tgisinternal
-      ) AS exists`,
-    );
-
-    const hasApprovalTrigger = triggerExistsRes.rows[0]?.exists === true;
-    const existingRes = await client.query(
-      `SELECT * FROM stock_item_requests WHERE id = $1 FOR UPDATE`,
-      [parsedId],
-    );
-
-    if (existingRes.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return next(createHttpError(404, "Request not found"));
-    }
-
-    const existingRequest = existingRes.rows[0];
-
-    if (existingRequest.status !== "pending") {
-      await client.query("ROLLBACK");
-      return next(
-        createHttpError(400, "This request has already been reviewed"),
-      );
-    }
-
-    let createdStockItem = null;
-    let stockItemWasCreated = false;
-
-    if (status === "approved") {
-      if (!hasApprovalTrigger) {
-        const stockRes = await client.query(
-          `INSERT INTO stock_items (name, description, unit, created_by, identity_source)
-           VALUES ($1, $2, $3, $4, 'approved_exception')
-           ON CONFLICT (name) DO NOTHING
-           RETURNING id, name`,
-          [
-            existingRequest.name,
-            existingRequest.description,
-            existingRequest.unit,
-            existingRequest.requested_by,
-          ],
-        );
-
-        stockItemWasCreated = stockRes.rowCount > 0;
-        createdStockItem = stockRes.rows[0] || null;
-
-        if (!createdStockItem) {
-          const conflictItem = await client.query(
-            `SELECT id, name, unit
-               FROM stock_items
-              WHERE name = $1
-              LIMIT 1`,
-            [existingRequest.name],
-          );
-          createdStockItem = conflictItem.rows[0] || null;
-        }
-
-        if (!createdStockItem) {
-          const conflictError = createHttpError(
-            409,
-            "The conflicting stock item could not be loaded",
-          );
-          conflictError.code = "stock_item_conflict_unresolved";
-          throw conflictError;
-        }
-
-        await client.query(
-          `INSERT INTO item_master_audit_events(entity_type,entity_id,action,actor_id,reason,new_values)
-           VALUES('stock_item',$1,$2,$3,$4,$5)`,
-          [
-            createdStockItem.id,
-            stockItemWasCreated
-              ? "legacy_creation_approved"
-              : "legacy_creation_reused",
-            req.user.id,
-            req.body.legacy_creation_reason.trim(),
-            {
-              stock_item_request_id: parsedId,
-              identity_source: "approved_exception",
-              reused_existing: !stockItemWasCreated,
-            },
-          ],
-        );
-      }
-    }
-
-    const updateRes = await client.query(
-      `UPDATE stock_item_requests
-         SET status = $1, approved_by = $2, review_notes = $3
-       WHERE id = $4
-       RETURNING *`,
-      [status, userId, reviewNotes, parsedId],
-    );
-
-    const updatedRequest = updateRes.rows[0];
-
-    if (status === "approved" && hasApprovalTrigger && !createdStockItem) {
-      const createdItemLookup = await client.query(
-        `SELECT id, name, unit
-           FROM stock_items
-          WHERE LOWER(name) = LOWER($1)
-          ORDER BY id DESC
-          LIMIT 1`,
-        [existingRequest.name],
-      );
-
-      createdStockItem = createdItemLookup.rows[0] || null;
-    }
-
-    const auditDescription =
-      status === "approved"
-        ? `Approved stock item request ${parsedId} for ${existingRequest.name}${
-            createdStockItem
-              ? ` (created stock item ${createdStockItem.id})`
-              : ""
-          }`
-        : `Rejected stock item request ${parsedId} for ${existingRequest.name}${
-            reviewNotes ? `: ${reviewNotes}` : ""
-          }`;
-
-    await client.query(
-      `INSERT INTO audit_logs (action, actor_id, target_id, description)
-       VALUES ($1, $2, $3, $4)`,
-      [
-        status === "approved"
-          ? "Stock Item Request Approved"
-          : "Stock Item Request Rejected",
-        userId,
-        parsedId,
-        auditDescription,
-      ],
-    );
-
-    const recipientId = existingRequest.requested_by;
-    if (Number.isInteger(recipientId)) {
-      const notificationMessage =
-        status === "approved"
-          ? `Your stock item request for "${existingRequest.name}" was approved${
-              createdStockItem ? " and added to stock items." : "."
-            }`
-          : `Your stock item request for "${existingRequest.name}" was rejected${
-              reviewNotes ? `: ${reviewNotes}` : "."
-            }`;
-
-      await createNotification(
-        {
-          userId: recipientId,
-          title: "Stock item request review",
-          message: notificationMessage,
-          metadata: { requestId: parsedId, status },
-        },
-        client,
-      );
-    }
-
-    await client.query("COMMIT");
-    transactionStarted = false;
-    res.json({ ...updatedRequest, created_stock_item: createdStockItem });
+    const input = validateReview(req.params, req.body || {});
+    const result = await stockItemRequestService.review({
+      input,
+      reviewerId: req.user.id,
+    });
+    return res.json(result);
   } catch (err) {
-    if (transactionStarted) {
-      await client.query("ROLLBACK");
-    }
-    console.error(
-      "❌ Failed to update stock item request status:",
-      err.message,
+    return next(
+      err.statusCode
+        ? err
+        : createHttpError(500, "Failed to update stock item request status"),
     );
-    if (err.statusCode) {
-      next(err);
-    } else {
-      next(createHttpError(500, "Failed to update stock item request status"));
-    }
-  } finally {
-    client.release();
   }
 };
 

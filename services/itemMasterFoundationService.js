@@ -18,7 +18,7 @@ class ItemMasterFoundationService {
     const params = [];
     const where = [];
     const add = (sql, value) => { params.push(value); where.push(sql.replace('?', `$${params.length}`)); };
-    if (query.q) add("to_tsvector('simple', item_code || ' ' || generic_name || ' ' || canonical_description) @@ plainto_tsquery('simple', ?)", query.q);
+    if (query.q) add("CONCAT_WS(' ', item_code, generic_name, canonical_description, category, item_type) ILIKE ?", `%${String(query.q).trim()}%`);
     if (query.status) add('lifecycle_status = ?', query.status);
     if (query.category) add('category = ?', query.category);
     if (query.item_type) add('item_type = ?', query.item_type);

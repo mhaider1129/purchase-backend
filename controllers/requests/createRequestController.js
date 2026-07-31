@@ -833,10 +833,10 @@ const createRequest = async (req, res, next) => {
 
     const itemIdMap = [];
     for (let idx = 0; idx < items.length; idx++) {
-      const governedItem = request_type === 'Warehouse Supply' || (request_type !== 'Non-Stock' && !items[idx].request_mode)
+      const governedItem = request_type === 'Warehouse Supply' || !items[idx].request_mode
         ? items[idx]
         : await validateRequestItemIdentity(client, items[idx], req.user, {
-            requireGovernedIdentity: request_type === 'Non-Stock' || Boolean(items[idx].request_mode),
+            requireGovernedIdentity: true,
           });
       items[idx] = governedItem;
       const {

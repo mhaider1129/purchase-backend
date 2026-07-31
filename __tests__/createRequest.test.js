@@ -113,7 +113,6 @@ describe('createRequest controller', () => {
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ rows: [{ type: 'medical', institute_id: 1 }] })
       .mockResolvedValueOnce({ rows: [{ id: 100, request_type: 'Non-Stock', temporary_requester_name: null }] })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 7, item_code: 'GEN-7', generic_name: 'Gloves', canonical_description: 'Examination gloves', inventory_uom: 'EA', interchangeability_policy: 'fully_interchangeable' }] })
       .mockResolvedValueOnce({ rows: [{ id: 200 }] })
       .mockResolvedValueOnce({ rows: [{ id: 2, email: 'hod@example.com' }] })
       .mockResolvedValueOnce({ rowCount: 0, rows: [] })
@@ -127,7 +126,7 @@ describe('createRequest controller', () => {
 
     fetchApprovalRoutes.mockResolvedValueOnce([{ role: 'HOD', approval_level: 1 }]);
 
-    const req = { body: { request_type: 'Non-Stock', justification: 'Need item', items: [{ item_name: 'Gloves', generic_item_id: 7, request_mode: 'generic_item', stocking_policy: 'non_stock', quantity: 10, unit_cost: 5 }] }, user: { id: 1, role: 'Requester', department_id: 10, institute_id: 1, hasPermission: () => false }, files: [] };
+    const req = { body: { request_type: 'Non-Stock', justification: 'Need item', items: [{ item_name: 'Gloves', quantity: 10, unit_cost: 5 }] }, user: { id: 1, role: 'Requester', department_id: 10, institute_id: 1, hasPermission: () => false }, files: [] };
     const res = createMockRes();
     const next = jest.fn();
 

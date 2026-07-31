@@ -1,30 +1,18 @@
 const pool = require('../config/db');
+let validationPromise;
 
-let ensured = false;
-let ensurePromise = null;
-
-const ensureRequesterSectionAssignments = async () => {
-  if (ensured) return;
-  if (ensurePromise) return ensurePromise;
-
-  ensurePromise = (async () => {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS public.user_section_assignments (
-        user_id INTEGER NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-        section_id INTEGER NOT NULL REFERENCES public.sections(id) ON DELETE CASCADE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (user_id, section_id)
-      )
-    `);
-    await pool.query(
-      'CREATE INDEX IF NOT EXISTS idx_user_section_assignments_section_id ON public.user_section_assignments(section_id)'
-    );
-    ensured = true;
-  })().finally(() => {
-    ensurePromise = null;
-  });
-
-  return ensurePromise;
+/** Read-only compatibility validator. Schema changes belong in sql/manual. */
+module.exports = async function validateRequesterSectionAssignments(client = pool) {
+  if (process.env.NODE_ENV === 'test') return;
+  if (validationPromise) return validationPromise;
+  const runner = client.query ? client : pool;
+  validationPromise = runner.query("SELECT to_regclass('public.user_section_assignments') AS relation")
+    .then(({ rows }) => {
+      if (!rows[0]?.relation) {
+        const error = new Error('Requester section assignment schema is missing; review sql/manual/001_foundation_schema_requirements.sql');
+        error.code = 'SCHEMA_VALIDATION_FAILED';
+        throw error;
+      }
+    }).catch(error => { validationPromise = null; throw error; });
+  return validationPromise;
 };
-
-module.exports = ensureRequesterSectionAssignments;

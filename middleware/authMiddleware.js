@@ -1,197 +1,125 @@
-// middleware/authMiddleware.js
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const {
   getPermissionsForUserId,
   buildPermissionSet,
   userHasPermission,
-  getDefaultPermissionsForRole,
 } = require('../utils/permissionService');
-const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
-const ensureRequesterSectionAssignments = require('../utils/ensureRequesterSectionAssignments');
 
-// 🔧 Reusable error generator
-function createHttpError(statusCode, message) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  return err;
+function createHttpError(statusCode, message, code) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  if (code) error.code = code;
+  return error;
 }
 
-function isDatabaseConnectivityError(err) {
-  if (!err) return false;
-
-  const connectionErrorCodes = new Set([
-    'ENOTFOUND',
-    'ECONNREFUSED',
-    'ECONNRESET',
-    'EHOSTUNREACH',
-    'ETIMEDOUT',
-  ]);
-
-  if (err.code && connectionErrorCodes.has(err.code)) {
-    return true;
-  }
-
-  const message = typeof err.message === 'string' ? err.message : '';
-  return /(getaddrinfo|connect\s+ECONNREFUSED|ECONNRESET|timeout)/i.test(message);
+function isDatabaseConnectivityError(error) {
+  const codes = new Set(['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ETIMEDOUT']);
+  return Boolean(error && (codes.has(error.code) || /(getaddrinfo|ECONNREFUSED|ECONNRESET|timeout)/i.test(error.message || '')));
 }
 
-function isPermissionLookupError(err) {
-  if (!err) return false;
-
-  if (isDatabaseConnectivityError(err)) {
-    return false;
+function jwtVerificationOptions(environment = process.env) {
+  const algorithm = environment.JWT_ALGORITHM || 'HS256';
+  const supportedAlgorithms = new Set(['HS256', 'HS384', 'HS512', 'RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512']);
+  if (!supportedAlgorithms.has(algorithm)) {
+    throw createHttpError(503, 'Authorization service is unavailable', 'AUTH_CONFIGURATION_ERROR');
   }
-
-  const permissionErrorCodes = new Set([
-    '42P01', // undefined_table
-    '42703', // undefined_column
-    '42883', // undefined_function/operator
-    '42501', // insufficient_privilege
-  ]);
-
-  if (err.code && permissionErrorCodes.has(err.code)) {
-    return true;
-  }
-
-  const message = typeof err.message === 'string' ? err.message : '';
-  return /(permission|user_permissions|data_scopes|role_permissions|relation .* does not exist|column .* does not exist)/i.test(message);
+  const options = { algorithms: [algorithm] };
+  if (environment.JWT_ISSUER) options.issuer = environment.JWT_ISSUER;
+  if (environment.JWT_AUDIENCE) options.audience = environment.JWT_AUDIENCE;
+  return options;
 }
 
-// 🔐 JWT Authentication Middleware
-const attachUserFromToken = async (token) => {
-  // ✅ Verify JWT Token
+function parseBearerToken(header) {
+  if (typeof header !== 'string') return null;
+  const match = /^Bearer ([^\s]+)$/.exec(header);
+  return match ? match[1] : null;
+}
+
+async function attachUserFromToken(token, dependencies = {}) {
+  const verify = dependencies.verify || jwt.verify;
+  const database = dependencies.pool || pool;
+  const permissionLookup = dependencies.getPermissionsForUserId || getPermissionsForUserId;
   let decoded;
   try {
-    decoded = jwt.verify(token, process.env.JWT_SECRET);
-  } catch (err) {
-    console.error('❌ JWT verification failed:', err.message);
-    throw createHttpError(401, 'Unauthorized: Invalid or expired token');
+    decoded = verify(token, process.env.JWT_SECRET, jwtVerificationOptions());
+  } catch (error) {
+    if (error?.code === 'AUTH_CONFIGURATION_ERROR') throw error;
+    throw createHttpError(401, 'Unauthorized: Invalid or expired token', 'INVALID_TOKEN');
   }
 
-  // Ensure required warehouse-related columns exist before querying
-  await ensureWarehouseAssignments();
-  await ensureRequesterSectionAssignments();
+  if (!Number.isInteger(decoded?.user_id) || decoded.user_id <= 0) {
+    throw createHttpError(401, 'Unauthorized: Token has no valid user identity', 'INVALID_TOKEN_SUBJECT');
+  }
 
-  // 🔎 Fetch user from DB
-  const userRes = await pool.query(
+  const userResult = await database.query(
     `SELECT u.id, u.name, u.role, u.department_id, u.section_id, u.institute_id, u.warehouse_id,
             u.is_active, u.can_request_medication,
             COALESCE(assigned_sections.section_ids, '[]'::json) AS assigned_section_ids
        FROM users u
        LEFT JOIN LATERAL (
          SELECT json_agg(usa.section_id ORDER BY usa.section_id) AS section_ids
-           FROM user_section_assignments usa
-          WHERE usa.user_id = u.id
+           FROM user_section_assignments usa WHERE usa.user_id = u.id
        ) assigned_sections ON TRUE
       WHERE u.id = $1`,
     [decoded.user_id]
   );
+  if (userResult.rowCount === 0) throw createHttpError(401, 'Unauthorized: User not found', 'USER_NOT_FOUND');
+  const user = userResult.rows[0];
+  if (!user.is_active) throw createHttpError(401, 'Unauthorized: User is deactivated', 'USER_INACTIVE');
 
-  if (userRes.rowCount === 0) {
-    throw createHttpError(401, 'Unauthorized: User not found');
-  }
-
-  const user = userRes.rows[0];
-
-  if (!user.is_active) {
-    throw createHttpError(401, 'Unauthorized: User is deactivated');
-  }
-
-  let permissions = [];
-  let dataScopes = {};
+  let authorization;
   try {
-    ({ permissions = [], dataScopes = {} } = await getPermissionsForUserId(user.id));
-  } catch (err) {
-    if (!isPermissionLookupError(err)) {
-      throw err;
+    authorization = await permissionLookup(user.id);
+    if (!authorization || !Array.isArray(authorization.permissions) ||
+        (authorization.dataScopes != null && (typeof authorization.dataScopes !== 'object' || Array.isArray(authorization.dataScopes)))) {
+      throw new TypeError('Malformed authorization data');
     }
-
-    permissions = getDefaultPermissionsForRole(user.role);
-    dataScopes = {};
-    console.warn(
-      `⚠️ Falling back to default role permissions for user ${user.id} because permission lookup failed: ${err.message}`
-    );
+  } catch (error) {
+    const authError = createHttpError(503, 'Authorization service is unavailable', 'AUTHORIZATION_SERVICE_UNAVAILABLE');
+    authError.cause = error;
+    throw authError;
   }
 
-  const userContext = {
-    id: user.id,
-    user_id: decoded.user_id,
-    name: user.name,
-    role: user.role,
-    department_id: user.department_id,
-    section_id: user.section_id,
-    assigned_section_ids: user.assigned_section_ids || [],
-    institute_id: user.institute_id,
-    warehouse_id: user.warehouse_id,
-    can_request_medication: user.can_request_medication,
-    permissions,
-    data_scopes: dataScopes,
+  const context = {
+    id: user.id, user_id: decoded.user_id, name: user.name, role: user.role,
+    department_id: user.department_id, section_id: user.section_id,
+    assigned_section_ids: user.assigned_section_ids || [], institute_id: user.institute_id,
+    warehouse_id: user.warehouse_id, can_request_medication: user.can_request_medication,
+    permissions: authorization.permissions, data_scopes: authorization.dataScopes || {},
   };
-
-  userContext.permissionSet = buildPermissionSet(permissions);
-  userContext.hasPermission = permissionCode => userHasPermission(userContext, permissionCode);
-  userContext.hasAnyPermission = codes =>
-    Array.isArray(codes) && codes.some(code => userHasPermission(userContext, code));
-  userContext.requirePermission = (code) => {
-    if (!userHasPermission(userContext, code)) {
-      throw createHttpError(403, 'You do not have permission to perform this action');
-    }
+  context.permissionSet = buildPermissionSet(context.permissions);
+  context.hasPermission = code => userHasPermission(context, code);
+  context.hasAnyPermission = codes => Array.isArray(codes) && codes.some(code => userHasPermission(context, code));
+  context.requirePermission = code => {
+    if (!userHasPermission(context, code)) throw createHttpError(403, 'You do not have permission to perform this action');
   };
+  return context;
+}
 
-  return userContext;
+function handleAuthenticationError(error, next) {
+  if (isDatabaseConnectivityError(error)) return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
+  if (error?.statusCode) return next(error);
+  return next(createHttpError(500, 'Authentication middleware failed'));
+}
+
+async function authenticateUser(req, _res, next) {
+  const token = parseBearerToken(req.headers.authorization);
+  if (!token) return next(createHttpError(401, 'Unauthorized: Missing or malformed token'));
+  try { req.user = await attachUserFromToken(token); return next(); }
+  catch (error) { return handleAuthenticationError(error, next); }
+}
+
+async function authenticateUserOptional(req, _res, next) {
+  const header = req.headers.authorization;
+  if (!header) return next();
+  const token = parseBearerToken(header);
+  if (!token) return next(createHttpError(401, 'Unauthorized: Missing or malformed token'));
+  try { req.user = await attachUserFromToken(token); return next(); }
+  catch (error) { return handleAuthenticationError(error, next); }
+}
+
+module.exports = {
+  authenticateUser, authenticateUserOptional, attachUserFromToken, parseBearerToken,
+  jwtVerificationOptions, isDatabaseConnectivityError,
 };
-
-const authenticateUser = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return next(createHttpError(401, 'Unauthorized: Missing or malformed token'));
-    }
-
-    const token = authHeader.split(' ')[1];
-    req.user = await attachUserFromToken(token);
-
-    next();
-  } catch (err) {
-    console.error('❌ Unexpected error in authenticateUser middleware:', err);
-
-    if (isDatabaseConnectivityError(err)) {
-      return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
-    }
-
-    if (err?.statusCode) {
-      return next(err);
-    }
-
-    next(createHttpError(500, 'Authentication middleware failed'));
-  }
-};
-
-const authenticateUserOptional = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return next();
-    }
-
-    const token = authHeader.split(' ')[1];
-    req.user = await attachUserFromToken(token);
-
-    next();
-  } catch (err) {
-    if (isDatabaseConnectivityError(err)) {
-      return next(createHttpError(503, 'Service Unavailable: Unable to connect to the database'));
-    }
-
-    if (err?.statusCode) {
-      return next(err);
-    }
-
-    next(createHttpError(500, 'Authentication middleware failed'));
-  }
-};
-
-module.exports = { authenticateUser, authenticateUserOptional };

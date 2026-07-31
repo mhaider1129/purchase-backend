@@ -228,8 +228,8 @@ const updateStockItemRequestStatus = async (req, res, next) => {
 
       if (!hasApprovalTrigger) {
         const stockRes = await client.query(
-          `INSERT INTO stock_items (name, description, unit, created_by)
-           VALUES ($1, $2, $3, $4)
+          `INSERT INTO stock_items (name, description, unit, created_by, identity_source)
+           VALUES ($1, $2, $3, $4, 'approved_exception')
            ON CONFLICT (name) DO NOTHING
            RETURNING id, name`,
           [
@@ -262,6 +262,11 @@ const updateStockItemRequestStatus = async (req, res, next) => {
         }
 
         createdStockItem = stockRes.rows[0] || null;
+        await client.query(
+          `INSERT INTO item_master_audit_events(entity_type,entity_id,action,actor_id,reason,new_values)
+           VALUES('stock_item',$1,'legacy_creation_approved',$2,$3,$4)`,
+          [createdStockItem.id, req.user.id, req.body.legacy_creation_reason.trim(), { stock_item_request_id: parsedId, identity_source: 'approved_exception' }]
+        );
       }
     }
 

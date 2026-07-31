@@ -98,7 +98,11 @@ const errorHandler = (err, req, res, next) => {
     success: false,
     message,
     requestId: req?.requestId,
-    ...(isProduction ? {} : { code: err.code, stack: err.stack }),
+    ...(err.code ? { code: err.code } : {}),
+    ...(err.details ? { details: err.details } : {}),
+    ...(err.existing_stock_item_id ? { existing_stock_item_id: err.existing_stock_item_id } : {}),
+    ...(err.match_reason ? { match_reason: err.match_reason } : {}),
+    ...(isProduction ? {} : { stack: err.stack }),
   });
 };
 

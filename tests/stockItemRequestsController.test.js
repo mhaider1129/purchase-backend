@@ -93,7 +93,7 @@ describe('stockItemRequestsController', () => {
     it('approves a request, creates stock item, and notifies requester', async () => {
       const req = {
         params: { id: '5' },
-        body: { status: 'approved', review_notes: 'Looks good' },
+        body: { status: 'approved', review_notes: 'Looks good', legacy_creation_reason: 'Approved exception for urgent legacy request' },
         user: { id: 2, hasPermission: jest.fn().mockReturnValue(true) },
       };
       const res = buildRes();
@@ -128,6 +128,7 @@ describe('stockItemRequestsController', () => {
         })
         .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // duplicate stock item check
         .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 42, name: 'Mask' }] }) // insert stock item
+        .mockResolvedValueOnce({}) // item master audit event
         .mockResolvedValueOnce({
           rows: [
             {

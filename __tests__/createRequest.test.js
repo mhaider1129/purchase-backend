@@ -104,7 +104,7 @@ describe('createRequest controller', () => {
     expect(mockClient.release).toHaveBeenCalled();
   });
 
-  test('creates non-stock request successfully with approval routing', async () => {
+  test('creates a free-text non-stock request successfully with approval routing', async () => {
     const mockClient = { query: jest.fn(), release: jest.fn() };
     pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
     pool.connect.mockResolvedValueOnce(mockClient);

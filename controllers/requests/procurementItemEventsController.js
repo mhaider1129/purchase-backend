@@ -170,8 +170,20 @@ const addProcurementItemEvent = async (req, res, next) => {
   let unitCost;
   let procurementDate;
   let supplierId;
+  let procurementQuantity;
+  let unitsPerPackage;
+  let procurementUnitOfMeasure;
   try {
-    eventQuantity = parsePositiveInteger(req.body?.event_quantity, 'event_quantity');
+    procurementQuantity = req.body?.procurement_quantity === undefined || req.body?.procurement_quantity === null || req.body?.procurement_quantity === ''
+      ? null
+      : parsePositiveInteger(req.body.procurement_quantity, 'procurement_quantity');
+    unitsPerPackage = req.body?.units_per_package === undefined || req.body?.units_per_package === null || req.body?.units_per_package === ''
+      ? 1
+      : parsePositiveInteger(req.body.units_per_package, 'units_per_package');
+    eventQuantity = parsePositiveInteger(
+      procurementQuantity === null ? req.body?.event_quantity : procurementQuantity * unitsPerPackage,
+      'event_quantity',
+    );
     unitCost = parseOptionalNonNegativeNumber(req.body?.unit_cost, 'unit_cost');
     procurementDate = parseOptionalDate(req.body?.procurement_date);
     supplierId = req.body?.supplier_id === undefined || req.body?.supplier_id === null || req.body?.supplier_id === ''
@@ -182,6 +194,9 @@ const addProcurementItemEvent = async (req, res, next) => {
   }
 
   const supplierName = req.body?.supplier_name ? String(req.body.supplier_name).trim() : null;
+  procurementUnitOfMeasure = req.body?.procurement_unit_of_measure
+    ? String(req.body.procurement_unit_of_measure).trim().slice(0, 100)
+    : null;
   const procurementNote = req.body?.procurement_note ? String(req.body.procurement_note).trim() : null;
   const userId = req.user.id;
 
@@ -244,8 +259,13 @@ const addProcurementItemEvent = async (req, res, next) => {
 
     const newPurchasedQuantity = previousPurchasedQuantity + eventQuantity;
     const remainingQuantity = Math.max(requestedQuantity - newPurchasedQuantity, 0);
-    const effectiveUnitCost = unitCost !== null ? unitCost : (item.unit_cost === null || item.unit_cost === undefined ? null : Number(item.unit_cost));
-    const eventTotalCost = unitCost !== null ? Number((eventQuantity * unitCost).toFixed(2)) : null;
+    // The entered price applies to the purchased package (for example, one box).
+    // requested_items.unit_cost remains the normalized price of one requested unit.
+    const normalizedUnitCost = unitCost !== null ? Number((unitCost / unitsPerPackage).toFixed(6)) : null;
+    const effectiveUnitCost = normalizedUnitCost !== null ? normalizedUnitCost : (item.unit_cost === null || item.unit_cost === undefined ? null : Number(item.unit_cost));
+    const eventTotalCost = unitCost !== null
+      ? Number(((procurementQuantity ?? eventQuantity) * unitCost).toFixed(2))
+      : null;
     const itemTotalCost = effectiveUnitCost !== null ? Number((newPurchasedQuantity * effectiveUnitCost).toFixed(2)) : item.total_cost;
     const procurementStatus = deriveItemStatus(newPurchasedQuantity, requestedQuantity);
 
@@ -253,8 +273,9 @@ const addProcurementItemEvent = async (req, res, next) => {
       `INSERT INTO public.procurement_item_events (
          request_id, requested_item_id, procurement_user_id, event_quantity,
          previous_purchased_quantity, new_purchased_quantity, remaining_quantity,
-         unit_cost, total_cost, supplier_id, supplier_name, procurement_note, procurement_date
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13::date, CURRENT_DATE))
+         unit_cost, total_cost, supplier_id, supplier_name, procurement_note, procurement_date,
+         procurement_quantity, procurement_unit_of_measure, units_per_package, package_unit_cost
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13::date, CURRENT_DATE),$14,$15,$16,$17)
        RETURNING *`,
       [
         requestId,
@@ -264,12 +285,16 @@ const addProcurementItemEvent = async (req, res, next) => {
         previousPurchasedQuantity,
         newPurchasedQuantity,
         remainingQuantity,
-        unitCost,
+        normalizedUnitCost,
         eventTotalCost,
         supplierId,
         supplierName,
         procurementNote,
         procurementDate,
+        procurementQuantity ?? eventQuantity,
+        procurementUnitOfMeasure || item.unit_of_measure || null,
+        unitsPerPackage,
+        unitCost,
       ]
     );
 
@@ -283,7 +308,7 @@ const addProcurementItemEvent = async (req, res, next) => {
            procurement_updated_at = CURRENT_TIMESTAMP
        WHERE id = $6
        RETURNING *`,
-      [newPurchasedQuantity, unitCost, itemTotalCost, procurementStatus, userId, item.id]
+      [newPurchasedQuantity, normalizedUnitCost, itemTotalCost, procurementStatus, userId, item.id]
     );
 
     if (effectiveUnitCost !== null) {

@@ -157,6 +157,22 @@ describe('procurement item events', () => {
     }));
   });
 
+  it('converts purchased packages into requested units and normalizes unit cost', async () => {
+    const client = buildClient({ itemOverrides: { item_name: 'Tablets', quantity: 1000, unit_of_measure: 'Tablet', unit_cost: null } });
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ procurement_quantity: 10, procurement_unit_of_measure: 'Box', units_per_package: 100, unit_cost: 50000 });
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await addProcurementItemEvent(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      event: expect.objectContaining({ event_quantity: 1000, unit_cost: 500, total_cost: 500000 }),
+      item: expect.objectContaining({ purchased_quantity: 1000, unit_cost: 500, total_cost: 500000 }),
+    }));
+  });
+
   it('blocks an event quantity greater than remaining quantity', async () => {
     const client = buildClient({ itemOverrides: { purchased_quantity: 60, procurement_status: 'partially_procured' } });
     pool.connect.mockResolvedValue(client);

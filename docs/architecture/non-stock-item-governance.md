@@ -1,0 +1,5 @@
+# Non-Stock item governance
+
+The selected policy is hybrid. A physical Non-Stock line is either catalogued (`generic_item*` mode plus an active `generic_item_id`) or an explicit exception. `approved_free_text_exception` requires `item-master.free-text-exception`, a description, and `restriction_justification`; it is stored with `catalog_status=approved_exception` and no catalog IDs. `pending_item_creation` requires justification/pending details and remains `pending_mapping`. Thus free text cannot masquerade as governed data, while first-time purchases remain possible.
+
+The existing `procurementItemIdentityService`, requested-item columns, pending-item resolution workflow, and generic selector already implement this model. No schema addition is required. Forms must submit the mode and reason explicitly and display the resulting catalog status. Governance reviewers should prefer pending creation when the item is reusable; approved exceptions are for genuinely exceptional purchases.

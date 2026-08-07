@@ -13,6 +13,17 @@ function createApprovalEngine(dependencies = {}) {
   const notify = dependencies.notify || outbox.enqueueNotification;
   const lifecycle = dependencies.lifecycle || lifecycleDefault;
 
+  async function supersedeWorkflow({ requestId, actor, reason, replacementSnapshotId }, suppliedClient = null) {
+    return withTransaction(async client => {
+      const result = await client.query(
+        `UPDATE approvals SET is_active=FALSE,is_superseded=TRUE,superseded_at=NOW(),
+           superseded_by_user_id=$2,superseded_reason=$3
+         WHERE request_id=$1 AND is_superseded=FALSE RETURNING *`,
+        [requestId, actor?.id || null, reason]);
+      return { approvals: result.rows, replacementSnapshotId };
+    }, { client: suppliedClient });
+  }
+
   async function createSteps({ requestId, routeSnapshot, actor, correlationId }, suppliedClient = null) {
     return withTransaction(async client => {
       const lockedRequest = await client.query('SELECT id FROM requests WHERE id=$1 FOR UPDATE', [requestId]);
@@ -28,9 +39,9 @@ function createApprovalEngine(dependencies = {}) {
       const created = [];
       for (const step of routeSnapshot.steps) {
         const result = await client.query(
-          `INSERT INTO approvals (request_id,approver_id,approval_level,status,is_active,route_snapshot_id)
-           VALUES ($1,$2,$3,'Pending',FALSE,$4) ON CONFLICT (request_id,route_snapshot_id,approval_level) DO NOTHING RETURNING *`,
-          [requestId, step.approverId, step.level, routeSnapshot.snapshotId]);
+          `INSERT INTO approvals (request_id,approver_id,approval_level,status,is_active,route_snapshot_id,approval_route_version)
+           VALUES ($1,$2,$3,'Pending',FALSE,$4,$5) ON CONFLICT (request_id,approval_route_version,approval_level) DO NOTHING RETURNING *`,
+          [requestId, step.approverId, step.level, routeSnapshot.snapshotId, routeSnapshot.version]);
         if (result.rows[0]) created.push(result.rows[0]);
       }
       const active = await activateNext(client, requestId);
@@ -99,7 +110,7 @@ function createApprovalEngine(dependencies = {}) {
       return afterRows[0];
     }, { client: suppliedClient });
   }
-  return { createSteps, decide, reassign, activateNext };
+  return { createSteps, decide, reassign, activateNext, supersedeWorkflow };
 }
 
 module.exports = { createApprovalEngine, ApprovalEngineError, ...createApprovalEngine() };

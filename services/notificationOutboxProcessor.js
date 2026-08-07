@@ -22,17 +22,22 @@ function createNotificationOutboxProcessor({ database = pool, deliver = deliverI
       await client.query('BEGIN');
       const claimed = await client.query(
         `SELECT * FROM notification_outbox
-          WHERE status IN ('pending','failed') AND next_attempt_at <= NOW() AND retry_count < $1
+          WHERE ((status IN ('pending','failed') AND next_attempt_at <= NOW())
+              OR (status='processing' AND processing_started_at < NOW() - INTERVAL '15 minutes'))
+            AND retry_count < $1
           ORDER BY next_attempt_at,id FOR UPDATE SKIP LOCKED LIMIT 1`, [maxRetries]);
       const event = claimed.rows[0];
       if (!event) { await client.query('COMMIT'); return null; }
       await client.query("UPDATE notification_outbox SET status='processing', processing_started_at=NOW(), last_error=NULL WHERE id=$1", [event.id]);
+      await client.query('SAVEPOINT notification_delivery');
       try {
         await deliver(client, event);
+        await client.query('RELEASE SAVEPOINT notification_delivery');
         await client.query("UPDATE notification_outbox SET status='delivered', processed_at=NOW(), processing_started_at=NULL WHERE id=$1", [event.id]);
         await client.query('COMMIT');
         return { id: event.id, status: 'delivered' };
       } catch (error) {
+        await client.query('ROLLBACK TO SAVEPOINT notification_delivery');
         const retries = Number(event.retry_count || 0) + 1;
         const terminal = retries >= maxRetries;
         await client.query(

@@ -12,105 +12,23 @@ const ensureWarehouseInventoryTables = require('../../utils/ensureWarehouseInven
 const recalculateAvailableQuantity = require('../../utils/recalculateAvailableQuantity');
 const { getInspectionSummaryForRequest } = require('../../utils/technicalInspectionStatus');
 const ensureRequestEditApprovalsTable = require('../../utils/ensureRequestEditApprovalsTable');
-
-const REWIREABLE_REQUEST_TYPES = new Set([
-  'Stock',
-  'Non-Stock',
-  'Medical Device',
-  'Medication',
-  'IT Item',
-  'Maintenance',
-  'Warehouse Supply',
-  'Printing Logbook',
-]);
+const requestReclassificationService = require('../../services/requestReclassificationService');
 
 const rewireRequestType = async (req, res, next) => {
-  if (String(req.user?.role || '').trim().toUpperCase() !== 'SCM') {
-    return next(createHttpError(403, 'Only SCM can change a request type'));
-  }
-
   const requestId = Number(req.params.id);
   const requestType = String(req.body?.request_type || '').trim();
   if (!Number.isInteger(requestId) || requestId <= 0) {
     return next(createHttpError(400, 'Invalid request id'));
   }
-  if (!REWIREABLE_REQUEST_TYPES.has(requestType)) {
-    return next(createHttpError(400, 'Invalid request type'));
-  }
-
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    const requestResult = await client.query(
-      `SELECT id, request_type, department_id, request_domain, estimated_cost
-         FROM requests
-        WHERE id = $1
-        FOR UPDATE`,
-      [requestId],
-    );
-    if (requestResult.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Request not found'));
-    }
-
-    const request = requestResult.rows[0];
-    if (request.request_type === requestType) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(400, 'The request already has this type'));
-    }
-
-    const routeDomain = await resolveRouteDomain({
-      client,
-      departmentId: request.department_id,
-      explicitDomain: request.request_domain,
-      requestType,
-    });
-    const route = await fetchApprovalRoutes({
-      client,
-      requestType,
-      departmentType: routeDomain,
-      amount: request.estimated_cost || 0,
-    });
-    if (!route.length) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(422, 'No approval route is configured for the selected request type'));
-    }
-
-    await client.query(
-      `UPDATE requests
-          SET request_type = $1,
-              request_domain = $2,
-              status = 'Submitted',
-              updated_at = CURRENT_TIMESTAMP
-        WHERE id = $3`,
-      [requestType, routeDomain, requestId],
-    );
-    await client.query(`DELETE FROM approvals WHERE request_id = $1`, [requestId]);
-
-    const { initializeApprovals } = require('../utils/initializeApprovals');
-    await initializeApprovals(requestId, client);
-
-    await client.query(
-      `INSERT INTO request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, 'Request type changed and approvals rewired', $2, $3)`,
-      [
-        requestId,
-        req.user.id,
-        `Request type changed from '${request.request_type}' to '${requestType}'; approval workflow restarted.`,
-      ],
-    );
-    await client.query('COMMIT');
+    const result = await requestReclassificationService.reclassifyRequest({ requestId, targetRequestType: requestType,
+      actor: req.user, reason: String(req.body?.reason || '').trim() || 'Request type corrected', correlationId: req.correlationId });
     return res.json({
       message: 'Request type changed and approval workflow rewired successfully.',
-      request_id: requestId,
-      request_type: requestType,
-      request_domain: routeDomain,
+      ...result,
     });
   } catch (err) {
-    await client.query('ROLLBACK');
-    return next(err.statusCode ? err : createHttpError(500, 'Failed to change request type'));
-  } finally {
-    client.release();
+    return next(err);
   }
 };
 

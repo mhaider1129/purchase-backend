@@ -38,6 +38,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'recalls.manage',
     'recalls.view',
     'requests.manage',
+    'requests.reclassify',
     'requests.view-all',
     'requests.view-incomplete',
     'stock-requests.review',
@@ -119,6 +120,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+
+  {
+    code: 'requests.reclassify',
+    name: 'Reclassify requests',
+    description: 'Change a pre-procurement request type and replace its active approval route.',
+  },
 
   {
     code: 'procure-to-pay.lifecycle.view',

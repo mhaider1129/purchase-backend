@@ -1,6 +1,7 @@
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureRequestedItemFinancialsTable');
+const uom = require('../../services/uomConversionService');
 
 const PRIVILEGED_ROLES = new Set(['SCM', 'Admin', 'Procurement Supervisor', 'ProcurementSupervisor']);
 const BLOCKED_REQUEST_STATUSES = new Set(['rejected', 'cancelled', 'canceled', 'closed', 'completed', 'received']);
@@ -181,7 +182,7 @@ const addProcurementItemEvent = async (req, res, next) => {
       ? 1
       : parsePositiveInteger(req.body.units_per_package, 'units_per_package');
     eventQuantity = parsePositiveInteger(
-      procurementQuantity === null ? req.body?.event_quantity : procurementQuantity * unitsPerPackage,
+      procurementQuantity === null ? req.body?.event_quantity : uom.packageQuantityToBaseQuantity(procurementQuantity, unitsPerPackage),
       'event_quantity',
     );
     unitCost = parseOptionalNonNegativeNumber(req.body?.unit_cost, 'unit_cost');
@@ -261,7 +262,7 @@ const addProcurementItemEvent = async (req, res, next) => {
     const remainingQuantity = Math.max(requestedQuantity - newPurchasedQuantity, 0);
     // The entered price applies to the purchased package (for example, one box).
     // requested_items.unit_cost remains the normalized price of one requested unit.
-    const normalizedUnitCost = unitCost !== null ? Number((unitCost / unitsPerPackage).toFixed(6)) : null;
+    const normalizedUnitCost = unitCost !== null ? uom.packagePriceToBaseUnitCost(unitCost, unitsPerPackage) : null;
     const effectiveUnitCost = normalizedUnitCost !== null ? normalizedUnitCost : (item.unit_cost === null || item.unit_cost === undefined ? null : Number(item.unit_cost));
     const eventTotalCost = unitCost !== null
       ? Number(((procurementQuantity ?? eventQuantity) * unitCost).toFixed(2))

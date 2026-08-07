@@ -748,7 +748,8 @@ const requestHodApproval = async (req, res, next) => {
        FROM users u
        LEFT JOIN departments d ON d.id = u.department_id
        WHERE u.id = $1
-         AND LOWER(u.role) = 'hod'`,
+         AND REGEXP_REPLACE(LOWER(TRIM(u.role)), '[^a-z0-9]+', '', 'g')
+             IN ('hod', 'coo', 'scm', 'medicaldevices')`,
       [hodUserId],
     );
 

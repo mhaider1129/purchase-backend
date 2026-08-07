@@ -1205,10 +1205,16 @@ const getHodApprovers = async (req, res, next) => {
          d.name AS department_name
        FROM users u
        LEFT JOIN departments d ON d.id = u.department_id
-       WHERE LOWER(u.role) IN ('hod', 'coo', 'scm')
+       WHERE REGEXP_REPLACE(LOWER(TRIM(u.role)), '[^a-z0-9]+', '', 'g')
+         IN ('hod', 'coo', 'scm', 'medicaldevices')
          AND u.is_active = true
        ORDER BY
-         CASE LOWER(u.role) WHEN 'coo' THEN 1 WHEN 'scm' THEN 2 ELSE 3 END,
+         CASE REGEXP_REPLACE(LOWER(TRIM(u.role)), '[^a-z0-9]+', '', 'g')
+           WHEN 'coo' THEN 1
+           WHEN 'scm' THEN 2
+           WHEN 'medicaldevices' THEN 3
+           ELSE 4
+         END,
          d.name NULLS LAST,
          u.name`,
     );

@@ -1,0 +1,5 @@
+# UOM conversion foundation
+
+`uomConversionService` is a database-free boundary for package/base arithmetic. Package quantity is multiplied by a positive integer `units_per_package`; package price is divided and rounded to six decimal places; totals remain rounded by the caller to currency precision. Reverse conversion succeeds only when reconstruction at six-decimal quantity precision exactly matches the base quantity. Label normalization only maps a small set of unambiguous plurals/abbreviations and otherwise preserves the label.
+
+Procurement item events use these functions, so persisted event quantity and normalized cost share one rule. A future controlled UOM master should replace free-form labels with IDs, dimensional families, effective-dated conversion factors, and explicit rounding/precision policies; that migration is intentionally outside Phase 2.

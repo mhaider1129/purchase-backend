@@ -35,7 +35,22 @@ function createRequestLifecycleService(dependencies = {}) {
       return { requestId: request.id, before: request.status, after: validation.to, changed: true, idempotent: false, request: result.rows[0] };
     }, { client: suppliedClient });
   }
-  return { transition };
+  async function resetForReclassification({ requestId, actor, expectedStatus }, suppliedClient = null) {
+    return withTransaction(async client => {
+      const { rows } = await client.query('SELECT * FROM requests WHERE id=$1 FOR UPDATE', [requestId]);
+      const request = rows[0];
+      if (!request) throw new RequestLifecycleError('Request not found', 'REQUEST_NOT_FOUND', 404);
+      if (expectedStatus && request.status !== expectedStatus) throw new RequestLifecycleError('Request was changed by another operation', 'STALE_TRANSITION');
+      await requestPolicy.assertCanTransition({ actor, request, permission: 'requests.reclassify' });
+      const allowed = new Set(['Draft', 'Submitted', 'Pending', 'Returned']);
+      if (!allowed.has(request.status)) throw new RequestLifecycleError(`Reclassification is blocked after procurement begins (current status: ${request.status})`, 'RECLASSIFICATION_BLOCKED');
+      if (request.status === 'Submitted') return { request, before: request.status, after: request.status, changed: false };
+      const updated = await client.query("UPDATE requests SET status='Submitted',updated_at=NOW() WHERE id=$1 AND status=$2 RETURNING *", [request.id, request.status]);
+      if (updated.rowCount !== 1) throw new RequestLifecycleError('Concurrent request transition detected', 'CONCURRENT_TRANSITION');
+      return { request: updated.rows[0], before: request.status, after: 'Submitted', changed: true };
+    }, { client: suppliedClient });
+  }
+  return { transition, resetForReclassification };
 }
 
 module.exports = { createRequestLifecycleService, RequestLifecycleError, ...createRequestLifecycleService() };

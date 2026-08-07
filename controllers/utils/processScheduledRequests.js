@@ -34,6 +34,7 @@ const processScheduledRequests = async () => {
                 FROM approvals
                WHERE request_id = $1
                  AND status = 'Pending'
+                 AND COALESCE(is_superseded, FALSE) = FALSE
             )`,
         [requestId],
       );

@@ -41,7 +41,7 @@ function createRequestLifecycleService(dependencies = {}) {
       const request = rows[0];
       if (!request) throw new RequestLifecycleError('Request not found', 'REQUEST_NOT_FOUND', 404);
       if (expectedStatus && request.status !== expectedStatus) throw new RequestLifecycleError('Request was changed by another operation', 'STALE_TRANSITION');
-      await requestPolicy.assertCanTransition({ actor, request, permission: 'requests.reclassify' });
+      await requestPolicy.assertCanTransition({ actor, request, permission: 'requests.reclassify', requireExplicitPermission: true });
       const allowed = new Set(['Draft', 'Submitted', 'Pending', 'Returned']);
       if (!allowed.has(request.status)) throw new RequestLifecycleError(`Reclassification is blocked after procurement begins (current status: ${request.status})`, 'RECLASSIFICATION_BLOCKED');
       if (request.status === 'Submitted') return { request, before: request.status, after: request.status, changed: false };

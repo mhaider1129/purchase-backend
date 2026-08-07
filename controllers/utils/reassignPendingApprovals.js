@@ -18,6 +18,7 @@ const reassignPendingApprovals = async () => {
         JOIN users u ON a.approver_id = u.id
         WHERE u.is_active = false
           AND a.status = 'Pending'
+          AND COALESCE(a.is_superseded, FALSE) = FALSE
           AND a.is_active = true
       `);
 
@@ -38,14 +39,14 @@ const reassignPendingApprovals = async () => {
           await client.query(
             `UPDATE approvals 
              SET approver_id = $1 
-             WHERE id = $2`,
+             WHERE id = $2 AND COALESCE(is_superseded, FALSE) = FALSE`,
             [newApproverId, approval_id]
           );
 
           await client.query(
             `UPDATE approvals
              SET is_active = true
-             WHERE request_id = $1 AND approval_level = $2`,
+             WHERE request_id = $1 AND approval_level = $2 AND COALESCE(is_superseded, FALSE) = FALSE`,
             [request_id, approval_level + 1]
           );
 
@@ -66,14 +67,14 @@ const reassignPendingApprovals = async () => {
           await client.query(
             `UPDATE approvals
              SET status = 'Approved', approved_at = CURRENT_TIMESTAMP, is_active = false
-             WHERE id = $1`,
+             WHERE id = $1 AND COALESCE(is_superseded, FALSE) = FALSE`,
             [approval_id]
           );
 
           await client.query(
             `UPDATE approvals
              SET is_active = true
-             WHERE request_id = $1 AND approval_level = $2 AND is_active = false`,
+             WHERE request_id = $1 AND approval_level = $2 AND is_active = false AND COALESCE(is_superseded, FALSE) = FALSE`,
             [request_id, approval_level + 1]
           );
 

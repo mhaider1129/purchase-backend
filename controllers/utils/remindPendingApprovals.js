@@ -13,6 +13,7 @@ const remindPendingApprovals = async () => {
       JOIN users u ON a.approver_id = u.id
       JOIN requests r ON a.request_id = r.id
       WHERE a.status = 'Pending'
+        AND COALESCE(a.is_superseded, FALSE) = FALSE
         AND a.is_active = true
         AND COALESCE(a.reminder_sent_at, r.created_at) <= NOW() - INTERVAL '72 hours'
         AND u.email IS NOT NULL

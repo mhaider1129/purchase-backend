@@ -32,7 +32,7 @@ const initializeApprovals = async (request_id, externalClient = null) => {
 
     if (!routeDefinitions.length) {
       const existing = await client.query(
-        `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = 1 LIMIT 1`,
+        `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = 1 AND COALESCE(is_superseded, FALSE) = FALSE LIMIT 1`,
         [request_id],
       );
 
@@ -59,7 +59,7 @@ const initializeApprovals = async (request_id, externalClient = null) => {
 
       for (const route of routeDefinitions) {
         const existing = await client.query(
-          `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
+          `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 AND COALESCE(is_superseded, FALSE) = FALSE LIMIT 1`,
           [request_id, route.approval_level],
         );
         if (existing.rowCount > 0) {
@@ -113,6 +113,7 @@ const initializeApprovals = async (request_id, externalClient = null) => {
               FROM approvals
              WHERE request_id = $1
                AND status = 'Pending'
+               AND COALESCE(is_superseded, FALSE) = FALSE
           )`,
       [request_id],
     );

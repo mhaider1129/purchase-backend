@@ -17,6 +17,7 @@ const { syncPermissionCatalog } = require('./utils/permissionService');
 const { syncUiAccessResources } = require('./utils/uiAccessService');
 const { syncCapabilityPolicies } = require('./utils/capabilityPolicyService');
 const processScheduledRequests = require('./controllers/utils/processScheduledRequests');
+const { processBatch: processNotificationOutbox } = require('./services/notificationOutboxProcessor');
 const { loadEnvironmentConfig } = require('./config/environment');
 const { writeAuditTrail } = require('./middleware/writeAuditTrail');
 const { getRequestBodyLimit } = require('./config/uploadLimits');
@@ -465,6 +466,7 @@ const startServer = (port = process.env.PORT || 5000, host = process.env.HOST ||
       await remindPendingApprovals();
       await remindPendingReceipts();
       await processScheduledRequests();
+      await processNotificationOutbox();
       setInterval(() => {
         processScheduledRequests().catch(err =>
           log('error', 'scheduled_request_processor_failed', { error: err.message })
@@ -476,6 +478,11 @@ const startServer = (port = process.env.PORT || 5000, host = process.env.HOST ||
           log('error', 'receipt_reminder_job_failed', { error: err.message })
         );
       }, 24 * 60 * 60 * 1000); // daily
+      setInterval(() => {
+        processNotificationOutbox().catch(err =>
+          log('error', 'notification_outbox_processor_failed', { error: err.message })
+        );
+      }, 60 * 1000);
     } catch (err) {
       log('error', 'startup_reassignment_failed', { error: err.message });
     }

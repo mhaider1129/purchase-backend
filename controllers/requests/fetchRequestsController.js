@@ -1200,13 +1200,17 @@ const getHodApprovers = async (req, res, next) => {
          u.id,
          u.name,
          u.email,
+         u.role,
          u.department_id,
          d.name AS department_name
        FROM users u
        LEFT JOIN departments d ON d.id = u.department_id
-       WHERE LOWER(u.role) = 'hod'
+       WHERE LOWER(u.role) IN ('hod', 'coo', 'scm')
          AND u.is_active = true
-       ORDER BY d.name NULLS LAST, u.name`,
+       ORDER BY
+         CASE LOWER(u.role) WHEN 'coo' THEN 1 WHEN 'scm' THEN 2 ELSE 3 END,
+         d.name NULLS LAST,
+         u.name`,
     );
 
     res.json(rows);

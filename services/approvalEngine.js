@@ -18,7 +18,7 @@ function createApprovalEngine(dependencies = {}) {
       const result = await client.query(
         `UPDATE approvals SET is_active=FALSE,is_superseded=TRUE,superseded_at=NOW(),
            superseded_by_user_id=$2,superseded_reason=$3
-         WHERE request_id=$1 AND is_superseded=FALSE RETURNING *`,
+         WHERE request_id=$1 AND COALESCE(is_superseded,FALSE)=FALSE RETURNING *`,
         [requestId, actor?.id || null, reason]);
       return { approvals: result.rows, replacementSnapshotId };
     }, { client: suppliedClient });
@@ -52,13 +52,13 @@ function createApprovalEngine(dependencies = {}) {
   }
 
   async function activateNext(client, requestId) {
-    const existing = await client.query("SELECT * FROM approvals WHERE request_id=$1 AND is_active=TRUE AND status='Pending' FOR UPDATE", [requestId]);
+    const existing = await client.query("SELECT * FROM approvals WHERE request_id=$1 AND is_active=TRUE AND status='Pending' AND COALESCE(is_superseded,FALSE)=FALSE FOR UPDATE", [requestId]);
     if (existing.rowCount > 1) throw new ApprovalEngineError('Multiple active approvals detected', 'DUPLICATE_ACTIVE_APPROVAL');
     if (existing.rowCount === 1) return existing.rows[0];
-    const next = await client.query("SELECT * FROM approvals WHERE request_id=$1 AND status='Pending' ORDER BY approval_level,id LIMIT 1 FOR UPDATE", [requestId]);
+    const next = await client.query("SELECT * FROM approvals WHERE request_id=$1 AND status='Pending' AND COALESCE(is_superseded,FALSE)=FALSE ORDER BY approval_level,id LIMIT 1 FOR UPDATE", [requestId]);
     if (!next.rows[0]) return null;
     if (!next.rows[0].approver_id) throw new ApprovalEngineError('The next approval has no assigned approver', 'MISSING_NEXT_APPROVER');
-    const activated = await client.query("UPDATE approvals SET is_active=TRUE WHERE id=$1 AND status='Pending' AND is_active=FALSE RETURNING *", [next.rows[0].id]);
+    const activated = await client.query("UPDATE approvals SET is_active=TRUE WHERE id=$1 AND status='Pending' AND is_active=FALSE AND COALESCE(is_superseded,FALSE)=FALSE RETURNING *", [next.rows[0].id]);
     if (activated.rowCount !== 1) throw new ApprovalEngineError('Approval activation conflict', 'ACTIVATION_CONFLICT');
     return activated.rows[0];
   }
@@ -71,6 +71,7 @@ function createApprovalEngine(dependencies = {}) {
       const approvalResult = await client.query('SELECT * FROM approvals WHERE id=$1 FOR UPDATE', [input.approvalId]);
       const approval = approvalResult.rows[0];
       if (!approval) throw new ApprovalEngineError('Approval not found', 'APPROVAL_NOT_FOUND', 404);
+      if (approval.is_superseded === true) throw new ApprovalEngineError('Superseded approvals cannot be decided', 'APPROVAL_SUPERSEDED');
       const requestResult = await client.query('SELECT * FROM requests WHERE id=$1 FOR UPDATE', [approval.request_id]);
       const request = requestResult.rows[0];
       if (!request) throw new ApprovalEngineError('Request not found', 'REQUEST_NOT_FOUND', 404);
@@ -81,7 +82,7 @@ function createApprovalEngine(dependencies = {}) {
             approved_at=CASE WHEN $1='Approved' THEN NOW() ELSE NULL END,
             decided_at=NOW(), rejected_at=CASE WHEN $1='Rejected' THEN NOW() ELSE NULL END,
             is_active=FALSE
-         WHERE id=$3 AND status='Pending' AND is_active=TRUE RETURNING *`, [input.decision, input.reason, approval.id]);
+         WHERE id=$3 AND status='Pending' AND is_active=TRUE AND COALESCE(is_superseded,FALSE)=FALSE RETURNING *`, [input.decision, input.reason, approval.id]);
       if (updated.rowCount !== 1) throw new ApprovalEngineError('Concurrent approval decision detected', 'CONCURRENT_DECISION');
       const correlationId = input.correlationId || input.idempotencyKey || null;
       await audit({ entityType: 'approval', entityId: approval.id, action: `approval.${input.decision.toLowerCase()}`, actorUserId: input.actor?.id, instituteId: request.institute_id, requestId: request.id, correlationId, beforeData: { status: approval.status, isActive: approval.is_active }, afterData: { status: input.decision, isActive: false }, reason: input.reason, metadata: { approvalStepId: approval.id, routeSnapshotId: approval.route_snapshot_id }, client });
@@ -91,7 +92,7 @@ function createApprovalEngine(dependencies = {}) {
         if (next) await notificationForActive(client, next, correlationId);
         else requestTransition = await lifecycle.transition({ requestId: request.id, toStatus: 'Approved', expectedStatus: request.status, actor: input.actor, permission: 'approvals.decide', correlationId, idempotencyKey: input.idempotencyKey, metadata: { approvalStepId: approval.id, routeSnapshotId: approval.route_snapshot_id } }, client);
       } else {
-        await client.query("UPDATE approvals SET is_active=FALSE WHERE request_id=$1 AND status='Pending'", [request.id]);
+        await client.query("UPDATE approvals SET is_active=FALSE WHERE request_id=$1 AND status='Pending' AND COALESCE(is_superseded,FALSE)=FALSE", [request.id]);
         requestTransition = await lifecycle.transition({ requestId: request.id, toStatus: input.decision, expectedStatus: request.status, actor: input.actor, permission: 'approvals.decide', reason: input.reason, correlationId, idempotencyKey: input.idempotencyKey, metadata: { approvalStepId: approval.id, routeSnapshotId: approval.route_snapshot_id } }, client);
       }
       await notify(client, { type: 'approval.decided', entityType: 'approval', entityId: approval.id, userId: request.requester_id, correlationId, idempotencyKey: `approval:${approval.id}:decision:${input.decision}:${input.idempotencyKey || updated.rows[0].decided_at || 'decided'}`, payload: { requestId: request.id, decision: input.decision, reason: input.reason } });
@@ -104,7 +105,9 @@ function createApprovalEngine(dependencies = {}) {
     return withTransaction(async client => {
       const { rows } = await client.query("SELECT * FROM approvals WHERE id=$1 FOR UPDATE", [approvalId]); const before = rows[0];
       if (!before || before.status !== 'Pending') throw new ApprovalEngineError('Only pending approvals can be reassigned', 'APPROVAL_NOT_PENDING');
-      const { rows: afterRows } = await client.query("UPDATE approvals SET approver_id=$1 WHERE id=$2 AND status='Pending' RETURNING *", [newApproverId, approvalId]);
+      if (before.is_superseded === true) throw new ApprovalEngineError('Superseded approvals cannot be reassigned', 'APPROVAL_SUPERSEDED');
+      const { rows: afterRows } = await client.query("UPDATE approvals SET approver_id=$1 WHERE id=$2 AND status='Pending' AND COALESCE(is_superseded,FALSE)=FALSE RETURNING *", [newApproverId, approvalId]);
+      if (!afterRows[0]) throw new ApprovalEngineError('Concurrent approval reassignment detected', 'CONCURRENT_REASSIGNMENT');
       await audit({ entityType: 'approval', entityId: approvalId, action: 'approval.reassigned', actorUserId: actor?.id, requestId: before.request_id, correlationId, beforeData: { approverId: before.approver_id }, afterData: { approverId: newApproverId }, reason, client });
       if (afterRows[0].is_active) await notificationForActive(client, afterRows[0], correlationId);
       return afterRows[0];

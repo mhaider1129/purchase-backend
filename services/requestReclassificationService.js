@@ -18,7 +18,7 @@ async function reclassifyRequest(command, suppliedClient = null) {
     const locked = await client.query('SELECT * FROM requests WHERE id=$1 FOR UPDATE', [requestId]);
     const before = locked.rows[0];
     if (!before) throw failure(404, 'Request not found', 'REQUEST_NOT_FOUND');
-    await requestPolicy.assertCanTransition({ actor, request: before, permission: 'requests.reclassify' });
+    await requestPolicy.assertCanTransition({ actor, request: before, permission: 'requests.reclassify', requireExplicitPermission: true });
     if (before.request_type === targetRequestType) throw failure(400, 'The request already has this type', 'SAME_REQUEST_TYPE');
     const domain = await resolveRouteDomain({ client, departmentId: before.department_id, explicitDomain: before.request_domain, requestType: targetRequestType });
     const configured = await fetchApprovalRoutes({ client, requestType: targetRequestType, departmentType: domain, amount: before.estimated_cost || 0 });

@@ -3,6 +3,9 @@ const approvalPolicy = require('../policies/approvalPolicy');
 const auditService = require('../services/auditService');
 const { enqueueNotification, keyFor } = require('../services/notificationOutboxService');
 const errorHandler = require('../middleware/errorHandler');
+const fs = require('fs');
+const path = require('path');
+const { createApprovalEngine } = require('../services/approvalEngine');
 
 describe('Phase 2 foundation corrections', () => {
   const request = { id: 3, requester_id: 2, institute_id: 1, department_id: 2, section_id: 3, warehouse_id: 4 };
@@ -13,6 +16,60 @@ describe('Phase 2 foundation corrections', () => {
   test('explicit cross-scope permissions permit an exception', async () => {
     const actor = { id: 2, permissions: ['requests.manage', 'requests.cross-institute', 'requests.cross-department', 'requests.cross-section'] };
     await expect(requestPolicy.assertCanTransition({ actor, request })).resolves.toBe(true);
+  });
+  test('an unscoped resource section does not restrict access', async () => {
+    const actor = { id: 2, institute_id: 1, department_id: 2, section_id: null, permissions: ['requests.manage'] };
+    await expect(requestPolicy.assertCanTransition({ actor, request: { ...request, section_id: null } })).resolves.toBe(true);
+  });
+  test('a missing actor section fails closed for a scoped resource', async () => {
+    const actor = { id: 2, institute_id: 1, department_id: 2, section_id: null, permissions: ['requests.manage'] };
+    await expect(requestPolicy.assertCanTransition({ actor, request })).rejects.toMatchObject({ code: 'SECTION_SCOPE_DENIED' });
+  });
+  test('strict permission prevents requester ownership from authorizing reclassification', async () => {
+    const actor = { id: request.requester_id, institute_id: 1, department_id: 2, section_id: 3, permissions: [] };
+    await expect(requestPolicy.assertCanTransition({ actor, request, permission: 'requests.reclassify', requireExplicitPermission: true })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  });
+  test('reclassification permission authorizes an in-scope user', async () => {
+    const actor = { id: 8, institute_id: 1, department_id: 2, section_id: 3, permissions: ['requests.reclassify'] };
+    await expect(requestPolicy.assertCanTransition({ actor, request, permission: 'requests.reclassify', requireExplicitPermission: true })).resolves.toBe(true);
+  });
+  test('reclassification still requires cross-institute permission', async () => {
+    const actor = { id: 8, institute_id: 99, department_id: 2, section_id: 3, permissions: ['requests.reclassify'] };
+    await expect(requestPolicy.assertCanTransition({ actor, request, permission: 'requests.reclassify', requireExplicitPermission: true })).rejects.toMatchObject({ code: 'INSTITUTE_SCOPE_DENIED' });
+  });
+  test('corrected request reclassification service imports', () => {
+    expect(require('../services/requestReclassificationService').reclassifyRequest).toEqual(expect.any(Function));
+  });
+  test('manual SQL documents and enforces the partial current-approval invariant', () => {
+    const sql = fs.readFileSync(path.join(__dirname, '../sql/manual/003_request_reclassification_and_uom.sql'), 'utf8');
+    expect(sql).toContain('uq_approvals_one_active_current_pending');
+    expect(sql).toMatch(/WHERE is_active = TRUE[\s\S]*status = 'Pending'[\s\S]*COALESCE\(is_superseded, FALSE\) = FALSE/);
+    expect(sql).not.toMatch(/SET approval_route_version = 1/);
+    expect(sql).not.toMatch(/approval_route_version SET NOT NULL/);
+    expect(sql).toMatch(/WHERE approval_route_version IS NOT NULL[\s\S]*GROUP BY request_id, approval_route_version, approval_level/);
+    expect(sql).toMatch(/ROW_NUMBER\(\) OVER[\s\S]*PARTITION BY request_id[\s\S]*actionable_rank > 1/);
+    expect(sql).not.toContain('Multiple active current Pending approvals exist; resolve them manually');
+  });
+  test('activateNext skips superseded pending approvals', async () => {
+    const query = jest.fn()
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 12, approver_id: 4 }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 12, is_active: true }] });
+    await expect(createApprovalEngine().activateNext({ query }, 3)).resolves.toMatchObject({ id: 12 });
+    query.mock.calls.forEach(([sql]) => expect(sql).toContain('COALESCE(is_superseded,FALSE)=FALSE'));
+  });
+  test('superseded approvals cannot be decided', async () => {
+    const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ id: 5, request_id: 3, status: 'Pending', is_active: true, is_superseded: true }] }) };
+    await expect(createApprovalEngine().decide({ approvalId: 5, decision: 'Approved', actor: { id: 8 } }, client)).rejects.toMatchObject({ code: 'APPROVAL_SUPERSEDED' });
+  });
+  test('superseded approvals cannot be reassigned', async () => {
+    const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ id: 5, status: 'Pending', is_superseded: true }] }) };
+    await expect(createApprovalEngine().reassign({ approvalId: 5, newApproverId: 9, actor: { id: 8 }, reason: 'coverage' }, client)).rejects.toMatchObject({ code: 'APPROVAL_SUPERSEDED' });
+  });
+  test('approval history intentionally has no superseded filter', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../controllers/approvalsController.js'), 'utf8');
+    const historyQuery = source.match(/FROM approvals a[\s\S]*?WHERE a\.request_id = \$1[\s\S]*?ORDER BY a\.approval_level ASC/);
+    expect(historyQuery?.[0]).not.toContain('is_superseded');
   });
   test('missing warehouse scope fails closed for approvals', async () => {
     const actor = { id: 9, institute_id: 1, department_id: 2, section_id: 3 };

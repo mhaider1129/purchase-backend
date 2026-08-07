@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 
-class ApprovalRouteError extends Error { constructor(message, code, details = null) { super(message); this.name = 'ApprovalRouteError'; this.code = code; this.details = details; } }
+class ApprovalRouteError extends Error { constructor(message, code, details = null, statusCode = 400) { super(message); this.name = 'ApprovalRouteError'; this.code = code; this.details = details; this.statusCode = statusCode; } }
 const stable = value => {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`;

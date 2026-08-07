@@ -5,7 +5,7 @@ const auditService = require('./auditService');
 const outbox = require('./notificationOutboxService');
 const lifecycleDefault = require('./requestLifecycleService');
 
-class ApprovalEngineError extends Error { constructor(message, code, status = 409) { super(message); this.name = 'ApprovalEngineError'; this.code = code; this.status = status; } }
+class ApprovalEngineError extends Error { constructor(message, code, statusCode = 409) { super(message); this.name = 'ApprovalEngineError'; this.code = code; this.statusCode = statusCode; } }
 
 function createApprovalEngine(dependencies = {}) {
   const policy = dependencies.policy || approvalPolicy.assertCanDecide;
@@ -29,7 +29,7 @@ function createApprovalEngine(dependencies = {}) {
       for (const step of routeSnapshot.steps) {
         const result = await client.query(
           `INSERT INTO approvals (request_id,approver_id,approval_level,status,is_active,route_snapshot_id)
-           VALUES ($1,$2,$3,'Pending',FALSE,$4) ON CONFLICT DO NOTHING RETURNING *`,
+           VALUES ($1,$2,$3,'Pending',FALSE,$4) ON CONFLICT (request_id,route_snapshot_id,approval_level) DO NOTHING RETURNING *`,
           [requestId, step.approverId, step.level, routeSnapshot.snapshotId]);
         if (result.rows[0]) created.push(result.rows[0]);
       }
@@ -66,7 +66,10 @@ function createApprovalEngine(dependencies = {}) {
       if (approval.status !== 'Pending' || !approval.is_active) throw new ApprovalEngineError('Approval is inactive or already decided', 'APPROVAL_NOT_ACTIVE');
       await policy({ actor: input.actor, request, approval, allowSelfApproval: input.allowSelfApproval });
       const updated = await client.query(
-        `UPDATE approvals SET status=$1,comments=$2,approved_at=NOW(),is_active=FALSE
+        `UPDATE approvals SET status=$1,comments=$2,
+            approved_at=CASE WHEN $1='Approved' THEN NOW() ELSE NULL END,
+            decided_at=NOW(), rejected_at=CASE WHEN $1='Rejected' THEN NOW() ELSE NULL END,
+            is_active=FALSE
          WHERE id=$3 AND status='Pending' AND is_active=TRUE RETURNING *`, [input.decision, input.reason, approval.id]);
       if (updated.rowCount !== 1) throw new ApprovalEngineError('Concurrent approval decision detected', 'CONCURRENT_DECISION');
       const correlationId = input.correlationId || input.idempotencyKey || null;
@@ -80,7 +83,7 @@ function createApprovalEngine(dependencies = {}) {
         await client.query("UPDATE approvals SET is_active=FALSE WHERE request_id=$1 AND status='Pending'", [request.id]);
         requestTransition = await lifecycle.transition({ requestId: request.id, toStatus: input.decision, expectedStatus: request.status, actor: input.actor, permission: 'approvals.decide', reason: input.reason, correlationId, idempotencyKey: input.idempotencyKey, metadata: { approvalStepId: approval.id, routeSnapshotId: approval.route_snapshot_id } }, client);
       }
-      await notify(client, { type: 'approval.decided', entityType: 'approval', entityId: approval.id, userId: request.requester_id, correlationId, idempotencyKey: input.idempotencyKey && `${input.idempotencyKey}:notification`, payload: { requestId: request.id, decision: input.decision, reason: input.reason } });
+      await notify(client, { type: 'approval.decided', entityType: 'approval', entityId: approval.id, userId: request.requester_id, correlationId, idempotencyKey: `approval:${approval.id}:decision:${input.decision}:${input.idempotencyKey || updated.rows[0].decided_at || 'decided'}`, payload: { requestId: request.id, decision: input.decision, reason: input.reason } });
       return { approval: updated.rows[0], nextApproval: next, requestTransition };
     }, { client: suppliedClient });
   }

@@ -37,6 +37,7 @@ const {
   reportReceiptIssue,
   updateRequestCost,
   updateRequestBeforeApproval,
+  rewireRequestType,
   deleteRequestCompletely,
   getClosedRequests,
   getAuditApprovedRejectedRequests,
@@ -80,6 +81,7 @@ router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.patch('/:id/report-receipt-issue', authenticateUser, reportReceiptIssue);
 router.put('/:id/cost', authenticateUser, updateRequestCost);
 router.put('/:id/edit', upload.any(), updateRequestBeforeApproval);
+router.put('/:id/request-type', rewireRequestType);
 router.post('/:requestId/items/:itemId/procurement-events', addProcurementItemEvent);
 router.get('/:requestId/items/:itemId/procurement-events', getProcurementItemEvents);
 router.delete('/:id/hard-delete', deleteRequestCompletely);

@@ -154,6 +154,9 @@ CREATE TABLE public.approvals (
   reminder_sent_at timestamp with time zone,
   updated_at timestamp with time zone DEFAULT now(),
   route_snapshot_id text,
+  route_snapshot jsonb,
+  decided_at timestamp with time zone,
+  rejected_at timestamp with time zone,
   CONSTRAINT approvals_pkey PRIMARY KEY (id),
   CONSTRAINT approvals_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT approvals_approver_id_fkey FOREIGN KEY (approver_id) REFERENCES public.users(id)
@@ -549,8 +552,10 @@ CREATE TABLE public.notifications (
   metadata jsonb,
   is_read boolean DEFAULT false,
   created_at timestamp with time zone DEFAULT now(),
+  outbox_event_id bigint,
   CONSTRAINT notifications_pkey PRIMARY KEY (id),
-  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT notifications_outbox_event_id_fkey FOREIGN KEY (outbox_event_id) REFERENCES public.notification_outbox(id)
 );
 CREATE TABLE public.ui_resource_permissions (
   resource_key text NOT NULL,
@@ -725,7 +730,7 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  supplier_type text NOT NULL DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
+  supplier_type text DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
   tax_number text,
   bank_info jsonb,
   currency text,

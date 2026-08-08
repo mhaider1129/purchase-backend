@@ -47,4 +47,4 @@ Historical consumers should expose `is_superseded`, `superseded_at`, `superseded
 
 ## Invariant documented by migration 003
 
-Migration 003 creates a unique route-step index on `(request_id, approval_route_version, approval_level)` and a partial unique index allowing only one active, non-superseded `Pending` approval per request. This database invariant complements, rather than replaces, the query filters.
+Migration 003 creates the versioned member identity `(request_id, approval_route_version, approval_level, approver_id)`. It deliberately has no one-active-approval-per-request or version/level-only unique invariant because both would prohibit parallel groups.

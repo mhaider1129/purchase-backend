@@ -596,6 +596,7 @@ const getWorkloadAnalysis = async (req, res) => {
           JOIN requests r ON a.request_id = r.id
           LEFT JOIN departments d ON r.department_id = d.id
           WHERE a.is_active = TRUE
+            AND COALESCE(a.is_superseded, FALSE) = FALSE
             AND a.status = ANY($1)
           GROUP BY a.approver_id, approver_name, role, department
           ORDER BY pending_count DESC, urgent_count DESC
@@ -609,6 +610,7 @@ const getWorkloadAnalysis = async (req, res) => {
           FROM approvals a
           JOIN requests r ON a.request_id = r.id
           WHERE a.is_active = TRUE
+            AND COALESCE(a.is_superseded, FALSE) = FALSE
             AND a.status = ANY($1)
           GROUP BY a.approval_level
           ORDER BY a.approval_level
@@ -623,6 +625,7 @@ const getWorkloadAnalysis = async (req, res) => {
           JOIN requests r ON a.request_id = r.id
           LEFT JOIN departments d ON r.department_id = d.id
           WHERE a.is_active = TRUE
+            AND COALESCE(a.is_superseded, FALSE) = FALSE
             AND a.status = ANY($1)
           GROUP BY department
           ORDER BY pending_count DESC

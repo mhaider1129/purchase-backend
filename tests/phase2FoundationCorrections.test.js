@@ -40,23 +40,22 @@ describe('Phase 2 foundation corrections', () => {
   test('corrected request reclassification service imports', () => {
     expect(require('../services/requestReclassificationService').reclassifyRequest).toEqual(expect.any(Function));
   });
-  test('manual SQL documents and enforces the partial current-approval invariant', () => {
+  test('manual SQL enforces versioned approval-member identity without forbidding parallel active members', () => {
     const sql = fs.readFileSync(path.join(__dirname, '../sql/manual/003_request_reclassification_and_uom.sql'), 'utf8');
-    expect(sql).toContain('uq_approvals_one_active_current_pending');
-    expect(sql).toMatch(/WHERE is_active = TRUE[\s\S]*status = 'Pending'[\s\S]*COALESCE\(is_superseded, FALSE\) = FALSE/);
+    expect(sql).not.toContain('uq_approvals_one_active_current_pending');
     expect(sql).not.toMatch(/SET approval_route_version = 1/);
     expect(sql).not.toMatch(/approval_route_version SET NOT NULL/);
-    expect(sql).toMatch(/WHERE approval_route_version IS NOT NULL[\s\S]*GROUP BY request_id, approval_route_version, approval_level/);
-    expect(sql).toMatch(/ROW_NUMBER\(\) OVER[\s\S]*PARTITION BY request_id[\s\S]*actionable_rank > 1/);
-    expect(sql).not.toContain('Multiple active current Pending approvals exist; resolve them manually');
+    expect(sql).toMatch(/GROUP BY request_id, approval_route_version, approval_level, approver_id/);
+    expect(sql).toMatch(/ON public\.approvals \(request_id, approval_route_version, approval_level, approver_id\)/);
   });
-  test('activateNext skips superseded pending approvals', async () => {
-    const query = jest.fn()
-      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 12, approver_id: 4 }] })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 12, is_active: true }] });
-    await expect(createApprovalEngine().activateNext({ query }, 3)).resolves.toMatchObject({ id: 12 });
-    query.mock.calls.forEach(([sql]) => expect(sql).toContain('COALESCE(is_superseded,FALSE)=FALSE'));
+  test('activateNext activates the entire first current level', async () => {
+    const repository = {
+      getCurrentLevel: jest.fn().mockResolvedValue(2),
+      activateLevel: jest.fn().mockResolvedValue([{ id: 12, approver_id: 4, approval_route_version: 3 }, { id: 13, approver_id: 5, approval_route_version: 3 }]),
+    };
+    const notify = jest.fn();
+    await expect(createApprovalEngine({ repository, notify }).activateNext({}, 3, { approvalRouteVersion: 3 })).resolves.toHaveLength(2);
+    expect(notify).toHaveBeenCalledTimes(2);
   });
   test('superseded approvals cannot be decided', async () => {
     const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ id: 5, request_id: 3, status: 'Pending', is_active: true, is_superseded: true }] }) };

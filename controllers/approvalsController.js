@@ -1699,6 +1699,7 @@ const notifyCurrentApprovalByEmail = async (req, res, next) => {
         WHERE a.request_id = $1
           AND a.status IN ('Pending', 'On Hold')
           AND a.is_active = TRUE
+          AND COALESCE(a.is_superseded, FALSE) = FALSE
         ORDER BY a.approval_level ASC, a.id ASC
         LIMIT 1
         FOR UPDATE OF a`,

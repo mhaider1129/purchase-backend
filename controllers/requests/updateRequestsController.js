@@ -199,7 +199,8 @@ const updateApprovalStatus = async (req, res, next) => {
 
     const approvalRes = await client.query(
       `SELECT id, request_id, approval_level FROM approvals
-       WHERE id = $1 AND approver_id = $2 AND is_active = true`,
+       WHERE id = $1 AND approver_id = $2 AND is_active = true
+         AND COALESCE(is_superseded, FALSE) = FALSE`,
       [approval_id, approver_id],
     );
 
@@ -416,6 +417,7 @@ const updateApprovalStatus = async (req, res, next) => {
             WHERE a.request_id = $1
               AND a.status = 'Pending'
               AND a.is_active = true
+              AND COALESCE(a.is_superseded, FALSE) = FALSE
             ORDER BY a.approval_level ASC, a.id ASC`,
           [request_id],
         );

@@ -17,7 +17,8 @@ ALTER TABLE public.approvals
 -- Deliberately leave pre-migration rows NULL (legacy/unversioned). A request can
 -- legitimately contain more than one historical approval at the same level.
 -- Backfilling every legacy row to version 1 would collide with an existing
--- (request_id, approval_route_version, approval_level) unique constraint, for
+-- (request_id, approval_route_version, approval_level, approver_id) unique
+-- constraint, for
 -- example when request 17 has two old level-3 rows. Canonical Phase 2 inserts
 -- always supply a non-NULL version; legacy writers that omit it remain usable.
 -- LOCK RISK: normalize a partially attempted earlier 003 that may have made the
@@ -40,31 +41,6 @@ BEGIN
   END IF;
 END $$;
 
--- Preserve legacy rows while normalizing the actionable flag. Older workflows
--- sometimes left several non-superseded Pending rows active for one request.
--- Keep exactly one deterministic row active: prefer the newest explicit route
--- version, then the earliest workflow level and row id. All other rows remain
--- Pending and visible in history; only their is_active flag becomes FALSE.
--- LOCK RISK: updates conflicting approval rows and takes row-level locks.
-WITH ranked_active AS (
-  SELECT id,
-         ROW_NUMBER() OVER (
-           PARTITION BY request_id
-           ORDER BY approval_route_version DESC NULLS LAST,
-                    approval_level ASC NULLS LAST,
-                    id ASC
-         ) AS actionable_rank
-    FROM public.approvals
-   WHERE is_active = TRUE
-     AND status = 'Pending'
-     AND COALESCE(is_superseded, FALSE) = FALSE
-)
-UPDATE public.approvals AS approval
-   SET is_active = FALSE
-  FROM ranked_active
- WHERE approval.id = ranked_active.id
-   AND ranked_active.actionable_rank > 1;
-
 -- Fail clearly before unique index creation only for conflicts that cannot be
 -- normalized without inventing versioned route identity.
 DO $$
@@ -72,7 +48,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM public.approvals
      WHERE approval_route_version IS NOT NULL
-     GROUP BY request_id, approval_route_version, approval_level
+     GROUP BY request_id, approval_route_version, approval_level, approver_id
     HAVING COUNT(*) > 1
   ) THEN
     RAISE EXCEPTION 'Duplicate versioned approval route steps exist; resolve them manually before migration 003';
@@ -81,15 +57,7 @@ END $$;
 
 -- LOCK RISK: index builds can block writes; use a quiet maintenance window.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_approvals_route_step
-  ON public.approvals (request_id, approval_route_version, approval_level);
-
--- Enforces the application's one-actionable-step invariant while allowing
--- superseded historical rows to remain visible.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_approvals_one_active_current_pending
-  ON public.approvals (request_id)
-  WHERE is_active = TRUE
-    AND status = 'Pending'
-    AND COALESCE(is_superseded, FALSE) = FALSE;
+  ON public.approvals (request_id, approval_route_version, approval_level, approver_id);
 
 CREATE INDEX IF NOT EXISTS idx_approvals_request_id
   ON public.approvals (request_id);
@@ -112,16 +80,17 @@ SELECT column_name, data_type, is_nullable, column_default
 SELECT indexname, indexdef
   FROM pg_indexes
  WHERE schemaname = 'public' AND tablename = 'approvals'
-   AND indexname IN ('uq_approvals_route_step',
-     'uq_approvals_one_active_current_pending', 'idx_approvals_request_id',
+   AND indexname IN ('uq_approvals_route_step', 'idx_approvals_request_id',
      'idx_approvals_is_superseded', 'idx_approvals_route_snapshot_id')
  ORDER BY indexname;
 
-SELECT request_id, COUNT(*) AS active_current_pending_count
+SELECT request_id, approval_route_version, approval_level,
+       COUNT(*) AS active_current_pending_count
   FROM public.approvals
  WHERE is_active = TRUE AND status = 'Pending'
    AND COALESCE(is_superseded, FALSE) = FALSE
- GROUP BY request_id HAVING COUNT(*) > 1;
+ GROUP BY request_id, approval_route_version, approval_level
+ ORDER BY request_id, approval_route_version, approval_level;
 
 -- Legacy duplicate levels are expected to remain unversioned. This query is
 -- informational and does not indicate migration failure.

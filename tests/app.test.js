@@ -96,19 +96,19 @@ describe('Express app', () => {
     );
   });
 
-  it('exposes auth routes under the api prefix', async () => {
+  it('exposes auth routes only under the api prefix', async () => {
     const rootResponse = await makeRequest(baseUrl, '/auth/login', { method: 'POST' });
     const apiResponse = await makeRequest(baseUrl, '/api/auth/login', { method: 'POST' });
     const doubleApiResponse = await makeRequest(baseUrl, '/api/api/auth/login', { method: 'POST' });
 
-    expect(apiResponse.status).toBe(rootResponse.status);
-    expect(apiResponse.body.message).toBe(rootResponse.body.message);
-    expect(doubleApiResponse.status).toBe(rootResponse.status);
-    expect(doubleApiResponse.body.message).toBe(rootResponse.body.message);
+    expect(apiResponse.status).toBe(400);
+    expect(apiResponse.body.message).toBe('Login identifier and password are required');
+    expect(rootResponse.status).toBe(404);
+    expect(doubleApiResponse.status).toBe(404);
   });
 
-  it('supports root aliases for protected routes when proxies strip the api prefix', async () => {
-    const rootAliasPaths = [
+  it('mounts protected routes under a single api prefix', async () => {
+    const protectedPaths = [
       '/files',
       '/requests',
       '/requested-items',
@@ -150,16 +150,22 @@ describe('Express app', () => {
       '/procure-to-pay',
       '/audit-registry',
       '/tasks',
-      ['/api/audit-registry/my-requests', '/audit-registry/my-requests'],
+      '/budget-control',
+      '/request-auto-assignment-rules',
+      '/department-requested-items',
+      '/procurement-evaluations',
+      '/print-service-requests',
     ];
 
-    for (const rootAliasPath of rootAliasPaths) {
-      const apiResponse = await makeRequest(baseUrl, `/api${rootAliasPath}`);
-      const aliasResponse = await makeRequest(baseUrl, rootAliasPath);
+    for (const protectedPath of protectedPaths) {
+      const apiResponse = await makeRequest(baseUrl, `/api${protectedPath}`);
+      const rootResponse = await makeRequest(baseUrl, protectedPath);
+      const doubleApiResponse = await makeRequest(baseUrl, `/api/api${protectedPath}`);
 
-      expect(aliasResponse.status).toBe(apiResponse.status);
-      expect(aliasResponse.body.message).toBe(apiResponse.body.message);
-      expect(aliasResponse.body.requestId).toEqual(expect.any(String));
+      expect(apiResponse.status).toBe(401);
+      expect(apiResponse.body.message).toBe('Unauthorized: Missing or malformed token');
+      expect(rootResponse.status).toBe(404);
+      expect(doubleApiResponse.status).toBe(404);
     }
   });
 
@@ -175,14 +181,14 @@ describe('Express app', () => {
     );
   });
 
-  it('normalizes double-api prefix in URL', async () => {
+  it('does not normalize a double-api prefix', async () => {
     const fileId = '123-abc';
 
     const normalResponse = await makeRequest(baseUrl, `/api/files/${fileId}`);
     const aliasedResponse = await makeRequest(baseUrl, `/api/api/files/${fileId}`);
 
-    expect(aliasedResponse.status).toBe(normalResponse.status);
-    expect(aliasedResponse.body.message).toBe(normalResponse.body.message);
-    expect(aliasedResponse.body.requestId).toEqual(expect.any(String));
+    expect(normalResponse.status).toBe(401);
+    expect(aliasedResponse.status).toBe(404);
+    expect(aliasedResponse.body.message).toContain('Route not found');
   });
 });

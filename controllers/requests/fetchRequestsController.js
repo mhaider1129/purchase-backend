@@ -795,6 +795,9 @@ const getAllRequests = async (req, res, next) => {
         case 'submitted':
           whereClauses.push(`COALESCE(NULLIF(TRIM(r.status), ''), 'Submitted') = 'Submitted'`);
           break;
+        case 'available in stock':
+          whereClauses.push(`LOWER(TRIM(r.status)) = 'available in stock'`);
+          break;
         default:
           params.push(normalizedCurrentStep);
           whereClauses.push(`${activeApprovalExists} AND step_user.role = $${params.length})`);

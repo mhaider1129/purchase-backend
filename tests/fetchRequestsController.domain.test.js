@@ -16,7 +16,7 @@ const buildRes = () => {
   return res;
 };
 
-describe('fetchRequestsController.getAllRequests domain filter', () => {
+describe('fetchRequestsController.getAllRequests filters', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     pool.query
@@ -56,6 +56,22 @@ describe('fetchRequestsController.getAllRequests domain filter', () => {
     await getAllRequests(req, res);
 
     expect(pool.query.mock.calls[0][0]).not.toContain('LOWER(TRIM(r.request_domain))');
+    expect(pool.query.mock.calls[0][1]).toEqual([10, 0]);
+  });
+
+  it('filters the current step by the terminal Available in Stock status', async () => {
+    const req = {
+      query: { current_step: 'Available in Stock' },
+      user: { institute_id: null },
+    };
+    const res = buildRes();
+
+    await getAllRequests(req, res);
+
+    expect(pool.query.mock.calls[0][0]).toContain(
+      "LOWER(TRIM(r.status)) = 'available in stock'",
+    );
+    expect(pool.query.mock.calls[0][0]).not.toContain('step_user.role =');
     expect(pool.query.mock.calls[0][1]).toEqual([10, 0]);
   });
 });

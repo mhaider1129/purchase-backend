@@ -6,6 +6,10 @@
 BEGIN;
 
 -- LOCK RISK: each ALTER TABLE takes an ACCESS EXCLUSIVE lock briefly.
+ALTER TABLE public.requests
+  ADD COLUMN IF NOT EXISTS approval_route_snapshot JSONB,
+  ADD COLUMN IF NOT EXISTS approval_route_snapshot_id TEXT;
+
 ALTER TABLE public.approvals
   ADD COLUMN IF NOT EXISTS is_superseded BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ,
@@ -28,7 +32,7 @@ ALTER TABLE public.approvals
   ALTER COLUMN approval_route_version DROP NOT NULL;
 
 -- Add the audit actor relationship only when it is absent.
-DO $$
+DO LANGUAGE plpgsql $migration$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -39,11 +43,12 @@ BEGIN
       ADD CONSTRAINT approvals_superseded_by_user_id_fkey
       FOREIGN KEY (superseded_by_user_id) REFERENCES public.users(id);
   END IF;
-END $$;
+END
+$migration$;
 
 -- Fail clearly before unique index creation only for conflicts that cannot be
 -- normalized without inventing versioned route identity.
-DO $$
+DO LANGUAGE plpgsql $migration$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM public.approvals
@@ -53,7 +58,8 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Duplicate versioned approval route steps exist; resolve them manually before migration 003';
   END IF;
-END $$;
+END
+$migration$;
 
 -- LOCK RISK: index builds can block writes; use a quiet maintenance window.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_approvals_route_step
@@ -69,6 +75,12 @@ CREATE INDEX IF NOT EXISTS idx_approvals_route_snapshot_id
 COMMIT;
 
 -- Read-only post-migration validation queries (retain the results).
+SELECT column_name, data_type, is_nullable, column_default
+  FROM information_schema.columns
+ WHERE table_schema = 'public' AND table_name = 'requests'
+   AND column_name IN ('approval_route_snapshot', 'approval_route_snapshot_id')
+ ORDER BY column_name;
+
 SELECT column_name, data_type, is_nullable, column_default
   FROM information_schema.columns
  WHERE table_schema = 'public' AND table_name = 'approvals'

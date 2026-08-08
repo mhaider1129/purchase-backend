@@ -47,6 +47,8 @@ describe('Phase 2 foundation corrections', () => {
     expect(sql).not.toMatch(/approval_route_version SET NOT NULL/);
     expect(sql).toMatch(/GROUP BY request_id, approval_route_version, approval_level, approver_id/);
     expect(sql).toMatch(/ON public\.approvals \(request_id, approval_route_version, approval_level, approver_id\)/);
+    expect(sql).toMatch(/ALTER TABLE public\.requests\s+ADD COLUMN IF NOT EXISTS approval_route_snapshot JSONB,\s+ADD COLUMN IF NOT EXISTS approval_route_snapshot_id TEXT/);
+    expect(sql).toMatch(/table_name = 'requests'[\s\S]*column_name IN \('approval_route_snapshot', 'approval_route_snapshot_id'\)/);
   });
   test('activateNext activates the entire first current level', async () => {
     const repository = {

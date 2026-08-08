@@ -55,305 +55,51 @@ const insertInventoryTransaction = async (client, payload) => {
 };
 
 const issueWarehouseStock = async (req, res, next) => {
-  const {
-    stock_item_id: rawStockItemId,
-    quantity: rawQuantity,
-    department_id: rawDepartmentId,
-    section_id: rawSectionId,
-    warehouse_id,
-    notes,
-    items: rawItems,
-  } = req.body || {};
-
-  if (!req.user?.hasPermission('warehouse.manage-supply')) {
-    return next(createHttpError(403, 'You do not have permission to issue warehouse stock'));
-  }
-
-  const departmentId = Number(rawDepartmentId);
-  if (!Number.isInteger(departmentId)) {
-    return next(createHttpError(400, 'A valid department_id is required'));
-  }
-
-  const hasSectionId = rawSectionId !== undefined && rawSectionId !== null && rawSectionId !== '';
-  const sectionId = hasSectionId ? Number(rawSectionId) : null;
-  if (hasSectionId && !Number.isInteger(sectionId)) {
-    return next(createHttpError(400, 'A valid section_id is required'));
-  }
-
-  const rawIssueItems = Array.isArray(rawItems) && rawItems.length > 0
-    ? rawItems
-    : [
-        {
-          stock_item_id: rawStockItemId,
-          quantity: rawQuantity,
-          notes,
-        },
-      ];
-
-    const normalizedItems = [];
-  for (let i = 0; i < rawIssueItems.length; i += 1) {
-    const entry = rawIssueItems[i] || {};
-    const stockItemId = Number(entry.stock_item_id ?? entry.stockItemId);
-    const quantity = parseQuantity(entry.quantity);
-
-    if (!Number.isInteger(stockItemId) || !Number.isFinite(quantity) || quantity <= 0) {
-      return next(
-        createHttpError(400, `A valid stock_item_id and positive quantity are required for item #${i + 1}`),
-      );
-    }
-
-    normalizedItems.push({
-      stockItemId,
-      quantity,
-      notes: entry.notes ?? notes ?? null,
-      pickingStrategy: String(entry.picking_strategy || req.body?.picking_strategy || 'fefo').toLowerCase(),
-    });
-  }
-
-  if (normalizedItems.length === 0) {
-    return next(createHttpError(400, 'At least one stock item is required to issue inventory'));
-  }
-
-  await ensureWarehouseAssignments();
-
-  const fallbackWarehouseId = req.user?.warehouse_id;
-  const providedWarehouseId =
-    warehouse_id === undefined || warehouse_id === null || warehouse_id === ''
-      ? null
-      : Number(warehouse_id);
-  const warehouseId = providedWarehouseId ?? fallbackWarehouseId;
-
-  if (!Number.isInteger(warehouseId)) {
-    return next(createHttpError(400, 'A valid warehouse must be specified'));
-  }
-
-  await ensureWarehouseInventoryTables();
-
+  const { stock_item_id, quantity, department_id, section_id, warehouse_id, notes, items } = req.body || {};
+  if (!req.user?.hasPermission('warehouse.manage-supply')) return next(createHttpError(403, 'You do not have permission to issue warehouse stock'));
+  const departmentId = Number(department_id);
+  const sectionId = section_id == null || section_id === '' ? null : Number(section_id);
+  const warehouseId = Number(warehouse_id || req.user?.warehouse_id);
+  if (!Number.isInteger(departmentId)) return next(createHttpError(400, 'A valid department_id is required'));
+  if (sectionId !== null && !Number.isInteger(sectionId)) return next(createHttpError(400, 'A valid section_id is required'));
+  if (!Number.isInteger(warehouseId)) return next(createHttpError(400, 'A valid warehouse must be specified'));
+  const inputItems = Array.isArray(items) && items.length ? items : [{ stock_item_id, quantity, notes }];
+  const normalized = inputItems.map((line, index) => {
+    const itemId = Number(line?.stock_item_id ?? line?.stockItemId);
+    const itemQuantity = parseQuantity(line?.quantity);
+    if (!Number.isInteger(itemId) || !(itemQuantity > 0)) throw createHttpError(400, `A valid stock_item_id and positive quantity are required for item #${index + 1}`);
+    return { itemId, quantity: itemQuantity, notes: line?.notes ?? notes ?? null };
+  });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    const departmentRes = await client.query(
-      'SELECT id FROM departments WHERE id = $1',
-      [departmentId],
-    );
-
-    if (departmentRes.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Department not found'));
-    }
-
+    const scope = await client.query('SELECT id, institute_id FROM warehouses WHERE id = $1 AND is_active = true', [warehouseId]);
+    if (!scope.rowCount) throw createHttpError(404, 'Warehouse not found');
+    const department = await client.query('SELECT id FROM departments WHERE id = $1', [departmentId]);
+    if (!department.rowCount) throw createHttpError(404, 'Department not found');
     if (sectionId !== null) {
-      const sectionRes = await client.query(
-        'SELECT id FROM sections WHERE id = $1 AND department_id = $2',
-        [sectionId, departmentId],
-      );
-
-      if (sectionRes.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(400, 'Section does not belong to the selected department'));
-      }
+      const section = await client.query('SELECT id FROM sections WHERE id = $1 AND department_id = $2', [sectionId, departmentId]);
+      if (!section.rowCount) throw createHttpError(400, 'Section does not belong to the selected department');
     }
-
-    const balances = [];
-
-    for (let i = 0; i < normalizedItems.length; i += 1) {
-      const { stockItemId, quantity, notes: itemNotes } = normalizedItems[i];
-
-      const stockItemRes = await client.query(
-        'SELECT id, name FROM stock_items WHERE id = $1',
-        [stockItemId],
-      );
-
-      if (stockItemRes.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(404, `Stock item not found for entry #${i + 1}`));
-      }
-
-      const itemName = stockItemRes.rows[0].name;
-
-      const strategy = ['fefo', 'fifo'].includes(normalizedItems[i].pickingStrategy)
-        ? normalizedItems[i].pickingStrategy
-        : 'fefo';
-
-      const balanceRes = await client.query(
-        `SELECT id, batch_id, lot_number, expiry_date, serial_number, quantity
-           FROM warehouse_stock_levels
-          WHERE warehouse_id = $1 AND stock_item_id = $2 AND quantity > 0
-          ORDER BY
-            CASE
-              WHEN $3 = 'fefo' THEN COALESCE(expiry_date, DATE '9999-12-31')
-              ELSE DATE '9999-12-31'
-            END ASC,
-            COALESCE(updated_at, CURRENT_TIMESTAMP) ASC,
-            id ASC
-          FOR UPDATE`,
-        [warehouseId, stockItemId, strategy],
-      );
-
-      if (balanceRes.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return next(
-          createHttpError(
-            400,
-            `Warehouse inventory for ${itemName} is not initialized. Please add stock before issuing items.`,
-          ),
-        );
-      }
-
-      const currentQty = balanceRes.rows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
-      if (currentQty < quantity) {
-        await client.query('ROLLBACK');
-        return next(
-          createHttpError(
-            400,
-            `Insufficient stock for ${itemName}. Available: ${currentQty}, requested: ${quantity}`,
-          ),
-        );
-      }
-      let remainingToIssue = quantity;
-      for (const batchRow of balanceRes.rows) {
-        if (remainingToIssue <= 0) break;
-        const availableInRow = Number(batchRow.quantity) || 0;
-        if (availableInRow <= 0) continue;
-        const consumed = Math.min(remainingToIssue, availableInRow);
-
-        await client.query(
-          `UPDATE warehouse_stock_levels
-              SET quantity = quantity - $2,
-                  updated_at = CURRENT_TIMESTAMP,
-                  updated_by = $3
-            WHERE id = $1`,
-          [batchRow.id, consumed, req.user.id],
-        );
-
-        const departmentLevelRes = await client.query(
-          `SELECT id, quantity
-             FROM department_stock_levels
-            WHERE department_id = $1
-              AND section_id IS NOT DISTINCT FROM $2
-              AND stock_item_id = $3
-              AND warehouse_batch_id IS NOT DISTINCT FROM $4
-              AND lot_number IS NOT DISTINCT FROM $5
-              AND expiry_date IS NOT DISTINCT FROM $6
-              AND serial_number IS NOT DISTINCT FROM $7
-            FOR UPDATE`,
-          [departmentId, sectionId, stockItemId, batchRow.batch_id, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number],
-        );
-
-        let departmentStockLevelId;
-        if (departmentLevelRes.rowCount > 0) {
-          departmentStockLevelId = departmentLevelRes.rows[0].id;
-          await client.query(
-            `UPDATE department_stock_levels
-                SET quantity = quantity + $2,
-                    updated_by = $3,
-                    updated_at = CURRENT_TIMESTAMP
-              WHERE id = $1`,
-            [departmentStockLevelId, consumed, req.user.id],
-          );
-        } else {
-          const insertDeptLevelRes = await client.query(
-            `INSERT INTO department_stock_levels (
-              department_id,
-              section_id,
-              warehouse_batch_id,
-              stock_item_id,
-              lot_number,
-              expiry_date,
-              serial_number,
-              quantity,
-              updated_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            RETURNING id`,
-            [departmentId, sectionId, batchRow.batch_id, stockItemId, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, consumed, req.user.id],
-          );
-          departmentStockLevelId = insertDeptLevelRes.rows[0].id;
-        }
-
-        const departmentMovementRes = await client.query(
-          `INSERT INTO department_stock_movements (
-            department_stock_level_id,
-            direction,
-            quantity,
-            source_warehouse_id,
-            source_batch_id,
-            lot_number,
-            expiry_date,
-            serial_number,
-            notes,
-            created_by
-          ) VALUES ($1, 'in', $2, $3, $4, $5, $6, $7, $8, $9)
-          RETURNING id`,
-          [departmentStockLevelId, consumed, warehouseId, batchRow.batch_id, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, itemNotes || null, req.user.id],
-        );
-
-        const warehouseMovementRes = await client.query(
-          `INSERT INTO warehouse_stock_movements (
-              warehouse_id,
-              stock_item_id,
-              batch_id,
-              item_name,
-              lot_number,
-              expiry_date,
-              serial_number,
-              direction,
-              quantity,
-              to_department_id,
-              to_section_id,
-              created_by,
-              notes
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'out', $8, $9, $10, $11, $12)
-            RETURNING id`,
-          [warehouseId, stockItemId, batchRow.batch_id, itemName, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, consumed, departmentId, sectionId, req.user.id, itemNotes || null],
-        );
-
-        await insertInventoryTransaction(client, {
-          transactionType: 'issue',
-          sourceLocation: `warehouse:${warehouseId}`,
-          destinationLocation: sectionId ? `department:${departmentId}:section:${sectionId}` : `department:${departmentId}`,
-          warehouseId,
-          departmentId,
-          sectionId,
-          batchId: batchRow.batch_id,
-          stockItemId,
-          quantity: consumed,
-          referenceDocument: 'warehouse_issue',
-          warehouseStockMovementId: warehouseMovementRes.rows[0].id,
-          departmentStockMovementId: departmentMovementRes.rows[0].id,
-          notes: itemNotes || null,
-          createdBy: req.user.id,
-        });
-
-        remainingToIssue -= consumed;
-      }
-
-      const updatedBalanceRes = await client.query(
-        `SELECT id, warehouse_id, stock_item_id, item_name, quantity, updated_at
-           FROM warehouse_stock_levels
-          WHERE warehouse_id = $1 AND stock_item_id = $2
-          ORDER BY quantity DESC, id ASC`,
-        [warehouseId, stockItemId],
-      );
-
-      await recalculateAvailableQuantity(client, stockItemId);
-
-      balances.push(updatedBalanceRes.rows[0]);
-    }
-
+    const { postMovements } = require('../services/inventoryPostingService');
+    const requestKey = req.get?.('Idempotency-Key') || req.body?.idempotency_key || `warehouse-issue:${req.user.id}:${Date.now()}`;
+    const commands = normalized.map((line, index) => ({
+      movementType: 'ISSUE', inventoryItemId: line.itemId, instituteId: scope.rows[0].institute_id,
+      warehouseId, quantity: line.quantity, stockStatus: 'AVAILABLE', sourceDocumentType: 'warehouse_issue',
+      sourceDocumentId: req.body?.reference_request_id || requestKey, sourceDocumentLineId: index + 1,
+      departmentId, destinationLocation: sectionId ? `department:${departmentId}:section:${sectionId}` : `department:${departmentId}`,
+      reason: line.notes, actor: req.user, idempotencyKey: `${requestKey}:line:${index + 1}`,
+      correlationId: req.correlationId || requestKey, metadata: { departmentId, sectionId },
+    }));
+    const results = await postMovements(commands, client);
     await client.query('COMMIT');
-
-    res.status(200).json({
-      message: 'Stock issued to department',
-      balances,
-    });
-  } catch (err) {
+    return res.status(200).json({ message: 'Stock issued to department', balances: results.map((result) => result.balances?.[0]).filter(Boolean) });
+  } catch (error) {
     await client.query('ROLLBACK');
-    console.error('❌ Failed to issue warehouse stock:', err.message);
-    next(createHttpError(500, 'Failed to issue warehouse stock'));
-  } finally {
-    client.release();
-  }
+    if (error.statusCode) return next(error);
+    console.error('❌ Failed to issue warehouse stock:', error.message);
+    return next(createHttpError(500, 'Failed to issue warehouse stock'));
+  } finally { client.release(); }
 };
 
 const addWarehouseStock = async (req, res, next) => {

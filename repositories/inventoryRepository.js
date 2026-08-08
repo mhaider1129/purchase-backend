@@ -50,5 +50,115 @@ class InventoryRepository {
       (entity_type,entity_id,action,actor_id,reason,new_values) VALUES ('stock_item',$1,$2,$3,$4,$5)`,
     [stockItemId, action, actorId, reason, values]);
   }
+
+  async validateWarehouse(warehouseId, instituteId) {
+    const result = await this.client.query(
+      'SELECT id, institute_id, name FROM warehouses WHERE id = $1 AND institute_id = $2 AND is_active = true',
+      [warehouseId, instituteId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async validateInventoryItem(stockItemId) {
+    const result = await this.client.query(
+      `SELECT si.id, si.name, si.unit, si.inventory_uom_id, si.generic_item_id,
+              iu.name AS inventory_uom
+         FROM stock_items si
+         LEFT JOIN item_uom iu ON iu.id = si.inventory_uom_id
+        WHERE si.id = $1`,
+      [stockItemId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async findMovementByIdempotencyKey(idempotencyKey) {
+    const result = await this.client.query(
+      'SELECT * FROM inventory_transactions WHERE idempotency_key = $1',
+      [idempotencyKey],
+    );
+    return result.rows[0] || null;
+  }
+
+  async lockPostingKeys(command) {
+    // Transaction-scoped advisory locks also serialize a missing balance row and concurrent retries.
+    await this.client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended($1, 0)),
+              pg_advisory_xact_lock(hashtextextended($2, 0))`,
+      [command.idempotencyKey, `${command.instituteId}:${command.warehouseId}:${command.inventoryItemId}:${command.stockStatus}:${command.batchNumber || ''}:${command.lotNumber || ''}:${command.serialNumber || ''}`],
+    );
+  }
+
+  async lockInventoryBalances({ warehouseId, stockItemId, stockStatus, batchNumber, lotNumber, serialNumber }) {
+    const result = await this.client.query(
+      `SELECT * FROM warehouse_stock_levels
+        WHERE warehouse_id = $1 AND stock_item_id = $2
+          AND stock_status = $3
+          AND ($4::text IS NULL OR batch_number = $4)
+          AND ($5::text IS NULL OR lot_number = $5)
+          AND ($6::text IS NULL OR serial_number = $6)
+        ORDER BY COALESCE(expiry_date, DATE '9999-12-31'), id FOR UPDATE`,
+      [warehouseId, stockItemId, stockStatus, batchNumber, lotNumber, serialNumber],
+    );
+    return result.rows;
+  }
+
+  async createInventoryBalance(command, itemName) {
+    const result = await this.client.query(
+      `INSERT INTO warehouse_stock_levels
+        (warehouse_id, stock_item_id, item_name, quantity, updated_by, stock_status,
+         batch_number, lot_number, serial_number, expiry_date)
+       VALUES ($1,$2,$3,0,$4,$5,$6,$7,$8,$9)
+       RETURNING *`,
+      [command.warehouseId, command.inventoryItemId, itemName, command.actor.id, command.stockStatus,
+        command.batchNumber || null, command.lotNumber || null, command.serialNumber || null, command.expiryDate || null],
+    );
+    return result.rows[0];
+  }
+
+  async updateInventoryBalance(balanceId, delta, actorId) {
+    const result = await this.client.query(
+      `UPDATE warehouse_stock_levels SET quantity = quantity + $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND quantity + $2 >= 0 RETURNING *`,
+      [balanceId, delta, actorId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async insertInventoryMovement(command, signedQuantity, item) {
+    const result = await this.client.query(
+      `INSERT INTO inventory_transactions
+        (transaction_type, movement_type, source_location, destination_location, warehouse_id,
+         department_id, stock_item_id, quantity, base_uom, source_quantity, source_uom,
+         conversion_factor, batch_number, lot_number, serial_number, expiry_date, stock_status,
+         source_document_type, source_document_id, source_document_line_id, reference_document,
+         notes, created_by, institute_id, idempotency_key, correlation_id, metadata,
+         reversal_of_movement_id, command_fingerprint)
+       VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$17,$20,$21,$22,$23,$24,$25::jsonb,$26,$27)
+       RETURNING *`,
+      [command.movementType, `warehouse:${command.warehouseId}`, command.destinationLocation || null,
+        command.warehouseId, command.departmentId || null, command.inventoryItemId, signedQuantity,
+        command.baseUom || item.inventory_uom || item.unit, command.sourceQuantity || command.quantity,
+        command.sourceUom || command.baseUom || item.inventory_uom || item.unit, command.conversionFactor || 1,
+        command.batchNumber || null, command.lotNumber || null, command.serialNumber || null,
+        command.expiryDate || null, command.stockStatus, command.sourceDocumentType,
+        String(command.sourceDocumentId), command.sourceDocumentLineId == null ? null : String(command.sourceDocumentLineId),
+        command.reason || null, command.actor.id, command.instituteId, command.idempotencyKey,
+        command.correlationId || null, JSON.stringify(command.metadata || {}), command.reversalOfMovementId || null,
+        command.commandFingerprint],
+    );
+    return result.rows[0];
+  }
+
+  async lockMovementForReversal(movementId) {
+    const result = await this.client.query('SELECT * FROM inventory_transactions WHERE id = $1 FOR UPDATE', [movementId]);
+    return result.rows[0] || null;
+  }
+
+  async markMovementReversed(originalId, reversalId) {
+    await this.client.query(
+      'UPDATE inventory_transactions SET reversed_by_movement_id = $2 WHERE id = $1 AND reversed_by_movement_id IS NULL',
+      [originalId, reversalId],
+    );
+  }
 }
 module.exports = InventoryRepository;

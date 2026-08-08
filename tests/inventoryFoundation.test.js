@@ -1,0 +1,21 @@
+'use strict';
+const { INVENTORY_MOVEMENT_TYPES, REVERSAL_TYPES } = require('../domain/inventoryMovementTypes');
+const { validateInventoryMovement } = require('../validators/inventoryMovementValidator');
+const { buildReceiptCommand } = require('../services/goodsReceiptInventoryAdapter');
+const { fingerprint } = require('../services/inventoryPostingService');
+const fs = require('fs');
+const path = require('path');
+const command = (o={}) => ({ movementType:'ISSUE',inventoryItemId:11,instituteId:2,warehouseId:3,quantity:4,stockStatus:'AVAILABLE',sourceDocumentType:'warehouse_issue',sourceDocumentId:'abc',actor:{id:7},idempotencyKey:'issue:abc:1',...o });
+describe('inventory foundation',()=>{
+ test('directions and reversals are canonical',()=>{expect(INVENTORY_MOVEMENT_TYPES.GOODS_RECEIPT.direction).toBe('IN');expect(INVENTORY_MOVEMENT_TYPES.ISSUE.direction).toBe('OUT');expect(REVERSAL_TYPES.ISSUE).toBe('ISSUE_REVERSAL');});
+ test.each([0,-1,NaN])('rejects invalid quantity %p',q=>expect(()=>validateInventoryMovement(command({quantity:q}))).toThrow('positive'));
+ test('requires transfer destination',()=>expect(()=>validateInventoryMovement(command({movementType:'TRANSFER_DISPATCH'}))).toThrow('destinationWarehouseId'));
+ test('requires adjustment/reversal reason',()=>{expect(()=>validateInventoryMovement(command({movementType:'NEGATIVE_ADJUSTMENT'}))).toThrow('reason');expect(()=>validateInventoryMovement(command({movementType:'ISSUE_REVERSAL'}))).toThrow('reason');});
+ test('requires idempotency',()=>expect(()=>validateInventoryMovement(command({idempotencyKey:''}))).toThrow('idempotencyKey'));
+ test('fingerprint detects conflict',()=>{const c=validateInventoryMovement(command());expect(fingerprint(c)).toBe(fingerprint({...c}));expect(fingerprint(c)).not.toBe(fingerprint({...c,quantity:5}));});
+ test('partial receipt is linked and idempotent',()=>{const b=buildReceiptCommand({id:9,receipt_number:'GRN-9',purchase_order_id:4},{id:2,stock_item_id:11,received_quantity:10,damaged_quantity:2,short_quantity:1,unit:'piece'},{instituteId:1,warehouseId:3,actor:{id:7}});expect(b).toMatchObject({quantity:7,idempotencyKey:'goods-receipt:9:line:2:accepted:7',sourceDocumentId:9});});
+ test('rejected-only receipt is skipped',()=>expect(buildReceiptCommand({id:1},{id:1,received_quantity:2,rejected_quantity:2},{})).toBeNull());
+ test('quarantine is not available',()=>expect(buildReceiptCommand({id:1},{id:2,stock_item_id:4,accepted_quantity:1,quarantined:true},{instituteId:1,warehouseId:1,actor:{id:1}}).stockStatus).toBe('QUARANTINE'));
+ test('tracking identity is preserved',()=>expect(buildReceiptCommand({id:1},{id:2,stock_item_id:4,accepted_quantity:1,batch_number:'B1',serial_number:'S1',expiry_date:'2028-01-01'},{instituteId:1,warehouseId:1,actor:{id:1}})).toMatchObject({batchNumber:'B1',serialNumber:'S1',expiryDate:'2028-01-01'}));
+ test('manual migration releases locks between phases and supports transactional SQL clients',()=>{const sql=fs.readFileSync(path.join(__dirname,'../sql/manual/004_inventory_transaction_engine.sql'),'utf8');const begins=(sql.match(/^BEGIN;$/gm)||[]).length;const commits=(sql.match(/^COMMIT;$/gm)||[]).length;expect(begins).toBeGreaterThanOrEqual(7);expect(commits).toBe(begins);expect(sql).toContain('ACCESS EXCLUSIVE MODE NOWAIT');expect(sql).toContain('IN SHARE MODE NOWAIT');expect(sql).not.toContain('INDEX CONCURRENTLY');});
+});

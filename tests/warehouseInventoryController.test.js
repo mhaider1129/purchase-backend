@@ -18,6 +18,69 @@ describe('warehouseInventoryController', () => {
   });
 
   describe('issueWarehouseStock', () => {
+    const createIssueClient = ({ departmentId, warehouseId, inventory }) => {
+      let departmentStockLevelId = 100;
+      const remainingByItem = new Map(inventory.map(item => [item.stockItemId, item.quantity]));
+      const namesByItem = new Map(inventory.map(item => [item.stockItemId, item.name]));
+      const stockLevelIds = new Map(inventory.map(item => [item.stockItemId, item.stockLevelId]));
+
+      const client = { release: jest.fn() };
+      client.query = jest.fn(async (sql, params = []) => {
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+        if (sql.includes('SELECT id FROM departments')) {
+          return { rowCount: params[0] === departmentId ? 1 : 0, rows: [{ id: departmentId }] };
+        }
+        if (sql.includes('SELECT id, name FROM stock_items')) {
+          const name = namesByItem.get(params[0]);
+          return { rowCount: name ? 1 : 0, rows: name ? [{ id: params[0], name }] : [] };
+        }
+        if (sql.includes('FROM warehouse_stock_levels') && sql.includes('FOR UPDATE')) {
+          const stockItemId = params[1];
+          const quantity = remainingByItem.get(stockItemId);
+          return {
+            rowCount: quantity === undefined ? 0 : 1,
+            rows: quantity === undefined ? [] : [{
+              id: stockLevelIds.get(stockItemId), batch_id: null, lot_number: null,
+              expiry_date: null, serial_number: null, quantity,
+            }],
+          };
+        }
+        if (sql.includes('UPDATE warehouse_stock_levels')) {
+          const stockItemId = inventory.find(item => item.stockLevelId === params[0]).stockItemId;
+          remainingByItem.set(stockItemId, remainingByItem.get(stockItemId) - params[1]);
+          return { rowCount: 1, rows: [] };
+        }
+        if (sql.includes('FROM department_stock_levels')) return { rowCount: 0, rows: [] };
+        if (sql.includes('INSERT INTO department_stock_levels')) {
+          departmentStockLevelId += 1;
+          return { rowCount: 1, rows: [{ id: departmentStockLevelId }] };
+        }
+        if (sql.includes('INSERT INTO department_stock_movements')) {
+          expect(params[0]).toBe(departmentStockLevelId);
+          return { rowCount: 1, rows: [{ id: departmentStockLevelId + 100 }] };
+        }
+        if (sql.includes('INSERT INTO warehouse_stock_movements')) {
+          return { rowCount: 1, rows: [{ id: departmentStockLevelId + 200 }] };
+        }
+        if (sql.includes('INSERT INTO inventory_transactions')) return { rowCount: 1, rows: [] };
+        if (sql.includes('FROM warehouse_stock_levels') && sql.includes('ORDER BY quantity')) {
+          const stockItemId = params[1];
+          return { rows: [{
+            id: stockLevelIds.get(stockItemId), warehouse_id: warehouseId, stock_item_id: stockItemId,
+            item_name: namesByItem.get(stockItemId), quantity: remainingByItem.get(stockItemId),
+            updated_at: '2024-01-01T00:00:00.000Z',
+          }] };
+        }
+        if (sql.includes('SELECT COALESCE(SUM(quantity)')) {
+          return { rows: [{ total_quantity: remainingByItem.get(params[0]) }] };
+        }
+        // recalculateAvailableQuantity updates the stock item aggregate.
+        if (sql.includes('UPDATE stock_items')) return { rowCount: 1, rows: [] };
+        throw new Error(`Unexpected query in test: ${sql}`);
+      });
+      return client;
+    };
+
     it('rejects issuing stock without the correct permission', async () => {
       const req = {
         body: {},
@@ -32,15 +95,12 @@ describe('warehouseInventoryController', () => {
     });
 
     it('fails when stock is unavailable or insufficient', async () => {
-      const client = { query: jest.fn(), release: jest.fn() };
+      const client = createIssueClient({
+        departmentId: 5,
+        warehouseId: 4,
+        inventory: [{ stockItemId: 1, stockLevelId: 1, name: 'Gloves', quantity: 2 }],
+      });
       db.connect.mockResolvedValue(client);
-
-      client.query
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 5 }] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, name: 'Gloves' }] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ quantity: 2 }] })
-        .mockResolvedValueOnce({});
 
       const req = {
         body: { department_id: 5, items: [{ stock_item_id: 1, quantity: 5 }] },
@@ -59,29 +119,12 @@ describe('warehouseInventoryController', () => {
     });
 
     it('issues stock to a department and records the new balance', async () => {
-      const client = { query: jest.fn(), release: jest.fn() };
+      const client = createIssueClient({
+        departmentId: 2,
+        warehouseId: 1,
+        inventory: [{ stockItemId: 3, stockLevelId: 7, name: 'Masks', quantity: 10 }],
+      });
       db.connect.mockResolvedValue(client);
-
-      client.query
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 2 }] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 3, name: 'Masks' }] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 7, quantity: 10 }] })
-        .mockResolvedValueOnce({
-          rows: [
-            {
-              id: 7,
-              warehouse_id: 1,
-              stock_item_id: 3,
-              item_name: 'Masks',
-              quantity: 7,
-              updated_at: '2024-01-01T00:00:00.000Z',
-            },
-          ],
-        })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({});
 
       const req = {
         body: {
@@ -114,31 +157,15 @@ describe('warehouseInventoryController', () => {
     });
 
     it('issues multiple stock items in a single transaction', async () => {
-      const client = { query: jest.fn(), release: jest.fn() };
+      const client = createIssueClient({
+        departmentId: 4,
+        warehouseId: 2,
+        inventory: [
+          { stockItemId: 11, stockLevelId: 21, name: 'Gloves', quantity: 15 },
+          { stockItemId: 12, stockLevelId: 22, name: 'Masks', quantity: 8 },
+        ],
+      });
       db.connect.mockResolvedValue(client);
-
-      client.query
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 4 }] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 11, name: 'Gloves' }] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 21, quantity: 15 }] })
-        .mockResolvedValueOnce({
-          rows: [
-            { id: 21, warehouse_id: 2, stock_item_id: 11, item_name: 'Gloves', quantity: 10, updated_at: '2024-01-01' },
-          ],
-        })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 12, name: 'Masks' }] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 22, quantity: 8 }] })
-        .mockResolvedValueOnce({
-          rows: [
-            { id: 22, warehouse_id: 2, stock_item_id: 12, item_name: 'Masks', quantity: 5, updated_at: '2024-01-01' },
-          ],
-        })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({});
 
       const req = {
         body: {

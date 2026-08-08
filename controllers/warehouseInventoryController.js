@@ -268,6 +268,7 @@ const issueWarehouseStock = async (req, res, next) => {
             RETURNING id`,
             [departmentId, sectionId, batchRow.batch_id, stockItemId, batchRow.lot_number, batchRow.expiry_date, batchRow.serial_number, consumed, req.user.id],
           );
+          departmentStockLevelId = insertDeptLevelRes.rows[0].id;
         }
 
         const departmentMovementRes = await client.query(

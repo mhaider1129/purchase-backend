@@ -1,4 +1,5 @@
 const { validateAndSnapshotRoute, ApprovalRouteError } = require('../services/approvalRouteResolver');
+const { createApprovalEngine } = require('../services/approvalEngine');
 
 describe('approvalRouteResolver', () => {
   const contexts = [
@@ -26,4 +27,28 @@ describe('approvalRouteResolver', () => {
   });
   test('rejects an identical member twice within a level', () => expect(() => validateAndSnapshotRoute([{ approval_level: 1, role: 'HOD' }, { approval_level: 1, role: 'HOD' }], {})).toThrow(expect.objectContaining({ code: 'DUPLICATE_ROUTE_STEP' })));
   test('cost is captured in the immutable snapshot', () => expect(validateAndSnapshotRoute([{ approval_level: 1, role: 'CFO' }], { cost: 100000 }).context.cost).toBe(100000));
+  test('route version participates in snapshot identity', () => {
+    const route = [{ id: 9, approval_level: 1, role: 'HOD' }];
+    const version1 = validateAndSnapshotRoute(route, { requestType: 'Stock', approvalRouteVersion: 1 });
+    const version2 = validateAndSnapshotRoute(route, { requestType: 'Stock', approvalRouteVersion: 2 });
+    expect(version1.version).toBe(1);
+    expect(version2.version).toBe(2);
+    expect(version1.snapshotId).not.toBe(version2.snapshotId);
+    expect(validateAndSnapshotRoute(route, { requestType: 'Stock', approvalRouteVersion: version2.version }).snapshotId).toBe(version2.snapshotId);
+  });
+  test('createSteps stores a snapshot and matching snapshot id on the request', async () => {
+    const snapshot = validateAndSnapshotRoute([{ approval_level: 1, approver_id: 42 }], { approvalRouteVersion: 2 });
+    const query = jest.fn().mockResolvedValue({ rows: [{ id: 70 }], rowCount: 1 });
+    const repository = {
+      lockRequest: jest.fn().mockResolvedValue({ id: 17 }),
+      getCurrentLevel: jest.fn().mockResolvedValue(null),
+    };
+    await createApprovalEngine({ repository, audit: jest.fn(), notify: jest.fn() }).createSteps(
+      { requestId: 17, routeSnapshot: snapshot, actor: { id: 8 }, correlationId: 'route-v2' },
+      { query },
+    );
+    const storageCall = query.mock.calls.find(([sql]) => sql.includes('UPDATE requests SET approval_route_snapshot='));
+    expect(JSON.parse(storageCall[1][0])).toEqual(snapshot);
+    expect(storageCall[1][1]).toBe(snapshot.snapshotId);
+  });
 });

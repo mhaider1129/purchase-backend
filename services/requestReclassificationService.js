@@ -33,11 +33,11 @@ async function reclassifyRequest(command, suppliedClient = null) {
       }
       resolved.push({ ...step, approver_id: approverId });
     }
-    const baseSnapshot = await routeResolver.resolveApprovalRoute({ client, configuredRoute: resolved, requestType: targetRequestType,
-      classification: domain, departmentId: before.department_id, sectionId: before.section_id, instituteId: before.institute_id,
-      cost: before.estimated_cost, requesterId: before.requester_id });
     const versionResult = await client.query('SELECT COALESCE(MAX(approval_route_version),0)+1 AS version FROM approvals WHERE request_id=$1', [requestId]);
-    const snapshot = { ...baseSnapshot, version: Number(versionResult.rows[0].version) };
+    const approvalRouteVersion = Number(versionResult.rows[0].version);
+    const snapshot = await routeResolver.resolveApprovalRoute({ client, configuredRoute: resolved, requestType: targetRequestType,
+      classification: domain, departmentId: before.department_id, sectionId: before.section_id, instituteId: before.institute_id,
+      cost: before.estimated_cost, requesterId: before.requester_id, approvalRouteVersion });
     const reset = await lifecycle.resetForReclassification({ requestId, actor, expectedStatus: before.status }, client);
     await approvalEngine.supersedeWorkflow({ requestId, actor, reason, replacementSnapshotId: snapshot.snapshotId }, client);
     await client.query('UPDATE requests SET request_type=$1,request_domain=$2,updated_at=NOW() WHERE id=$3', [targetRequestType, domain, requestId]);

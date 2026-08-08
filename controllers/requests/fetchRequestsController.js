@@ -519,7 +519,7 @@ const getMyRequests = async (req, res, next) => {
         ) AS items
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
-       LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true
+       LEFT JOIN approvals ap ON r.id = ap.request_id AND ap.is_active = true AND COALESCE(ap.is_superseded, FALSE) = FALSE
        LEFT JOIN users au ON ap.approver_id = au.id
        ${whereClause}
        ORDER BY r.created_at DESC`,
@@ -767,7 +767,8 @@ const getAllRequests = async (req, res, next) => {
         FROM approvals step_ap
         JOIN users step_user ON step_user.id = step_ap.approver_id
         WHERE step_ap.request_id = r.id
-          AND step_ap.is_active = true`;
+          AND step_ap.is_active = true
+          AND COALESCE(step_ap.is_superseded, FALSE) = FALSE`;
       switch (normalizedCurrentStepLower) {
         case 'rejected':
           whereClauses.push(`LOWER(TRIM(r.status)) = 'rejected'`);
@@ -788,6 +789,7 @@ const getAllRequests = async (req, res, next) => {
           whereClauses.push(`LOWER(TRIM(r.status)) = 'approved' AND NOT EXISTS (
             SELECT 1 FROM approvals approved_ap
             WHERE approved_ap.request_id = r.id AND approved_ap.is_active = true
+              AND COALESCE(approved_ap.is_superseded, FALSE) = FALSE
           )`);
           break;
         case 'submitted':
@@ -921,6 +923,7 @@ const getAllRequests = async (req, res, next) => {
         FROM approvals active_ap
         WHERE active_ap.request_id = r.id
           AND active_ap.is_active = true
+          AND COALESCE(active_ap.is_superseded, FALSE) = FALSE
         ORDER BY active_ap.approval_level DESC NULLS LAST, active_ap.id DESC
         LIMIT 1
       ) ap ON TRUE
@@ -1176,6 +1179,7 @@ const getPendingApprovals = async (req, res, next) => {
        JOIN approvals a ON r.id = a.request_id
        WHERE a.approver_id = $1
          AND a.is_active = true
+         AND COALESCE(a.is_superseded, FALSE) = FALSE
          AND a.status IN ('Pending', 'On Hold')
          ORDER BY r.created_at DESC`,
       [req.user.id],
@@ -1303,6 +1307,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
            WHERE ap.request_id = r.id
              AND ap.status = 'Pending'
              AND ap.is_active = true
+             AND COALESCE(ap.is_superseded, FALSE) = FALSE
            ORDER BY ap.approval_level ASC
            LIMIT 1
          ) AS current_pending_approver_name,
@@ -1313,6 +1318,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
            WHERE ap.request_id = r.id
              AND ap.status = 'Pending'
              AND ap.is_active = true
+             AND COALESCE(ap.is_superseded, FALSE) = FALSE
            ORDER BY ap.approval_level ASC
            LIMIT 1
          ) AS current_pending_approver_role,
@@ -1478,6 +1484,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          AND a.approver_id = $1
          AND a.status = 'Pending'
          AND a.is_active = true
+         AND COALESCE(a.is_superseded, FALSE) = FALSE
        GROUP BY a.id, r.id, r.temporary_requester_name, u.name, d.name, s.name, p.name,
          budget_snapshot.budget_envelope_id,
          budget_snapshot.allocated_amount,

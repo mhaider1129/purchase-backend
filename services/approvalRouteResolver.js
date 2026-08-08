@@ -16,14 +16,20 @@ function validateAndSnapshotRoute(route, context = {}) {
     if (!Number.isInteger(level) || level <= 0) throw new ApprovalRouteError('Route contains an invalid level', 'INVALID_ROUTE', { index });
     if (!approverId && !role) throw new ApprovalRouteError('Route step has no approver or role', 'MISSING_APPROVER', { level });
     return Object.freeze({ level, type: approverId ? 'user' : 'role', approverId: approverId || null, role, routeRuleId: raw.id || null, warehouseId: raw.warehouse_id || context.warehouseId || null });
-  }).sort((a, b) => a.level - b.level);
+  }).sort((a, b) => a.level - b.level || (a.routeRuleId || 0) - (b.routeRuleId || 0));
   const seen = new Set();
   for (const step of steps) {
     const key = `${step.level}:${step.type}:${step.approverId || step.role.toLowerCase()}`;
-    if (seen.has(key) || steps.filter(candidate => candidate.level === step.level).length > 1) throw new ApprovalRouteError('Route contains duplicate steps', 'DUPLICATE_ROUTE_STEP', { level: step.level });
+    if (seen.has(key)) throw new ApprovalRouteError('Route contains a duplicate approval member', 'DUPLICATE_ROUTE_STEP', { level: step.level });
     seen.add(key);
   }
-  const snapshot = { version: 1, context: { requestType: context.requestType || null, classification: context.classification || null, departmentId: context.departmentId || null, sectionId: context.sectionId || null, instituteId: context.instituteId || null, warehouseId: context.warehouseId || null, cost: Number(context.cost || 0), itemCategory: context.itemCategory || null, maintenanceClassification: context.maintenanceClassification || null, requesterId: context.requesterId || null }, steps };
+  const levels = [...new Set(steps.map(step => step.level))].map(level => Object.freeze({
+    level,
+    members: Object.freeze(steps.filter(step => step.level === level)),
+  }));
+  // `steps` remains in the immutable snapshot so historical consumers retain the
+  // flat representation; `levels` is the canonical group representation.
+  const snapshot = { version: Number(context.approvalRouteVersion || 1), context: { requestType: context.requestType || null, classification: context.classification || null, departmentId: context.departmentId || null, sectionId: context.sectionId || null, instituteId: context.instituteId || null, warehouseId: context.warehouseId || null, cost: Number(context.cost || 0), itemCategory: context.itemCategory || null, maintenanceClassification: context.maintenanceClassification || null, requesterId: context.requesterId || null }, steps: Object.freeze(steps), levels: Object.freeze(levels) };
   return Object.freeze({ ...snapshot, snapshotId: crypto.createHash('sha256').update(stable(snapshot)).digest('hex') });
 }
 

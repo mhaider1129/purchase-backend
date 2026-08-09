@@ -3,8 +3,11 @@
 const { postMovements } = require('./inventoryPostingService');
 
 function buildReceiptCommand(receipt, line, context) {
-  const accepted = Number(line.accepted_quantity ?? line.received_quantity ?? 0) -
-    Number(line.rejected_quantity ?? line.damaged_quantity ?? 0) - Number(line.short_quantity ?? 0);
+  // Persisted receipt semantics: received_quantity is gross; damage and shortage are deducted once.
+  // accepted_quantity, when supplied by an internal normalized caller, is already final.
+  const accepted = line.accepted_quantity != null
+    ? Number(line.accepted_quantity)
+    : Number(line.received_quantity ?? 0) - Number(line.rejected_quantity ?? line.damaged_quantity ?? 0) - Number(line.short_quantity ?? 0);
   if (!(accepted > 0)) return null;
   return {
     movementType: 'GOODS_RECEIPT', inventoryItemId: line.stock_item_id,

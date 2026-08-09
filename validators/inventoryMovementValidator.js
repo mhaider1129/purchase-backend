@@ -9,7 +9,8 @@ const integer = (value) => Number.isSafeInteger(Number(value)) && Number(value) 
 function validateInventoryMovement(command) {
   const type = INVENTORY_MOVEMENT_TYPES[command?.movementType];
   if (!type) throw new InventoryError('INVALID_MOVEMENT_TYPE', 'A supported movementType is required');
-  if (!integer(command.inventoryItemId ?? command.stockItemId)) throw new InventoryError('INVALID_INVENTORY_ITEM', 'A valid inventoryItemId is required');
+  if (type.genericPostingSupported === false) throw new InventoryError('UNSUPPORTED_MOVEMENT', `${command.movementType} is not supported by generic Phase 3A posting`, 501);
+  if (!integer(command.inventoryItemId)) throw new InventoryError('INVALID_INVENTORY_ITEM', 'A valid inventoryItemId is required');
   if (!integer(command.instituteId)) throw new InventoryError('INVALID_INSTITUTE', 'A valid instituteId is required');
   if (!integer(command.warehouseId)) throw new InventoryError('INVALID_WAREHOUSE', 'A valid warehouseId is required');
   const quantity = Number(command.quantity);
@@ -25,7 +26,7 @@ function validateInventoryMovement(command) {
   for (const [name, value] of [['batchNumber', command.batchNumber], ['lotNumber', command.lotNumber], ['serialNumber', command.serialNumber]]) {
     if (value != null && (!text(value) || value.trim().length > 120)) throw new InventoryError('INVALID_TRACKING_VALUE', `${name} is invalid`);
   }
-  return { ...command, inventoryItemId: Number(command.inventoryItemId ?? command.stockItemId), instituteId: Number(command.instituteId), warehouseId: Number(command.warehouseId), quantity, stockStatus: status, idempotencyKey: command.idempotencyKey.trim() };
+  return { ...command, inventoryItemId: Number(command.inventoryItemId), instituteId: Number(command.instituteId), warehouseId: Number(command.warehouseId), quantity, stockStatus: status, idempotencyKey: command.idempotencyKey.trim() };
 }
 
 module.exports = { validateInventoryMovement };

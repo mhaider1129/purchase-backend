@@ -34,6 +34,14 @@ Before resuming, verify Phases 1â€“4 from the schema or rerun them individuallyâ
 - Run one numbered phase at a time. The file no longer uses `CREATE INDEX CONCURRENTLY`, so Phase 5 is compatible with clients that wrap submitted SQL in a transaction.
 - Ensure retrying APIs supply stable idempotency keys before enabling the engine.
 
+## Integrity preflights and application contract
+
+Run the Phase 5 balance and serial preflights after Phase 1 has added the identity columns and before either balance index is built. Every query must return zero rows. Duplicate canonical balances are never auto-merged: stop and obtain inventory-owner/DBA review. The canonical balance identity exactly matches application inbound lookup: `warehouse_id`, `stock_item_id` (called `inventoryItemId` internally), `stock_status`, `batch_number`, `lot_number`, `serial_number`, and `expiry_date`, with nulls equal. Outbound allocation may span unspecified identities and locks rows in FEFO order (`expiry_date ASC NULLS LAST`, then `id`).
+
+Available positive serial uniqueness is scoped to `(stock_item_id, serial_number)`, so one item/serial cannot be available in two warehouses while different items may share serial text. PostgreSQL 15 or newer is required for the `NULLS NOT DISTINCT` canonical identity index.
+
+Phase 3A generic posting explicitly rejects quarantine/release because atomic status transfer is deferred, and rejects dispatch/receipt because a transfer coordinator does not yet own the complete destination lifecycle. Thus no successful status ledger entry can be written without a projection change, and transfer types in the ledger constraint are reserved for the future internal coordinator.
+
 ## Rollback limitations
 
 Schema additions can remain safely in place. Once new engine movements exist, never remove ledger data or its source/reversal fields. Restore application compatibility first and preserve posted rows. Removing constraints or indexes weakens guarantees. Disable the immutable trigger only as part of a reviewed recovery, then restore it immediately.

@@ -46,8 +46,10 @@ async function postValidated(command, client) {
     throw new InventoryError('INVALID_STOCK_STATUS', `${command.stockStatus} stock cannot be issued`, 409);
   }
 
-  let balances = await repository.lockInventoryBalances(command);
   const direction = INVENTORY_MOVEMENT_TYPES[command.movementType].direction;
+  let balances = direction === 'IN'
+    ? await repository.lockExactInventoryBalance(command)
+    : await repository.lockEligibleOutboundBalances(command);
   const before = balances.reduce((sum, row) => sum + Number(row.quantity), 0);
   if (direction === 'OUT' && before < command.quantity) {
     throw new InventoryError('INSUFFICIENT_STOCK', `Available stock ${before} is less than requested quantity ${command.quantity}`, 409, { available: before, requested: command.quantity });

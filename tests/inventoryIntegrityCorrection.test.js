@@ -1,4 +1,3 @@
-
 'use strict';
 
 const InventoryRepository = require('../repositories/inventoryRepository');
@@ -9,6 +8,7 @@ const { buildReceiptCommand } = require('../services/goodsReceiptInventoryAdapte
 const { buildReversalCommand } = require('../services/inventoryReversalService');
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 describe('Phase 3 inventory integrity correction', () => {
   test('repository maps canonical inventoryItemId to stock_item_id', async () => {
@@ -78,9 +78,22 @@ describe('Phase 3 inventory integrity correction', () => {
 
   test('SQL uses canonical uniqueness and identical serial preflight identity', () => {
     const sql = fs.readFileSync(path.join(__dirname, '../sql/manual/004_inventory_transaction_engine.sql'), 'utf8');
+    expect(sql).not.toMatch(/^@@|^diff --git|^index [0-9a-f]|^--- |^\+\+\+ /m);
     expect(sql).toContain('(warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date) NULLS NOT DISTINCT');
     expect(sql).toContain('GROUP BY stock_item_id, serial_number');
     expect(sql).toContain('ux_available_serial_location ON warehouse_stock_levels(stock_item_id, serial_number)');
     expect(sql).toContain('array_agg(id ORDER BY id) AS balance_ids');
+  });
+
+  test('manual SQL validator rejects a copied diff hunk with its exact line', () => {
+    const fixture = path.join(__dirname, 'tmp-sql004-diff.sql');
+    fs.writeFileSync(fixture, 'BEGIN;\n@@ -85,96 +86,116 @@ COMMIT;\n');
+    try {
+      const result = spawnSync(process.execPath, [path.join(__dirname, '../scripts/validateManualSql.js'), fixture], { encoding: 'utf8' });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('tmp-sql004-diff.sql:2: Git patch metadata');
+    } finally {
+      fs.unlinkSync(fixture);
+    }
   });
 });

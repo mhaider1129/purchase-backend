@@ -2,6 +2,18 @@
 
 This migration is manual. Application code does not execute it, and no agent connected to Supabase.
 
+## Use the raw SQL file, not a pull-request diff
+
+Download or open the repository's **raw** `004_inventory_transaction_engine.sql` file and copy its contents directly. Do not copy from a pull-request **Files changed** view, an email patch, or output from `git diff`. Lines such as `@@ -85,96 +84,116 @@`, `diff --git`, `---`, `+++`, and change lines prefixed with `+` or `-` are patch metadata and are not PostgreSQL syntax. PostgreSQL error `42601` at or near `@@` proves that a diff hunk was submitted rather than the raw migration.
+
+Before submitting anything to a SQL client, save the proposed text locally and run:
+
+```bash
+npm run validate:sql004
+```
+
+The command must report `raw SQL validation passed`. It validates the repository's complete raw migration and fails with exact line numbers if Git patch metadata is present. To validate a separately downloaded file, run `node scripts/validateManualSql.js /path/to/proposed_004.sql`. This check only reads a local file; it does not connect to a database or execute SQL.
+
 ## Why the earlier script could deadlock
 
 The earlier version used one transaction for every alteration, backfill, constraint, index, and trigger. Consequently, a lock already obtained on one inventory relation remained held while the migration waited for another. A live inventory request could hold those relations in the opposite order, producing PostgreSQL `40P01`.

@@ -59,14 +59,14 @@ class InventoryRepository {
     return result.rows[0] || null;
   }
 
-  async validateInventoryItem(stockItemId) {
+  async validateInventoryItem(inventoryItemId) {
     const result = await this.client.query(
       `SELECT si.id, si.name, si.unit, si.inventory_uom_id, si.generic_item_id,
               iu.name AS inventory_uom
          FROM stock_items si
          LEFT JOIN item_uom iu ON iu.id = si.inventory_uom_id
         WHERE si.id = $1`,
-      [stockItemId],
+      [inventoryItemId],
     );
     return result.rows[0] || null;
   }
@@ -88,16 +88,35 @@ class InventoryRepository {
     );
   }
 
-  async lockInventoryBalances({ warehouseId, stockItemId, stockStatus, batchNumber, lotNumber, serialNumber }) {
+  // Canonical balance identity: warehouse, inventory item, status, batch, lot, serial, and expiry.
+  async lockExactInventoryBalance({ warehouseId, inventoryItemId, stockStatus, batchNumber, lotNumber, serialNumber, expiryDate }) {
     const result = await this.client.query(
       `SELECT * FROM warehouse_stock_levels
         WHERE warehouse_id = $1 AND stock_item_id = $2
           AND stock_status = $3
-          AND ($4::text IS NULL OR batch_number = $4)
-          AND ($5::text IS NULL OR lot_number = $5)
-          AND ($6::text IS NULL OR serial_number = $6)
-        ORDER BY COALESCE(expiry_date, DATE '9999-12-31'), id FOR UPDATE`,
-      [warehouseId, stockItemId, stockStatus, batchNumber, lotNumber, serialNumber],
+          AND batch_number IS NOT DISTINCT FROM $4::text
+          AND lot_number IS NOT DISTINCT FROM $5::text
+          AND serial_number IS NOT DISTINCT FROM $6::text
+          AND expiry_date IS NOT DISTINCT FROM $7::date
+        ORDER BY id FOR UPDATE`,
+      [warehouseId, inventoryItemId, stockStatus, batchNumber ?? null, lotNumber ?? null,
+        serialNumber ?? null, expiryDate ?? null],
+    );
+    return result.rows;
+  }
+
+  async lockEligibleOutboundBalances({ warehouseId, inventoryItemId, stockStatus, batchNumber, lotNumber, serialNumber, expiryDate }) {
+    const result = await this.client.query(
+      `SELECT * FROM warehouse_stock_levels
+        WHERE warehouse_id = $1 AND stock_item_id = $2 AND stock_status = $3
+          AND ($4::text IS NULL OR batch_number IS NOT DISTINCT FROM $4::text)
+          AND ($5::text IS NULL OR lot_number IS NOT DISTINCT FROM $5::text)
+          AND ($6::text IS NULL OR serial_number IS NOT DISTINCT FROM $6::text)
+          AND ($7::date IS NULL OR expiry_date IS NOT DISTINCT FROM $7::date)
+          AND quantity > 0
+        ORDER BY expiry_date ASC NULLS LAST, id FOR UPDATE`,
+      [warehouseId, inventoryItemId, stockStatus, batchNumber ?? null, lotNumber ?? null,
+        serialNumber ?? null, expiryDate ?? null],
     );
     return result.rows;
   }

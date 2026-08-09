@@ -9,7 +9,7 @@ const command = (o={}) => ({ movementType:'ISSUE',inventoryItemId:11,instituteId
 describe('inventory foundation',()=>{
  test('directions and reversals are canonical',()=>{expect(INVENTORY_MOVEMENT_TYPES.GOODS_RECEIPT.direction).toBe('IN');expect(INVENTORY_MOVEMENT_TYPES.ISSUE.direction).toBe('OUT');expect(REVERSAL_TYPES.ISSUE).toBe('ISSUE_REVERSAL');});
  test.each([0,-1,NaN])('rejects invalid quantity %p',q=>expect(()=>validateInventoryMovement(command({quantity:q}))).toThrow('positive'));
- test('requires transfer destination',()=>expect(()=>validateInventoryMovement(command({movementType:'TRANSFER_DISPATCH'}))).toThrow('destinationWarehouseId'));
+ test('generic transfers are deferred until a coordinator owns both lifecycles',()=>expect(()=>validateInventoryMovement(command({movementType:'TRANSFER_DISPATCH'}))).toThrow('not supported'));
  test('requires adjustment/reversal reason',()=>{expect(()=>validateInventoryMovement(command({movementType:'NEGATIVE_ADJUSTMENT'}))).toThrow('reason');expect(()=>validateInventoryMovement(command({movementType:'ISSUE_REVERSAL'}))).toThrow('reason');});
  test('requires idempotency',()=>expect(()=>validateInventoryMovement(command({idempotencyKey:''}))).toThrow('idempotencyKey'));
  test('fingerprint detects conflict',()=>{const c=validateInventoryMovement(command());expect(fingerprint(c)).toBe(fingerprint({...c}));expect(fingerprint(c)).not.toBe(fingerprint({...c,quantity:5}));});

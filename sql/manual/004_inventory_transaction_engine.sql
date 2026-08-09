@@ -9,8 +9,7 @@
 -- =============================================================================
 SELECT
   (SELECT count(*) FROM warehouse_stock_levels WHERE quantity < 0) AS invalid_negative_balances,
-  (SELECT count(*) FROM inventory_transactions WHERE quantity = 0) AS invalid_zero_movements,
-  (SELECT count(*) FROM (SELECT serial_number FROM warehouse_stock_levels WHERE serial_number IS NOT NULL AND quantity > 0 GROUP BY 1 HAVING count(*) > 1) d) AS duplicate_available_serials;
+  (SELECT count(*) FROM inventory_transactions WHERE quantity = 0) AS invalid_zero_movements;
 
 -- =============================================================================
 -- PHASE 1: BALANCE PROJECTION DDL
@@ -107,13 +106,27 @@ COMMIT;
 -- Both queries must return zero rows before creating unique indexes.
 SELECT idempotency_key, count(*) FROM inventory_transactions WHERE idempotency_key IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
 SELECT reversal_of_movement_id, count(*) FROM inventory_transactions WHERE reversal_of_movement_id IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+-- Canonical balance identity is warehouse + stock item + status + batch + lot + serial + expiry.
+-- These are read-only preflights. If either returns rows, STOP: do not merge or delete data;
+-- provide the rows to the inventory owner for manual reconciliation before this migration resumes.
+SELECT warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date,
+       count(*) AS duplicate_rows, array_agg(id ORDER BY id) AS balance_ids
+  FROM warehouse_stock_levels
+ GROUP BY warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date
+HAVING count(*) > 1;
+-- The same stock-item serial cannot be positively AVAILABLE in multiple rows. Serial text may repeat across items.
+SELECT stock_item_id, serial_number, count(*) AS duplicate_rows, array_agg(id ORDER BY id) AS balance_ids
+  FROM warehouse_stock_levels
+ WHERE serial_number IS NOT NULL AND stock_status = 'AVAILABLE' AND quantity > 0
+ GROUP BY stock_item_id, serial_number
+HAVING count(*) > 1;
 -- Must return zero rows. An invalid same-named index makes IF NOT EXISTS skip rebuilding it;
 -- have a DBA drop only the reported invalid index before continuing.
 SELECT c.relname AS invalid_index
   FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid
  WHERE NOT x.indisvalid AND c.relname IN
  ('ux_inventory_transactions_idempotency','ux_inventory_transactions_reversal',
-  'ix_inventory_ledger_scope','ix_inventory_balance_lock','ux_available_serial_location');
+  'ix_inventory_ledger_scope','ix_inventory_balance_lock','ux_inventory_balance_identity','ux_available_serial_location');
 BEGIN;
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '10min';
@@ -127,7 +140,9 @@ SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '10min';
 LOCK TABLE warehouse_stock_levels IN SHARE MODE NOWAIT;
 CREATE INDEX IF NOT EXISTS ix_inventory_balance_lock ON warehouse_stock_levels(warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, id);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_available_serial_location ON warehouse_stock_levels(serial_number)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_inventory_balance_identity ON warehouse_stock_levels
+  (warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date) NULLS NOT DISTINCT;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_available_serial_location ON warehouse_stock_levels(stock_item_id, serial_number)
  WHERE serial_number IS NOT NULL AND stock_status = 'AVAILABLE' AND quantity > 0;
 COMMIT;
 
@@ -176,5 +191,9 @@ ALTER TABLE inventory_transactions VALIDATE CONSTRAINT inventory_transactions_re
 -- Post-validation: all queries must return zero rows/counts.
 SELECT idempotency_key, count(*) FROM inventory_transactions WHERE idempotency_key IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
 SELECT * FROM warehouse_stock_levels WHERE quantity < 0 OR reserved_quantity < 0 OR reserved_quantity > quantity;
+SELECT warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date, count(*)
+ FROM warehouse_stock_levels GROUP BY 1,2,3,4,5,6,7 HAVING count(*) > 1;
+SELECT stock_item_id, serial_number, count(*) FROM warehouse_stock_levels
+ WHERE serial_number IS NOT NULL AND stock_status = 'AVAILABLE' AND quantity > 0 GROUP BY 1,2 HAVING count(*) > 1;
 SELECT count(*) AS invalid_institute_references FROM inventory_transactions it
  WHERE it.institute_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM institutes i WHERE i.id = it.institute_id);

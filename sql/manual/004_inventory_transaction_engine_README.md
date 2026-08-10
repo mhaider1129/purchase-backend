@@ -25,7 +25,7 @@ The revised file uses independently committed phases, touches one high-write inv
 1. Do **not** immediately rerun the old script and do not terminate unidentified sessions.
 2. PostgreSQL automatically rolls back the transaction selected as the deadlock victim. Confirm the SQL client shows no open/aborted transaction; reconnect if uncertain.
 3. Inspect active inventory writers using the platform's database activity tooling and schedule an inventory-write maintenance window. Do not run diagnostic termination SQL without DBA review.
-4. Take and verify a fresh backup of `warehouse_stock_levels` and `inventory_transactions`.
+4. Take and verify a fresh backup of `warehouse_stock_levels`, `inventory_transactions`, and (when present) `inventory_transaction_allocations`.
 5. Compare the current schema with each phase. All additions use `IF NOT EXISTS` or recreate named constraints safely, so the revised migration is resumable after review.
 6. Run Phase 0 alone. Stop if any count is nonzero.
 7. Run Phases 1–4 **one phase at a time**, confirming each `COMMIT`. A `55P03 could not obtain lock` result is safe: wait for the maintenance window and retry that phase.
@@ -53,6 +53,14 @@ Run the Phase 5 balance and serial preflights after Phase 1 has added the identi
 Available positive serial uniqueness is scoped to `(stock_item_id, serial_number)`, so one item/serial cannot be available in two warehouses while different items may share serial text. PostgreSQL 15 or newer is required for the `NULLS NOT DISTINCT` canonical identity index.
 
 Phase 3A generic posting explicitly rejects quarantine/release because atomic status transfer is deferred, and rejects dispatch/receipt because a transfer coordinator does not yet own the complete destination lifecycle. Thus no successful status ledger entry can be written without a projection change, and transfer types in the ledger constraint are reserved for the future internal coordinator.
+
+Every new engine movement (`metadata.allocationLedgerVersion = 1`) has immutable child rows in
+`inventory_transaction_allocations`. Each row snapshots the exact balance ID, signed quantity,
+status, batch, lot, serial, expiry, and UOM in deterministic allocation order. A parent may span
+multiple FEFO rows. Legacy movements are deliberately left without child rows: the migration does
+not guess historical allocation identity, and automatic reversal rejects those legacy movements.
+The final read-only checks report zero quantities, orphan rows, and allocation sums that do not
+equal their versioned parent movement.
 
 ## Rollback limitations
 

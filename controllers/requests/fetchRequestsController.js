@@ -1234,9 +1234,9 @@ const getHodApprovers = async (req, res, next) => {
 };
 
 const getMyMaintenanceRequests = async (req, res, next) => {
-  const normalizedRole = (req.user?.role || '').toString().trim().toLowerCase();
   const canViewAllMaintenanceRequests =
-    normalizedRole === 'engineer' || req.user.hasPermission?.('requests.view-all');
+    req.user.hasPermission?.('maintenance-requests.view-all') ||
+    req.user.hasPermission?.('requests.view-all');
   const viewerFilter = canViewAllMaintenanceRequests
     ? ''
     : 'AND r.initiated_by_technician_id = $1';

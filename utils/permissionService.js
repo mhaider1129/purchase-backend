@@ -9,7 +9,7 @@ const normalizeRoleKey = (role) =>
 
 const DEFAULT_ROLE_PERMISSIONS = {
   requester: ['stock-requests.create'],
-  engineer: ['stock-requests.create'],
+  engineer: ['stock-requests.create', 'maintenance-requests.view-all'],
   technician: [
     'warehouse.manage-supply',
     'warehouse.view-supply',
@@ -120,6 +120,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+
+  {
+    code: 'maintenance-requests.view-all',
+    name: 'View all maintenance requests',
+    description: 'Access the maintenance requests status page and view requests submitted by all users.',
+  },
 
   {
     code: 'requests.reclassify',

@@ -20,6 +20,9 @@ describe('permissionService defaults', () => {
       expect(scmDefaults).toContain('requests.view-all');
       expect(scmDefaults.every(code => code === code.toLowerCase())).toBe(true);
 
+      const engineerDefaults = getDefaultPermissionsForRole(' Engineer ');
+      expect(engineerDefaults).toContain('maintenance-requests.view-all');
+
       const unknownDefaults = getDefaultPermissionsForRole('unknown-role');
       expect(unknownDefaults).toEqual([]);
     });

@@ -3,11 +3,11 @@
 const { postMovements } = require('./inventoryPostingService');
 
 function buildReceiptCommand(receipt, line, context) {
-  // Persisted receipt semantics: received_quantity is gross; damage and shortage are deducted once.
-  // accepted_quantity, when supplied by an internal normalized caller, is already final.
+  // Persisted GRN semantics: received is gross; damaged and short are separate deductions.
+  // accepted_quantity is not persisted, but normalized internal callers may provide it as final.
   const accepted = line.accepted_quantity != null
     ? Number(line.accepted_quantity)
-    : Number(line.received_quantity ?? 0) - Number(line.rejected_quantity ?? line.damaged_quantity ?? 0) - Number(line.short_quantity ?? 0);
+    : Number(line.received_quantity ?? 0) - Number(line.damaged_quantity ?? 0) - Number(line.short_quantity ?? 0);
   if (!(accepted > 0)) return null;
   return {
     movementType: 'GOODS_RECEIPT', inventoryItemId: line.stock_item_id,

@@ -79,6 +79,44 @@ class InventoryRepository {
     return result.rows[0] || null;
   }
 
+  async loadMovementWithAllocations(movementId, { forUpdate = false } = {}) {
+    const movementResult = await this.client.query(
+      `SELECT * FROM inventory_transactions WHERE id = $1${forUpdate ? ' FOR UPDATE' : ''}`,
+      [movementId],
+    );
+    const movement = movementResult.rows[0] || null;
+    if (!movement) return null;
+    const allocationResult = await this.client.query(
+      `SELECT * FROM inventory_transaction_allocations
+        WHERE inventory_transaction_id = $1 ORDER BY allocation_sequence, id`,
+      [movementId],
+    );
+    return { movement, allocations: allocationResult.rows };
+  }
+
+  async findMovementWithAllocationsByIdempotencyKey(idempotencyKey) {
+    const result = await this.client.query(
+      'SELECT id FROM inventory_transactions WHERE idempotency_key = $1', [idempotencyKey],
+    );
+    return result.rows[0] ? this.loadMovementWithAllocations(result.rows[0].id) : null;
+  }
+
+  async findAllocationsByTracking({ inventoryItemId, batchNumber, lotNumber, serialNumber, expiryDate }) {
+    const result = await this.client.query(
+      `SELECT a.*, it.movement_type, it.source_document_type, it.source_document_id, it.posted_at
+         FROM inventory_transaction_allocations a
+         JOIN inventory_transactions it ON it.id = a.inventory_transaction_id
+        WHERE a.stock_item_id = $1
+          AND ($2::text IS NULL OR a.batch_number IS NOT DISTINCT FROM $2::text)
+          AND ($3::text IS NULL OR a.lot_number IS NOT DISTINCT FROM $3::text)
+          AND ($4::text IS NULL OR a.serial_number IS NOT DISTINCT FROM $4::text)
+          AND ($5::date IS NULL OR a.expiry_date IS NOT DISTINCT FROM $5::date)
+        ORDER BY it.posted_at, a.inventory_transaction_id, a.allocation_sequence`,
+      [inventoryItemId, batchNumber ?? null, lotNumber ?? null, serialNumber ?? null, expiryDate ?? null],
+    );
+    return result.rows;
+  }
+
   async lockPostingKeys(command) {
     // Transaction-scoped advisory locks also serialize a missing balance row and concurrent retries.
     await this.client.query(
@@ -143,6 +181,15 @@ class InventoryRepository {
     return result.rows[0] || null;
   }
 
+  async lockInventoryBalanceById(balanceId, command) {
+    const result = await this.client.query(
+      `SELECT * FROM warehouse_stock_levels WHERE id = $1 AND warehouse_id = $2
+        AND stock_item_id = $3 AND stock_status = $4 FOR UPDATE`,
+      [balanceId, command.warehouseId, command.inventoryItemId, command.stockStatus],
+    );
+    return result.rows[0] || null;
+  }
+
   async insertInventoryMovement(command, signedQuantity, item) {
     const result = await this.client.query(
       `INSERT INTO inventory_transactions
@@ -162,15 +209,33 @@ class InventoryRepository {
         command.expiryDate || null, command.stockStatus, command.sourceDocumentType,
         String(command.sourceDocumentId), command.sourceDocumentLineId == null ? null : String(command.sourceDocumentLineId),
         command.reason || null, command.actor.id, command.instituteId, command.idempotencyKey,
-        command.correlationId || null, JSON.stringify(command.metadata || {}), command.reversalOfMovementId || null,
+        command.correlationId || null, JSON.stringify({ ...(command.metadata || {}), allocationLedgerVersion: 1 }), command.reversalOfMovementId || null,
         command.commandFingerprint],
     );
     return result.rows[0];
   }
 
+  async insertInventoryAllocations(movementId, allocations) {
+    const inserted = [];
+    for (const allocation of allocations) {
+      const result = await this.client.query(
+        `INSERT INTO inventory_transaction_allocations
+          (inventory_transaction_id, warehouse_stock_level_id, warehouse_id, stock_item_id,
+           stock_status, quantity, batch_number, lot_number, serial_number, expiry_date,
+           base_uom, allocation_sequence)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        [movementId, allocation.warehouseStockLevelId, allocation.warehouseId,
+          allocation.inventoryItemId, allocation.stockStatus, allocation.quantity,
+          allocation.batchNumber, allocation.lotNumber, allocation.serialNumber,
+          allocation.expiryDate, allocation.baseUom, allocation.sequence],
+      );
+      inserted.push(result.rows[0]);
+    }
+    return inserted;
+  }
+
   async lockMovementForReversal(movementId) {
-    const result = await this.client.query('SELECT * FROM inventory_transactions WHERE id = $1 FOR UPDATE', [movementId]);
-    return result.rows[0] || null;
+    return this.loadMovementWithAllocations(movementId, { forUpdate: true });
   }
 
   async markMovementReversed(originalId, reversalId) {

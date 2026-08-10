@@ -28,15 +28,12 @@ class InventoryRepository {
     return result.rows[0];
   }
   async setupWarehouse(stockItem, configuration, genericItemId, actorId) {
-    await this.client.query(`INSERT INTO warehouse_stock_levels
-      (warehouse_id, stock_item_id, generic_item_id, item_name, quantity, updated_by)
-      VALUES ($1,$2,$3,$4,0,$5) ON CONFLICT (warehouse_id, stock_item_id)
-      DO UPDATE SET generic_item_id=EXCLUDED.generic_item_id, item_name=EXCLUDED.item_name, updated_by=EXCLUDED.updated_by`,
-    [configuration.warehouse_id, stockItem.id, genericItemId, stockItem.name, actorId]);
+    // Warehouse assignment is configuration, not an inventory balance.  A balance is
+    // created by the posting engine only when stock is actually received.
+    await this.upsertPolicy(stockItem.id, configuration, actorId);
   }
   async upsertPolicy(stockItemId, configuration, actorId) {
-    if (!configuration.replenishment_policy) return;
-    const p = configuration.replenishment_policy;
+    const p = configuration.replenishment_policy || {};
     await this.client.query(`INSERT INTO warehouse_replenishment_policies
       (warehouse_id, stock_item_id, reorder_point, safety_stock, lead_time_days, review_period_days, lot_size, is_active, updated_by)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (warehouse_id, stock_item_id) DO UPDATE SET

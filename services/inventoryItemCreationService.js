@@ -58,7 +58,6 @@ class InventoryItemCreationService {
       const stockItem = await inventory.insertStockItem(identity, actorId);
       for (const configuration of input.warehouse_configurations) {
         await inventory.setupWarehouse(stockItem, configuration, generic.id, actorId);
-        await inventory.upsertPolicy(stockItem.id, configuration, actorId);
       }
       await inventory.audit(stockItem.id, 'added_from_master', actorId, identity.snapshot);
       await client.query('COMMIT'); return stockItem;

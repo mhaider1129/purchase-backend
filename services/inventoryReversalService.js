@@ -7,7 +7,7 @@ const { REVERSAL_TYPES } = require('../domain/inventoryMovementTypes');
 const InventoryError = require('../errors/inventoryError');
 const inventoryPostingService = require('./inventoryPostingService');
 
-function buildReversalCommand(original, { reason, actor, idempotencyKey, correlationId }) {
+function buildReversalCommand(original, { reason, actor, idempotencyKey, correlationId, allocations = [] }) {
   return {
     movementType: REVERSAL_TYPES[original.movement_type], inventoryItemId: original.stock_item_id, instituteId: original.institute_id,
     warehouseId: original.warehouse_id, quantity: Math.abs(Number(original.quantity)),
@@ -18,6 +18,10 @@ function buildReversalCommand(original, { reason, actor, idempotencyKey, correla
     stockStatus: original.stock_status, sourceDocumentType: 'inventory_movement_reversal',
     sourceDocumentId: original.id, reason: String(reason).trim(), actor, idempotencyKey,
     correlationId, reversalOfMovementId: original.id,
+    allocationOverrides: allocations.map((allocation) => ({
+      warehouseStockLevelId: allocation.warehouse_stock_level_id,
+      quantity: -Number(allocation.quantity),
+    })),
     metadata: {
       reversedMovementId: original.id, originalMovementId: original.id,
       originalDepartmentId: original.department_id || null,
@@ -34,14 +38,22 @@ async function reverseMovement({ movementId, reason, actor, idempotencyKey, corr
   if (!idempotencyKey) throw new InventoryError('INVALID_IDEMPOTENCY_KEY', 'A reversal idempotencyKey is required');
   return withTransaction(async (client) => {
     const repository = new InventoryRepository(client);
-    const original = await repository.lockMovementForReversal(movementId);
-    if (!original) throw new InventoryError('MOVEMENT_NOT_FOUND', 'Inventory movement was not found', 404);
-    if (original.reversed_by_movement_id) throw new InventoryError('MOVEMENT_ALREADY_REVERSED', 'Inventory movement has already been reversed', 409);
+    const originalResult = await repository.lockMovementForReversal(movementId);
+    if (!originalResult) throw new InventoryError('MOVEMENT_NOT_FOUND', 'Inventory movement was not found', 404);
+    const { movement: original, allocations } = originalResult;
     const movementType = REVERSAL_TYPES[original.movement_type];
     if (!movementType) throw new InventoryError('MOVEMENT_NOT_REVERSIBLE', 'This movement type cannot be reversed', 409);
-    const result = await inventoryPostingService.postMovement(buildReversalCommand(original, {
-      reason, actor, idempotencyKey, correlationId,
-    }), client);
+    if (!allocations.length) throw new InventoryError('LEGACY_MOVEMENT_UNALLOCATED', 'Legacy movement has no exact allocations and cannot be automatically reversed', 409);
+    const reversalCommand = buildReversalCommand(original, {
+      reason, actor, idempotencyKey, correlationId, allocations,
+    });
+    if (original.reversed_by_movement_id) {
+      const retry = await repository.findMovementWithAllocationsByIdempotencyKey(idempotencyKey);
+      if (!retry || Number(retry.movement.id) !== Number(original.reversed_by_movement_id)) {
+        throw new InventoryError('MOVEMENT_ALREADY_REVERSED', 'Inventory movement has already been reversed', 409);
+      }
+    }
+    const result = await inventoryPostingService.postMovement(reversalCommand, client);
     if (!result.idempotent) await repository.markMovementReversed(original.id, result.movement.id);
     return result;
   }, { client: suppliedClient, pool });

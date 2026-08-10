@@ -57,13 +57,53 @@ describe('Phase 3 inventory integrity correction', () => {
     expect(() => validateInventoryMovement({ movementType })).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_MOVEMENT', statusCode: 501 }));
   });
 
-  test('receipt quantities are calculated exactly once for accepted, damaged, short, partial, rejected and quarantine cases', () => {
+  test('receipt quantities follow persisted gross minus damaged minus short semantics', () => {
     const context = { instituteId: 1, warehouseId: 2, actor: { id: 3 } };
     expect(buildReceiptCommand({ id: 1 }, { id: 1, stock_item_id: 4, accepted_quantity: 7, damaged_quantity: 2, short_quantity: 1 }, context).quantity).toBe(7);
     expect(buildReceiptCommand({ id: 1 }, { id: 2, stock_item_id: 4, received_quantity: 10, damaged_quantity: 2, short_quantity: 1 }, context).quantity).toBe(7);
     expect(buildReceiptCommand({ id: 1 }, { id: 3, received_quantity: 2, damaged_quantity: 2 }, context)).toBeNull();
     expect(buildReceiptCommand({ id: 1 }, { id: 4, received_quantity: 5, short_quantity: 5 }, context)).toBeNull();
     expect(buildReceiptCommand({ id: 1 }, { id: 5, stock_item_id: 4, accepted_quantity: 1, quarantined: true }, context).stockStatus).toBe('QUARANTINE');
+  });
+
+  test('allocation rows preserve signed quantity, tracking identity and deterministic sequence', async () => {
+    const rows = [{ id: 101 }, { id: 102 }];
+    const client = { query: jest.fn().mockImplementation(async () => ({ rows: [rows.shift()] })) };
+    const allocations = await new InventoryRepository(client).insertInventoryAllocations(50, [
+      { warehouseStockLevelId: 8, warehouseId: 2, inventoryItemId: 4, stockStatus: 'AVAILABLE',
+        quantity: -5, batchNumber: 'A', lotNumber: 'L-A', serialNumber: null,
+        expiryDate: '2027-09-01', baseUom: 'each', sequence: 1 },
+      { warehouseStockLevelId: 9, warehouseId: 2, inventoryItemId: 4, stockStatus: 'AVAILABLE',
+        quantity: -7, batchNumber: 'B', lotNumber: 'L-B', serialNumber: null,
+        expiryDate: '2027-10-01', baseUom: 'each', sequence: 2 },
+    ]);
+    expect(allocations).toHaveLength(2);
+    expect(client.query.mock.calls.map((call) => call[1].slice(0, 6))).toEqual([
+      [50, 8, 2, 4, 'AVAILABLE', -5], [50, 9, 2, 4, 'AVAILABLE', -7],
+    ]);
+    expect(client.query.mock.calls[0][1].slice(6)).toEqual(['A', 'L-A', null, '2027-09-01', 'each', 1]);
+  });
+
+  test('movement query returns allocations while legacy movement remains readable', async () => {
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 7, quantity: -2 }] })
+      .mockResolvedValueOnce({ rows: [] }) };
+    await expect(new InventoryRepository(client).loadMovementWithAllocations(7)).resolves.toEqual({
+      movement: { id: 7, quantity: -2 }, allocations: [],
+    });
+  });
+
+  test('reversal command targets exact original balance allocations', () => {
+    const original = { id: 8, movement_type: 'ISSUE', stock_item_id: 3, institute_id: 1,
+      warehouse_id: 2, quantity: -12, stock_status: 'AVAILABLE' };
+    const command = buildReversalCommand(original, { reason: 'Correction', actor: { id: 1 },
+      idempotencyKey: 'reverse:8', allocations: [
+        { warehouse_stock_level_id: 21, quantity: -5 },
+        { warehouse_stock_level_id: 22, quantity: -7 },
+      ] });
+    expect(command.allocationOverrides).toEqual([
+      { warehouseStockLevelId: 21, quantity: 5 }, { warehouseStockLevelId: 22, quantity: 7 },
+    ]);
   });
 
   test('reversal preserves original business context', () => {
@@ -83,6 +123,9 @@ describe('Phase 3 inventory integrity correction', () => {
     expect(sql).toContain('GROUP BY stock_item_id, serial_number');
     expect(sql).toContain('ux_available_serial_location ON warehouse_stock_levels(stock_item_id, serial_number)');
     expect(sql).toContain('array_agg(id ORDER BY id) AS balance_ids');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS inventory_transaction_allocations');
+    expect(sql).toContain('prevent_inventory_allocation_mutation');
+    expect(sql).toContain("metadata->>'allocationLedgerVersion' = '1'");
   });
 
   test('manual SQL validator rejects a copied diff hunk with its exact line', () => {

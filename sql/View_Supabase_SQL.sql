@@ -157,9 +157,15 @@ CREATE TABLE public.approvals (
   route_snapshot jsonb,
   decided_at timestamp with time zone,
   rejected_at timestamp with time zone,
+  is_superseded boolean NOT NULL DEFAULT false,
+  superseded_at timestamp with time zone,
+  superseded_by_user_id integer,
+  superseded_reason text,
+  approval_route_version integer,
   CONSTRAINT approvals_pkey PRIMARY KEY (id),
   CONSTRAINT approvals_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
-  CONSTRAINT approvals_approver_id_fkey FOREIGN KEY (approver_id) REFERENCES public.users(id)
+  CONSTRAINT approvals_approver_id_fkey FOREIGN KEY (approver_id) REFERENCES public.users(id),
+  CONSTRAINT approvals_superseded_by_user_id_fkey FOREIGN KEY (superseded_by_user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.approval_routes (
   id integer NOT NULL DEFAULT nextval('approval_routes_id_seq'::regclass),
@@ -635,7 +641,7 @@ CREATE TABLE public.warehouse_stock_levels (
   warehouse_id integer NOT NULL,
   stock_item_id integer NOT NULL,
   item_name text NOT NULL,
-  quantity numeric NOT NULL DEFAULT 0,
+  quantity numeric NOT NULL DEFAULT 0 CHECK (quantity >= 0::numeric),
   updated_by integer,
   updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
   batch_id integer,
@@ -643,6 +649,9 @@ CREATE TABLE public.warehouse_stock_levels (
   expiry_date date,
   serial_number text,
   generic_item_id bigint,
+  stock_status text NOT NULL DEFAULT 'AVAILABLE'::text CHECK (stock_status = ANY (ARRAY['AVAILABLE'::text, 'QUARANTINE'::text, 'BLOCKED'::text, 'RECALLED'::text, 'DAMAGED'::text, 'EXPIRED'::text])),
+  batch_number text,
+  reserved_quantity numeric NOT NULL DEFAULT 0,
   CONSTRAINT warehouse_stock_levels_pkey PRIMARY KEY (id),
   CONSTRAINT warehouse_stock_levels_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id),
   CONSTRAINT warehouse_stock_levels_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id),
@@ -1410,7 +1419,7 @@ CREATE TABLE public.audit_registry_entries (
 );
 CREATE TABLE public.inventory_transactions (
   id integer NOT NULL DEFAULT nextval('inventory_transactions_id_seq'::regclass),
-  transaction_type text NOT NULL CHECK (transaction_type = ANY (ARRAY['warehouse'::text, 'department'::text, 'transfer'::text, 'receipt'::text, 'issue'::text, 'adjustment'::text, 'recall'::text])),
+  transaction_type text NOT NULL CHECK (transaction_type = ANY (ARRAY['warehouse'::text, 'department'::text, 'transfer'::text, 'receipt'::text, 'issue'::text, 'adjustment'::text, 'recall'::text, 'GOODS_RECEIPT'::text, 'GOODS_RECEIPT_REVERSAL'::text, 'ISSUE'::text, 'ISSUE_REVERSAL'::text, 'TRANSFER_DISPATCH'::text, 'TRANSFER_RECEIPT'::text, 'POSITIVE_ADJUSTMENT'::text, 'NEGATIVE_ADJUSTMENT'::text, 'QUARANTINE'::text, 'RELEASE_FROM_QUARANTINE'::text])),
   source_location text,
   destination_location text,
   warehouse_id integer,
@@ -1435,6 +1444,24 @@ CREATE TABLE public.inventory_transactions (
   batch_number text,
   serial_number text,
   expiry_date date,
+  movement_type text NOT NULL,
+  institute_id integer,
+  base_uom text,
+  source_quantity numeric,
+  source_uom text,
+  conversion_factor numeric CHECK (conversion_factor IS NULL OR conversion_factor > 0::numeric),
+  lot_number text,
+  stock_status text NOT NULL DEFAULT 'AVAILABLE'::text,
+  source_document_type text,
+  source_document_id text,
+  source_document_line_id text,
+  idempotency_key text,
+  correlation_id text,
+  reversal_of_movement_id integer,
+  reversed_by_movement_id integer,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  command_fingerprint text,
+  posted_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT inventory_transactions_pkey PRIMARY KEY (id),
   CONSTRAINT inventory_transactions_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT inventory_transactions_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
@@ -1448,7 +1475,10 @@ CREATE TABLE public.inventory_transactions (
   CONSTRAINT inventory_transactions_generic_item_id_fkey FOREIGN KEY (generic_item_id) REFERENCES public.generic_items(id),
   CONSTRAINT inventory_transactions_approved_product_id_fkey FOREIGN KEY (approved_product_id) REFERENCES public.approved_products(id),
   CONSTRAINT inventory_transactions_supplier_catalog_item_id_fkey FOREIGN KEY (supplier_catalog_item_id) REFERENCES public.supplier_catalog_items(id),
-  CONSTRAINT inventory_transactions_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id)
+  CONSTRAINT inventory_transactions_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
+  CONSTRAINT inventory_transactions_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
+  CONSTRAINT inventory_transactions_reversal_of_movement_id_fkey FOREIGN KEY (reversal_of_movement_id) REFERENCES public.inventory_transactions(id),
+  CONSTRAINT inventory_transactions_reversed_by_movement_id_fkey FOREIGN KEY (reversed_by_movement_id) REFERENCES public.inventory_transactions(id)
 );
 CREATE TABLE public.finance_chart_of_accounts (
   id integer NOT NULL DEFAULT nextval('finance_chart_of_accounts_id_seq'::regclass),

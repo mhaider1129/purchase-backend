@@ -46,6 +46,25 @@ Before resuming, verify Phases 1â€“4 from the schema or rerun them individuallyâ
 - Run one numbered phase at a time. The file no longer uses `CREATE INDEX CONCURRENTLY`, so Phase 5 is compatible with clients that wrap submitted SQL in a transaction.
 - Ensure retrying APIs supply stable idempotency keys before enabling the engine.
 
+## Required deployment order
+
+1. Take and verify a restorable backup.
+2. Deploy application code compatible with dimensioned balances. Keep all inventory write
+   endpoints controlled; goods receipt is migrated, but the legacy transfer, initial-allocation,
+   request-receipt, warehouse add/discard, and supply writers must not receive traffic.
+3. Enter a maintenance window and stop API, job, and integration inventory writers.
+4. Run every read-only preflight in Phases 0 and 5. Retain the unique-object inventory and stop on
+   canonical duplicates, `batch_id`-only distinctions, or tracked/untracked zero-row findings until
+   the inventory owner resolves them.
+5. Execute SQL 004 one numbered phase at a time as described above.
+6. Restart the compatible workers and enable only compatible inventory writers.
+7. Smoke-test receipt of two different batches of the same item into the same warehouse and verify
+   two balances exist.
+8. Test an issue, its reversal, and a goods receipt, including ledger/allocation totals.
+
+SQL cannot discover application source dependencies. Deployment of compatible code **before** the
+pair-only constraint is removed is a mandatory human precondition, not a database assertion.
+
 ## Integrity preflights and application contract
 
 Run the Phase 5 balance and serial preflights after Phase 1 has added the identity columns and before either balance index is built. Every query must return zero rows. Duplicate canonical balances are never auto-merged: stop and obtain inventory-owner/DBA review. The canonical balance identity exactly matches application inbound lookup: `warehouse_id`, `stock_item_id` (called `inventoryItemId` internally), `stock_status`, `batch_number`, `lot_number`, `serial_number`, and `expiry_date`, with nulls equal. Outbound allocation may span unspecified identities and locks rows in FEFO order (`expiry_date ASC NULLS LAST`, then `id`).

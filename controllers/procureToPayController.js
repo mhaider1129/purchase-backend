@@ -3,7 +3,7 @@ const createHttpError = require('../utils/httpError');
 const { ensureProcureToPayTables } = require('../utils/ensureProcureToPayTables');
 const { ensureFinanceCoreTables } = require('../utils/ensureFinanceCoreTables');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
-const recalculateAvailableQuantity = require('../utils/recalculateAvailableQuantity');
+const { postAcceptedReceiptLines } = require('../services/goodsReceiptInventoryAdapter');
 const {
   LIFECYCLE_STATES,
   MATCH_POLICIES,
@@ -189,6 +189,14 @@ const createGoodsReceipt = async (req, res, next) => {
 
     const inventoryUpdates = [];
     const inventoryWarnings = [];
+    const canonicalReceiptLines = [];
+
+    const warehouseScope = await client.query(
+      'SELECT institute_id FROM warehouses WHERE id = $1', [targetWarehouseId]
+    );
+    if (warehouseScope.rowCount === 0 || warehouseScope.rows[0].institute_id == null) {
+      throw createHttpError(400, 'The receipt warehouse has no inventory institute scope');
+    }
 
     for (const receiptItem of receipt.items || []) {
       if (purchase_order_id) {
@@ -224,7 +232,7 @@ const createGoodsReceipt = async (req, res, next) => {
 
       if (receiptItem.generic_item_id) {
         const byGenericId = await client.query(
-          'SELECT id, name, generic_item_id FROM stock_items WHERE generic_item_id = $1 ORDER BY id LIMIT 1',
+          'SELECT id, name, unit, generic_item_id FROM stock_items WHERE generic_item_id = $1 ORDER BY id LIMIT 1',
           [receiptItem.generic_item_id]
         );
         stockItem = byGenericId.rows[0] || null;
@@ -232,7 +240,7 @@ const createGoodsReceipt = async (req, res, next) => {
 
       if (!stockItem && receiptItem.requested_item_id) {
         const fromRequested = await client.query(
-          `SELECT si.id, si.name, si.generic_item_id
+          `SELECT si.id, si.name, si.unit, si.generic_item_id
            FROM requested_items ri
            JOIN stock_items si ON si.generic_item_id = ri.generic_item_id
            WHERE ri.id = $1 AND ri.request_id = $2
@@ -249,7 +257,7 @@ const createGoodsReceipt = async (req, res, next) => {
           item_name: receiptItem.item_name,
         });
         const fromItemName = await client.query(
-          `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+          `SELECT id, name, unit, generic_item_id FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
           [receiptItem.item_name]
         );
         stockItem = fromItemName.rows[0] || null;
@@ -260,48 +268,11 @@ const createGoodsReceipt = async (req, res, next) => {
         continue;
       }
 
-      await client.query(
-        `INSERT INTO warehouse_stock_levels (
-          warehouse_id,
-          stock_item_id,
-          item_name,
-          quantity,
-          updated_by,
-          updated_at,
-          generic_item_id
-        ) VALUES ($1, $2, $3, $4, $5, NOW(), $6)
-        ON CONFLICT (warehouse_id, stock_item_id)
-        DO UPDATE
-          SET quantity = warehouse_stock_levels.quantity + EXCLUDED.quantity,
-              item_name = EXCLUDED.item_name,
-              updated_by = EXCLUDED.updated_by,
-              updated_at = NOW()`,
-        [targetWarehouseId, stockItem.id, stockItem.name, netQuantity, req.user.id, stockItem.generic_item_id || receiptItem.generic_item_id || null]
-      );
-
-      await recalculateAvailableQuantity(client, stockItem.id);
-
-      await client.query(
-        `INSERT INTO warehouse_stock_movements (
-          warehouse_id,
-          stock_item_id,
-          item_name,
-          direction,
-          quantity,
-          reference_request_id,
-          created_by,
-          notes
-        ) VALUES ($1, $2, $3, 'in', $4, $5, $6, $7)`,
-        [
-          targetWarehouseId,
-          stockItem.id,
-          stockItem.name,
-          netQuantity,
-          requestId,
-          req.user.id,
-          `Goods receipt ${receipt.receipt_number}`,
-        ]
-      );
+      canonicalReceiptLines.push({
+        ...receiptItem,
+        stock_item_id: stockItem.id,
+        unit: receiptItem.unit || stockItem.unit,
+      });
 
       inventoryUpdates.push({
         stock_item_id: stockItem.id,
@@ -309,6 +280,15 @@ const createGoodsReceipt = async (req, res, next) => {
         quantity_added: netQuantity,
       });
     }
+
+    // The adapter shares this transaction and is the sole balance/ledger writer.
+    // In particular, do not also write the legacy warehouse_stock_movements table.
+    await postAcceptedReceiptLines(receipt, canonicalReceiptLines, {
+      instituteId: warehouseScope.rows[0].institute_id,
+      warehouseId: targetWarehouseId,
+      actor: req.user,
+      correlationId: req.correlationId || null,
+    }, client);
 
     const estimatedReceiptValue = (receipt.items || []).reduce((sum, line) => {
       const netQuantity =

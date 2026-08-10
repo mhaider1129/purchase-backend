@@ -12,6 +12,19 @@ SELECT
   (SELECT count(*) FROM inventory_transactions WHERE quantity = 0) AS invalid_zero_movements,
   to_regclass('public.inventory_transaction_allocations') AS existing_allocation_table;
 
+-- Inventory uniqueness inventory: retain this output with the change record.
+SELECT CASE WHEN con.oid IS NULL THEN 'index' ELSE 'constraint' END AS object_type,
+       idx.relname AS object_name, con.conname AS constraint_name,
+       pg_get_indexdef(i.indexrelid) AS definition
+  FROM pg_index i
+  JOIN pg_class tbl ON tbl.oid = i.indrelid
+  JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+  JOIN pg_class idx ON idx.oid = i.indexrelid
+  LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid
+ WHERE ns.nspname = 'public' AND tbl.relname = 'warehouse_stock_levels'
+   AND i.indisunique
+ ORDER BY idx.relname;
+
 -- =============================================================================
 -- PHASE 1: BALANCE PROJECTION DDL
 -- NOWAIT makes this phase fail immediately instead of waiting in a lock cycle.
@@ -134,6 +147,27 @@ COMMIT;
 -- Both queries must return zero rows before creating unique indexes.
 SELECT idempotency_key, count(*) FROM inventory_transactions WHERE idempotency_key IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
 SELECT reversal_of_movement_id, count(*) FROM inventory_transactions WHERE reversal_of_movement_id IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+-- Report legacy rows whose old batch entity distinguishes otherwise identical canonical identities.
+SELECT warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date,
+       count(*) AS rows, array_agg(id ORDER BY id) AS balance_ids,
+       array_agg(batch_id ORDER BY id) AS legacy_batch_ids
+  FROM warehouse_stock_levels
+ GROUP BY warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date
+HAVING count(*) > 1 AND count(DISTINCT batch_id) > 1;
+
+-- Configuration-like zero rows are safe only as the untracked AVAILABLE identity; review those
+-- coexisting with tracked stock because application configuration now lives in replenishment policies.
+SELECT z.id AS zero_balance_id, z.warehouse_id, z.stock_item_id,
+       array_agg(t.id ORDER BY t.id) AS tracked_balance_ids
+  FROM warehouse_stock_levels z
+  JOIN warehouse_stock_levels t ON t.warehouse_id = z.warehouse_id
+   AND t.stock_item_id = z.stock_item_id AND t.id <> z.id
+ WHERE z.quantity = 0 AND z.stock_status = 'AVAILABLE' AND z.batch_number IS NULL
+   AND z.lot_number IS NULL AND z.serial_number IS NULL AND z.expiry_date IS NULL
+   AND (t.batch_number IS NOT NULL OR t.lot_number IS NOT NULL OR t.serial_number IS NOT NULL OR t.expiry_date IS NOT NULL)
+ GROUP BY z.id, z.warehouse_id, z.stock_item_id;
+
+
 -- Canonical balance identity is warehouse + stock item + status + batch + lot + serial + expiry.
 -- These are read-only preflights. If either returns rows, STOP: do not merge or delete data;
 -- provide the rows to the inventory owner for manual reconciliation before this migration resumes.
@@ -175,9 +209,38 @@ BEGIN;
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '10min';
 LOCK TABLE warehouse_stock_levels IN SHARE MODE NOWAIT;
+-- Keep the ordinary pair lookup path after obsolete pair-only uniqueness is removed.
+CREATE INDEX IF NOT EXISTS idx_wsl_warehouse_item ON warehouse_stock_levels(warehouse_id, stock_item_id);
 CREATE INDEX IF NOT EXISTS ix_inventory_balance_lock ON warehouse_stock_levels(warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_inventory_balance_identity ON warehouse_stock_levels
   (warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date) NULLS NOT DISTINCT;
+-- Remove only unique objects whose complete, non-expression, non-partial key is exactly the
+-- obsolete ordered pair. Constraint-backed indexes are removed through their constraint.
+DO $$
+DECLARE candidate record;
+BEGIN
+  FOR candidate IN
+    SELECT idx.relname AS index_name, con.conname AS constraint_name
+      FROM pg_index i
+      JOIN pg_class tbl ON tbl.oid = i.indrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+      JOIN pg_class idx ON idx.oid = i.indexrelid
+      LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid AND con.contype IN ('u', 'p')
+     WHERE ns.nspname = 'public' AND tbl.relname = 'warehouse_stock_levels'
+       AND i.indisunique AND i.indnkeyatts = 2 AND i.indexprs IS NULL AND i.indpred IS NULL
+       AND (SELECT array_agg(att.attname ORDER BY key.ordinality)
+              FROM unnest(i.indkey::smallint[]) WITH ORDINALITY key(attnum, ordinality)
+              JOIN pg_attribute att ON att.attrelid = tbl.oid AND att.attnum = key.attnum
+             WHERE key.ordinality <= i.indnkeyatts)
+           = ARRAY['warehouse_id','stock_item_id']::name[]
+  LOOP
+    IF candidate.constraint_name IS NOT NULL THEN
+      EXECUTE format('ALTER TABLE public.warehouse_stock_levels DROP CONSTRAINT %I', candidate.constraint_name);
+    ELSE
+      EXECUTE format('DROP INDEX public.%I', candidate.index_name);
+    END IF;
+  END LOOP;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_available_serial_location ON warehouse_stock_levels(stock_item_id, serial_number)
  WHERE serial_number IS NOT NULL AND stock_status = 'AVAILABLE' AND quantity > 0;
 COMMIT;

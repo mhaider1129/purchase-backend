@@ -31,6 +31,30 @@ describe('Phase 3 inventory integrity correction', () => {
     expect(params).toEqual([1, 2, 'AVAILABLE', null, null, null, '2028-01-01']);
   });
 
+  test('different batches use different exact identities and plain inserts never use pair conflict', async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [{ id: 10 }] }) };
+    const repo = new InventoryRepository(client);
+    await repo.lockExactInventoryBalance({ warehouseId: 1, inventoryItemId: 2,
+      stockStatus: 'AVAILABLE', batchNumber: 'Batch A' });
+    await repo.lockExactInventoryBalance({ warehouseId: 1, inventoryItemId: 2,
+      stockStatus: 'AVAILABLE', batchNumber: 'Batch B' });
+    expect(client.query.mock.calls[0][1][3]).toBe('Batch A');
+    expect(client.query.mock.calls[1][1][3]).toBe('Batch B');
+    await repo.createInventoryBalance({ warehouseId: 1, inventoryItemId: 2,
+      actor: { id: 3 }, stockStatus: 'AVAILABLE', batchNumber: 'Batch B' }, 'Gauze');
+    expect(client.query.mock.calls[2][0]).not.toContain('ON CONFLICT (warehouse_id, stock_item_id)');
+  });
+
+  test('warehouse setup persists configuration policy without creating a zero balance', async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    await new InventoryRepository(client).setupWarehouse(
+      { id: 2, name: 'Gauze' }, { warehouse_id: 1 }, 9, 3,
+    );
+    const sql = client.query.mock.calls.map((call) => call[0]).join('\n');
+    expect(sql).toContain('INSERT INTO warehouse_replenishment_policies');
+    expect(sql).not.toContain('INSERT INTO warehouse_stock_levels');
+  });
+
   test('outbound allocation is FEFO and explicit batch restricts identity', async () => {
     const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     await new InventoryRepository(client).lockEligibleOutboundBalances({
@@ -126,6 +150,19 @@ describe('Phase 3 inventory integrity correction', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS inventory_transaction_allocations');
     expect(sql).toContain('prevent_inventory_allocation_mutation');
     expect(sql).toContain("metadata->>'allocationLedgerVersion' = '1'");
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_wsl_warehouse_item');
+    expect(sql).toContain("= ARRAY['warehouse_id','stock_item_id']::name[]");
+    expect(sql).not.toContain('DROP CONSTRAINT IF EXISTS warehouse_stock_levels_warehouse_id_stock_item_id_key');
+    expect(sql).toContain('array_agg(batch_id ORDER BY id) AS legacy_batch_ids');
+  });
+
+  test('goods receipt delegates once and contains no legacy balance or movement write', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../controllers/procureToPayController.js'), 'utf8');
+    const receiptFunction = source.slice(source.indexOf('const createGoodsReceipt'), source.indexOf('const estimatedReceiptValue'));
+    expect(receiptFunction.match(/postAcceptedReceiptLines\(/g)).toHaveLength(1);
+    expect(receiptFunction).not.toContain('INSERT INTO warehouse_stock_levels');
+    expect(receiptFunction).not.toContain('INSERT INTO warehouse_stock_movements');
+    expect(receiptFunction).toContain('No stock item found');
   });
 
   test('manual SQL validator rejects a copied diff hunk with its exact line', () => {

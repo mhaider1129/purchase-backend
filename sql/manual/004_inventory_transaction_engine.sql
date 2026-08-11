@@ -25,6 +25,26 @@ SELECT CASE WHEN con.oid IS NULL THEN 'index' ELSE 'constraint' END AS object_ty
    AND i.indisunique
  ORDER BY idx.relname;
 
+-- Exact legacy six-column identity inventory. A row qualifies only when the complete,
+-- ordered key is (warehouse_id, stock_item_id, batch_id, lot_number, expiry_date,
+-- serial_number), with no expressions or predicate. Retain this output with the change record.
+SELECT CASE WHEN con.oid IS NULL THEN 'index' ELSE 'constraint' END AS object_type,
+       idx.relname AS object_name, con.conname AS constraint_name,
+       pg_get_indexdef(i.indexrelid) AS definition
+  FROM pg_index i
+  JOIN pg_class tbl ON tbl.oid = i.indrelid
+  JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+  JOIN pg_class idx ON idx.oid = i.indexrelid
+  LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid AND con.contype IN ('u', 'p')
+ WHERE ns.nspname = 'public' AND tbl.relname = 'warehouse_stock_levels'
+   AND i.indisunique AND i.indnkeyatts = 6 AND i.indexprs IS NULL AND i.indpred IS NULL
+   AND (SELECT array_agg(att.attname ORDER BY key.ordinality)
+          FROM unnest(i.indkey::smallint[]) WITH ORDINALITY key(attnum, ordinality)
+          JOIN pg_attribute att ON att.attrelid = tbl.oid AND att.attnum = key.attnum
+         WHERE key.ordinality <= i.indnkeyatts)
+       = ARRAY['warehouse_id','stock_item_id','batch_id','lot_number','expiry_date','serial_number']::name[]
+ ORDER BY idx.relname;
+
 -- =============================================================================
 -- PHASE 1: BALANCE PROJECTION DDL
 -- NOWAIT makes this phase fail immediately instead of waiting in a lock cycle.
@@ -214,8 +234,9 @@ CREATE INDEX IF NOT EXISTS idx_wsl_warehouse_item ON warehouse_stock_levels(ware
 CREATE INDEX IF NOT EXISTS ix_inventory_balance_lock ON warehouse_stock_levels(warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_inventory_balance_identity ON warehouse_stock_levels
   (warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date) NULLS NOT DISTINCT;
--- Remove only unique objects whose complete, non-expression, non-partial key is exactly the
--- obsolete ordered pair. Constraint-backed indexes are removed through their constraint.
+-- Remove only unique objects whose complete, non-expression, non-partial key is exactly an
+-- obsolete identity: the ordered pair or historical six-column batch_id key. Constraint-backed
+-- indexes are removed through their constraint. batch_id itself remains historical lookup data.
 DO $$
 DECLARE candidate record;
 BEGIN
@@ -227,12 +248,13 @@ BEGIN
       JOIN pg_class idx ON idx.oid = i.indexrelid
       LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid AND con.contype IN ('u', 'p')
      WHERE ns.nspname = 'public' AND tbl.relname = 'warehouse_stock_levels'
-       AND i.indisunique AND i.indnkeyatts = 2 AND i.indexprs IS NULL AND i.indpred IS NULL
+       AND i.indisunique AND i.indnkeyatts IN (2, 6) AND i.indexprs IS NULL AND i.indpred IS NULL
        AND (SELECT array_agg(att.attname ORDER BY key.ordinality)
               FROM unnest(i.indkey::smallint[]) WITH ORDINALITY key(attnum, ordinality)
               JOIN pg_attribute att ON att.attrelid = tbl.oid AND att.attnum = key.attnum
              WHERE key.ordinality <= i.indnkeyatts)
-           = ARRAY['warehouse_id','stock_item_id']::name[]
+           IN (ARRAY['warehouse_id','stock_item_id']::name[],
+               ARRAY['warehouse_id','stock_item_id','batch_id','lot_number','expiry_date','serial_number']::name[])
   LOOP
     IF candidate.constraint_name IS NOT NULL THEN
       EXECUTE format('ALTER TABLE public.warehouse_stock_levels DROP CONSTRAINT %I', candidate.constraint_name);

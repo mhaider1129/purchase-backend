@@ -104,61 +104,15 @@ const assignRequestToProcurement = async (req, res, next) => {
   }
 };
 
-const addReceivedStockToWarehouse = async (client, { warehouseId, requestId, itemName, quantity, userId }) => {
-  if (!Number.isInteger(warehouseId)) {
-    throw createHttpError(400, 'You must be assigned to a warehouse to receive stock items');
-  }
-
-  const parsedQuantity = Number(quantity);
-  if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
-    throw createHttpError(400, `Cannot add a non-positive quantity for ${itemName || 'the stock item'}`);
-  }
-
-  await ensureWarehouseAssignments(client);
-  await ensureWarehouseInventoryTables(client);
-
-  const stockItemRes = await client.query(
-    `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
-    [itemName],
-  );
-
-  if (stockItemRes.rowCount === 0) {
-    throw createHttpError(400, `Stock item '${itemName}' does not exist in the catalogue`);
-  }
-
-  const stockItemId = stockItemRes.rows[0].id;
-  const normalizedName = stockItemRes.rows[0].name;
-
-  await client.query(
-    `INSERT INTO warehouse_stock_levels (warehouse_id, stock_item_id, item_name, quantity, updated_by)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (warehouse_id, stock_item_id)
-     DO UPDATE SET
-       quantity = warehouse_stock_levels.quantity + EXCLUDED.quantity,
-       updated_at = CURRENT_TIMESTAMP,
-       updated_by = EXCLUDED.updated_by,
-       item_name = EXCLUDED.item_name`,
-    [warehouseId, stockItemId, normalizedName, parsedQuantity, userId],
-  );
-
-  await client.query(
-    `INSERT INTO warehouse_stock_movements (
-        warehouse_id, stock_item_id, item_name, direction, quantity, reference_request_id, created_by, notes
-      ) VALUES ($1, $2, $3, 'in', $4, $5, $6, $7)`,
-    [
-      warehouseId,
-      stockItemId,
-      normalizedName,
-      parsedQuantity,
-      requestId,
-      userId,
-      'Stock purchase received into warehouse inventory',
-    ],
-  );
-
-  await recalculateAvailableQuantity(client, stockItemId);
-
-  return { stock_item_id: stockItemId, item_name: normalizedName, quantity: parsedQuantity };
+const addReceivedStockToWarehouse = async (client, { warehouseId, requestId, itemName, quantity, userId, actor }) => {
+  if (!Number.isInteger(warehouseId)) throw createHttpError(400, 'You must be assigned to a warehouse to receive stock items');
+  const stockItemRes = await client.query('SELECT id,name FROM stock_items WHERE LOWER(name)=LOWER($1) LIMIT 1',[itemName]);
+  if (!stockItemRes.rowCount) throw createHttpError(400, `Stock item '${itemName}' does not exist in the catalogue`);
+  const warehouseRes = await client.query('SELECT institute_id FROM warehouses WHERE id=$1',[warehouseId]);
+  const { postAcceptedReceiptLines } = require('../../services/goodsReceiptInventoryAdapter');
+  const line={id:`request-${requestId}-${stockItemRes.rows[0].id}`,stock_item_id:stockItemRes.rows[0].id,accepted_quantity:Number(quantity)};
+  const results=await postAcceptedReceiptLines({id:`legacy-request-${requestId}`,receipt_number:`REQUEST-${requestId}`},[line],{warehouseId,instituteId:warehouseRes.rows[0].institute_id,actor:actor || {id:userId},correlationId:`request-receipt:${requestId}`},client);
+  return {stock_item_id:stockItemRes.rows[0].id,item_name:stockItemRes.rows[0].name,quantity:Number(quantity),movement_id:results[0]?.movement?.id};
 };
 
 const updateApprovalStatus = async (req, res, next) => {
@@ -2045,6 +1999,7 @@ const markRequestAsReceived = async (req, res, next) => {
           itemName: item.item_name,
           quantity: safeQuantityToReceive,
           userId: user_id,
+          actor: req.user,
         });
       }
     } else if (remainingReceivable <= 0 && !item.is_received) {

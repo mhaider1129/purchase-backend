@@ -5,7 +5,7 @@ const pool = require('../config/db');
 const withTransaction = require('../utils/withTransaction');
 const InventoryError = require('../errors/inventoryError');
 const { hasPermission } = require('../policies/inventoryPolicy');
-const { postMovement } = require('./inventoryPostingService');
+const { postStatusTransferMovement } = require('./inventoryPostingService');
 
 const ALLOWED = new Set(['AVAILABLE:QUARANTINE','QUARANTINE:AVAILABLE','AVAILABLE:RECALLED','RECALLED:AVAILABLE','AVAILABLE:BLOCKED','BLOCKED:AVAILABLE','AVAILABLE:DAMAGED','AVAILABLE:EXPIRED']);
 const permissionFor = (from, to) => to === 'QUARANTINE' ? 'inventory.quarantine' : from === 'QUARANTINE' ? 'inventory.release-quarantine' : 'inventory.recall';
@@ -18,20 +18,21 @@ async function transferStatus(input, suppliedClient = null) {
   const permission = permissionFor(from, to);
   if (!hasPermission(input.actor, permission)) throw new InventoryError('INVENTORY_PERMISSION_DENIED', `Permission required: ${permission}`, 403);
   const correlationId = input.correlationId || crypto.randomUUID();
+  const operation = to === 'QUARANTINE' ? 'QUARANTINE' : from === 'QUARANTINE' ? 'RELEASE' : 'RECALL';
   return withTransaction(async (client) => {
     const common = { inventoryItemId: input.inventoryItemId, instituteId: input.instituteId, warehouseId: input.warehouseId,
       quantity: input.quantity, batchNumber: input.batchNumber, lotNumber: input.lotNumber, serialNumber: input.serialNumber,
       expiryDate: input.expiryDate, sourceDocumentType: input.sourceDocumentType || 'inventory_status_transfer',
       sourceDocumentId: input.sourceDocumentId, sourceDocumentLineId: input.sourceDocumentLineId, reason: input.reason.trim(),
-      actor: input.actor, correlationId, metadata: { movementGroup: correlationId, statusTransfer: { from, to } } };
-    const debit = await postMovement({ ...common, movementType: 'NEGATIVE_ADJUSTMENT', stockStatus: from, idempotencyKey: `${input.idempotencyKey}:debit` }, client);
+      actor: input.actor, correlationId, metadata: { movementGroup: correlationId, statusTransfer: { from, to }, statusTransferOperation: operation } };
+    const debit = await postStatusTransferMovement({ ...common, movementType: 'NEGATIVE_ADJUSTMENT', stockStatus: from, idempotencyKey: `${input.idempotencyKey}:debit` }, operation, client);
     const credits = [];
     for (const allocation of debit.allocations) {
-      credits.push(await postMovement({ ...common, movementType: 'POSITIVE_ADJUSTMENT', stockStatus: to,
+      credits.push(await postStatusTransferMovement({ ...common, movementType: 'POSITIVE_ADJUSTMENT', stockStatus: to,
         quantity: Math.abs(Number(allocation.quantity)), batchNumber: allocation.batch_number,
         lotNumber: allocation.lot_number, serialNumber: allocation.serial_number, expiryDate: allocation.expiry_date,
         idempotencyKey: `${input.idempotencyKey}:credit:${allocation.allocation_sequence}`,
-        metadata: { ...common.metadata, debitMovementId: debit.movement.id, debitAllocationId: allocation.id } }, client));
+        metadata: { ...common.metadata, debitMovementId: debit.movement.id, debitAllocationId: allocation.id } }, operation, client));
     }
     return { debit, credits, correlationId };
   }, { client: suppliedClient, pool });

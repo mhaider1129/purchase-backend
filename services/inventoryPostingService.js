@@ -118,6 +118,36 @@ async function postMovement(rawCommand, suppliedClient = null) {
   return withTransaction((client) => postValidated(command, client), { client: suppliedClient, pool });
 }
 
+// This entry point derives authorization from the operation rather than from a
+// request field. Generic postMovement callers can never opt into this path by
+// supplying a coordinator/string flag.
+async function postStatusTransferMovement(rawCommand, operation, suppliedClient = null) {
+  const permissions = {
+    QUARANTINE: 'inventory.quarantine',
+    RELEASE: 'inventory.release-quarantine',
+    RECALL: 'inventory.recall',
+  };
+  const permission = permissions[operation];
+  if (!permission || !require('../policies/inventoryPolicy').hasPermission(rawCommand?.actor, permission)) {
+    throw new InventoryError('INVENTORY_PERMISSION_DENIED', `Permission required: ${permission || 'status transfer permission'}`, 403);
+  }
+  const command = validateInventoryMovement(rawCommand);
+  if (!['POSITIVE_ADJUSTMENT', 'NEGATIVE_ADJUSTMENT'].includes(command.movementType) ||
+      command.metadata?.statusTransferOperation !== operation) {
+    throw new InventoryError('INVALID_STATUS_TRANSFER_POSTING', 'Invalid internal status-transfer posting', 400);
+  }
+  return withTransaction(async (client) => {
+    const repository = new InventoryRepository(client);
+    const warehouse = await repository.validateWarehouse(command.warehouseId, command.instituteId);
+    if (!warehouse) throw new InventoryError('WAREHOUSE_SCOPE_DENIED', 'Warehouse is unavailable in the supplied institute', 403);
+    // Retain institute/warehouse isolation while substituting only the business
+    // permission which was verified above.
+    const internalActor = { ...command.actor, permissions: [...(command.actor.permissions || []), 'inventory.adjust'],
+      permissionSet: new Set([...(command.actor.permissionSet || []), 'inventory.adjust']) };
+    return postValidated({ ...command, actor: internalActor }, client);
+  }, { client: suppliedClient, pool });
+}
+
 async function postMovements(rawCommands, suppliedClient = null) {
   if (!Array.isArray(rawCommands) || rawCommands.length === 0) throw new InventoryError('INVALID_MOVEMENT_BATCH', 'At least one movement is required');
   const commands = rawCommands.map(validateInventoryMovement).sort((a, b) =>

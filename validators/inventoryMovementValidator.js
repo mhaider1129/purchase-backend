@@ -9,7 +9,7 @@ const integer = (value) => Number.isSafeInteger(Number(value)) && Number(value) 
 function validateInventoryMovement(command) {
   const type = INVENTORY_MOVEMENT_TYPES[command?.movementType];
   if (!type) throw new InventoryError('INVALID_MOVEMENT_TYPE', 'A supported movementType is required');
-  if (type.genericPostingSupported === false) throw new InventoryError('UNSUPPORTED_MOVEMENT', `${command.movementType} is not supported by generic Phase 3A posting`, 501);
+  if (type.genericPostingSupported === false && command?.coordinator !== 'warehouseTransferService') throw new InventoryError('UNSUPPORTED_MOVEMENT', `${command.movementType} is not supported by generic Phase 3A posting`, 501);
   if (!integer(command.inventoryItemId)) throw new InventoryError('INVALID_INVENTORY_ITEM', 'A valid inventoryItemId is required');
   if (!integer(command.instituteId)) throw new InventoryError('INVALID_INSTITUTE', 'A valid instituteId is required');
   if (!integer(command.warehouseId)) throw new InventoryError('INVALID_WAREHOUSE', 'A valid warehouseId is required');

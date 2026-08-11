@@ -55,100 +55,16 @@ const findActiveRecallBlocker = async (client, { stockItemId, itemName }) => {
   return rows[0] || null;
 };
 
-const decrementWarehouseStock = async (
-  client,
-  {
-    warehouseId,
-    stockItem,
-    quantity,
-    requestId,
-    departmentId,
-    userId,
-    skipIfMissingStockLevel = false,
-    batchId = null,
-    lotNumber = null,
-    expiryDate = null,
-  },
-) => {
-  const { id: stockItemId, name: itemName } = stockItem;
-  const balanceRes = await client.query(
-    `SELECT id, quantity, batch_id, lot_number, expiry_date
-       FROM warehouse_stock_levels
-      WHERE warehouse_id = $1
-        AND stock_item_id = $2
-        AND batch_id IS NOT DISTINCT FROM $3
-        AND lot_number IS NOT DISTINCT FROM $4
-        AND expiry_date IS NOT DISTINCT FROM $5
-      FOR UPDATE`,
-    [warehouseId, stockItemId, batchId, lotNumber, expiryDate],
-  );
-
-  if (balanceRes.rowCount === 0) {
-    if (skipIfMissingStockLevel) {
-      return {
-        stock_item_id: stockItemId,
-        item_name: itemName,
-        warning:
-          'Warehouse inventory is not initialized for this stock item; stock was not decremented.',
-      };
-    }
-
-    throw createHttpError(
-      400,
-      `Warehouse inventory for ${itemName} is not initialized. Please add stock before supplying items.`,
-    );
-  }
-
-  const currentQty = Number(balanceRes.rows[0].quantity) || 0;
-  if (currentQty < quantity) {
-    throw createHttpError(
-      400,
-      `Insufficient stock for ${itemName}. Available: ${currentQty}, requested: ${quantity}`,
-    );
-  }
-
-  await client.query(
-    `UPDATE warehouse_stock_levels
-        SET quantity = quantity - $2,
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by = $3
-      WHERE id = $1`,
-    [balanceRes.rows[0].id, quantity, userId],
-  );
-
-  await recalculateAvailableQuantity(client, stockItemId);
-
-  await client.query(
-    `INSERT INTO warehouse_stock_movements (
-        warehouse_id,
-        stock_item_id,
-        batch_id,
-        item_name,
-        lot_number,
-        expiry_date,
-        direction,
-        quantity,
-        reference_request_id,
-        to_department_id,
-        created_by,
-        notes
-      ) VALUES ($1, $2, $3, $4, $5, $6, 'out', $7, $8, $9, $10, $11)`,
-    [
-      warehouseId,
-      stockItemId,
-      balanceRes.rows[0].batch_id,
-      itemName,
-      balanceRes.rows[0].lot_number,
-      balanceRes.rows[0].expiry_date,
-      quantity,
-      requestId,
-      departmentId,
-      userId,
-      'Warehouse supply request fulfillment',
-    ],
-  );
-
-  return { stock_item_id: stockItemId, item_name: itemName, batch_id: balanceRes.rows[0].batch_id, lot_number: balanceRes.rows[0].lot_number, expiry_date: balanceRes.rows[0].expiry_date };
+const decrementWarehouseStock = async (client, { warehouseId, stockItem, quantity, requestId, departmentId, userId, batchId = null, lotNumber = null, expiryDate = null, actor }) => {
+  const warehouse = await client.query('SELECT institute_id FROM warehouses WHERE id=$1', [warehouseId]);
+  const { postMovement } = require('../services/inventoryPostingService');
+  const result = await postMovement({ movementType:'ISSUE', inventoryItemId:stockItem.id, instituteId:warehouse.rows[0].institute_id,
+    warehouseId, quantity, stockStatus:'AVAILABLE', batchNumber:batchId == null ? null : String(batchId), lotNumber, expiryDate,
+    sourceDocumentType:'warehouse_supply', sourceDocumentId:requestId, sourceDocumentLineId:stockItem.id,
+    departmentId, destinationLocation:`department:${departmentId}`, actor:actor || { id:userId },
+    idempotencyKey:`warehouse-supply:${requestId}:item:${stockItem.id}:quantity:${quantity}`,
+    correlationId:`warehouse-supply:${requestId}`, metadata:{ requestId, departmentId } }, client);
+  return { stock_item_id:stockItem.id,item_name:stockItem.name,movement_id:result.movement.id,allocations:result.allocations };
 };
 
 // Record supplied items for a request
@@ -325,7 +241,7 @@ const recordSuppliedItems = async (req, res, next) => {
           requestId: request.id,
           departmentId: request.department_id,
           userId,
-          skipIfMissingStockLevel: true,
+          actor: req.user,
           batchId,
           lotNumber,
           expiryDate,

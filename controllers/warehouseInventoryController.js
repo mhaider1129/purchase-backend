@@ -102,314 +102,47 @@ const issueWarehouseStock = async (req, res, next) => {
   } finally { client.release(); }
 };
 
+const inventoryAdjustmentService = require('../services/inventoryAdjustmentService');
+
+const resolveAdjustmentContext = async (warehouseId) => {
+  const { rows } = await pool.query('SELECT id, institute_id FROM warehouses WHERE id = $1 AND is_active = true', [warehouseId]);
+  if (!rows[0]) throw createHttpError(404, 'Warehouse not found');
+  return rows[0];
+};
+
 const addWarehouseStock = async (req, res, next) => {
-  const {
-    stock_item_id: rawStockItemId,
-    quantity: rawQuantity,
-    notes,
-    warehouse_id,
-    batch_id: rawBatchId,
-    lot_number: rawLotNumber,
-    expiry_date: rawExpiryDate,
-    serial_number: rawSerialNumber,
-  } = req.body || {};
-
-  if (!req.user?.hasPermission('warehouse.manage-supply')) {
-    return next(createHttpError(403, 'You do not have permission to manage warehouse stock'));
-  }
-
-  const stockItemId = Number(rawStockItemId);
-  if (!Number.isInteger(stockItemId)) {
-    return next(createHttpError(400, 'A valid stock_item_id is required'));
-  }
-
-  const quantity = parseQuantity(rawQuantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) {
-    return next(createHttpError(400, 'Quantity must be a positive number'));
-  }
-
-  const batchId = rawBatchId === undefined || rawBatchId === null || rawBatchId === '' ? null : Number(rawBatchId);
-  if (batchId !== null && !Number.isInteger(batchId)) {
-    return next(createHttpError(400, 'batch_id must be an integer when provided'));
-  }
-  const lotNumber = normalizeNullableText(rawLotNumber);
-  const serialNumber = normalizeNullableText(rawSerialNumber);
-  const expiryDate = normalizeNullableDate(rawExpiryDate);
-
-  await ensureWarehouseAssignments();
-
-  const fallbackWarehouseId = req.user?.warehouse_id;
-  const providedWarehouseId =
-    warehouse_id === undefined || warehouse_id === null || warehouse_id === ''
-      ? null
-      : Number(warehouse_id);
-  const warehouseId = providedWarehouseId ?? fallbackWarehouseId;
-
-  if (!Number.isInteger(warehouseId)) {
-    return next(createHttpError(400, 'A valid warehouse must be specified'));
-  }
-
-  await ensureWarehouseInventoryTables();
-
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const stockItemRes = await client.query(
-      'SELECT id, name FROM stock_items WHERE id = $1',
-      [stockItemId],
-    );
-
-    if (stockItemRes.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Stock item not found'));
-    }
-
-    const itemName = stockItemRes.rows[0].name;
-
-    const existingLevelRes = await client.query(
-      `SELECT id
-         FROM warehouse_stock_levels
-        WHERE warehouse_id = $1
-          AND stock_item_id = $2
-          AND batch_id IS NOT DISTINCT FROM $3
-          AND lot_number IS NOT DISTINCT FROM $4
-          AND expiry_date IS NOT DISTINCT FROM $5
-          AND serial_number IS NOT DISTINCT FROM $6
-        FOR UPDATE`,
-      [warehouseId, stockItemId, batchId, lotNumber, expiryDate, serialNumber],
-    );
-
-    let balanceRes;
-    if (existingLevelRes.rowCount > 0) {
-      balanceRes = await client.query(
-        `UPDATE warehouse_stock_levels
-            SET quantity = quantity + $2,
-                updated_by = $3,
-                updated_at = CURRENT_TIMESTAMP,
-                item_name = $4
-          WHERE id = $1
-          RETURNING id, warehouse_id, stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, quantity, updated_at`,
-        [existingLevelRes.rows[0].id, quantity, req.user.id, itemName],
-      );
-    } else {
-      balanceRes = await client.query(
-        `INSERT INTO warehouse_stock_levels (
-          warehouse_id,
-          stock_item_id,
-          batch_id,
-          item_name,
-          lot_number,
-          expiry_date,
-          serial_number,
-          quantity,
-          updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING id, warehouse_id, stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, quantity, updated_at`,
-        [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, req.user.id],
-      );
-    }
-
-    await recalculateAvailableQuantity(client, stockItemId);
-
-    const movementRes = await client.query(
-      `INSERT INTO warehouse_stock_movements (
-        warehouse_id, stock_item_id, batch_id, item_name, lot_number, expiry_date, serial_number, direction, quantity, notes, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'in', $8, $9, $10)
-      RETURNING id`,
-      [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, notes || null, req.user.id],
-    );
-    await insertInventoryTransaction(client, {
-      transactionType: 'receipt',
-      sourceLocation: null,
-      destinationLocation: `warehouse:${warehouseId}`,
-      warehouseId,
-      batchId,
-      stockItemId,
-      quantity,
-      referenceDocument: 'warehouse_stock_add',
-      warehouseStockMovementId: movementRes.rows[0].id,
-      notes: notes || null,
-      createdBy: req.user.id,
-    });
-
-    await client.query('COMMIT');
-
-    res.status(201).json({
-      message: 'Stock quantity added to warehouse',
-      balance: balanceRes.rows[0],
-    });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Failed to add warehouse stock:', err.message);
-    next(createHttpError(500, 'Failed to add warehouse stock'));
-  } finally {
-    client.release();
-  }
+    if (!req.user?.hasPermission('inventory.adjust') && !req.user?.hasPermission('inventory.opening-balance')) return next(createHttpError(403, 'Permission required: inventory.adjust'));
+    const stockItemId = Number(req.body?.stock_item_id); const quantity = parseQuantity(req.body?.quantity);
+    const warehouseId = Number(req.body?.warehouse_id || req.user?.warehouse_id);
+    const reason = String(req.body?.reason || req.body?.notes || '').trim();
+    if (!Number.isInteger(stockItemId) || !(quantity > 0) || !Number.isInteger(warehouseId)) return next(createHttpError(400, 'Valid warehouse, stock item, and positive quantity are required'));
+    if (!reason) return next(createHttpError(400, 'A reason is required'));
+    const warehouse = await resolveAdjustmentContext(warehouseId);
+    const key = req.get?.('Idempotency-Key') || req.body?.idempotency_key;
+    if (!key) return next(createHttpError(400, 'Idempotency-Key is required'));
+    const result = await inventoryAdjustmentService.positive({ inventoryItemId: stockItemId, instituteId: warehouse.institute_id, warehouseId, quantity,
+      reason, actor: req.user, idempotencyKey: key, sourceDocumentType: req.body?.source_document_type || 'warehouse_stock_add',
+      sourceDocumentId: req.body?.source_document_id || key, batchNumber: req.body?.batch_number || null, lotNumber: normalizeNullableText(req.body?.lot_number),
+      serialNumber: normalizeNullableText(req.body?.serial_number), expiryDate: normalizeNullableDate(req.body?.expiry_date), stockStatus: req.body?.stock_status || 'AVAILABLE' });
+    return res.status(result.idempotent ? 200 : 201).json({ message: 'Stock adjustment posted', ...result });
+  } catch (error) { return next(error.statusCode ? error : createHttpError(500, 'Failed to add warehouse stock')); }
 };
 
 const discardWarehouseStock = async (req, res, next) => {
-  const {
-    stock_item_id: rawStockItemId,
-    quantity: rawQuantity,
-    reason,
-    notes,
-    warehouse_id,
-    lot_number: rawLotNumber,
-    expiry_date: rawExpiryDate,
-    serial_number: rawSerialNumber,
-    batch_id: rawBatchId,
-  } = req.body || {};
-
-  if (!req.user?.hasPermission('warehouse.manage-supply')) {
-    return next(createHttpError(403, 'You do not have permission to adjust warehouse stock'));
-  }
-
-  const stockItemId = Number(rawStockItemId);
-  if (!Number.isInteger(stockItemId)) {
-    return next(createHttpError(400, 'A valid stock_item_id is required'));
-  }
-
-  const quantity = parseQuantity(rawQuantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) {
-    return next(createHttpError(400, 'Quantity must be a positive number'));
-  }
-
-  const batchId = rawBatchId === undefined || rawBatchId === null || rawBatchId === '' ? null : Number(rawBatchId);
-  if (batchId !== null && !Number.isInteger(batchId)) {
-    return next(createHttpError(400, 'batch_id must be an integer when provided'));
-  }
-  const lotNumber = normalizeNullableText(rawLotNumber);
-  const serialNumber = normalizeNullableText(rawSerialNumber);
-  const expiryDate = normalizeNullableDate(rawExpiryDate);
-
-  const normalizedReason = String(reason || '').trim().toLowerCase();
-  const allowedReasons = ['expired', 'damaged', 'other'];
-  if (!normalizedReason || !allowedReasons.includes(normalizedReason)) {
-    return next(createHttpError(400, 'A reason of expired, damaged, or other is required'));
-  }
-
-  await ensureWarehouseAssignments();
-
-  const fallbackWarehouseId = req.user?.warehouse_id;
-  const providedWarehouseId =
-    warehouse_id === undefined || warehouse_id === null || warehouse_id === '' ? null : Number(warehouse_id);
-  const warehouseId = providedWarehouseId ?? fallbackWarehouseId;
-
-  if (!Number.isInteger(warehouseId)) {
-    return next(createHttpError(400, 'A valid warehouse must be specified'));
-  }
-
-  await ensureWarehouseInventoryTables();
-
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const stockItemRes = await client.query('SELECT id, name FROM stock_items WHERE id = $1', [stockItemId]);
-
-    if (stockItemRes.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Stock item not found'));
-    }
-
-    const itemName = stockItemRes.rows[0].name;
-
-    const balanceRes = await client.query(
-      `SELECT id, batch_id, lot_number, expiry_date, serial_number, quantity
-         FROM warehouse_stock_levels
-        WHERE warehouse_id = $1 AND stock_item_id = $2
-          AND batch_id IS NOT DISTINCT FROM $3
-          AND lot_number IS NOT DISTINCT FROM $4
-          AND expiry_date IS NOT DISTINCT FROM $5
-          AND serial_number IS NOT DISTINCT FROM $6
-        FOR UPDATE`,
-      [warehouseId, stockItemId, batchId, lotNumber, expiryDate, serialNumber],
-    );
-
-    if (balanceRes.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return next(
-        createHttpError(
-          400,
-          `Warehouse inventory for ${itemName} is not initialized. Please add stock before adjusting quantities.`,
-        ),
-      );
-    }
-
-    const currentQty = Number(balanceRes.rows[0].quantity) || 0;
-    if (currentQty < quantity) {
-      await client.query('ROLLBACK');
-      return next(
-        createHttpError(
-          400,
-          `Insufficient stock for ${itemName}. Available: ${currentQty}, requested: ${quantity}`,
-        ),
-      );
-    }
-
-    const updatedBalanceRes = await client.query(
-      `UPDATE warehouse_stock_levels
-          SET quantity = quantity - $2,
-              updated_at = CURRENT_TIMESTAMP,
-              updated_by = $3
-        WHERE id = $1
-        RETURNING id, warehouse_id, stock_item_id, item_name, quantity, updated_at`,
-      [balanceRes.rows[0].id, quantity, req.user.id],
-    );
-
-    await recalculateAvailableQuantity(client, stockItemId);
-
-    const destructionNotes = notes?.trim()
-      ? `Destroyed (${normalizedReason}): ${notes.trim()}`
-      : `Destroyed (${normalizedReason})`;
-
-    const movementRes = await client.query(
-      `INSERT INTO warehouse_stock_movements (
-          warehouse_id,
-          stock_item_id,
-          batch_id,
-          item_name,
-          lot_number,
-          expiry_date,
-          serial_number,
-          direction,
-          quantity,
-          notes,
-          created_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'out', $8, $9, $10)
-        RETURNING id, warehouse_id, stock_item_id, item_name, lot_number, expiry_date, serial_number, direction, quantity, notes, created_at`,
-      [warehouseId, stockItemId, batchId, itemName, lotNumber, expiryDate, serialNumber, quantity, destructionNotes, req.user.id],
-    );
-    await insertInventoryTransaction(client, {
-      transactionType: 'adjustment',
-      sourceLocation: `warehouse:${warehouseId}`,
-      destinationLocation: null,
-      warehouseId,
-      batchId,
-      stockItemId,
-      quantity,
-      referenceDocument: 'warehouse_stock_discard',
-      warehouseStockMovementId: movementRes.rows[0].id,
-      notes: destructionNotes,
-      createdBy: req.user.id,
-    });
-
-    await client.query('COMMIT');
-
-    res.status(200).json({
-      message: 'Stock removal recorded',
-      balance: updatedBalanceRes.rows[0],
-      movement: movementRes.rows[0],
-      reason: normalizedReason,
-    });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Failed to discard warehouse stock:', err.message);
-    next(createHttpError(500, 'Failed to discard warehouse stock'));
-  } finally {
-    client.release();
-  }
+    if (!req.user?.hasPermission('inventory.adjust')) return next(createHttpError(403, 'Permission required: inventory.adjust'));
+    const stockItemId = Number(req.body?.stock_item_id); const quantity = parseQuantity(req.body?.quantity);
+    const warehouseId = Number(req.body?.warehouse_id || req.user?.warehouse_id); const reason = String(req.body?.reason || '').trim();
+    if (!Number.isInteger(stockItemId) || !(quantity > 0) || !Number.isInteger(warehouseId)) return next(createHttpError(400, 'Valid warehouse, stock item, and positive quantity are required'));
+    if (!reason) return next(createHttpError(400, 'A reason is required'));
+    const warehouse = await resolveAdjustmentContext(warehouseId); const key = req.get?.('Idempotency-Key') || req.body?.idempotency_key;
+    if (!key) return next(createHttpError(400, 'Idempotency-Key is required'));
+    const result = await inventoryAdjustmentService.negative({ inventoryItemId: stockItemId, instituteId: warehouse.institute_id, warehouseId, quantity,
+      reason, actor:req.user,idempotencyKey:key,sourceDocumentType:'warehouse_stock_discard',sourceDocumentId:req.body?.source_document_id || key,
+      batchNumber:req.body?.batch_number || null,lotNumber:normalizeNullableText(req.body?.lot_number),serialNumber:normalizeNullableText(req.body?.serial_number),expiryDate:normalizeNullableDate(req.body?.expiry_date),stockStatus:'AVAILABLE',metadata:{discardCategory:reason,notes:req.body?.notes || null} });
+    return res.status(200).json({message:'Stock removal posted',...result});
+  } catch(error){return next(error.statusCode ? error : createHttpError(500,'Failed to discard warehouse stock'));}
 };
 
 const getWarehouseItems = async (req, res, next) => {

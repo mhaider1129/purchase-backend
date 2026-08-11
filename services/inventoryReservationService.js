@@ -61,15 +61,34 @@ async function release(input, suppliedClient = null) {
 }
 
 async function issue(input, suppliedClient = null) {
+  const idempotencyKey = typeof input?.idempotencyKey === 'string' ? input.idempotencyKey.trim() : '';
+  if (!idempotencyKey) throw new InventoryError('INVALID_IDEMPOTENCY_KEY', 'A reservation issue idempotencyKey is required', 400);
+  const requestedQuantity = Number(input.quantity);
+  if (!(requestedQuantity > 0)) throw new InventoryError('RESERVATION_EXCEEDED', 'A positive issue quantity is required', 409);
   return withTransaction(async (client) => {
     const result = await client.query('SELECT * FROM inventory_reservations WHERE id=$1 FOR UPDATE', [input.reservationId]);
-    if (!result.rowCount || result.rows[0].status !== 'ACTIVE') throw new InventoryError('RESERVATION_NOT_ACTIVE', 'An active reservation is required', 409);
-    const reservation = result.rows[0]; const remainingReservation = Number(reservation.quantity)-Number(reservation.consumed_quantity);
+    if (!result.rowCount) throw new InventoryError('RESERVATION_NOT_ACTIVE', 'An active reservation is required', 409);
+    const reservation = result.rows[0];
     // Issuing is intentionally conjunctive: inventory.reserve proves authority over
     // the reservation document, while inventory.issue authorizes the physical debit.
     const warehouse = await authorize(client, input, reservation.warehouse_id, 'inventory.reserve');
     await authorize(client, input, reservation.warehouse_id, 'inventory.issue');
-    const quantity = Number(input.quantity ?? remainingReservation);
+    const existing = await client.query(`SELECT * FROM inventory_reservation_issue_operations
+      WHERE reservation_id=$1 AND idempotency_key=$2`, [reservation.id, idempotencyKey]);
+    if (existing.rowCount) {
+      const operation = existing.rows[0];
+      if (Number(operation.requested_quantity) !== requestedQuantity) {
+        throw new InventoryError('IDEMPOTENCY_CONFLICT', 'The idempotency key was already used with a different issue quantity', 409);
+      }
+      const movement = await client.query('SELECT * FROM inventory_transactions WHERE id=$1', [operation.inventory_movement_id]);
+      const allocations = await client.query(`SELECT * FROM inventory_transaction_allocations
+        WHERE inventory_transaction_id=$1 ORDER BY allocation_sequence,id`, [operation.inventory_movement_id]);
+      if (!movement.rowCount) throw new InventoryError('IDEMPOTENCY_RECORD_INVALID', 'The issue operation movement is unavailable', 409);
+      return { movement: movement.rows[0], allocations: allocations.rows, idempotent: true };
+    }
+    if (reservation.status !== 'ACTIVE') throw new InventoryError('RESERVATION_NOT_ACTIVE', 'An active reservation is required', 409);
+    const remainingReservation = Number(reservation.quantity)-Number(reservation.consumed_quantity);
+    const quantity = requestedQuantity;
     if (!(quantity > 0) || quantity > remainingReservation) throw new InventoryError('RESERVATION_EXCEEDED', 'Issue quantity exceeds remaining reserved quantity', 409);
     const rows = await client.query(`SELECT * FROM inventory_reservation_allocations WHERE reservation_id=$1 ORDER BY id FOR UPDATE`, [reservation.id]);
     let left = quantity; const consumed = [];
@@ -82,12 +101,17 @@ async function issue(input, suppliedClient = null) {
     for (const { allocation, amount } of consumed) {
       const balance = await client.query('UPDATE warehouse_stock_levels SET reserved_quantity=reserved_quantity-$2,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND reserved_quantity >= $2 RETURNING id', [allocation.warehouse_stock_level_id, amount]);
       if (!balance.rowCount) throw new InventoryError('RESERVATION_BALANCE_MISMATCH', 'Reserved stock balance is inconsistent', 409);
+    }
+    const posted = await postMovement({ ...input, movementType:'ISSUE', inventoryItemId:reservation.stock_item_id, instituteId:warehouse.institute_id, warehouseId:reservation.warehouse_id, quantity, stockStatus:'AVAILABLE', sourceDocumentType:reservation.document_type, sourceDocumentId:reservation.document_id, sourceDocumentLineId:reservation.document_line_id, idempotencyKey, allocationOverrides:consumed.map(({allocation,amount})=>({warehouseStockLevelId:allocation.warehouse_stock_level_id,quantity:amount})), metadata:{ reservationId:reservation.id } }, client);
+    for (const { allocation, amount } of consumed) {
       await client.query('UPDATE inventory_reservation_allocations SET consumed_quantity=consumed_quantity+$2,updated_at=CURRENT_TIMESTAMP WHERE id=$1', [allocation.id, amount]);
     }
-    const posted = await postMovement({ ...input, movementType:'ISSUE', inventoryItemId:reservation.stock_item_id, instituteId:warehouse.institute_id, warehouseId:reservation.warehouse_id, quantity, stockStatus:'AVAILABLE', sourceDocumentType:reservation.document_type, sourceDocumentId:reservation.document_id, sourceDocumentLineId:reservation.document_line_id, idempotencyKey:input.idempotencyKey || `reservation:${reservation.id}:issue:${Number(reservation.consumed_quantity)}`, allocationOverrides:consumed.map(({allocation,amount})=>({warehouseStockLevelId:allocation.warehouse_stock_level_id,quantity:amount})), metadata:{ reservationId:reservation.id } }, client);
     const totalConsumed = Number(reservation.consumed_quantity)+quantity; const complete = totalConsumed === Number(reservation.quantity);
     await client.query(`UPDATE inventory_reservations SET consumed_quantity=$2,status=CASE WHEN $3 THEN 'CONSUMED' ELSE 'ACTIVE' END,consumed_at=CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END,consumed_by=CASE WHEN $3 THEN $4 ELSE NULL END WHERE id=$1`, [reservation.id,totalConsumed,complete,input.actor.id]);
-    return posted;
+    await client.query(`INSERT INTO inventory_reservation_issue_operations
+      (reservation_id,idempotency_key,requested_quantity,inventory_movement_id,created_by)
+      VALUES($1,$2,$3,$4,$5)`, [reservation.id,idempotencyKey,quantity,posted.movement.id,input.actor.id]);
+    return { ...posted, idempotent: false };
   }, { client: suppliedClient, pool });
 }
 

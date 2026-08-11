@@ -51,7 +51,7 @@ describe('Phase 3B runtime integrity behavior', () => {
 
   test('status transfer rejects unauthorized actor and generic posting cannot spoof authorization', async () => {
     const status = require('../services/inventoryStatusTransferService');
-    await expect(status.quarantine({ reason: 'x', actor: actor([]) })).rejects.toMatchObject({ code: 'INVENTORY_PERMISSION_DENIED' });
+    await expect(status.quarantine({ reason: 'x', idempotencyKey: 'unauthorized-q', actor: actor([]) })).rejects.toMatchObject({ code: 'INVENTORY_PERMISSION_DENIED' });
     const { postMovement } = require('../services/inventoryPostingService');
     await expect(postMovement({
       movementType: 'NEGATIVE_ADJUSTMENT', inventoryItemId: 20, instituteId: 1, warehouseId: 10,
@@ -73,12 +73,52 @@ describe('Phase 3B runtime integrity behavior', () => {
   });
 });
 
+describe('status transfer operation idempotency', () => {
+  const permittedActor = { id: 7, active: true, institute_id: 1, warehouse_id: 10, permissions: ['inventory.quarantine'] };
+
+  function harness() {
+    const movements = new Map();
+    const postedKeys = [];
+    jest.resetModules();
+    jest.doMock('../utils/withTransaction', () => (work) => work({}));
+    jest.doMock('../services/inventoryPostingService', () => ({ postStatusTransferMovement: jest.fn(async (command) => {
+      if (movements.has(command.idempotencyKey)) return { ...movements.get(command.idempotencyKey), idempotent: true };
+      postedKeys.push(command.idempotencyKey);
+      const result = command.idempotencyKey.endsWith(':debit')
+        ? { movement: { id: postedKeys.length }, allocations: [{ id: 91, allocation_sequence: 1, quantity: -command.quantity }] }
+        : { movement: { id: postedKeys.length }, allocations: [] };
+      movements.set(command.idempotencyKey, result);
+      return { ...result, idempotent: false };
+    }) }));
+    return { service: require('../services/inventoryStatusTransferService'), postedKeys };
+  }
+
+  const command = (key) => ({ inventoryItemId: 20, instituteId: 1, warehouseId: 10, quantity: 5,
+    sourceDocumentId: 9, reason: 'inspection', idempotencyKey: key, actor: permittedActor });
+
+  test('Q1 retry returns its deterministic debit/credit group while Q2 posts a new group', async () => {
+    const h = harness();
+    await h.service.quarantine(command('Q1'));
+    await h.service.quarantine(command('Q1'));
+    expect(h.postedKeys).toEqual(['Q1:debit', 'Q1:credit:1']);
+    await h.service.quarantine(command('Q2'));
+    expect(h.postedKeys).toEqual(['Q1:debit', 'Q1:credit:1', 'Q2:debit', 'Q2:credit:1']);
+  });
+
+  test('missing status-transfer operation key is rejected before a transaction starts', async () => {
+    const h = harness();
+    await expect(h.service.quarantine(command('  '))).rejects.toMatchObject({ code: 'INVALID_IDEMPOTENCY_KEY', statusCode: 400 });
+    expect(h.postedKeys).toHaveLength(0);
+  });
+});
+
 describe('reservation issue transaction behavior', () => {
   const scopedActor = { id: 7, active: true, institute_id: 1, warehouse_id: 10,
     permissions: ['inventory.reserve', 'inventory.issue'] };
 
   function harness({ failPosting = false } = {}) {
     let state = { onHand: 100, reserved: 100, consumed: 0, released: 0, status: 'ACTIVE' };
+    const operations = new Map();
     const allocation = { id: 8, reservation_id: 4, warehouse_stock_level_id: 30,
       reserved_quantity: 100, consumed_quantity: 0, released_quantity: 0 };
     const client = { query: jest.fn(async (sql, params = []) => {
@@ -86,6 +126,11 @@ describe('reservation issue transaction behavior', () => {
         stock_item_id: 20, document_type: 'request', document_id: '9', document_line_id: '2', quantity: 100,
         consumed_quantity: state.consumed, status: state.status }] };
       if (sql.startsWith('SELECT id,institute_id FROM warehouses')) return { rowCount: 1, rows: [{ id: 10, institute_id: 1 }] };
+      if (sql.includes('FROM inventory_reservation_issue_operations')) {
+        const row = operations.get(params[1]); return { rowCount: row ? 1 : 0, rows: row ? [row] : [] };
+      }
+      if (sql.startsWith('SELECT * FROM inventory_transactions')) return { rowCount: 1, rows: [{ id: params[0], movement_type: 'ISSUE' }] };
+      if (sql.includes('FROM inventory_transaction_allocations')) return { rowCount: 1, rows: [{ inventory_transaction_id: params[0], quantity: -40 }] };
       if (sql.includes('FROM inventory_reservation_allocations')) return { rowCount: 1, rows: [{ ...allocation,
         consumed_quantity: state.consumed, released_quantity: state.released }] };
       if (sql.startsWith('UPDATE warehouse_stock_levels SET reserved_quantity=reserved_quantity-')) {
@@ -96,6 +141,10 @@ describe('reservation issue transaction behavior', () => {
       if (sql.startsWith('UPDATE inventory_reservation_allocations SET released_quantity')) { state.released += Number(params[1]); return { rowCount: 1, rows: [] }; }
       if (sql.startsWith('UPDATE inventory_reservations SET consumed_quantity')) {
         state.consumed = Number(params[1]); state.status = params[2] ? 'CONSUMED' : 'ACTIVE'; return { rowCount: 1, rows: [] };
+      }
+      if (sql.startsWith('INSERT INTO inventory_reservation_issue_operations')) {
+        operations.set(params[1], { reservation_id: params[0], idempotency_key: params[1], requested_quantity: params[2], inventory_movement_id: params[3] });
+        return { rowCount: 1, rows: [] };
       }
       if (sql.includes("SET status='RELEASED'")) { state.status = 'RELEASED'; return { rowCount: 1, rows: [{ ...state }] }; }
       throw new Error(`Unexpected SQL: ${sql}`);
@@ -122,22 +171,41 @@ describe('reservation issue transaction behavior', () => {
     expect(h.getState()).toEqual({ onHand: 0, reserved: 0, consumed: 100, released: 0, status: 'CONSUMED' });
   });
 
+  test('R1 retry cannot consume coordinator state twice and conflicting reuse is rejected', async () => {
+    const h = harness();
+    const first = await h.service.issue({ reservationId: 4, quantity: 40, idempotencyKey: 'R1', actor: scopedActor });
+    expect(first.idempotent).toBe(false);
+    const retry = await h.service.issue({ reservationId: 4, quantity: 40, idempotencyKey: 'R1', actor: scopedActor });
+    expect(retry.idempotent).toBe(true);
+    expect(h.getState()).toEqual({ onHand: 60, reserved: 60, consumed: 40, released: 0, status: 'ACTIVE' });
+    await expect(h.service.issue({ reservationId: 4, quantity: 30, idempotencyKey: 'R1', actor: scopedActor }))
+      .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', statusCode: 409 });
+    await h.service.issue({ reservationId: 4, quantity: 60, idempotencyKey: 'R2', actor: scopedActor });
+    expect(h.getState()).toEqual({ onHand: 0, reserved: 0, consumed: 100, released: 0, status: 'CONSUMED' });
+  });
+
+  test('issue requires an explicit non-empty operation key', async () => {
+    const h = harness();
+    await expect(h.service.issue({ reservationId: 4, quantity: 40, actor: scopedActor }))
+      .rejects.toMatchObject({ code: 'INVALID_IDEMPOTENCY_KEY', statusCode: 400 });
+  });
+
   test('release after partial issue releases only the remaining reservation', async () => {
     const h = harness();
-    await h.service.issue({ reservationId: 4, quantity: 40, actor: scopedActor });
+    await h.service.issue({ reservationId: 4, quantity: 40, idempotencyKey: 'partial-release', actor: scopedActor });
     await h.service.release({ reservationId: 4, actor: scopedActor });
     expect(h.getState()).toEqual({ onHand: 60, reserved: 0, consumed: 40, released: 60, status: 'RELEASED' });
   });
 
   test('posting failure rolls back the prior reserved_quantity reduction', async () => {
     const h = harness({ failPosting: true });
-    await expect(h.service.issue({ reservationId: 4, quantity: 40, actor: scopedActor })).rejects.toThrow('posting failed');
+    await expect(h.service.issue({ reservationId: 4, quantity: 40, idempotencyKey: 'posting-fails', actor: scopedActor })).rejects.toThrow('posting failed');
     expect(h.getState()).toEqual({ onHand: 100, reserved: 100, consumed: 0, released: 0, status: 'ACTIVE' });
   });
 
   test('cross-warehouse issue and unauthorized release are denied', async () => {
     const h = harness();
-    await expect(h.service.issue({ reservationId: 4, quantity: 1, actor: { ...scopedActor, warehouse_id: 11 } }))
+    await expect(h.service.issue({ reservationId: 4, quantity: 1, idempotencyKey: 'wrong-scope', actor: { ...scopedActor, warehouse_id: 11 } }))
       .rejects.toMatchObject({ code: 'WAREHOUSE_SCOPE_DENIED' });
     await expect(h.service.release({ reservationId: 4, actor: { ...scopedActor, permissions: [], permissionSet: new Set() } }))
       .rejects.toMatchObject({ code: 'INVENTORY_PERMISSION_DENIED' });

@@ -151,9 +151,33 @@ describe('Phase 3 inventory integrity correction', () => {
     expect(sql).toContain('prevent_inventory_allocation_mutation');
     expect(sql).toContain("metadata->>'allocationLedgerVersion' = '1'");
     expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_wsl_warehouse_item');
-    expect(sql).toContain("= ARRAY['warehouse_id','stock_item_id']::name[]");
+    expect(sql).toContain("IN (ARRAY['warehouse_id','stock_item_id']::name[]");
+    expect(sql).toContain("ARRAY['warehouse_id','stock_item_id','batch_id','lot_number','expiry_date','serial_number']::name[]");
+    expect(sql).toContain('i.indnkeyatts IN (2, 6)');
+    expect(sql).toContain("EXECUTE format('ALTER TABLE public.warehouse_stock_levels DROP CONSTRAINT %I'");
+    expect(sql).toContain("EXECUTE format('DROP INDEX public.%I'");
+    expect(sql).toContain('i.indexprs IS NULL AND i.indpred IS NULL');
     expect(sql).not.toContain('DROP CONSTRAINT IF EXISTS warehouse_stock_levels_warehouse_id_stock_item_id_key');
     expect(sql).toContain('array_agg(batch_id ORDER BY id) AS legacy_batch_ids');
+    expect(sql).not.toContain('DROP COLUMN batch_id');
+  });
+
+  test('canonical status dimension permits the same tracking identity in separate balances', () => {
+    const available = [1, 2, 'AVAILABLE', 'B-1', 'LOT-1', null, '2028-01-01'];
+    const quarantine = [1, 2, 'QUARANTINE', 'B-1', 'LOT-1', null, '2028-01-01'];
+    expect(available).not.toEqual(quarantine);
+    expect(available.filter((_, index) => index !== 2)).toEqual(
+      quarantine.filter((_, index) => index !== 2),
+    );
+  });
+
+  test('request-time bootstrap only validates the canonical schema', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../utils/ensureWarehouseInventoryTables.js'), 'utf8');
+    expect(source).toContain("idx.relname = 'ux_inventory_balance_identity'");
+    expect(source).toContain('i.indnullsnotdistinct');
+    expect(source).toContain("'stock_status', 'batch_number', 'batch_id', 'lot_number', 'serial_number', 'expiry_date'");
+    expect(source).not.toMatch(/CREATE\s+(?:TABLE|INDEX)|ALTER\s+TABLE|DROP\s+(?:INDEX|TABLE)/i);
+    expect(source).not.toContain("ARRAY['warehouse_id','stock_item_id','batch_id','lot_number','expiry_date','serial_number']");
   });
 
   test('goods receipt delegates once and contains no legacy balance or movement write', () => {

@@ -20,6 +20,17 @@ The earlier version used one transaction for every alteration, backfill, constra
 
 The revised file uses independently committed phases, touches one high-write inventory table per DDL phase, requests DDL/index locks with `NOWAIT`, adds foreign keys as `NOT VALID`, and defers constraint validation. A busy database now fails fast rather than waiting in a migration/application lock cycle.
 
+SQL 004 retires both obsolete uniqueness models when present: `(warehouse_id, stock_item_id)` and
+`(warehouse_id, stock_item_id, batch_id, lot_number, expiry_date, serial_number)`. It replaces them
+with `(warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number,
+expiry_date) NULLS NOT DISTINCT`. The cleanup uses catalog-derived complete ordered keys rather
+than guessed object names, and therefore leaves ordinary and unrelated unique indexes untouched.
+
+The `batch_id` column is not removed. Old rows may retain `batch_id`, and those values remain
+available for historical lookup. Business batch identity for new postings is `batch_number`,
+`lot_number`, `serial_number`, and `expiry_date`; the canonical identity does not depend on
+`batch_id`.
+
 ## Recovery after `40P01`
 
 1. Do **not** immediately rerun the old script and do not terminate unidentified sessions.
@@ -64,6 +75,11 @@ Before resuming, verify Phases 1â€“4 from the schema or rerun them individuallyâ
 
 SQL cannot discover application source dependencies. Deployment of compatible code **before** the
 pair-only constraint is removed is a mandatory human precondition, not a database assertion.
+
+`ensureWarehouseInventoryTables` remains a Phase 3B technical-debt call from request handlers, but
+is now read-only: it validates that SQL 004's tables, identity columns (including retained
+`batch_id`), and valid canonical unique index are installed. It fails closed with deployment
+guidance instead of creating tables, columns, or obsolete uniqueness during an HTTP request.
 
 ## Integrity preflights and application contract
 

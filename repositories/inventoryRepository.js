@@ -148,7 +148,7 @@ class InventoryRepository {
           AND ($5::text IS NULL OR lot_number IS NOT DISTINCT FROM $5::text)
           AND ($6::text IS NULL OR serial_number IS NOT DISTINCT FROM $6::text)
           AND ($7::date IS NULL OR expiry_date IS NOT DISTINCT FROM $7::date)
-          AND quantity > 0
+          AND quantity - COALESCE(reserved_quantity, 0) > 0
         ORDER BY expiry_date ASC NULLS LAST, id FOR UPDATE`,
       [warehouseId, inventoryItemId, stockStatus, batchNumber ?? null, lotNumber ?? null,
         serialNumber ?? null, expiryDate ?? null],
@@ -173,6 +173,15 @@ class InventoryRepository {
     const result = await this.client.query(
       `UPDATE warehouse_stock_levels SET quantity = quantity + $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP
         WHERE id = $1 AND quantity + $2 >= 0 RETURNING *`,
+      [balanceId, delta, actorId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async updateUnreservedInventoryBalance(balanceId, delta, actorId) {
+    const result = await this.client.query(
+      `UPDATE warehouse_stock_levels SET quantity = quantity + $2, updated_by = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND quantity + $2 >= reserved_quantity RETURNING *`,
       [balanceId, delta, actorId],
     );
     return result.rows[0] || null;

@@ -10,8 +10,8 @@ describe('Phase 3B inventory integrity', () => {
     expect(service).toContain('Number(allocation.dispatched_quantity)-Number(allocation.received_quantity)');
     expect(sql).toContain('UNIQUE(dispatch_allocation_id)'); expect(sql).toContain('received_quantity<=dispatched_quantity');
   });
-  test('repeated transfer receipts use request identity and cannot restart original allocations', () => {
-    const service=read('services/warehouseTransferService.js'); expect(service).toContain("metadata->>'receiptSequence'=$3");
+  test('repeated transfer receipts use durable operation identity and cannot restart original allocations', () => {
+    const service=read('services/warehouseTransferService.js'); expect(service).toContain('inventory_transfer_receipt_operations');
     expect(service).toContain('UPDATE inventory_transfer_allocation_links SET received_quantity=received_quantity+$2');
     expect(service).not.toContain('Math.min(left,Math.abs(Number(allocation.quantity)))');
   });

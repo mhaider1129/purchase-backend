@@ -64,9 +64,14 @@ async function postValidated(command, client) {
       ? await repository.lockExactInventoryBalance(command)
       : await repository.lockEligibleOutboundBalances(command);
   }
+  const exactReversal = Boolean(command.reversalOfMovementId);
+  const availableFor = (row) => exactReversal ? Number(row.quantity) : Number(row.quantity) - Number(row.reserved_quantity || 0);
   const before = balances.reduce((sum, row) => sum + Number(row.quantity), 0);
-  if (direction === 'OUT' && (before < command.quantity || balances.some((row) => row.reversalQuantity && Number(row.quantity) < row.reversalQuantity))) {
-    throw new InventoryError('INSUFFICIENT_STOCK', `Available stock ${before} is less than requested quantity ${command.quantity}`, 409, { available: before, requested: command.quantity });
+  const outboundAvailable = balances.reduce((sum, row) => sum + Math.max(0, availableFor(row)), 0);
+  // Exact compensating reversals are the sole exception: they restore the original
+  // allocation identity and must not be blocked by a later reservation.
+  if (direction === 'OUT' && (outboundAvailable < command.quantity || balances.some((row) => row.reversalQuantity && availableFor(row) < row.reversalQuantity))) {
+    throw new InventoryError('INSUFFICIENT_STOCK', `Available stock ${outboundAvailable} is less than requested quantity ${command.quantity}`, 409, { available: outboundAvailable, requested: command.quantity });
   }
   if (direction === 'IN' && balances.length === 0) balances = [await repository.createInventoryBalance(command, item.name)];
 
@@ -75,8 +80,10 @@ async function postValidated(command, client) {
   const allocationDrafts = [];
   for (const balance of balances) {
     if (remaining <= 0) break;
-    const amount = balance.reversalQuantity || (direction === 'OUT' ? Math.min(remaining, Number(balance.quantity)) : remaining);
-    const row = await repository.updateInventoryBalance(balance.id, direction === 'OUT' ? -amount : amount, command.actor.id);
+    const amount = balance.reversalQuantity || (direction === 'OUT' ? Math.min(remaining, availableFor(balance)) : remaining);
+    const row = direction === 'OUT' && !exactReversal
+      ? await repository.updateUnreservedInventoryBalance(balance.id, -amount, command.actor.id)
+      : await repository.updateInventoryBalance(balance.id, direction === 'OUT' ? -amount : amount, command.actor.id);
     if (!row) throw new InventoryError('INSUFFICIENT_STOCK', 'Inventory changed while posting; retry the operation', 409);
     updated.push(row);
     allocationDrafts.push({
@@ -114,6 +121,15 @@ async function postValidated(command, client) {
 }
 
 async function postMovement(rawCommand, suppliedClient = null) {
+  if (rawCommand?.reversalOfMovementId != null) {
+    throw new InventoryError('INVALID_REVERSAL_POSTING', 'Reversals must use the controlled reversal service', 400);
+  }
+  const command = validateInventoryMovement(rawCommand);
+  return withTransaction((client) => postValidated(command, client), { client: suppliedClient, pool });
+}
+
+async function postReversalMovement(rawCommand, suppliedClient = null) {
+  if (rawCommand?.reversalOfMovementId == null) throw new InventoryError('INVALID_REVERSAL_POSTING', 'An original movement is required', 400);
   const command = validateInventoryMovement(rawCommand);
   return withTransaction((client) => postValidated(command, client), { client: suppliedClient, pool });
 }
@@ -160,4 +176,4 @@ async function postMovements(rawCommands, suppliedClient = null) {
   }, { client: suppliedClient, pool });
 }
 
-module.exports = { postMovement, postMovements, fingerprint, postValidated };
+module.exports = { postMovement, postMovements, postReversalMovement, postStatusTransferMovement, fingerprint, postValidated };

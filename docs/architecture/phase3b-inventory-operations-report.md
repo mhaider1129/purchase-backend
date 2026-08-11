@@ -33,3 +33,25 @@ SQL 005 adds only transfer links/lifecycle columns, reservations, cycle counts, 
 ## Recommended next phase
 
 Add explicit serial/batch/expiry control fields to item master, build condition-aware department and supplier return coordinators, retire compatibility movement reads, and add database-backed concurrency integration tests after SQL 005 is reviewed and manually applied.
+# Runtime integrity correction
+
+Ordinary outbound allocation uses `quantity - reserved_quantity`; ISSUE, transfer dispatch,
+negative adjustment, and status-transfer debits therefore cannot consume another document's
+reservation. An exact compensating reversal is the only exception because it restores the
+original allocation identity through the controlled reversal service.
+
+Reservation creation and release require `inventory.reserve`. Issuing a reservation requires
+both `inventory.reserve` (authority over the reservation) and `inventory.issue` (authority for
+the physical stock debit). All three operations enforce active-actor, institute, and warehouse
+scope through the inventory policy; cross-scope access requires the corresponding explicit
+cross-institute or cross-warehouse permission.
+
+Reservation issues lock the reservation and its allocation rows, release exactly the consumed
+amount from each locked stock balance, post the ISSUE with exact allocation overrides, then
+advance allocation and reservation consumption in one transaction. A posting failure rolls the
+reserved balance reduction back, and unused reserved stock remains reserved.
+
+Transfer receipts require a caller-supplied idempotency key and an in-transit transfer with
+persisted dispatch links. `inventory_transfer_receipt_operations` durably distinguishes a retry
+of one receipt operation from a later partial receipt. A completed transfer can return the prior
+operation for the same key, but cannot create a new receipt.

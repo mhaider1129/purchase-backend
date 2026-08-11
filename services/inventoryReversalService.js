@@ -53,7 +53,7 @@ async function reverseMovement({ movementId, reason, actor, idempotencyKey, corr
         throw new InventoryError('MOVEMENT_ALREADY_REVERSED', 'Inventory movement has already been reversed', 409);
       }
     }
-    const result = await inventoryPostingService.postMovement(reversalCommand, client);
+    const result = await inventoryPostingService.postReversalMovement(reversalCommand, client);
     if (!result.idempotent) await repository.markMovementReversed(original.id, result.movement.id);
     return result;
   }, { client: suppliedClient, pool });

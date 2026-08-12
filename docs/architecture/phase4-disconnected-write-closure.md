@@ -41,3 +41,6 @@ The live PO receipt route now delegates to `goodsReceiptService`; it contains no
 * `requested_items` receipt flags outside this route: **LEGACY**, never canonical PO receipt history.
 
 No active live PO receipt path directly updates warehouse balances or `warehouse_stock_movements`.
+## Phase 4C invoice/match closure (2026-08-12)
+
+The request-scoped invoice submission, matching, approval, and decline endpoints now delegate to `supplierInvoiceService`. Runtime invoice header/line/result SQL is confined to `connectedP2PRepository`. `procureToPayPersistenceService.insertSupplierInvoice` remains classified **LEGACY / TO_DISABLE** for compatibility but has no live controller caller. Override evidence is append-only; request lifecycle, finance ledger, payable, and payment writers are projections or later-phase authorities.

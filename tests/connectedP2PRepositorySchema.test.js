@@ -16,6 +16,36 @@ const mockClient = () => {
 };
 
 describe('connected P2P repository checked-in schema contract', () => {
+  test('SQL 006 permits nullable legacy requested items but rejects dangling references', () => {
+    const migration = fs.readFileSync(path.join(__dirname, '../sql/manual/006_connected_procure_to_pay.sql'), 'utf8');
+    expect(migration).toContain('ri.request_id IS NOT NULL AND r.id IS NULL');
+    expect(migration).toContain("WHERE request_id IS NULL) THEN RAISE NOTICE");
+    expect(migration).not.toContain("WHERE r.id IS NULL) THEN RAISE EXCEPTION 'Preflight: orphan requested_items.request_id rows'");
+  });
+
+  test('SQL 006 preserves supplier-less legacy POs but rejects dangling suppliers', () => {
+    const migration = fs.readFileSync(path.join(__dirname, '../sql/manual/006_connected_procure_to_pay.sql'), 'utf8');
+    expect(migration).toContain("purchase_orders WHERE supplier_id IS NULL) THEN RAISE NOTICE");
+    expect(migration).toContain('po.supplier_id IS NOT NULL AND s.id IS NULL');
+    expect(migration).not.toContain("purchase_orders WHERE supplier_id IS NULL) THEN RAISE EXCEPTION");
+  });
+
+  test('SQL 006 catalog-guards optional requested-item award fields', () => {
+    const migration = fs.readFileSync(path.join(__dirname, '../sql/manual/006_connected_procure_to_pay.sql'), 'utf8');
+    expect(migration).toContain("column_name IN ('supplier_name','unit_cost')");
+    expect(migration).toContain("format('SELECT EXISTS (SELECT 1 FROM public.requested_items WHERE %I IS NOT NULL)', legacy_column)");
+    expect(migration).not.toContain('FROM public.requested_items WHERE supplier_name IS NOT NULL OR unit_cost IS NOT NULL');
+  });
+
+  test('SQL 006 safely resumes when the compatible awards relation exists', () => {
+    const migration = fs.readFileSync(path.join(__dirname, '../sql/manual/006_connected_procure_to_pay.sql'), 'utf8');
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.procurement_awards');
+    expect(migration).toContain('CREATE INDEX IF NOT EXISTS procurement_awards_request_item_idx');
+    expect(migration).toContain("existing procurement_awards relation is incompatible with SQL 006");
+    expect(migration).toContain('GROUP BY table_name HAVING count(*)=15');
+    expect(migration).not.toMatch(/CREATE TABLE public\.procurement_awards/);
+  });
+
   test('award insert executes the exact SQL 006 application-column contract', async () => {
     const client = mockClient();
     const repository = createConnectedP2PRepository(client);
@@ -27,7 +57,7 @@ describe('connected P2P repository checked-in schema contract', () => {
     expect(sql).not.toContain('created_by');
     expect(values).toEqual([1, 2, 3, '4', '5.25', 'USD', 'QUOTATION', 6, 'best compliant offer', 7, 'award-8', 'a'.repeat(64)]);
     const migration = fs.readFileSync(path.join(__dirname, '../sql/manual/006_connected_procure_to_pay.sql'), 'utf8');
-    const definition = migration.match(/CREATE TABLE public\.procurement_awards \(([\s\S]*?)\n\);/)[1];
+    const definition = migration.match(/CREATE TABLE(?: IF NOT EXISTS)? public\.procurement_awards \(([\s\S]*?)\n\);/)[1];
     const insertColumns = sql.match(/procurement_awards \(([^)]+)\)/)[1].split(',').map(value => value.trim());
     for (const column of insertColumns) expect(definition).toMatch(new RegExp(`\\b${column}\\b`));
     for (const required of ['selection_reason', 'actor_id', 'payload_fingerprint']) {

@@ -16,6 +16,14 @@ function decimal(value, field) {
   return BigInt(whole) * SCALE + BigInt(fraction.padEnd(4, '0'));
 }
 
+function scaledBigIntToDecimalString(value) {
+  const negative = value < 0n;
+  const absolute = negative ? -value : value;
+  const whole = absolute / SCALE;
+  const fraction = String(absolute % SCALE).padStart(4, '0').replace(/0+$/, '');
+  return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`;
+}
+
 function fingerprint(purchaseOrderId, lines) {
   const canonicalQuantity = (value, field) => decimal(value, field).toString();
   const normalized = lines.map((line) => ({
@@ -26,6 +34,8 @@ function fingerprint(purchaseOrderId, lines) {
     lot_number: line.lot_number || null, serial_number: line.serial_number || null,
     expiry_date: line.expiry_date || null, warehouse_id: line.warehouse_id == null ? null : Number(line.warehouse_id),
     stock_status: line.stock_status || 'AVAILABLE',
+    source_uom: line.source_uom || null, base_uom: line.base_uom || null,
+    conversion_factor: canonicalQuantity(line.conversion_factor || 1, 'conversion_factor'),
   })).sort((a, b) => a.purchase_order_item_id - b.purchase_order_item_id);
   return crypto.createHash('sha256').update(JSON.stringify({ purchase_order_id: Number(purchaseOrderId), lines: normalized })).digest('hex');
 }
@@ -40,6 +50,7 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
   const payloadFingerprint = fingerprint(purchaseOrderId, lines);
 
   return repository.withTransaction(async (tx) => {
+    await tx.lockGoodsReceiptOperation(key);
     const prior = await tx.findReceiptByIdempotency(key);
     if (prior) {
       if (prior.payload_fingerprint !== payloadFingerprint) throw Object.assign(createHttpError(409, 'Idempotency key was already used with a different receipt payload'), { code: 'IDEMPOTENCY_CONFLICT' });
@@ -64,12 +75,12 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
       const short = decimal(input.short_quantity || 0, 'short_quantity');
       const accepted = gross - damaged - short;
       if (gross <= 0n || accepted < 0n) throw createHttpError(400, 'Received quantity must be positive and discrepancies cannot exceed it');
-      const already = decimal(await tx.loadCumulativeReceipts(poLine.id), 'already_received');
+      const already = decimal(await tx.loadCumulativeAcceptedReceipts(poLine.id), 'already_accepted');
       const ordered = decimal(poLine.quantity, 'ordered_quantity');
-      if (gross > ordered - already) throw Object.assign(createHttpError(409, `Receipt exceeds remaining quantity for PO line ${poLine.id}`), { code: 'OVER_RECEIPT' });
+      if (accepted > ordered - already) throw Object.assign(createHttpError(409, `Receipt exceeds remaining accepted quantity for PO line ${poLine.id}`), { code: 'OVER_RECEIPT' });
       prepared.push({ ...input, ...poLine, purchase_order_item_id: poLine.id, received_quantity: input.received_quantity,
         damaged_quantity: input.damaged_quantity || 0, short_quantity: input.short_quantity || 0,
-        accepted_quantity: Number(accepted) / Number(SCALE), ordered_quantity: poLine.quantity,
+        accepted_quantity: scaledBigIntToDecimalString(accepted), ordered_quantity: poLine.quantity,
         item_name: poLine.item_name || input.item_name, requested_item_id: poLine.requested_item_id });
     }
 
@@ -82,8 +93,8 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
       const saved = await tx.insertGoodsReceiptLine({ ...line, goods_receipt_id: receipt.id });
       receipt.items.push(saved);
       await tx.synchronizePurchaseOrderLineReceivedQuantity(line.purchase_order_item_id);
-      if (line.line_type === 'INVENTORY' && line.accepted_quantity > 0) {
-        const stockItem = line.stock_item_id ? { id: line.stock_item_id } : await tx.resolveReceiptStockItem(line.requested_item_id);
+      if (line.line_type === 'INVENTORY' && decimal(line.accepted_quantity, 'accepted_quantity') > 0n) {
+        const stockItem = await tx.resolveReceiptStockItem(line.requested_item_id);
         if (!stockItem) throw createHttpError(409, `Inventory line ${line.id} is not mapped to a canonical stock item`);
         const warehouse = await tx.loadWarehouseScope(Number(line.warehouse_id));
         if (!warehouse?.institute_id) throw createHttpError(400, `Inventory line ${line.id} requires a valid warehouse_id`);
@@ -110,4 +121,4 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
   });
 }
 
-module.exports = { createGoodsReceipt, fingerprint, decimal, RECEIVABLE_STATUSES };
+module.exports = { createGoodsReceipt, fingerprint, decimal, scaledBigIntToDecimalString, RECEIVABLE_STATUSES };

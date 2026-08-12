@@ -6,9 +6,9 @@ function buildReceiptCommand(receipt, line, context) {
   // Persisted GRN semantics: received is gross; damaged and short are separate deductions.
   // accepted_quantity is not persisted, but normalized internal callers may provide it as final.
   const accepted = line.accepted_quantity != null
-    ? Number(line.accepted_quantity)
-    : Number(line.received_quantity ?? 0) - Number(line.damaged_quantity ?? 0) - Number(line.short_quantity ?? 0);
-  if (!(accepted > 0)) return null;
+    ? String(line.accepted_quantity)
+    : String(Number(line.received_quantity ?? 0) - Number(line.damaged_quantity ?? 0) - Number(line.short_quantity ?? 0));
+  if (!/^\d+(\.\d+)?$/.test(accepted) || /^0+(\.0+)?$/.test(accepted)) return null;
   return {
     movementType: 'GOODS_RECEIPT', inventoryItemId: line.stock_item_id,
     instituteId: context.instituteId, warehouseId: context.warehouseId, quantity: accepted,

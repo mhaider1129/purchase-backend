@@ -1,11 +1,9 @@
-# Goods receipt inventory semantics
+# Goods receipt and inventory semantics
 
-A persisted receipt line's `received_quantity` is the gross physical delivery reported at the dock. `damaged_quantity` and `short_quantity` are explicit deductions. The established accepted quantity is:
+`goods_receipt_items.received_quantity` is the gross quantity physically reported on a receipt and remains immutable discrepancy evidence. The accepted quantity is exactly `received_quantity - damaged_quantity - short_quantity`. Cumulative accepted quantity—not gross history—is authoritative for PO-line fulfillment capacity, the `purchase_order_items.received_quantity` projection, delivery completion, and inventory posting. Consequently, a replacement may fill the accepted remainder after damage or shortage while gross receipt history can exceed the ordered quantity.
 
-`accepted = received - damaged - short`
+Each receipt line requires gross quantity greater than zero, non-negative damaged and short quantities, and a non-negative accepted result. An accepted quantity of zero is intentionally valid as a discrepancy-only receipt: it is persisted as evidence but changes neither PO fulfillment nor inventory. Damaged and short units are never posted as `AVAILABLE` inventory.
 
-All values must be non-negative, accepted cannot be negative, and gross receipt cannot exceed the PO line's remaining quantity according to cumulative receipt history. Accepted quantity drives the repairable PO-line received projection, PO completion, and inventory movement quantity. This preserves the former controller/adapter rule while eliminating its duplicate calculations.
+Receipt creation first takes a transaction-scoped PostgreSQL advisory lock for `goods-receipt:<idempotency-key>`, then checks the stored fingerprint, and only then locks the PO and its lines. Identical concurrent calls therefore serialize and return one receipt; a changed operation receives `IDEMPOTENCY_CONFLICT`. The unique idempotency index remains a final invariant rather than normal retry control.
 
-Only a PO line whose persisted `line_type` is `INVENTORY` creates inventory. It must resolve to a canonical stock item and warehouse/institute scope. Batch, lot, serial, expiry, source/base UOM and stock status flow from receipt row to the Phase 3 allocation command. A `QUARANTINE` receipt increases quarantined physical stock and increases available stock by zero. Non-inventory and service lines record acceptance without stock. Asset/medical-device handoff is preserved as receipt-only pending its dedicated downstream workflow.
-
-Receipt reversal is not deletion and is deferred to Phase 4B.1; a posted movement must be reversed through the canonical inventory reversal facility.
+The fingerprint covers the PO line, gross/damaged/short quantities, batch, lot, serial, expiry, warehouse, stock status, source UOM, base UOM, and conversion factor. `stock_item_id` is deliberately not caller authority: inventory identity is resolved server-side from the canonical requested-item/item-master relationship. Accepted quantities cross the receipt-to-inventory adapter boundary as exact decimal strings; no JavaScript floating-point conversion is used there.

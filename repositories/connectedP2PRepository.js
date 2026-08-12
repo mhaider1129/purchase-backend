@@ -68,7 +68,8 @@ const createConnectedP2PRepository = (client) => ({
 
   lockPurchaseOrderLine: (id) => one(client,'SELECT * FROM purchase_order_items WHERE id=$1 FOR UPDATE',[id]),
   lockPurchaseOrderLines: async (ids) => (await client.query('SELECT * FROM purchase_order_items WHERE id=ANY($1::bigint[]) ORDER BY id FOR UPDATE',[ids])).rows,
-  loadCumulativeReceipts: async (id) => (await one(client,"SELECT COALESCE(SUM(gri.received_quantity),0)::text quantity FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=$1",[id])).quantity,
+  lockGoodsReceiptOperation: (key) => client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`goods-receipt:${key}`]),
+  loadCumulativeAcceptedReceipts: async (id) => (await one(client,"SELECT COALESCE(SUM(gri.received_quantity-gri.damaged_quantity-gri.short_quantity),0)::text quantity FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=$1",[id])).quantity,
   findReceiptByIdempotency: (key) => one(client,'SELECT * FROM goods_receipts WHERE idempotency_key=$1',[key]),
   loadReceiptWithLines: async (id) => { const receipt=await one(client,'SELECT * FROM goods_receipts WHERE id=$1',[id]); if(!receipt)return null; receipt.items=(await client.query('SELECT * FROM goods_receipt_items WHERE goods_receipt_id=$1 ORDER BY id',[id])).rows; return receipt; },
   insertGoodsReceipt: (r) => one(client,`WITH identity AS (SELECT nextval(pg_get_serial_sequence('goods_receipts','id')) AS id)

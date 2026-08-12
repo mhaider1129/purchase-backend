@@ -1,31 +1,31 @@
 'use strict';
 
-const { createGoodsReceipt } = require('../services/goodsReceiptService');
+const { createGoodsReceipt, fingerprint, scaledBigIntToDecimalString } = require('../services/goodsReceiptService');
 
 function harness({ status = 'PO_ISSUED', quantity = 100, lineType = 'NON_INVENTORY', inventoryFails = false } = {}) {
-  const receipts = new Map(); let cumulative = 0; let receiptId = 0; let poStatus = status;
+  const receipts = new Map(); let grossCumulative = 0; let acceptedCumulative = 0; let receiptId = 0; let poStatus = status;
   const audit = { writeAuditEvent: jest.fn().mockResolvedValue({}) };
   const outbox = { enqueueNotification: jest.fn().mockResolvedValue({ created: true }) };
   const inventory = { postAcceptedReceiptLines: jest.fn(async () => { if (inventoryFails) throw new Error('inventory failed'); return [{ movement: { id: 9 } }]; }) };
   const tx = {
-    client: { query: jest.fn() }, findReceiptByIdempotency: jest.fn(async (key) => receipts.get(key)?.receipt || null),
+    client: { query: jest.fn() }, lockGoodsReceiptOperation: jest.fn(), findReceiptByIdempotency: jest.fn(async (key) => receipts.get(key)?.receipt || null),
     loadReceiptWithLines: jest.fn(async (id) => [...receipts.values()].find((v) => v.receipt.id === id)?.receipt),
     lockPurchaseOrder: jest.fn(async () => ({ id: 4, request_id: 2, supplier_id: 8, status: poStatus })),
-    lockPurchaseOrderLines: jest.fn(async (ids) => ids.map((id) => ({ id, purchase_order_id: 4, requested_item_id: 7, item_name: 'Gloves', quantity, received_quantity: cumulative, unit_price: 2, line_type: lineType }))),
-    loadCumulativeReceipts: jest.fn(async () => String(cumulative)),
+    lockPurchaseOrderLines: jest.fn(async (ids) => ids.map((id) => ({ id, purchase_order_id: 4, requested_item_id: 7, item_name: 'Gloves', quantity, received_quantity: acceptedCumulative, unit_price: 2, line_type: lineType }))),
+    loadCumulativeAcceptedReceipts: jest.fn(async () => String(acceptedCumulative)),
     insertGoodsReceipt: jest.fn(async (input) => ({ id: ++receiptId, ...input, receipt_number: `GR-${receiptId}` })),
-    insertGoodsReceiptLine: jest.fn(async (line) => { cumulative += Number(line.received_quantity); return { id: receiptId * 10, ...line }; }),
+    insertGoodsReceiptLine: jest.fn(async (line) => { grossCumulative += Number(line.received_quantity); acceptedCumulative += Number(line.accepted_quantity); return { id: receiptId * 10, ...line }; }),
     synchronizePurchaseOrderLineReceivedQuantity: jest.fn(async () => ({})),
-    calculatePurchaseOrderReceiptTotals: jest.fn(async () => ({ ordered_quantity: String(quantity), received_quantity: String(cumulative) })),
+    calculatePurchaseOrderReceiptTotals: jest.fn(async () => ({ ordered_quantity: String(quantity), received_quantity: String(acceptedCumulative) })),
     markPurchaseOrderPartiallyReceived: jest.fn(async () => ({ id: 4, status: (poStatus = 'PO_PARTIAL') })),
     markPurchaseOrderDelivered: jest.fn(async () => ({ id: 4, status: (poStatus = 'PO_DELIVERED') })),
     loadWarehouseScope: jest.fn(async () => ({ id: 3, institute_id: 5 })),
     resolveReceiptStockItem: jest.fn(async () => ({ id: 11 })),
   };
-  const repository = { withTransaction: jest.fn(async (work) => { const before = cumulative; try { const result = await work(tx); receipts.set(result.receipt.idempotency_key, { receipt: result.receipt }); return result; } catch (error) { cumulative = before; throw error; } }) };
+  const repository = { withTransaction: jest.fn(async (work) => { const before = [grossCumulative, acceptedCumulative]; try { const result = await work(tx); receipts.set(result.receipt.idempotency_key, { receipt: result.receipt }); return result; } catch (error) { [grossCumulative, acceptedCumulative] = before; throw error; } }) };
   const receive = (key, received, extra = {}) => createGoodsReceipt({ repository, purchaseOrderId: 4, idempotencyKey: key,
     lines: [{ purchase_order_item_id: 1, received_quantity: received, ...extra }], actor: { id: 1, institute_id: 5 }, requestId: 2, auditService: audit, outbox, inventory });
-  return { receive, tx, audit, outbox, inventory, get cumulative() { return cumulative; }, get status() { return poStatus; } };
+  return { receive, tx, audit, outbox, inventory, get cumulative() { return acceptedCumulative; }, get gross() { return grossCumulative; }, get status() { return poStatus; } };
 }
 
 describe('canonical goods receipt transaction', () => {
@@ -63,7 +63,7 @@ describe('canonical goods receipt transaction', () => {
     await expect(h.receive('inv', 10, { warehouse_id: 3, batch_number: 'B7', lot_number: 'L2', expiry_date: '2027-01-01', stock_status: 'QUARANTINE' })).rejects.toThrow('inventory failed');
     expect(h.cumulative).toBe(0);
     const line = h.inventory.postAcceptedReceiptLines.mock.calls[0][1][0];
-    expect(line).toMatchObject({ batch_number: 'B7', lot_number: 'L2', expiry_date: '2027-01-01', quarantined: true, accepted_quantity: 10 });
+    expect(line).toMatchObject({ batch_number: 'B7', lot_number: 'L2', expiry_date: '2027-01-01', quarantined: true, accepted_quantity: '10' });
     expect(h.audit.writeAuditEvent).not.toHaveBeenCalled();
   });
 
@@ -74,6 +74,33 @@ describe('canonical goods receipt transaction', () => {
 
   test('damaged and short quantities are excluded from projection input', async () => {
     const h = harness(); await h.receive('damage', 10, { damaged_quantity: 2, short_quantity: 1 });
-    expect(h.tx.insertGoodsReceiptLine).toHaveBeenCalledWith(expect.objectContaining({ received_quantity: 10, damaged_quantity: 2, short_quantity: 1, accepted_quantity: 7 }));
+    expect(h.tx.insertGoodsReceiptLine).toHaveBeenCalledWith(expect.objectContaining({ received_quantity: 10, damaged_quantity: 2, short_quantity: 1, accepted_quantity: '7' }));
+  });
+
+  test.each([{ damaged_quantity: 10 }, { short_quantity: 10 }])('allows replacement after discrepancy: %o', async (discrepancy) => {
+    const h = harness({ lineType: 'INVENTORY' });
+    await h.receive('first', 100, { ...discrepancy, warehouse_id: 3 });
+    expect(h.status).toBe('PO_PARTIAL'); expect(h.cumulative).toBe(90); expect(h.gross).toBe(100);
+    await expect(h.receive('too-much', 11, { warehouse_id: 3 })).rejects.toMatchObject({ code: 'OVER_RECEIPT' });
+    await h.receive('replacement', 10, { warehouse_id: 3 });
+    expect(h.status).toBe('PO_DELIVERED'); expect(h.cumulative).toBe(100); expect(h.gross).toBe(110);
+    expect(h.inventory.postAcceptedReceiptLines.mock.calls.map((call) => call[1][0].accepted_quantity)).toEqual(['90', '10']);
+  });
+
+  test('persists a zero-accepted discrepancy-only receipt without inventory or fulfillment', async () => {
+    const h = harness({ lineType: 'INVENTORY' }); await h.receive('all-damaged', 10, { damaged_quantity: 10, warehouse_id: 3 });
+    expect(h.gross).toBe(10); expect(h.cumulative).toBe(0); expect(h.inventory.postAcceptedReceiptLines).not.toHaveBeenCalled();
+  });
+
+  test('keeps four-decimal accepted quantities as exact strings', async () => {
+    const h = harness({ quantity: '1.0000', lineType: 'INVENTORY' });
+    await h.receive('decimal', '0.1234', { warehouse_id: 3 });
+    expect(h.inventory.postAcceptedReceiptLines.mock.calls[0][1][0].accepted_quantity).toBe('0.1234');
+    expect(scaledBigIntToDecimalString(123456n)).toBe('12.3456');
+  });
+
+  test.each(['source_uom', 'base_uom', 'conversion_factor'])('fingerprint covers %s', (field) => {
+    const base = { purchase_order_item_id: 1, received_quantity: 1 };
+    expect(fingerprint(4, [base])).not.toBe(fingerprint(4, [{ ...base, [field]: field === 'conversion_factor' ? '2' : 'EA' }]));
   });
 });

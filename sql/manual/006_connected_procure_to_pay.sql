@@ -14,22 +14,58 @@ BEGIN
 END $$;
 
 -- Preflight diagnostics: abort rather than applying constraints over ambiguous legacy data.
-DO $$ DECLARE duplicate_found boolean; BEGIN
- IF EXISTS (SELECT 1 FROM public.requested_items ri LEFT JOIN public.requests r ON r.id=ri.request_id WHERE r.id IS NULL) THEN RAISE EXCEPTION 'Preflight: orphan requested_items.request_id rows'; END IF;
- IF EXISTS (SELECT 1 FROM public.purchase_orders WHERE supplier_id IS NULL) THEN RAISE EXCEPTION 'Preflight: purchase_orders with NULL supplier_id'; END IF;
+DO $$
+DECLARE
+ duplicate_found boolean;
+ legacy_award_found boolean := false;
+ legacy_column text;
+BEGIN
+ -- request_id is nullable in the checked-in legacy schema. A NULL request_id is
+ -- an unlinked legacy row, not a dangling foreign key and does not prevent this
+ -- additive migration. Fail only when a non-NULL reference has no parent.
+ IF EXISTS (SELECT 1 FROM public.requested_items ri LEFT JOIN public.requests r ON r.id=ri.request_id WHERE ri.request_id IS NOT NULL AND r.id IS NULL) THEN RAISE EXCEPTION 'Preflight: requested_items rows reference missing requests'; END IF;
+ IF EXISTS (SELECT 1 FROM public.requested_items WHERE request_id IS NULL) THEN RAISE NOTICE 'Preflight: unlinked legacy requested_items rows found; excluded from connected P2P until linked to a request'; END IF;
+ -- supplier_id is nullable on the legacy purchase_orders table and SQL 006 does
+ -- not add a NOT NULL constraint. Preserve draft/historical rows rather than
+ -- guessing a supplier. Canonical issue/invoice services reject unusable POs.
+ IF EXISTS (SELECT 1 FROM public.purchase_orders WHERE supplier_id IS NULL) THEN RAISE NOTICE 'Preflight: legacy purchase_orders with NULL supplier_id found; they remain ineligible for connected issue and invoicing until governed and linked'; END IF;
+ IF EXISTS (SELECT 1 FROM public.purchase_orders po LEFT JOIN public.suppliers s ON s.id=po.supplier_id WHERE po.supplier_id IS NOT NULL AND s.id IS NULL) THEN RAISE EXCEPTION 'Preflight: purchase_orders rows reference missing suppliers'; END IF;
  IF EXISTS (SELECT 1 FROM public.supplier_invoices WHERE supplier_id IS NOT NULL GROUP BY supplier_id, lower(btrim(invoice_number)) HAVING count(*) > 1) THEN RAISE EXCEPTION 'Preflight: duplicate supplier invoice identities'; END IF;
+ IF EXISTS (SELECT 1 FROM public.supplier_invoices si LEFT JOIN public.purchase_orders po ON po.id=si.purchase_order_id WHERE si.purchase_order_id IS NOT NULL AND po.id IS NULL) THEN RAISE EXCEPTION 'Preflight: orphan supplier invoice purchase-order links'; END IF;
+ IF EXISTS (SELECT 1 FROM public.invoice_items ii LEFT JOIN public.supplier_invoices si ON si.id=ii.supplier_invoice_id WHERE si.id IS NULL) THEN RAISE EXCEPTION 'Preflight: orphan invoice items'; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='supplier_invoices' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.supplier_invoices WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate invoice idempotency keys'; END IF; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='payment_records' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.payment_records WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate payment idempotency keys'; END IF; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='goods_receipts' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.goods_receipts WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate goods receipt idempotency keys'; END IF; END IF;
  IF EXISTS (SELECT 1 FROM public.goods_receipts WHERE receipt_number IS NOT NULL GROUP BY receipt_number HAVING count(*) > 1) THEN RAISE EXCEPTION 'Preflight: duplicate goods receipt numbers'; END IF;
- IF EXISTS (SELECT 1 FROM public.requested_items WHERE supplier_name IS NOT NULL OR unit_cost IS NOT NULL) THEN RAISE NOTICE 'Preflight: legacy award-like requested_items fields require reconciliation'; END IF;
+ -- Schema generations differ: unit_cost may exist while supplier_name may not.
+ -- Resolve optional legacy columns through the catalog and dynamic SQL so the
+ -- parser never binds a column absent from the target database.
+ FOR legacy_column IN
+   SELECT column_name FROM information_schema.columns
+   WHERE table_schema='public' AND table_name='requested_items'
+     AND column_name IN ('supplier_name','unit_cost')
+ LOOP
+   EXECUTE format('SELECT EXISTS (SELECT 1 FROM public.requested_items WHERE %I IS NOT NULL)', legacy_column)
+     INTO duplicate_found;
+   legacy_award_found := legacy_award_found OR duplicate_found;
+ END LOOP;
+ IF legacy_award_found THEN RAISE NOTICE 'Preflight: populated legacy award-like requested_items fields require reconciliation'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='budget_envelopes' AND column_name IN ('allocated_amount','consumed_amount') GROUP BY table_name HAVING count(*)=2) THEN RAISE EXCEPTION 'Preflight: incompatible budget_envelopes balance columns'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name IN ('request_id','budget_envelope_id','stage','amount','currency','source_type','source_id','notes','actor_id') GROUP BY table_name HAVING count(*)=9) THEN RAISE EXCEPTION 'Preflight: incompatible commitment_ledger base columns'; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name IN ('commitment_type','status')) THEN RAISE EXCEPTION 'Preflight: incompatible commitment_ledger legacy columns found'; END IF;
+ -- A prior reviewed run may already have created the Phase 4 awards table.
+ -- Permit that state only when its complete application contract is present;
+ -- do not silently accept an unrelated or partially-created relation.
+ IF to_regclass('public.procurement_awards') IS NOT NULL AND NOT EXISTS (
+   SELECT 1 FROM information_schema.columns
+   WHERE table_schema='public' AND table_name='procurement_awards'
+     AND column_name IN ('id','request_id','request_item_id','supplier_id','awarded_quantity','unit_price','currency','source_type','source_id','selection_reason','actor_id','awarded_at','status','idempotency_key','payload_fingerprint')
+   GROUP BY table_name HAVING count(*)=15
+ ) THEN RAISE EXCEPTION 'Preflight: existing procurement_awards relation is incompatible with SQL 006'; END IF;
 END $$;
 
 -- requests/requested_items/suppliers/users use INTEGER PKs; document tables use BIGINT PKs.
-CREATE TABLE public.procurement_awards (
+CREATE TABLE IF NOT EXISTS public.procurement_awards (
  id BIGSERIAL PRIMARY KEY,
  request_id INTEGER NOT NULL REFERENCES public.requests(id),
  request_item_id INTEGER NOT NULL REFERENCES public.requested_items(id),
@@ -41,7 +77,7 @@ CREATE TABLE public.procurement_awards (
  awarded_at TIMESTAMPTZ NOT NULL DEFAULT now(), status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','CANCELLED','SUPERSEDED')),
  idempotency_key TEXT NOT NULL UNIQUE, payload_fingerprint CHAR(64) NOT NULL
 );
-CREATE INDEX procurement_awards_request_item_idx ON public.procurement_awards(request_item_id) WHERE status='ACTIVE';
+CREATE INDEX IF NOT EXISTS procurement_awards_request_item_idx ON public.procurement_awards(request_item_id) WHERE status='ACTIVE';
 
 ALTER TABLE public.purchase_orders ADD COLUMN IF NOT EXISTS currency VARCHAR(3);
 ALTER TABLE public.purchase_order_items ADD COLUMN IF NOT EXISTS request_id INTEGER REFERENCES public.requests(id);
@@ -62,10 +98,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_po_commitment_idx ON public.commitm
 
 -- purchase_order_id is the canonical existing PO FK (never po_id).
 ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS supplier_invoice_identity_uq ON public.supplier_invoices(supplier_id, lower(btrim(invoice_number))) WHERE supplier_id IS NOT NULL;
+ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS normalized_invoice_number TEXT;
+ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS payload_fingerprint CHAR(64);
+ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'AP_INVOICE_SUBMITTED';
+ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.supplier_invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+UPDATE public.supplier_invoices SET normalized_invoice_number=lower(btrim(invoice_number)) WHERE normalized_invoice_number IS NULL;
+ALTER TABLE public.supplier_invoices ALTER COLUMN normalized_invoice_number SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS supplier_invoice_identity_uq ON public.supplier_invoices(supplier_id, normalized_invoice_number) WHERE supplier_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS supplier_invoice_idempotency_uq ON public.supplier_invoices(idempotency_key) WHERE idempotency_key IS NOT NULL;
 ALTER TABLE public.invoice_items ADD COLUMN IF NOT EXISTS purchase_order_item_id BIGINT REFERENCES public.purchase_order_items(id);
+ALTER TABLE public.invoice_items ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.invoice_items ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0;
 ALTER TABLE public.invoice_match_results ADD COLUMN IF NOT EXISTS variances JSONB NOT NULL DEFAULT '[]'::jsonb;
+CREATE TABLE IF NOT EXISTS public.invoice_match_override_decisions (
+ id BIGSERIAL PRIMARY KEY, invoice_match_result_id BIGINT NOT NULL REFERENCES public.invoice_match_results(id),
+ decision TEXT NOT NULL CHECK (decision IN ('APPROVED','DECLINED')), reason TEXT NOT NULL,
+ actor_id INTEGER NOT NULL REFERENCES public.users(id), original_variances JSONB NOT NULL,
+ decided_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS invoice_match_history_idx ON public.invoice_match_results(supplier_invoice_id,matched_at DESC);
 
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS supplier_invoice_id BIGINT REFERENCES public.supplier_invoices(id);

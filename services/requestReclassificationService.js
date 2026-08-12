@@ -12,6 +12,35 @@ const REQUEST_TYPES = new Set(['Stock','Non-Stock','Medical Device','Medication'
 const failure = (statusCode, message, code) => Object.assign(new Error(message), { statusCode, code });
 const RECLASSIFICATION_SCHEMA_ERRORS = new Set(['42P01', '42703']);
 
+async function resolveRouteApprover(client, step, request) {
+  if (step.approver_id) return step.approver_id;
+
+  const role = String(step.role || '').trim();
+  const normalizedRole = role.toLowerCase();
+  if (normalizedRole === 'requester') return request.requester_id;
+
+  const departmentName = normalizedRole === 'it department hod'
+    ? 'it'
+    : normalizedRole === 'maintenance department hod' ? 'maintenance' : null;
+  if (departmentName) {
+    const user = await client.query(
+      `SELECT u.id FROM users u
+       JOIN departments d ON d.id=u.department_id
+       WHERE LOWER(u.role)='hod' AND u.is_active=TRUE
+         AND (LOWER(d.name)=$1 OR LOWER(d.name) LIKE $1 || ' %'
+           OR LOWER(d.name) LIKE '% ' || $1 || '%')
+       ORDER BY CASE WHEN LOWER(d.name)=$1 THEN 0 ELSE 1 END,u.id LIMIT 1`,
+      [departmentName],
+    );
+    return user.rows[0]?.id;
+  }
+
+  const user = await client.query(`SELECT id FROM users WHERE LOWER(role)=LOWER($1) AND is_active=TRUE
+    AND ($2::int IS NULL OR department_id=$2 OR LOWER($1) IN ('scm','admin','cmo','coo','ceo','cfo','medical devices'))
+    ORDER BY id LIMIT 1`, [role, request.department_id || null]);
+  return user.rows[0]?.id;
+}
+
 function translateReclassificationError(error) {
   if (!RECLASSIFICATION_SCHEMA_ERRORS.has(error?.code)) return error;
   const schemaError = failure(
@@ -37,12 +66,8 @@ async function reclassifyRequest(command, suppliedClient = null) {
     if (!configured.length) throw failure(422, 'No approval route is configured for the selected request type', 'MISSING_ROUTE');
     const resolved = [];
     for (const step of configured) {
-      let approverId = step.approver_id;
-      if (!approverId) {
-        const user = await client.query(`SELECT id FROM users WHERE LOWER(role)=LOWER($1) AND is_active=TRUE
-          AND ($2::int IS NULL OR department_id=$2 OR LOWER($1) IN ('scm','admin')) ORDER BY id LIMIT 1`, [step.role, before.department_id || null]);
-        approverId = user.rows[0]?.id;
-      }
+      const approverId = await resolveRouteApprover(client, step, before);
+      if (!approverId) throw failure(422, `No active user is available for approval role "${step.role}"`, 'MISSING_APPROVER');
       resolved.push({ ...step, approver_id: approverId });
     }
     const versionResult = await client.query('SELECT COALESCE(MAX(approval_route_version),0)+1 AS version FROM approvals WHERE request_id=$1', [requestId]);
@@ -69,4 +94,4 @@ async function reclassifyRequest(command, suppliedClient = null) {
   });
 }
 
-module.exports = { REQUEST_TYPES, reclassifyRequest, translateReclassificationError };
+module.exports = { REQUEST_TYPES, reclassifyRequest, resolveRouteApprover, translateReclassificationError };

@@ -12,7 +12,7 @@ const {
   getPurchaseOrderStatusMetadata,
   validatePurchaseOrderForIssuance,
 } = require('../services/procureToPayService');
-const { insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
+const supplierInvoiceService = require('../services/supplierInvoiceService');
 const {
   advanceLifecycleToApprovedRequest,
   ensureLifecycleRow,
@@ -128,378 +128,46 @@ const listReceiptsByRequest = async (req, res, next) => {
 };
 
 const submitInvoice = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.invoices.manage', ['procurementspecialist', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
-    const {
-      supplier,
-      supplier_id = null,
-      invoice_number,
-      invoice_date,
-      subtotal_amount,
-      tax_amount = 0,
-      extra_charges = 0,
-      total_amount,
-      currency = 'USD',
-      purchase_order_id = null,
-      po_equivalent_number = null,
-      receipt_id = null,
-      attachment_metadata = null,
-      items = [],
-    } = req.body;
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-    await ensureFinanceCoreTables(client);
-    await ensureLifecycleRow(client, requestId, req.user.id);
-
-    const requestMetaRes = await client.query(
-      `SELECT department_id, project_id FROM requests WHERE id = $1 FOR UPDATE`,
-      [requestId]
-    );
-
-    if (requestMetaRes.rowCount === 0) {
-      throw createHttpError(404, 'Request not found');
-    }
-
-    const requestMeta = requestMetaRes.rows[0];
-
-    let resolvedPurchaseOrderId = purchase_order_id || null;
-    let resolvedReceiptId = receipt_id || null;
-
-    if (resolvedReceiptId) {
-      const receiptRes = await client.query(
-        `SELECT id, request_id, purchase_order_id
-           FROM goods_receipts
-          WHERE id = $1 AND request_id = $2
-          FOR UPDATE`,
-        [resolvedReceiptId, requestId]
-      );
-      if (receiptRes.rowCount === 0) {
-        throw createHttpError(404, 'Goods receipt not found for this request');
-      }
-      resolvedPurchaseOrderId = resolvedPurchaseOrderId || receiptRes.rows[0].purchase_order_id || null;
-      if (!resolvedPurchaseOrderId) {
-        throw createHttpError(400, 'Invoice must be linked to a PO-backed goods receipt for 3-way matching');
-      }
-      if (Number(receiptRes.rows[0].purchase_order_id) !== Number(resolvedPurchaseOrderId)) {
-        throw createHttpError(400, 'receipt_id does not belong to the provided purchase_order_id');
-      }
-    }
-
-    if (resolvedPurchaseOrderId) {
-      const poRes = await client.query(
-        `SELECT id, request_id, status
-           FROM purchase_orders
-          WHERE id = $1 AND request_id = $2
-          FOR UPDATE`,
-        [resolvedPurchaseOrderId, requestId]
-      );
-      if (poRes.rowCount === 0) {
-        throw createHttpError(404, 'Purchase order not found for this request');
-      }
-      if (!resolvedReceiptId) {
-        throw createHttpError(400, 'A goods receipt is required before entering an invoice against a PO');
-      }
-    }
-
-    const budgetCheck = await assertBudgetCanCover(client, {
-      departmentId: requestMeta.department_id,
-      projectId: requestMeta.project_id || null,
-      amount: Number(total_amount) || 0,
-      currency,
+    const result = await supplierInvoiceService.submitSupplierInvoice({
+      repository: createTransactionalP2PRepository(pool),
+      purchaseOrderId: req.body.purchase_order_id,
+      supplierId: req.body.supplier_id,
+      invoiceNumber: req.body.invoice_number,
+      invoiceDate: req.body.invoice_date,
+      currency: req.body.currency || 'USD',
+      lines: req.body.lines || req.body.items,
+      idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key,
+      actor: req.user,
+      attachmentMetadata: req.body.attachment_metadata,
     });
-
-    const supplierRef = await resolveSupplierReference(client, {
-      supplierId: supplier_id,
-      supplierName: supplier,
-      requireSupplier: true,
-    });
-
-    const invoice = await insertSupplierInvoice(client, {
-      requestId,
-      userId: req.user.id,
-      supplier: supplierRef.supplierName,
-      supplierId: supplierRef.supplierId,
-      invoiceNumber: invoice_number,
-      invoiceDate: invoice_date,
-      subtotalAmount: subtotal_amount,
-      taxAmount: tax_amount,
-      extraCharges: extra_charges,
-      totalAmount: total_amount,
-      currency,
-      purchaseOrderId: resolvedPurchaseOrderId,
-      poEquivalentNumber: po_equivalent_number,
-      receiptId: resolvedReceiptId,
-      attachmentMetadata: attachment_metadata,
-      items,
-    });
-
-
-    await linkDocuments(client, {
-      requestId,
-      sourceType: resolvedReceiptId ? 'GOODS_RECEIPT_PO' : (resolvedPurchaseOrderId ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST'),
-      sourceId: resolvedReceiptId || resolvedPurchaseOrderId || requestId,
-      targetType: 'AP_INVOICE',
-      targetId: invoice.id,
-      metadata: { invoice_number: invoice.invoice_number },
-      createdBy: req.user.id,
-    });
-
-    const actualCommitment = await recordCommitment(client, {
-      requestId,
-      budgetEnvelopeId: budgetCheck.envelope.id,
-      stage: 'actual',
-      amount: Number(total_amount) || 0,
-      currency,
-      sourceType: 'supplier_invoice',
-      sourceId: String(invoice.id),
-      notes: `Actual spend from supplier invoice ${invoice.invoice_number}`,
-      actorId: req.user.id,
-    });
-
-    const glPosting = await postProcureToPayAccrual(client, {
-      requestId,
-      sourceId: invoice.id,
-      amount: Number(total_amount) || 0,
-      currency,
-      actorId: req.user.id,
-    });
-
-    const budgetSnapshot = await getBudgetSnapshot(client, budgetCheck.envelope.id);
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.AP_INVOICE_SUBMITTED, req.user.id, 'Invoice submitted');
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_PENDING, req.user.id, 'Awaiting matching');
-    await logFinanceAction(client, requestId, req.user.id, 'SUPPLIER_INVOICE_SUBMITTED', {
-      supplier_invoice_id: invoice.id,
-      budget_envelope_id: budgetCheck.envelope.id,
-      actual_commitment_id: actualCommitment?.id || null,
-      gl_posting_id: glPosting?.id || null,
-    });
-
-    await client.query('COMMIT');
-    await sendRequestWorkflowEmail({
-      requestId,
-      subject: `Supplier invoice submitted for request #${requestId}`,
-      message: [
-        `${req.user?.name || 'A procurement user'} submitted supplier invoice ${invoice.invoice_number} for request #${requestId}.`,
-        `Supplier: ${invoice.supplier || supplierRef.supplierName}`,
-        `Amount: ${invoice.total_amount || total_amount} ${invoice.currency || currency}`,
-        'The invoice is ready for matching and finance review.',
-      ].join('\n'),
-      logLabel: 'supplier invoice notification',
-    });
-
-    res.status(201).json({
-      message: 'Invoice submitted',
-      invoice,
-      budget: budgetSnapshot,
-      actual_commitment: actualCommitment,
-      gl_posting: glPosting,
-    });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    res.status(result.idempotent ? 200 : 201).json(result);
+  } catch (error) { next(error); }
 };
 
 const runInvoiceMatch = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.match.manage', ['procurementspecialist', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
-    const supplierInvoiceId = Number(req.params.invoiceId);
-    const policy = req.body?.policy === MATCH_POLICIES.TWO_WAY ? MATCH_POLICIES.TWO_WAY : MATCH_POLICIES.THREE_WAY;
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const invoiceHeaderRes = await client.query(
-      `SELECT si.id, si.receipt_id, si.purchase_order_id, po.created_by AS po_created_by, po.po_number
-         FROM supplier_invoices si
-         LEFT JOIN purchase_orders po ON po.id = si.purchase_order_id
-        WHERE si.id = $1 AND si.request_id = $2
-        FOR UPDATE OF si`,
-      [supplierInvoiceId, requestId]
-    );
-    if (invoiceHeaderRes.rowCount === 0) {
-      throw createHttpError(404, 'Invoice not found for this request');
-    }
-    const invoiceHeader = invoiceHeaderRes.rows[0];
-    if (!invoiceHeader.purchase_order_id || !invoiceHeader.receipt_id) {
-      throw createHttpError(400, '3-way matching requires the invoice to be linked to both a PO and a goods receipt');
-    }
-
-    const requestItemsRes = await client.query(
-      `SELECT quantity, unit_cost FROM requested_items WHERE request_id = $1`,
-      [requestId]
-    );
-    const purchaseOrderItemsRes = await client.query(
-      `SELECT poi.quantity, poi.unit_price
-       FROM purchase_order_items poi
-       JOIN supplier_invoices si ON si.purchase_order_id = poi.purchase_order_id
-       WHERE si.id = $1`,
-      [supplierInvoiceId]
-    );
-    const receiptItemsRes = await client.query(
-      `SELECT gri.received_quantity AS quantity, gri.unit_price
-       FROM goods_receipt_items gri
-       JOIN goods_receipts gr ON gr.id = gri.goods_receipt_id
-       WHERE gr.request_id = $1
-         AND ($2::bigint IS NULL OR gr.id = $2::bigint)`,
-      [requestId, invoiceHeader.receipt_id]
-    );
-    const invoiceItemsRes = await client.query(
-      `SELECT quantity, unit_price FROM invoice_items WHERE supplier_invoice_id = $1`,
-      [supplierInvoiceId]
-    );
-
-    const result = performInvoiceMatch({
-      policy,
-      requestItems: requestItemsRes.rows,
-      purchaseOrderItems: purchaseOrderItemsRes.rows,
-      receiptItems: receiptItemsRes.rows,
-      invoiceItems: invoiceItemsRes.rows,
-      tolerances: req.body?.tolerances || undefined,
-    });
-
-    const saved = await client.query(
-      `INSERT INTO invoice_match_results (request_id, supplier_invoice_id, match_policy, match_status, mismatch_reasons, matched_by)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       RETURNING *`,
-      [
-        requestId,
-        supplierInvoiceId,
-        result.policy,
-        result.matched ? 'MATCHED' : 'MISMATCH',
-        JSON.stringify(result.mismatch_reasons),
-        req.user.id,
-      ]
-    );
-
-    const discrepancyOwnerId = result.matched ? null : invoiceHeader.po_created_by;
-    const enrichedResult = {
-      ...result,
-      po_number: invoiceHeader.po_number || null,
-      discrepancy_owner_id: discrepancyOwnerId || null,
-      discrepancy_resolution: result.matched
-        ? (result.price_variance?.is_supplier_discount ? 'SUPPLIER_DISCOUNT_ACCEPTED' : 'READY_FOR_FINANCE_REVIEW')
-        : 'PROCUREMENT_PO_CREATOR_REVIEW_REQUIRED',
-    };
-
-    if (result.matched) {
-      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'Invoice matched', enrichedResult);
-      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, req.user.id, 'Ready for finance review');
-    } else {
-      await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'Invoice match exception assigned to PO creator', enrichedResult);
-    }
-
-    await logFinanceAction(client, requestId, req.user.id, 'INVOICE_MATCH_EXECUTED', { invoice_match_result_id: saved.rows[0].id, ...enrichedResult });
-
-    await client.query('COMMIT');
-    res.json({ match_result: { ...saved.rows[0], ...enrichedResult } });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    const result = await supplierInvoiceService.runInvoiceMatch({ repository: createTransactionalP2PRepository(pool), invoiceId: Number(req.params.invoiceId), actor: req.user });
+    res.json(result);
+  } catch (error) { next(error); }
 };
 
 const approveMatchOverride = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.override-mismatch', ['scm', 'admin', 'financeapprover']);
-    const requestId = Number(req.params.requestId);
-    const matchResultId = Number(req.params.matchResultId);
-    const reason = String(req.body?.reason || '').trim();
-    if (!reason) {
-      throw createHttpError(400, 'Override reason is required');
-    }
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const updated = await client.query(
-      `UPDATE invoice_match_results
-       SET override_approved = TRUE,
-           override_by = $2,
-           override_reason = $3,
-           override_at = NOW(),
-           match_status = 'OVERRIDDEN'
-       WHERE id = $1 AND request_id = $4
-       RETURNING *`,
-      [matchResultId, req.user.id, reason, requestId]
-    );
-
-    if (updated.rowCount === 0) {
-      throw createHttpError(404, 'Match result not found');
-    }
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'SCM accepted invoice price variance', { match_result_id: matchResultId, reason });
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.FINANCE_REVIEW_PENDING, req.user.id, 'Ready for finance review after SCM variance acceptance');
-    await logFinanceAction(client, requestId, req.user.id, 'MISMATCH_OVERRIDE_APPROVED', { match_result_id: matchResultId, reason, resolution: 'SCM_ACCEPTED_SUPPLIER_PRICE_CHANGE' });
-    await client.query('COMMIT');
-    res.json({ message: 'Override approved', match_result: updated.rows[0] });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    const result = await supplierInvoiceService.decideMatchOverride({ repository: createTransactionalP2PRepository(pool), matchResultId: Number(req.params.matchResultId), decision: 'APPROVED', reason: req.body.reason, actor: req.user });
+    res.json(result);
+  } catch (error) { next(error); }
 };
 
 const declineInvoiceMatch = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.override-mismatch', ['scm', 'admin', 'financeapprover']);
-    const requestId = Number(req.params.requestId);
-    const matchResultId = Number(req.params.matchResultId);
-    const reason = String(req.body?.reason || '').trim();
-    if (!reason) {
-      throw createHttpError(400, 'Decline reason is required');
-    }
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const updated = await client.query(
-      `UPDATE invoice_match_results
-       SET override_approved = FALSE,
-           override_by = $2,
-           override_reason = $3,
-           override_at = NOW(),
-           match_status = 'DECLINED'
-       WHERE id = $1 AND request_id = $4
-       RETURNING *`,
-      [matchResultId, req.user.id, reason, requestId]
-    );
-
-    if (updated.rowCount === 0) {
-      throw createHttpError(404, 'Match result not found');
-    }
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_EXCEPTION, req.user.id, 'SCM declined supplier invoice variance; supplier must issue a corrected invoice', {
-      match_result_id: matchResultId,
-      reason,
-      resolution: 'SUPPLIER_CORRECTED_INVOICE_REQUIRED',
-    });
-    await logFinanceAction(client, requestId, req.user.id, 'INVOICE_VARIANCE_DECLINED', {
-      match_result_id: matchResultId,
-      reason,
-      resolution: 'SUPPLIER_CORRECTED_INVOICE_REQUIRED',
-    });
-    await client.query('COMMIT');
-    res.json({ message: 'Invoice variance declined; request a corrected supplier invoice', match_result: updated.rows[0] });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    const result = await supplierInvoiceService.decideMatchOverride({ repository: createTransactionalP2PRepository(pool), matchResultId: Number(req.params.matchResultId), decision: 'DECLINED', reason: req.body.reason, actor: req.user });
+    res.json(result);
+  } catch (error) { next(error); }
 };
 
 const verifyFinanceRecord = async (req, res, next) => {

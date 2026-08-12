@@ -9,7 +9,7 @@ async function writeAuditEvent(event) {
   const details = { instituteId, requestId, correlationId, beforeData, afterData, metadata, reason };
   const result = await database.query(
     `INSERT INTO audit_logs (action, action_type, actor_id, target_type, target_id, description, details)
-     VALUES ($1,$1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,
+     VALUES ($1,$1,$2,$3,$4,$5,$6) RETURNING *`,
     [action, actorUserId, entityType, String(entityId), reason || `${action} ${entityType}`, JSON.stringify(details)]
   );
   return result.rows[0];

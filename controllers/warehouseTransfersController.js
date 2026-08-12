@@ -242,4 +242,6 @@ module.exports = {
   approveTransferRequest,
   rejectTransferRequest,
   getTransferRequest,
+  receiveTransferRequest,
+  cancelTransferRequest,
 };

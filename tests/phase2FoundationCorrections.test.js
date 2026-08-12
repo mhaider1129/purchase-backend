@@ -81,6 +81,12 @@ describe('Phase 2 foundation corrections', () => {
     await auditService.writeAuditEvent({ entityType: 'request', entityId: 3, action: 'x', requestId: null, correlationId: 'trace-1', client: { query } });
     expect(JSON.parse(query.mock.calls[0][1][5])).toMatchObject({ requestId: null, correlationId: 'trace-1' });
   });
+  test('audit details use the database column type instead of forcing jsonb', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [{}] });
+    await auditService.writeAuditEvent({ entityType: 'request', entityId: 3, action: 'request.reclassified', client: { query } });
+    expect(query.mock.calls[0][0]).toContain('$6) RETURNING');
+    expect(query.mock.calls[0][0]).not.toContain('$6::jsonb');
+  });
   test('outbox duplicate safely returns the existing event', async () => {
     const query = jest.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ id: 7 }] });
     await expect(enqueueNotification({ query }, { type: 'x', entityType: 'request', entityId: 3, idempotencyKey: 'event-3' })).resolves.toEqual({ event: { id: 7 }, created: false });

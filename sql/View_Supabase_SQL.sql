@@ -68,6 +68,7 @@ CREATE TABLE public.requests (
   approval_route_snapshot_id text,
   lifecycle_version bigint NOT NULL DEFAULT 0,
   CONSTRAINT requests_pkey PRIMARY KEY (id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
@@ -78,8 +79,7 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id)
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
 );
 CREATE TABLE public.requested_items (
   id integer NOT NULL DEFAULT nextval('requested_items_id_seq'::regclass),
@@ -1629,12 +1629,16 @@ CREATE TABLE public.warehouse_transfer_requests (
   rejection_reason text,
   created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
   updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+  dispatched_at timestamp with time zone,
+  dispatched_by integer,
+  received_at timestamp with time zone,
   CONSTRAINT warehouse_transfer_requests_pkey PRIMARY KEY (id),
   CONSTRAINT warehouse_transfer_requests_origin_warehouse_id_fkey FOREIGN KEY (origin_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT warehouse_transfer_requests_destination_warehouse_id_fkey FOREIGN KEY (destination_warehouse_id) REFERENCES public.warehouses(id),
   CONSTRAINT warehouse_transfer_requests_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES public.users(id),
   CONSTRAINT warehouse_transfer_requests_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id),
-  CONSTRAINT warehouse_transfer_requests_rejected_by_fkey FOREIGN KEY (rejected_by) REFERENCES public.users(id)
+  CONSTRAINT warehouse_transfer_requests_rejected_by_fkey FOREIGN KEY (rejected_by) REFERENCES public.users(id),
+  CONSTRAINT warehouse_transfer_requests_dispatched_by_fkey FOREIGN KEY (dispatched_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.warehouse_transfer_items (
   id integer NOT NULL DEFAULT nextval('warehouse_transfer_items_id_seq'::regclass),

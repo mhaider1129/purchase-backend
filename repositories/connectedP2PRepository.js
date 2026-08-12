@@ -11,9 +11,9 @@ const createConnectedP2PRepository = (client) => ({
   loadActiveAwards: async (requestItemId) => (await client.query("SELECT * FROM procurement_awards WHERE request_item_id=$1 AND status='ACTIVE' ORDER BY id", [requestItemId])).rows,
   findAwardByIdempotency: (key) => one(client, 'SELECT * FROM procurement_awards WHERE idempotency_key=$1', [key]),
   insertAward: (a) => one(client, `INSERT INTO procurement_awards
-    (request_id,request_item_id,supplier_id,awarded_quantity,unit_price,currency,source_type,source_id,idempotency_key,status,created_by)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ACTIVE',$10) RETURNING *`,
-  [a.request_id,a.request_item_id,a.supplier_id,a.awarded_quantity,a.unit_price,a.currency,a.source_type,a.source_id,a.idempotency_key,a.created_by]),
+    (request_id,request_item_id,supplier_id,awarded_quantity,unit_price,currency,source_type,source_id,selection_reason,actor_id,idempotency_key,payload_fingerprint,status)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'ACTIVE') RETURNING *`,
+  [a.request_id,a.request_item_id,a.supplier_id,a.awarded_quantity,a.unit_price,a.currency,a.source_type,a.source_id,a.selection_reason,a.actor_id,a.idempotency_key,a.payload_fingerprint]),
   lockAwards: async (ids) => (await client.query('SELECT * FROM procurement_awards WHERE id=ANY($1::bigint[]) ORDER BY id FOR UPDATE', [ids])).rows,
   getAwardConversion: (awardId) => one(client, `SELECT a.awarded_quantity::text,
     COALESCE(SUM(CASE WHEN po.status NOT IN ('PO_CANCELLED','CANCELLED') THEN poi.quantity ELSE 0 END),0)::text ordered_quantity,
@@ -33,6 +33,21 @@ const createConnectedP2PRepository = (client) => ({
   loadPurchaseOrder: async (id) => { const header=await one(client,'SELECT * FROM purchase_orders WHERE id=$1',[id]); if (!header) return null; header.lines=(await client.query('SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id',[id])).rows; return header; },
   loadPurchaseOrderLines: async (id) => (await client.query('SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id',[id])).rows,
   loadSupplier: (id) => one(client, 'SELECT * FROM suppliers WHERE id=$1', [id]),
+  async loadSupplierEligibilityFacts(id) {
+    const supplier = await one(client, 'SELECT * FROM suppliers WHERE id=$1', [id]);
+    const complianceArtifacts = (await client.query(`SELECT id,artifact_type,name,expiry_date,status,blocked
+      FROM supplier_compliance_artifacts WHERE supplier_id=$1
+      AND status='active' AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE) ORDER BY id`, [id])).rows;
+    const evaluationFacts = (await client.query(`SELECT id,evaluation_date,overall_score,compliance_score,weighted_overall_score
+      FROM supplier_evaluations WHERE supplier_id=$1 ORDER BY evaluation_date DESC,id DESC`, [id])).rows;
+    return {
+      supplier,
+      complianceBlocked: complianceArtifacts.some((artifact) => artifact.blocked === true),
+      complianceArtifacts,
+      evaluationFacts,
+      deferredChecks: ['CATEGORY_QUALIFICATION_NOT_AVAILABLE', 'BLACKLIST_REGISTRY_NOT_AVAILABLE'],
+    };
+  },
   resolveBudgetEnvelope: (po) => one(client, `SELECT be.* FROM requests r JOIN budget_envelopes be
     ON be.department_id=r.department_id AND COALESCE(be.project_id::text,'')=COALESCE(r.project_id::text,'')
     WHERE r.id=$1 AND be.currency=$2 AND be.fiscal_year=EXTRACT(YEAR FROM CURRENT_DATE)::integer

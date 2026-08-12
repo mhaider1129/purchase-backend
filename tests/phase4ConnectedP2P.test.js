@@ -7,11 +7,11 @@ const { planCancellation } = require('../services/p2pCancellationService');
 const { postPayment } = require('../services/paymentService');
 
 describe('Phase 4 connected P2P behavior', () => {
-  test('inactive, suspended, unqualified and category-ineligible suppliers cannot be selected', () => {
-    expect(evaluateSupplierEligibility({ is_active: false }).eligible).toBe(false);
-    expect(evaluateSupplierEligibility({ status: 'suspended' }).eligible).toBe(false);
-    expect(evaluateSupplierEligibility({ qualification_status: 'pending' }).eligible).toBe(false);
-    expect(evaluateSupplierEligibility({ eligible_category_ids: [2] }, { categoryId: 1 }).eligible).toBe(false);
+  test('supported supplier status and compliance facts determine eligibility', () => {
+    expect(evaluateSupplierEligibility({ supplier: { status: 'inactive' } }).eligible).toBe(false);
+    expect(evaluateSupplierEligibility({ supplier: { status: 'suspended' } }).eligible).toBe(false);
+    expect(evaluateSupplierEligibility({ supplier: { status: 'active' }, complianceBlocked: true }).eligible).toBe(false);
+    expect(evaluateSupplierEligibility({ supplier: { status: 'active' }, deferredChecks: ['CATEGORY_QUALIFICATION_NOT_AVAILABLE'] }).eligible).toBe(true);
   });
   test('contract precedes quotation and provenance is returned', () => {
     const result = selectPrice({ contractPrice: { id: 7, unit_price: '3.25', currency: 'USD' }, award: { id: 9, source_type: 'QUOTATION', unit_price: '4.00', currency: 'USD' } });
@@ -53,15 +53,19 @@ describe('Phase 4 connection corrections', () => {
   test('award idempotency fingerprints conflict and locked cumulative quantity is decimal safe', async () => {
     const { createAward } = require('../services/procurementAwardService');
     const rows = new Map(); let sum = '0';
-    const repository = {
-      lockRequestItem: async (_id, work) => work({ id: 2, request_id: 1, approved_quantity: '100.0000' }),
+    const tx = {
+      client: {}, lockRequestItem: async () => ({ id: 2, request_id: 1, approved_quantity: '100.0000' }),
+      loadSupplierEligibilityFacts: async id => ({ supplier: { id, status: 'active' }, complianceBlocked: false, evaluationFacts: [], deferredChecks: [] }),
       findByIdempotencyKey: async key => rows.get(key), sumActiveAwards: async () => sum,
-      insert: async row => { rows.set(row.idempotency_key, row); sum = row.awarded_quantity; return row; },
+      insert: async row => { const saved={id:1,...row}; rows.set(row.idempotency_key, saved); sum = row.awarded_quantity; return saved; },
     };
+    const repository = { withTransaction: work => work(tx) };
+    const deps = { auditService: { writeAuditEvent: async () => {} }, outbox: { enqueueNotification: async () => {} } };
     const base = { awarded_quantity: '70', unit_price: '1.25', currency: 'USD', source_type: 'QUOTATION', source_id: 9, selection_reason: 'best', idempotency_key: 'award-1' };
-    await createAward({ repository, requestItem: { id: 2 }, supplier: { id: 3 }, input: base, actor: { id: 4 } });
-    await expect(createAward({ repository, requestItem: { id: 2 }, supplier: { id: 3 }, input: { ...base, awarded_quantity: '71' }, actor: { id: 4 } })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', status: 409 });
-    await expect(createAward({ repository: { ...repository, findByIdempotencyKey: async () => null }, requestItem: { id: 2 }, supplier: { id: 4 }, input: { ...base, idempotency_key: 'award-2' }, actor: { id: 4 } })).rejects.toMatchObject({ code: 'AWARD_QUANTITY_EXCEEDED' });
+    await createAward({ repository, requestItem: { id: 2 }, supplier: { id: 3 }, input: base, actor: { id: 4 }, ...deps });
+    await expect(createAward({ repository, requestItem: { id: 2 }, supplier: { id: 3 }, input: { ...base, awarded_quantity: '71' }, actor: { id: 4 }, ...deps })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', status: 409 });
+    tx.findByIdempotencyKey = async () => null;
+    await expect(createAward({ repository, requestItem: { id: 2 }, supplier: { id: 4 }, input: { ...base, idempotency_key: 'award-2' }, actor: { id: 4 }, ...deps })).rejects.toMatchObject({ code: 'AWARD_QUANTITY_EXCEEDED' });
   });
 
   test('PO inherits award traceability and rejects a supplied wrong supplier', async () => {

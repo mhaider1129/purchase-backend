@@ -1,5 +1,5 @@
 'use strict';
-const { assertSupplierEligible } = require('./supplierEligibilityService');
+const { loadAndAssertSupplierEligible } = require('./supplierEligibilityService');
 const { calculatePurchaseOrderTotals, compareDecimal } = require('./purchaseOrderTotalsService');
 const { commitPurchaseOrder } = require('./budgetCommitmentService');
 const defaultAudit = require('./auditService');
@@ -37,7 +37,7 @@ const releasePurchaseOrder = async ({ repository, purchaseOrderId, actor, auditS
   if (po.status === 'PO_ISSUED') return { purchaseOrder: await tx.loadPurchaseOrder(po.id), commitment: await tx.findCommitmentByIdempotency(key) };
   if (po.status !== 'PO_APPROVED' || !po.approved_at || !po.approved_by) throw Object.assign(new Error('PO must have completed approval before issue'), { code: 'INVALID_PO_TRANSITION', statusCode: 409 });
   const lines = await tx.loadPurchaseOrderLines(po.id);
-  assertSupplierEligible(await tx.loadSupplier(po.supplier_id));
+  await loadAndAssertSupplierEligible(tx, po.supplier_id);
   for (const line of lines) if (!line.award_id || !line.requested_item_id || !line.price_source_type || !line.price_source_id) throw Object.assign(new Error('PO line traceability and price provenance are required'), { code: 'PO_LINE_TRACE_REQUIRED', statusCode: 409 });
   const totals = calculatePurchaseOrderTotals({ lines, freight: po.freight, charges: po.charges });
   const commitment = await commitPurchaseOrder({ repository: tx, purchaseOrder: { ...po, grand_total: totals.grand_total }, idempotencyKey: key, actor });

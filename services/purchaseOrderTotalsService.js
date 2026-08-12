@@ -19,6 +19,12 @@ const formatDecimal = (scaled, places = 2) => {
   return `${rounded < 0n ? '-' : ''}${absolute / factor}.${String(absolute % factor).padStart(places, '0')}`;
 };
 const multiply = (left, right) => (left * right + FACTOR / 2n) / FACTOR;
+const compareDecimal = (left, right) => {
+  const difference = parseDecimal(left) - parseDecimal(right);
+  return difference < 0n ? -1 : difference > 0n ? 1 : 0;
+};
+const addDecimal = (...values) => formatDecimal(values.reduce((sum, value) => sum + parseDecimal(value), 0n));
+const subtractDecimal = (left, ...values) => formatDecimal(values.reduce((result, value) => result - parseDecimal(value), parseDecimal(left)));
 
 const calculateLine = (line) => {
   const subtotal = multiply(parseDecimal(line.quantity), parseDecimal(line.unit_price));
@@ -43,4 +49,4 @@ const calculatePurchaseOrderTotals = ({ lines = [], freight = 0, charges = 0 }) 
   return { lines: calculatedLines, subtotal: formatDecimal(subtotal), discount: formatDecimal(discount), tax: formatDecimal(tax), freight: formatDecimal(parseDecimal(freight)), charges: formatDecimal(parseDecimal(charges)), grand_total: formatDecimal(subtotal - discount + tax + extras) };
 };
 
-module.exports = { parseDecimal, formatDecimal, calculateLine, calculatePurchaseOrderTotals };
+module.exports = { parseDecimal, formatDecimal, compareDecimal, addDecimal, subtractDecimal, calculateLine, calculatePurchaseOrderTotals };

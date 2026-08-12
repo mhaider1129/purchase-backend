@@ -49,3 +49,34 @@ describe('Phase 4 connected P2P behavior', () => {
     await postPayment({ repository, invoiceId: 1, amount: 60, idempotencyKey: 'c' }); expect(status).toBe('PAID');
   });
 });
+describe('Phase 4 connection corrections', () => {
+  test('award idempotency fingerprints conflict and locked cumulative quantity is decimal safe', async () => {
+    const { createAward } = require('../services/procurementAwardService');
+    const rows = new Map(); let sum = '0';
+    const repository = {
+      lockRequestItem: async (_id, work) => work({ id: 2, request_id: 1, approved_quantity: '100.0000' }),
+      findByIdempotencyKey: async key => rows.get(key), sumActiveAwards: async () => sum,
+      insert: async row => { rows.set(row.idempotency_key, row); sum = row.awarded_quantity; return row; },
+    };
+    const base = { awarded_quantity: '70', unit_price: '1.25', currency: 'USD', source_type: 'QUOTATION', source_id: 9, selection_reason: 'best', idempotency_key: 'award-1' };
+    await createAward({ repository, requestItem: { id: 2 }, supplier: { id: 3 }, input: base, actor: { id: 4 } });
+    await expect(createAward({ repository, requestItem: { id: 2 }, supplier: { id: 3 }, input: { ...base, awarded_quantity: '71' }, actor: { id: 4 } })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', status: 409 });
+    await expect(createAward({ repository: { ...repository, findByIdempotencyKey: async () => null }, requestItem: { id: 2 }, supplier: { id: 4 }, input: { ...base, idempotency_key: 'award-2' }, actor: { id: 4 } })).rejects.toMatchObject({ code: 'AWARD_QUANTITY_EXCEEDED' });
+  });
+
+  test('PO inherits award traceability and rejects a supplied wrong supplier', async () => {
+    const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
+    const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, status: 'ACTIVE', awarded_quantity: '10', unit_price: '4', currency: 'USD', source_type: 'QUOTATION', source_id: 6 };
+    const tx = { lockAwards: async () => [award], insertHeader: async row => ({ id: 9, ...row }), insertLine: async row => row };
+    const repository = { withTransaction: work => work(tx) };
+    const po = await createPurchaseOrderFromAwards({ repository, awardIds: [8], actor: { id: 7 } });
+    expect(po).toMatchObject({ supplier_id: 3, request_id: 1, lines: [{ award_id: 8, request_item_id: 2, quantity: '10', price_source_type: 'QUOTATION' }] });
+    await expect(createPurchaseOrderFromAwards({ repository, awardIds: [8], actor: { id: 7 }, input: { supplier_id: 99 } })).rejects.toMatchObject({ code: 'PO_SUPPLIER_MISMATCH' });
+  });
+
+  test('cumulative invoice quantities exclude voids and prevent 70 plus 70 against 100', () => {
+    const { matchInvoice } = require('../services/invoiceMatchingService');
+    const result = matchInvoice({ policy: 'THREE_WAY', purchaseOrder: { supplier_id: 1, currency: 'USD', lines: [{ id: 2, quantity: '100', unit_price: '1' }] }, receipts: [{ lines: [{ po_line_id: 2, quantity: '100' }] }], priorInvoices: [{ status: 'MATCHED', lines: [{ po_line_id: 2, quantity: '70' }] }, { status: 'VOIDED', lines: [{ po_line_id: 2, quantity: '99' }] }], invoice: { supplier_id: 1, currency: 'USD', lines: [{ id: 4, po_line_id: 2, quantity: '70', unit_price: '1' }] } });
+    expect(result.variances).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'QUANTITY_VARIANCE', reason: 'OVER_INVOICED' })]));
+  });
+});

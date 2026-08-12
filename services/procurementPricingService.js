@@ -6,4 +6,11 @@ const selectPrice = ({ contractPrice, award, directPurchase, manualOverride, can
   if (manualOverride) { if (!canOverride) throw Object.assign(new Error('Manual price override is not authorized'), { code: 'PRICE_OVERRIDE_FORBIDDEN' }); return { unit_price: String(manualOverride.unit_price), currency: manualOverride.currency, price_source_type: 'MANUAL_OVERRIDE', price_source_id: manualOverride.approval_id }; }
   throw Object.assign(new Error('No governed price source is available'), { code: 'PRICE_SOURCE_REQUIRED' });
 };
-module.exports = { selectPrice };
+const selectRepositoryPrice = async ({ repository, supplierId, requestItemId, quantity, contractId, at = new Date(), awardId, directPurchaseId }) => {
+  const contractPrice = contractId ? await repository.findApplicableContractPrice({ contractId, supplierId, requestItemId, quantity, at }) : null;
+  if (contractId && !contractPrice) throw Object.assign(new Error('Contract is not applicable to this supplier, item, date or quantity'), { code: 'CONTRACT_PRICE_NOT_APPLICABLE' });
+  const award = !contractPrice && awardId ? await repository.findAwardPrice({ awardId, supplierId, requestItemId }) : null;
+  const directPurchase = !contractPrice && !award && directPurchaseId ? await repository.findDirectPurchasePrice({ directPurchaseId, supplierId, requestItemId }) : null;
+  return selectPrice({ contractPrice, award, directPurchase, at });
+};
+module.exports = { selectPrice, selectRepositoryPrice };

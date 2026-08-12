@@ -997,248 +997,44 @@ const markPaid = async (req, res, next) => {
 
 
 
+const parsePurchaseOrderId = (value) => {
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw createHttpError(400, 'Invalid purchase order id');
+  return id;
+};
+
 const submitPurchaseOrderForApproval = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
-    const poId = Number(req.params.poId);
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
-    if (!poRes.rowCount) {
-      throw createHttpError(404, 'Purchase order not found');
-    }
-
-    const po = poRes.rows[0];
-    if (['PO_CANCELLED', 'PO_CLOSED', 'PO_ISSUED'].includes(po.status)) {
-      throw createHttpError(400, `Purchase order cannot be submitted for approval from status ${po.status}`);
-    }
-
-    const updated = await client.query(
-      `UPDATE purchase_orders
-          SET status = 'PO_PENDING_APPROVAL',
-              approval_required = TRUE,
-              approval_route = COALESCE($2, approval_route, 'SCM_APPROVAL_AUTHORITY'),
-              updated_at = NOW()
-        WHERE id = $1
-        RETURNING *`,
-      [poId, req.body?.approval_route || null]
-    );
-
-    if (po.request_id) {
-      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_PENDING_APPROVAL, req.user.id, 'Purchase order submitted for approval');
-      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_SUBMITTED_FOR_APPROVAL', { purchase_order_id: poId });
-    }
-
-    await client.query('COMMIT');
-    await sendRequestWorkflowEmail({
-      requestId: po.request_id,
-      subject: `Purchase order submitted for approval for request #${po.request_id}`,
-      message: `${req.user?.name || 'A procurement user'} submitted purchase order ${updated.rows[0].po_number || `#${poId}`} for approval on request #${po.request_id}.`,
-      logLabel: 'purchase order submission notification',
-    });
-    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    const purchaseOrder = await purchaseOrderService.submitPurchaseOrder({ repository: createTransactionalP2PRepository(pool), purchaseOrderId: parsePurchaseOrderId(req.params.poId), approvalRoute: req.body?.approval_route, actor: req.user });
+    res.json({ purchase_order: annotatePurchaseOrder(purchaseOrder) });
+  } catch (error) { next(error); }
 };
 
 const approvePurchaseOrder = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['scm', 'admin']);
-    const poId = Number(req.params.poId);
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
-    if (!poRes.rowCount) {
-      throw createHttpError(404, 'Purchase order not found');
-    }
-
-    const po = poRes.rows[0];
-    if (!['PO_PENDING_APPROVAL', 'PO_DRAFT', 'PO_APPROVED'].includes(po.status)) {
-      throw createHttpError(400, `Purchase order cannot be approved from status ${po.status}`);
-    }
-
-    const updated = await client.query(
-      `UPDATE purchase_orders
-          SET status = 'PO_APPROVED',
-              approval_required = TRUE,
-              approved_by = $2,
-              approved_at = NOW(),
-              updated_at = NOW()
-        WHERE id = $1
-        RETURNING *`,
-      [poId, req.user.id]
-    );
-
-    if (po.request_id) {
-      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_APPROVED, req.user.id, 'Purchase order approved');
-      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_APPROVED', { purchase_order_id: poId });
-    }
-
-    await client.query('COMMIT');
-    await sendRequestWorkflowEmail({
-      requestId: po.request_id,
-      subject: `Purchase order approved for request #${po.request_id}`,
-      message: `${req.user?.name || 'An approver'} approved purchase order ${updated.rows[0].po_number || `#${poId}`} for request #${po.request_id}.`,
-      logLabel: 'purchase order approval notification',
-    });
-    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    const purchaseOrder = await purchaseOrderService.approvePurchaseOrder({ repository: createTransactionalP2PRepository(pool), purchaseOrderId: parsePurchaseOrderId(req.params.poId), actor: req.user });
+    res.json({ purchase_order: annotatePurchaseOrder(purchaseOrder) });
+  } catch (error) { next(error); }
 };
 
 const issuePurchaseOrder = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
-    const poId = Number(req.params.poId);
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
-    if (!poRes.rowCount) {
-      throw createHttpError(404, 'Purchase order not found');
-    }
-
-    const itemsRes = await client.query(`SELECT requested_item_id, item_name, quantity, unit_price FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id ASC`, [poId]);
-    const po = poRes.rows[0];
-    const validationErrors = validatePurchaseOrderForIssuance({
-      supplierId: po.supplier_id,
-      supplierName: po.supplier_name,
-      items: itemsRes.rows,
-      deliveryDate: po.expected_delivery_date,
-      deliveryLocation: po.delivery_location,
-      budgetCostCenter: po.budget_cost_center,
-      taxTerms: po.tax_terms,
-      paymentTerms: po.payment_terms || po.terms,
-    });
-
-    if (validationErrors.length > 0) {
-      throw createHttpError(400, `Purchase order cannot be issued: ${validationErrors.join('; ')}`);
-    }
-    if (po.approval_required && !po.approved_at) {
-      throw createHttpError(400, 'Purchase order must be approved before it can be issued');
-    }
-
-    const updated = await client.query(
-      `UPDATE purchase_orders
-          SET status = 'PO_ISSUED',
-              issue_event_at = NOW(),
-              issued_to_supplier_at = NOW(),
-              issued_by = $2,
-              issued_at = NOW(),
-              supplier_contact_email = COALESCE($3, supplier_contact_email),
-              updated_at = NOW()
-        WHERE id = $1
-        RETURNING *`,
-      [poId, req.user.id, req.body?.supplier_contact_email || null]
-    );
-
-    if (po.request_id) {
-      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_ISSUED, req.user.id, 'Purchase order issued to supplier');
-      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_ISSUED', {
-        purchase_order_id: poId,
-        supplier_contact_email: req.body?.supplier_contact_email || po.supplier_contact_email || null,
-      });
-    }
-
-    await client.query('COMMIT');
-    const issuedPurchaseOrder = annotatePurchaseOrder(updated.rows[0]);
-    await sendRequestWorkflowEmail({
-      requestId: po.request_id,
-      subject: `Purchase order issued for request #${po.request_id}`,
-      message: [
-        `${req.user?.name || 'A procurement user'} issued purchase order ${issuedPurchaseOrder.po_number || `#${poId}`} to ${issuedPurchaseOrder.supplier_name || 'the supplier'}.`,
-        issuedPurchaseOrder.supplier_contact_email ? `Supplier email: ${issuedPurchaseOrder.supplier_contact_email}` : '',
-      ].filter(Boolean).join('\n'),
-      logLabel: 'purchase order issuance notification',
-    });
-    if (issuedPurchaseOrder.supplier_contact_email) {
-      await sendWorkflowEmail({
-        to: issuedPurchaseOrder.supplier_contact_email,
-        subject: `Purchase order ${issuedPurchaseOrder.po_number || `#${poId}`} issued`,
-        message: [
-          `Purchase order ${issuedPurchaseOrder.po_number || `#${poId}`} has been issued by the Procurement System.`,
-          issuedPurchaseOrder.expected_delivery_date ? `Expected delivery date: ${issuedPurchaseOrder.expected_delivery_date}` : '',
-          issuedPurchaseOrder.delivery_location ? `Delivery location: ${issuedPurchaseOrder.delivery_location}` : '',
-        ].filter(Boolean).join('\n'),
-        logLabel: 'supplier purchase order email',
-      });
-    }
-    res.json({ purchase_order: issuedPurchaseOrder });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    const result = await purchaseOrderService.releasePurchaseOrder({ repository: createTransactionalP2PRepository(pool), purchaseOrderId: parsePurchaseOrderId(req.params.poId), actor: req.user });
+    res.json({ purchase_order: annotatePurchaseOrder(result.purchaseOrder), commitment: result.commitment });
+  } catch (error) { next(error); }
 };
 
 const cancelPurchaseOrder = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
-    const poId = Number(req.params.poId);
     const reason = String(req.body?.reason || '').trim();
-    if (!reason) {
-      throw createHttpError(400, 'Cancellation reason is required');
-    }
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
-    if (!poRes.rowCount) {
-      throw createHttpError(404, 'Purchase order not found');
-    }
-
-    const po = poRes.rows[0];
-    if (['PO_CLOSED', 'PO_CANCELLED'].includes(po.status)) {
-      throw createHttpError(400, `Purchase order is already ${po.status}`);
-    }
-
-    const updated = await client.query(
-      `UPDATE purchase_orders
-          SET status = 'PO_CANCELLED',
-              cancellation_reason = $2,
-              updated_at = NOW()
-        WHERE id = $1
-        RETURNING *`,
-      [poId, reason]
-    );
-
-    if (po.request_id) {
-      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_CANCELLED, req.user.id, 'Purchase order cancelled', { reason });
-      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_CANCELLED', { purchase_order_id: poId, reason });
-    }
-
-    await client.query('COMMIT');
-    await sendRequestWorkflowEmail({
-      requestId: po.request_id,
-      subject: `Purchase order cancelled for request #${po.request_id}`,
-      message: [
-        `${req.user?.name || 'A procurement user'} cancelled purchase order ${updated.rows[0].po_number || `#${poId}`} for request #${po.request_id}.`,
-        `Reason: ${reason}`,
-      ].join('\n'),
-      logLabel: 'purchase order cancellation notification',
-    });
-    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    if (!reason) throw createHttpError(400, 'Cancellation reason is required');
+    const result = await purchaseOrderService.cancelPurchaseOrder({ repository: createTransactionalP2PRepository(pool), purchaseOrderId: parsePurchaseOrderId(req.params.poId), reason, actor: req.user });
+    res.json({ purchase_order: annotatePurchaseOrder(result.purchaseOrder), commitment: result.commitment });
+  } catch (error) { next(error); }
 };
 
 const closePurchaseOrder = async (req, res, next) => {

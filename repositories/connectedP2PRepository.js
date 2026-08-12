@@ -31,8 +31,18 @@ const createConnectedP2PRepository = (client) => ({
   [l.purchase_order_id,l.requested_item_id,l.award_id,l.quantity,l.unit_price,l.price_source_type,l.price_source_id,l.line_type||'NON_INVENTORY']),
   lockPurchaseOrder: (id) => one(client, 'SELECT * FROM purchase_orders WHERE id=$1 FOR UPDATE', [id]),
   loadPurchaseOrder: async (id) => { const header=await one(client,'SELECT * FROM purchase_orders WHERE id=$1',[id]); if (!header) return null; header.lines=(await client.query('SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id',[id])).rows; return header; },
-  updatePurchaseOrderTotals: (id,t) => one(client,'UPDATE purchase_orders SET subtotal=$2,tax_amount=$3,total_amount=$4,updated_at=NOW() WHERE id=$1 RETURNING *',[id,t.subtotal,t.tax_amount||'0',t.grand_total]),
-  releasePurchaseOrder: (id,t) => one(client,"UPDATE purchase_orders SET subtotal=$2,total_amount=$3,status='PO_ISSUED',issued_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *",[id,t.subtotal,t.grand_total]),
+  loadPurchaseOrderLines: async (id) => (await client.query('SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id',[id])).rows,
+  loadSupplier: (id) => one(client, 'SELECT * FROM suppliers WHERE id=$1', [id]),
+  resolveBudgetEnvelope: (po) => one(client, `SELECT be.* FROM requests r JOIN budget_envelopes be
+    ON be.department_id=r.department_id AND COALESCE(be.project_id::text,'')=COALESCE(r.project_id::text,'')
+    WHERE r.id=$1 AND be.currency=$2 AND be.fiscal_year=EXTRACT(YEAR FROM CURRENT_DATE)::integer
+    ORDER BY be.id LIMIT 1`, [po.request_id, po.currency]),
+  markPurchaseOrderSubmitted: (id,route) => one(client,"UPDATE purchase_orders SET status='PO_PENDING_APPROVAL',approval_required=TRUE,approval_route=COALESCE($2,approval_route,'SCM_APPROVAL_AUTHORITY'),updated_at=NOW() WHERE id=$1 RETURNING *",[id,route||null]),
+  markPurchaseOrderApproved: (id,actorId) => one(client,"UPDATE purchase_orders SET status='PO_APPROVED',approval_required=TRUE,approved_by=$2,approved_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *",[id,actorId]),
+  markPurchaseOrderIssued: (id,t,actorId) => one(client,"UPDATE purchase_orders SET total_amount=$2,status='PO_ISSUED',issued_at=NOW(),issue_event_at=NOW(),issued_to_supplier_at=NOW(),issued_by=$3,updated_at=NOW() WHERE id=$1 RETURNING *",[id,t.grand_total,actorId]),
+  markPurchaseOrderCancelled: (id,reason) => one(client,"UPDATE purchase_orders SET status='PO_CANCELLED',cancellation_reason=$2,updated_at=NOW() WHERE id=$1 RETURNING *",[id,reason]),
+  hasPurchaseOrderReceipts: async (id) => Boolean(await one(client, `SELECT 1 FROM goods_receipts gr JOIN goods_receipt_items gri ON gri.goods_receipt_id=gr.id
+    WHERE gr.purchase_order_id=$1 AND COALESCE(gri.received_quantity,0)>0 LIMIT 1`, [id])),
 
   lockBudgetEnvelope: (id) => one(client,'SELECT * FROM budget_envelopes WHERE id=$1 FOR UPDATE',[id]),
   sumActiveEncumbrances: async (id) => (await one(client,"SELECT COALESCE(SUM(amount),0)::text amount FROM commitment_ledger WHERE budget_envelope_id=$1 AND stage='encumbrance' AND state='ACTIVE'",[id])).amount,
@@ -69,7 +79,6 @@ const createConnectedP2PRepository = (client) => ({
   insert(a){ return this.insertAward(a); },
   insertHeader(p){ return this.insertPurchaseOrderHeader(p); },
   insertLine(l){ return this.insertPurchaseOrderLine(l); },
-  release(id,t){ return this.releasePurchaseOrder(id,t); },
 });
 
 const createTransactionalP2PRepository = (pool) => ({

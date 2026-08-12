@@ -1,47 +1,31 @@
-# Phase 4 production cutover closure
+# Phase 4 cutover batch A: PO issue and commitment closure
 
-## Live controller migrated
+## Live controllers and status mapping
 
-`procureToPayController.createPurchaseOrder` accepts only award IDs and quantities and delegates to `purchaseOrderService.createPurchaseOrderFromAwards`. It no longer calculates totals, accepts caller prices, copies supplier identity, or creates traceability.
+The live `procureToPayController` PO endpoints now authorize, parse the PO identifier, call `purchaseOrderService`, shape the response, and forward errors. Submit is strictly `PO_DRAFT` → `PO_PENDING_APPROVAL`; approve is strictly `PO_PENDING_APPROVAL` → `PO_APPROVED` and records `approved_by`/`approved_at`; issue is strictly an actually approved `PO_APPROVED` → `PO_ISSUED`. Cancellation persists `PO_CANCELLED`. No `APPROVED` or `RELEASED` PO status is written.
 
-## Real repository methods
+## Canonical issue transaction
 
-`connectedP2PRepository` is bound to one supplied PostgreSQL client. It provides entity-specific operations for award locks/inserts/remaining quantity; PO headers, lines, locks, loads, totals and release; budget locks, commitments and release; receipt locks, cumulative receipt quantities and inserts; invoice identity locks, PO/prior invoice loads, invoice/line/match inserts and lifecycle; and invoice locks, posted payment totals, payment inserts and AP lifecycle. `createTransactionalP2PRepository` owns BEGIN/COMMIT/ROLLBACK.
+`releasePurchaseOrder({ repository, purchaseOrderId, actor, auditService, outbox })` owns the repository transaction. It locks and loads authoritative PO state, loads lines and supplier, requires completed approval, validates award/requested-item/price provenance, calculates exact decimal totals, derives the fiscal-year budget envelope from the request department/project and PO currency, locks it, and computes availability as `allocated_amount - consumed_amount - active encumbrances`. It inserts the `stage='encumbrance'`, `state='ACTIVE'` commitment with `po-release:{purchaseOrderId}`, marks the PO `PO_ISSUED`, audits `BUDGET_COMMITTED` and `PO_ISSUED`, and enqueues both outbox events before commit. Audit or outbox failure rolls the whole unit back. SMTP is outside and is not a prerequisite.
 
-## Award to PO quantity control
+An issued retry returns the current PO plus the existing commitment. The unique idempotency key and the locked PO/budget rows prevent duplicate financial effect and serialize competing POs against one envelope.
 
-Partial conversion is supported. Awards lock in ID order. Under that lock, active/non-cancelled PO quantities are subtracted from awarded quantity and excess is rejected. Therefore 60 + 40 of 100 succeeds, a further 1 fails, and competing 70 conversions serialize so only one can commit. SQL 006 intentionally has no `UNIQUE(award_id)` and adds a covering `(award_id, purchase_order_id) INCLUDE (quantity)` index.
+## Cancellation
 
-## Budget transaction model
+The cancellation service locks the PO, safely returns an already-cancelled PO, and rejects any positive receipt history with `RECEIPT_RETURN_OR_REVERSAL_REQUIRED`. Otherwise it marks the PO `PO_CANCELLED`, changes its active encumbrance to `RELEASED` without deleting history, audits, enqueues `BUDGET_COMMITMENT_RELEASED` and `PO_CANCELLED`, and commits atomically.
 
-The adapter locks `budget_envelopes` `FOR UPDATE`, sums active `commitment_ledger` encumbrances, performs idempotency lookup, inserts encumbrances, and releases commitments without deleting history. Numeric strings preserve exact-decimal service arithmetic.
+## Repository and writer classification
 
-## Receipt integration model
+The connected repository is the canonical writer for Batch A: submission, approval, issue, cancellation, encumbrance insertion, and commitment release. Its methods are entity-specific and its transactional wrapper owns `BEGIN`/`COMMIT`/`ROLLBACK`.
 
-The adapter locks PO lines, calculates cumulative valid receipts, and inserts idempotent receipt headers/lines carrying `line_type`. The existing `goodsReceiptInventoryAdapter` remains the only stock route. The live receipt controller remains a compatibility writer pending final coordinator cutover.
+The remaining direct `UPDATE purchase_orders` occurrences are outside this bounded cutover: the receipt compatibility projection in `procureToPayController` and the PO close endpoint. The remaining direct `INSERT INTO commitment_ledger` in `financeCoreService` supports the pre-existing reservation/actual finance flow, not PO-issue encumbrance. There are no other direct `UPDATE commitment_ledger` writers. Receipt, invoice, matching, payment, and requested-item projection paths remain intentionally unchanged.
 
-## Invoice and matching cutover
+## SQL 006
 
-Repository operations use canonical `purchase_order_id`, transaction advisory-lock supplier/invoice identity, insert headers/lines, load prior valid invoices, persist structured matches, and update lifecycle. Live invoice/match controllers remain outstanding.
+No SQL 006 change is required. It already adds `purchase_order_id`, `idempotency_key`, and `state`; retains existing `stage` and `actor_id`; constrains commitment state; and provides unique idempotency and one-active-PO-encumbrance indexes. The checked-in schema snapshot has no PO status CHECK constraint. If a deployed database has an out-of-snapshot PO status CHECK, the required DBA-reviewed migration is to replace that constraint so it permits exactly `PO_DRAFT`, `PO_PENDING_APPROVAL`, `PO_APPROVED`, `PO_ISSUED`, and `PO_CANCELLED` before cutover. SQL 006 remains manual and was not executed.
 
-## Payment cutover
+## Behavioral coverage
 
-Repository operations lock invoices, total posted payments, enforce payment idempotency storage, insert physical records, and update invoice/AP state. Legacy controller payment paths remain outstanding and must delegate before final closure.
-
-## Requested-item projection strategy
-
-The selected strategy is a compatibility projection updated only after canonical commits. Direct legacy endpoints are not all disabled yet, so this closure remains outstanding.
-
-## Remaining direct writers
-
-Canonical SQL is confined to the repository. Search also found production compatibility writers: `rfxPortalController` inserts POs; `procureToPayController` updates PO receipt/approval/issue/cancel/close states and writes legacy payments; `procureToPayPersistenceService` inserts legacy invoices. No exact direct writer was found for the four requested-item search strings. These results are explicitly classified as outstanding, not migrated.
-
-## Corrected SQL 006
-
-SQL 006 adds only the partial-conversion covering index required by this pass. It was not executed.
-
-## Controller/integration tests and results
-
-The controller test imports the actual controller, mocks the canonical service boundary, proves award delegation, and proves arbitrary legacy line pricing is rejected. Connected behavior tests cover inherited traceability and 60/40/1 award accounting. Targeted result: 2 suites and 15 tests passed. Full result: 82 suites/452 tests passed; 2 suites/3 unrelated pre-existing tests failed in warehouse inventory mocks and warehouse-transfer route assembly.
+Executable service tests cover submit/invalid submit, approve, issue, one commitment, issue retry, exact 100/70 budget success, serialized second-70 failure, rollback on budget/audit/outbox failure, unreceived cancellation/release, received cancellation rejection, retry safety, canonical events, and canonical statuses. Controller tests exercise real controller authorization and service delegation rather than relying only on source-string assertions.
 
 No SQL was executed against Supabase.

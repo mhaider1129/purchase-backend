@@ -71,4 +71,10 @@ ALTER TABLE public.goods_receipts ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS goods_receipt_idempotency_uq ON public.goods_receipts(idempotency_key) WHERE idempotency_key IS NOT NULL;
 ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS purchase_order_item_id BIGINT REFERENCES public.purchase_order_items(id);
 
+-- Partial award conversion is intentional: do not make award_id unique. The
+-- covering index supports the locked award -> active PO quantity calculation.
+CREATE INDEX IF NOT EXISTS po_items_award_quantity_idx
+  ON public.purchase_order_items (award_id, purchase_order_id)
+  INCLUDE (quantity);
+
 COMMIT;

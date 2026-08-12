@@ -29,3 +29,15 @@ No SQL 006 change is required. It already adds `purchase_order_id`, `idempotency
 Executable service tests cover submit/invalid submit, approve, issue, one commitment, issue retry, exact 100/70 budget success, serialized second-70 failure, rollback on budget/audit/outbox failure, unreceived cancellation/release, received cancellation rejection, retry safety, canonical events, and canonical statuses. Controller tests exercise real controller authorization and service delegation rather than relying only on source-string assertions.
 
 No SQL was executed against Supabase.
+## Phase 4B receipt closure
+
+The live PO receipt route now delegates to `goodsReceiptService`; it contains no receipt, PO projection/status, or warehouse SQL. The service calls only entity-specific methods on `connectedP2PRepository`, and only `goodsReceiptInventoryAdapter` reaches the Phase 3 inventory writer.
+
+* `connectedP2PRepository`: **CANONICAL REPOSITORY** for `goods_receipts`, `goods_receipt_items`, PO-line receipt projection, and PO receipt status.
+* `procureToPayPersistenceService.insertGoodsReceipt`: **LEGACY ACTIVE only for callers not yet cut over / TO-DISABLE**; it is no longer reachable from the live PO receipt controller.
+* `ensureProcureToPayTables`: **SCHEMA FOUNDATION**, not a business writer.
+* Tests/fixtures containing receipt SQL: **TEST**.
+* Receipt list/dashboard/matching SQL: **READ PROJECTION**.
+* `requested_items` receipt flags outside this route: **LEGACY**, never canonical PO receipt history.
+
+No active live PO receipt path directly updates warehouse balances or `warehouse_stock_movements`.

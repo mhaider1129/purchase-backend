@@ -1,25 +1,11 @@
-# Goods receipt inventory quantity semantics
+# Goods receipt inventory semantics
 
-## Repository evidence
+A persisted receipt line's `received_quantity` is the gross physical delivery reported at the dock. `damaged_quantity` and `short_quantity` are explicit deductions. The established accepted quantity is:
 
-`goods_receipt_items` persists `ordered_quantity`, `received_quantity`,
-`damaged_quantity`, and `short_quantity`. It has no `accepted_quantity` or
-`rejected_quantity` column. The receipt controller uses the same net quantity for purchase-order
-receipt progress, warehouse inventory, and receipt valuation.
+`accepted = received - damaged - short`
 
-## Canonical formula
+All values must be non-negative, accepted cannot be negative, and gross receipt cannot exceed the PO line's remaining quantity according to cumulative receipt history. Accepted quantity drives the repairable PO-line received projection, PO completion, and inventory movement quantity. This preserves the former controller/adapter rule while eliminating its duplicate calculations.
 
-For a persisted goods-receipt line:
+Only a PO line whose persisted `line_type` is `INVENTORY` creates inventory. It must resolve to a canonical stock item and warehouse/institute scope. Batch, lot, serial, expiry, source/base UOM and stock status flow from receipt row to the Phase 3 allocation command. A `QUARANTINE` receipt increases quarantined physical stock and increases available stock by zero. Non-inventory and service lines record acceptance without stock. Asset/medical-device handoff is preserved as receipt-only pending its dedicated downstream workflow.
 
-```text
-inventory accepted quantity = received_quantity - damaged_quantity - short_quantity
-```
-
-`received_quantity` is therefore gross physically reported receipt quantity. Damage and shortage
-are separate additive discrepancy deductions. `short_quantity` describes the ordered quantity not
-received and is not an additional received quantity. `ordered_quantity` is contextual and is not
-added to the inventory quantity. There is no persisted rejected quantity.
-
-The adapter also accepts `accepted_quantity` from an already-normalized internal caller. Because
-that value is final, it is posted directly and discrepancies are not deducted a second time. Zero
-or negative net quantities do not produce inventory movements.
+Receipt reversal is not deletion and is deferred to Phase 4B.1; a posted movement must be reversed through the canonical inventory reversal facility.

@@ -3,7 +3,7 @@ const createHttpError = require('../utils/httpError');
 const { ensureProcureToPayTables } = require('../utils/ensureProcureToPayTables');
 const { ensureFinanceCoreTables } = require('../utils/ensureFinanceCoreTables');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
-const { postAcceptedReceiptLines } = require('../services/goodsReceiptInventoryAdapter');
+const goodsReceiptService = require('../services/goodsReceiptService');
 const {
   LIFECYCLE_STATES,
   MATCH_POLICIES,
@@ -12,7 +12,7 @@ const {
   getPurchaseOrderStatusMetadata,
   validatePurchaseOrderForIssuance,
 } = require('../services/procureToPayService');
-const { insertGoodsReceipt, insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
+const { insertSupplierInvoice } = require('../services/procureToPayPersistenceService');
 const {
   advanceLifecycleToApprovedRequest,
   ensureLifecycleRow,
@@ -84,324 +84,26 @@ const annotatePurchaseOrder = (row) => {
 };
 
 const createGoodsReceipt = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.receipts.manage', ['warehousekeeper', 'warehousemanager', 'scm', 'admin']);
     const requestId = Number(req.params.requestId);
-    const {
-      purchase_order_id = null,
-      warehouse_id,
-      warehouse_location = null,
-      received_at,
-      notes = null,
-      discrepancy_notes = null,
-      items = [],
-    } = req.body;
-
-    if (!Number.isInteger(requestId) || requestId <= 0) {
-      throw createHttpError(400, 'Invalid request id');
-    }
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-    await ensureWarehouseInventoryTables(client);
-    await ensureFinanceCoreTables(client);
-    await ensureLifecycleRow(client, requestId, req.user.id);
-
-    const requestRes = await client.query(
-      `SELECT supply_warehouse_id, department_id, project_id FROM requests WHERE id = $1 FOR UPDATE`,
-      [requestId]
-    );
-
-    if (requestRes.rowCount === 0) {
-      throw createHttpError(404, 'Request not found');
-    }
-
-    const fallbackWarehouseId = requestRes.rows[0].supply_warehouse_id || req.user?.warehouse_id || null;
-    const explicitWarehouseId = warehouse_id === undefined || warehouse_id === null || warehouse_id === ''
-      ? null
-      : Number(warehouse_id);
-    const targetWarehouseId = explicitWarehouseId || Number(fallbackWarehouseId);
-
-    if (!Number.isInteger(targetWarehouseId) || targetWarehouseId <= 0) {
-      throw createHttpError(400, 'A valid warehouse_id is required to update warehouse stock');
-    }
-
-    if (purchase_order_id !== null && purchase_order_id !== undefined && purchase_order_id !== '') {
-      const purchaseOrderId = Number(purchase_order_id);
-      if (!Number.isInteger(purchaseOrderId) || purchaseOrderId <= 0) {
-        throw createHttpError(400, 'Invalid purchase_order_id');
-      }
-
-      const poResult = await client.query(
-        `SELECT id, request_id, status FROM purchase_orders WHERE id = $1 FOR UPDATE`,
-        [purchaseOrderId]
-      );
-
-      if (poResult.rowCount === 0) {
-        throw createHttpError(404, 'Purchase order not found');
-      }
-
-      if (Number(poResult.rows[0].request_id) !== requestId) {
-        throw createHttpError(400, 'purchase_order_id does not belong to the provided request');
-      }
-      if (!['PO_APPROVED', 'PO_ISSUED', 'PO_PARTIAL'].includes(poResult.rows[0].status)) {
-        throw createHttpError(400, 'Goods receipt can only be recorded after SCM approval when the PO is active');
-      }
-    }
-
-    const receipt = await insertGoodsReceipt(client, {
-      requestId,
-      userId: req.user.id,
-      purchaseOrderId: purchase_order_id,
-      warehouseLocation: warehouse_location,
-      receivedAt: received_at || null,
-      notes,
-      discrepancyNotes: discrepancy_notes,
-      items,
-    });
-
-
-    await linkDocuments(client, {
-      requestId,
-      sourceType: purchase_order_id ? 'PURCHASE_ORDER' : 'PURCHASE_REQUEST',
-      sourceId: purchase_order_id || requestId,
-      targetType: 'GOODS_RECEIPT_PO',
-      targetId: receipt.id,
-      metadata: { receipt_number: receipt.receipt_number },
-      createdBy: req.user.id,
-    });
-
-    let nonPoApprovalSteps = [];
-    if (!purchase_order_id) {
-      nonPoApprovalSteps = [
-        ['PROCUREMENT_REVIEW', 'procurementspecialist'],
-        ['FINANCE_REVIEW', 'financeapprover'],
-        ['WAREHOUSE_RELEASE', 'warehousemanager'],
-      ];
-
-      for (const [approvalStep, assignedRole] of nonPoApprovalSteps) {
-        await client.query(
-          `INSERT INTO non_po_receipt_approvals (goods_receipt_id, request_id, approval_step, assigned_role)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (goods_receipt_id, approval_step) DO NOTHING`,
-          [receipt.id, requestId, approvalStep, assignedRole]
-        );
-      }
-    }
-
-    const inventoryUpdates = [];
-    const inventoryWarnings = [];
-    const canonicalReceiptLines = [];
-
-    const warehouseScope = await client.query(
-      'SELECT institute_id FROM warehouses WHERE id = $1', [targetWarehouseId]
-    );
-    if (warehouseScope.rowCount === 0 || warehouseScope.rows[0].institute_id == null) {
-      throw createHttpError(400, 'The receipt warehouse has no inventory institute scope');
-    }
-
-    for (const receiptItem of receipt.items || []) {
-      if (purchase_order_id) {
-        const netPoQuantity =
-          (Number(receiptItem.received_quantity) || 0) -
-          (Number(receiptItem.damaged_quantity) || 0) -
-          (Number(receiptItem.short_quantity) || 0);
-
-        if (netPoQuantity > 0) {
-          await client.query(
-            `UPDATE purchase_order_items
-                SET received_quantity = received_quantity + $2
-              WHERE purchase_order_id = $1
-                AND (
-                  ($3::integer IS NOT NULL AND requested_item_id = $3)
-                  OR LOWER(item_name) = LOWER($4)
-                )`,
-            [purchase_order_id, netPoQuantity, receiptItem.requested_item_id || null, receiptItem.item_name]
-          );
-        }
-      }
-      const receivedQuantity = Number(receiptItem.received_quantity) || 0;
-      const damagedQuantity = Number(receiptItem.damaged_quantity) || 0;
-      const shortQuantity = Number(receiptItem.short_quantity) || 0;
-      const netQuantity = receivedQuantity - damagedQuantity - shortQuantity;
-
-      if (netQuantity <= 0) {
-        inventoryWarnings.push(`Skipped ${receiptItem.item_name}: net received quantity is 0 after discrepancy values.`);
-        continue;
-      }
-
-      let stockItem = null;
-
-      if (receiptItem.generic_item_id) {
-        const byGenericId = await client.query(
-          'SELECT id, name, unit, generic_item_id FROM stock_items WHERE generic_item_id = $1 ORDER BY id LIMIT 1',
-          [receiptItem.generic_item_id]
-        );
-        stockItem = byGenericId.rows[0] || null;
-      }
-
-      if (!stockItem && receiptItem.requested_item_id) {
-        const fromRequested = await client.query(
-          `SELECT si.id, si.name, si.unit, si.generic_item_id
-           FROM requested_items ri
-           JOIN stock_items si ON si.generic_item_id = ri.generic_item_id
-           WHERE ri.id = $1 AND ri.request_id = $2
-           LIMIT 1`,
-          [receiptItem.requested_item_id, requestId]
-        );
-        stockItem = fromRequested.rows[0] || null;
-      }
-
-      if (!stockItem) {
-        console.warn('LEGACY_ITEM_NAME_FALLBACK', {
-          request_id: requestId,
-          requested_item_id: receiptItem.requested_item_id || null,
-          item_name: receiptItem.item_name,
-        });
-        const fromItemName = await client.query(
-          `SELECT id, name, unit, generic_item_id FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
-          [receiptItem.item_name]
-        );
-        stockItem = fromItemName.rows[0] || null;
-      }
-
-      if (!stockItem) {
-        inventoryWarnings.push(`No stock item found for "${receiptItem.item_name}". Warehouse stock was not updated for this line.`);
-        continue;
-      }
-
-      canonicalReceiptLines.push({
-        ...receiptItem,
-        stock_item_id: stockItem.id,
-        unit: receiptItem.unit || stockItem.unit,
-      });
-
-      inventoryUpdates.push({
-        stock_item_id: stockItem.id,
-        item_name: stockItem.name,
-        quantity_added: netQuantity,
-      });
-    }
-
-    // The adapter shares this transaction and is the sole balance/ledger writer.
-    // In particular, do not also write the legacy warehouse_stock_movements table.
-    await postAcceptedReceiptLines(receipt, canonicalReceiptLines, {
-      instituteId: warehouseScope.rows[0].institute_id,
-      warehouseId: targetWarehouseId,
-      actor: req.user,
+    const purchaseOrderId = Number(req.body.purchase_order_id);
+    const idempotencyKey = String(req.get('Idempotency-Key') || req.body.idempotency_key || '').trim();
+    if (!Number.isInteger(requestId) || requestId <= 0) throw createHttpError(400, 'Invalid request id');
+    if (!idempotencyKey) throw createHttpError(400, 'Idempotency-Key header is required');
+    const result = await goodsReceiptService.createGoodsReceipt({
+      repository: createTransactionalP2PRepository(pool), purchaseOrderId, idempotencyKey,
+      lines: req.body.items || req.body.lines || [], receivedAt: req.body.received_at || null,
+      actor: req.user, requestId, warehouseLocation: req.body.warehouse_location || null,
+      notes: req.body.notes || null, discrepancyNotes: req.body.discrepancy_notes || null,
       correlationId: req.correlationId || null,
-    }, client);
-
-    const estimatedReceiptValue = (receipt.items || []).reduce((sum, line) => {
-      const netQuantity =
-        (Number(line.received_quantity) || 0) -
-        (Number(line.damaged_quantity) || 0) -
-        (Number(line.short_quantity) || 0);
-      const unitPrice = Number(line.unit_price) || 0;
-      return sum + (netQuantity > 0 ? netQuantity * unitPrice : 0);
-    }, 0);
-
-    const requestMeta = requestRes.rows[0];
-    const receiptBudgetEnvelope = await resolveBudgetEnvelope(client, {
-      departmentId: requestMeta.department_id,
-      projectId: requestMeta.project_id || null,
-      currency: 'USD',
     });
-
-    let commitmentEntry = null;
-    if (receiptBudgetEnvelope && estimatedReceiptValue > 0) {
-      commitmentEntry = await recordCommitment(client, {
-        requestId,
-        budgetEnvelopeId: receiptBudgetEnvelope.id,
-        stage: 'encumbrance',
-        amount: estimatedReceiptValue,
-        currency: 'USD',
-        sourceType: 'goods_receipt',
-        sourceId: String(receipt.id),
-        notes: `Encumbrance from receipt ${receipt.receipt_number}`,
-        actorId: req.user.id,
-      });
-    }
-
-    let nextReceiptLifecycleState = LIFECYCLE_STATES.PO_PARTIAL;
-    if (purchase_order_id) {
-      const poTotalsRes = await client.query(
-        `SELECT COALESCE(SUM(quantity), 0) AS ordered_quantity,
-                COALESCE(SUM(received_quantity), 0) AS received_quantity
-           FROM purchase_order_items
-          WHERE purchase_order_id = $1`,
-        [purchase_order_id]
-      );
-      const poTotals = poTotalsRes.rows[0] || {};
-      const derivedPoStatus = derivePurchaseOrderStatus({
-        currentStatus: 'PO_ISSUED',
-        orderedQuantity: poTotals.ordered_quantity,
-        receivedQuantity: poTotals.received_quantity,
-        issuedAt: new Date(),
-      });
-      nextReceiptLifecycleState = derivedPoStatus === 'PO_DELIVERED' ? LIFECYCLE_STATES.PO_DELIVERED : LIFECYCLE_STATES.PO_PARTIAL;
-
-      await client.query(
-        `UPDATE purchase_orders
-            SET status = $2,
-                updated_at = NOW()
-          WHERE id = $1`,
-        [purchase_order_id, derivedPoStatus]
-      );
-    }
-
-    await transitionLifecycleState(
-      client,
-      requestId,
-      nextReceiptLifecycleState,
-      req.user.id,
-      purchase_order_id ? 'Goods receipt captured' : 'Non-PO goods receipt captured and routed for additional approvals'
-    );
-    await logFinanceAction(client, requestId, req.user.id, 'GOODS_RECEIPT_CREATED', {
-      receipt_id: receipt.id,
-      warehouse_id: targetWarehouseId,
-      inventory_updates: inventoryUpdates,
-      inventory_warnings: inventoryWarnings,
-      encumbrance_commitment_id: commitmentEntry?.id || null,
-      non_po_approval_steps: nonPoApprovalSteps.map(([approvalStep, assignedRole]) => ({
-        approval_step: approvalStep,
-        assigned_role: assignedRole,
-      })),
-    });
-    await client.query('COMMIT');
-
-    await sendRequestWorkflowEmail({
-      requestId,
-      subject: `Goods receipt captured for request #${requestId}`,
-      message: [
-        `${req.user?.name || 'A warehouse user'} captured goods receipt ${receipt.receipt_number} for request #${requestId}.`,
-        purchase_order_id ? `Purchase order: #${purchase_order_id}` : 'This was captured as a non-PO goods receipt and may require additional approvals.',
-        inventoryUpdates.length > 0
-          ? `Warehouse stock updated for ${inventoryUpdates.length} item(s).`
-          : 'No warehouse stock quantities were updated.',
-        inventoryWarnings.length > 0 ? `Warnings: ${inventoryWarnings.join('; ')}` : '',
-      ].filter(Boolean).join('\n'),
-      logLabel: 'goods receipt notification',
-    });
-
-    res.status(201).json({
-      message: 'Goods receipt captured',
-      receipt,
-      warehouse_id: targetWarehouseId,
-      inventory_updates: inventoryUpdates,
-      inventory_warnings: inventoryWarnings,
-      encumbrance_commitment_id: commitmentEntry?.id || null,
-      non_po_approval_required: !purchase_order_id,
-      non_po_approval_steps: nonPoApprovalSteps.map(([approvalStep, assignedRole]) => ({
-        approval_step: approvalStep,
-        assigned_role: assignedRole,
-      })),
+    res.status(result.idempotent ? 200 : 201).json({
+      message: result.idempotent ? 'Goods receipt already captured' : 'Goods receipt captured',
+      ...result,
     });
   } catch (error) {
-    await client.query('ROLLBACK');
     next(error);
-  } finally {
-    client.release();
   }
 };
 

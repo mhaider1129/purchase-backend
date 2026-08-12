@@ -20,6 +20,8 @@ DO $$ DECLARE duplicate_found boolean; BEGIN
  IF EXISTS (SELECT 1 FROM public.supplier_invoices WHERE supplier_id IS NOT NULL GROUP BY supplier_id, lower(btrim(invoice_number)) HAVING count(*) > 1) THEN RAISE EXCEPTION 'Preflight: duplicate supplier invoice identities'; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='supplier_invoices' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.supplier_invoices WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate invoice idempotency keys'; END IF; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='payment_records' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.payment_records WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate payment idempotency keys'; END IF; END IF;
+ IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='goods_receipts' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.goods_receipts WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate goods receipt idempotency keys'; END IF; END IF;
+ IF EXISTS (SELECT 1 FROM public.goods_receipts WHERE receipt_number IS NOT NULL GROUP BY receipt_number HAVING count(*) > 1) THEN RAISE EXCEPTION 'Preflight: duplicate goods receipt numbers'; END IF;
  IF EXISTS (SELECT 1 FROM public.requested_items WHERE supplier_name IS NOT NULL OR unit_cost IS NOT NULL) THEN RAISE NOTICE 'Preflight: legacy award-like requested_items fields require reconciliation'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='budget_envelopes' AND column_name IN ('allocated_amount','consumed_amount') GROUP BY table_name HAVING count(*)=2) THEN RAISE EXCEPTION 'Preflight: incompatible budget_envelopes balance columns'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name IN ('request_id','budget_envelope_id','stage','amount','currency','source_type','source_id','notes','actor_id') GROUP BY table_name HAVING count(*)=9) THEN RAISE EXCEPTION 'Preflight: incompatible commitment_ledger base columns'; END IF;
@@ -70,8 +72,20 @@ ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS supplier_invoice_id 
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS reversal_of_payment_id BIGINT REFERENCES public.payment_records(id);
 CREATE UNIQUE INDEX IF NOT EXISTS payment_idempotency_uq ON public.payment_records(idempotency_key) WHERE idempotency_key IS NOT NULL;
 ALTER TABLE public.goods_receipts ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE public.goods_receipts ADD COLUMN IF NOT EXISTS payload_fingerprint CHAR(64);
 CREATE UNIQUE INDEX IF NOT EXISTS goods_receipt_idempotency_uq ON public.goods_receipts(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS goods_receipt_number_uq ON public.goods_receipts(receipt_number) WHERE receipt_number IS NOT NULL;
 ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS purchase_order_item_id BIGINT REFERENCES public.purchase_order_items(id);
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS batch_number TEXT;
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS lot_number TEXT;
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS serial_number TEXT;
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS expiry_date DATE;
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS warehouse_id BIGINT REFERENCES public.warehouses(id);
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS stock_status TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (stock_status IN ('AVAILABLE','QUARANTINE','DAMAGED','EXPIRED','RECALLED','BLOCKED'));
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS source_uom TEXT;
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS base_uom TEXT;
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS stock_item_id BIGINT REFERENCES public.stock_items(id);
+CREATE INDEX IF NOT EXISTS goods_receipt_items_po_line_idx ON public.goods_receipt_items(purchase_order_item_id);
 
 -- Partial award conversion is intentional: do not make award_id unique. The
 -- covering index supports the locked award -> active PO quantity calculation.
@@ -79,4 +93,8 @@ CREATE INDEX IF NOT EXISTS po_items_award_quantity_idx
   ON public.purchase_order_items (award_id, purchase_order_id)
   INCLUDE (quantity);
 
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='goods_receipt_idempotency_uq') THEN RAISE EXCEPTION 'Post-validation: goods receipt idempotency index missing'; END IF;
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='goods_receipts' AND column_name='payload_fingerprint') THEN RAISE EXCEPTION 'Post-validation: receipt payload fingerprint missing'; END IF;
+END $$;
 COMMIT;

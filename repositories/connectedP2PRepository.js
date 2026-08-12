@@ -67,10 +67,21 @@ const createConnectedP2PRepository = (client) => ({
   releaseCommitment: (id) => one(client,"UPDATE commitment_ledger SET state='RELEASED' WHERE id=$1 AND stage='encumbrance' AND state='ACTIVE' RETURNING *",[id]),
 
   lockPurchaseOrderLine: (id) => one(client,'SELECT * FROM purchase_order_items WHERE id=$1 FOR UPDATE',[id]),
+  lockPurchaseOrderLines: async (ids) => (await client.query('SELECT * FROM purchase_order_items WHERE id=ANY($1::bigint[]) ORDER BY id FOR UPDATE',[ids])).rows,
   loadCumulativeReceipts: async (id) => (await one(client,"SELECT COALESCE(SUM(gri.received_quantity),0)::text quantity FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=$1",[id])).quantity,
   findReceiptByIdempotency: (key) => one(client,'SELECT * FROM goods_receipts WHERE idempotency_key=$1',[key]),
-  insertGoodsReceipt: (r) => one(client,'INSERT INTO goods_receipts (purchase_order_id,request_id,idempotency_key,received_at,received_by) VALUES ($1,$2,$3,COALESCE($4,NOW()),$5) RETURNING *',[r.purchase_order_id,r.request_id,r.idempotency_key,r.received_at,r.received_by]),
-  insertGoodsReceiptLine: (l) => one(client,'INSERT INTO goods_receipt_items (goods_receipt_id,purchase_order_item_id,requested_item_id,item_name,ordered_quantity,received_quantity,unit_price,line_notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',[l.goods_receipt_id,l.purchase_order_item_id,l.requested_item_id,l.item_name,l.ordered_quantity,l.accepted_quantity,l.unit_price,l.line_notes||null]),
+  loadReceiptWithLines: async (id) => { const receipt=await one(client,'SELECT * FROM goods_receipts WHERE id=$1',[id]); if(!receipt)return null; receipt.items=(await client.query('SELECT * FROM goods_receipt_items WHERE goods_receipt_id=$1 ORDER BY id',[id])).rows; return receipt; },
+  insertGoodsReceipt: (r) => one(client,`WITH identity AS (SELECT nextval(pg_get_serial_sequence('goods_receipts','id')) AS id)
+    INSERT INTO goods_receipts (id,purchase_order_id,request_id,idempotency_key,payload_fingerprint,receipt_number,warehouse_location,received_at,received_by,notes,discrepancy_notes)
+    SELECT id,$1,$2,$3,$4,'GR-'||id,$5,COALESCE($6,NOW()),$7,$8,$9 FROM identity RETURNING *`,[r.purchase_order_id,r.request_id,r.idempotency_key,r.payload_fingerprint,r.warehouse_location||null,r.received_at,r.received_by,r.notes||null,r.discrepancy_notes||null]),
+  insertGoodsReceiptLine: (l) => one(client,`INSERT INTO goods_receipt_items (goods_receipt_id,purchase_order_item_id,requested_item_id,item_name,ordered_quantity,received_quantity,damaged_quantity,short_quantity,unit_price,line_notes,batch_number,lot_number,serial_number,expiry_date,warehouse_id,stock_status,source_uom,base_uom,stock_item_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,[l.goods_receipt_id,l.purchase_order_item_id,l.requested_item_id,l.item_name,l.ordered_quantity,l.received_quantity,l.damaged_quantity||0,l.short_quantity||0,l.unit_price,l.line_notes||null,l.batch_number||null,l.lot_number||null,l.serial_number||null,l.expiry_date||null,l.warehouse_id||null,l.stock_status||'AVAILABLE',l.source_uom||null,l.base_uom||null,l.stock_item_id||null]),
+  synchronizePurchaseOrderLineReceivedQuantity: (id) => one(client,`UPDATE purchase_order_items poi SET received_quantity=(SELECT COALESCE(SUM(gri.received_quantity-gri.damaged_quantity-gri.short_quantity),0) FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=poi.id) WHERE poi.id=$1 RETURNING *`,[id]),
+  calculatePurchaseOrderReceiptTotals: (id) => one(client,`SELECT COALESCE(SUM(quantity),0)::text ordered_quantity,COALESCE(SUM(received_quantity),0)::text received_quantity FROM purchase_order_items WHERE purchase_order_id=$1`,[id]),
+  markPurchaseOrderPartiallyReceived: (id) => one(client,"UPDATE purchase_orders SET status='PO_PARTIAL',updated_at=NOW() WHERE id=$1 RETURNING *",[id]),
+  markPurchaseOrderDelivered: (id) => one(client,"UPDATE purchase_orders SET status='PO_DELIVERED',updated_at=NOW() WHERE id=$1 RETURNING *",[id]),
+  loadWarehouseScope: (id) => one(client,'SELECT * FROM warehouses WHERE id=$1',[id]),
+  resolveReceiptStockItem: (requestedItemId) => one(client,`SELECT si.* FROM requested_items ri JOIN stock_items si ON si.generic_item_id=ri.generic_item_id WHERE ri.id=$1 ORDER BY si.id LIMIT 1`,[requestedItemId]),
 
   lockSupplierInvoiceIdentity: async (supplierId,number) => { await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`${supplierId}:${String(number).toLowerCase()}`]); },
   loadInvoicePurchaseOrder: (id) => one(client,'SELECT * FROM purchase_orders WHERE id=$1',[id]),

@@ -21,6 +21,8 @@ const {
 const { resolveSupplierReference } = require('../services/supplierReferenceService');
 const { linkDocuments } = require('../services/documentFlowService');
 const { PAYABLE_STATUS, PAYMENT_STATUS } = require('../constants/statusCatalog');
+const purchaseOrderService = require('../services/purchaseOrderService');
+const { createTransactionalP2PRepository } = require('../repositories/connectedP2PRepository');
 const {
   assertBudgetCanCover,
   recordCommitment,
@@ -1310,300 +1312,28 @@ const closePurchaseOrder = async (req, res, next) => {
 };
 
 const createPurchaseOrder = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['scm', 'procurementspecialist', 'admin']);
-    const requestId = Number(req.params.requestId);
-    const requestIdOrNull = Number.isInteger(requestId) && requestId > 0 ? requestId : null;
-    const {
-      supplier_id = null,
-      supplier_name = null,
-      expected_delivery_date = null,
-      delivery_location = null,
-      budget_cost_center = null,
-      tax_terms = null,
-      payment_terms = null,
-      terms = null,
-      supplier_contact_email = null,
-      contract_reference = null,
-      source_document_type = null,
-      source_document_id = null,
-      approval_required = null,
-      approval_route = null,
-      fulfillment_method = null,
-      items = [],
-    } = req.body || {};
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-    await ensureFinanceCoreTables(client);
-    if (requestIdOrNull) {
-      await ensureLifecycleRow(client, requestIdOrNull, req.user.id);
+    const selections = req.body?.awards;
+    if (!Array.isArray(selections) || !selections.length || selections.some((entry) => !entry.award_id || entry.quantity == null)) {
+      throw createHttpError(400, 'awards with award_id and quantity are required');
     }
-
-    let requestMeta = null;
-    let requestItems = [];
-    let derivedContractReference = contract_reference || null;
-    let derivedDeliveryLocation = delivery_location || null;
-    let derivedBudgetCostCenter = budget_cost_center || null;
-    let sourceType = source_document_type || (requestIdOrNull ? 'PURCHASE_REQUEST' : 'MANUAL_PO');
-    let sourceId = source_document_id || (requestIdOrNull ? String(requestIdOrNull) : null);
-    const normalizedFulfillmentMethod = ['DIRECT_PURCHASE', 'CSCC'].includes(String(fulfillment_method || '').toUpperCase())
-      ? String(fulfillment_method).toUpperCase()
-      : null;
-
-    if (requestIdOrNull) {
-      const requestRes = await client.query(
-        `SELECT r.id, r.status, r.department_id, r.project_id, r.supply_warehouse_id, w.name AS supply_warehouse_name
-         FROM requests r
-         LEFT JOIN warehouses w ON w.id = r.supply_warehouse_id
-         WHERE r.id = $1
-         FOR UPDATE OF r`,
-        [requestIdOrNull]
-      );
-
-      if (requestRes.rowCount === 0) {
-        throw createHttpError(404, 'Request not found');
-      }
-
-      requestMeta = requestRes.rows[0];
-      const approvedRequestStatuses = new Set([
-        'approved',
-        'assigned',
-        'partially procured',
-        'technical_inspection_pending',
-        'completed',
-        'received',
-      ]);
-      if (approvedRequestStatuses.has(String(requestMeta.status || '').trim().toLowerCase())) {
-        await advanceLifecycleToApprovedRequest(client, requestIdOrNull, req.user.id);
-      }
-      requestItems = (
-        await client.query(
-          `SELECT ri.id AS requested_item_id,
-                  ri.item_name,
-                  ri.generic_item_id,
-                  COALESCE(ri.mandatory_product_id, ri.preferred_product_id) AS approved_product_id,
-                  GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) AS quantity,
-                  COALESCE(ri.quantity, 0) AS requested_quantity,
-                  COALESCE(po_allocated.ordered_quantity, 0) AS po_allocated_quantity,
-                  COALESCE(ri.unit_cost, 0) AS unit_price,
-                  rif.contract_id,
-                  c.reference_number AS contract_reference
-           FROM requested_items ri
-           LEFT JOIN LATERAL (
-             SELECT COALESCE(SUM(poi.quantity), 0) AS ordered_quantity
-               FROM purchase_order_items poi
-               JOIN purchase_orders po ON po.id = poi.purchase_order_id
-              WHERE po.request_id = ri.request_id
-                AND poi.requested_item_id = ri.id
-                AND po.status <> 'PO_CANCELLED'
-           ) po_allocated ON TRUE
-           LEFT JOIN requested_item_financials rif ON rif.requested_item_id = ri.id
-           LEFT JOIN contracts c ON c.id = rif.contract_id
-           WHERE ri.request_id = $1
-             AND GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) > 0
-           ORDER BY ri.id ASC`,
-          [requestIdOrNull]
-        )
-      ).rows;
-
-      derivedContractReference = derivedContractReference || requestItems.find((item) => item.contract_reference)?.contract_reference || null;
-      derivedDeliveryLocation = derivedDeliveryLocation || requestMeta.supply_warehouse_name || null;
-
-      const budgetEnvelope = await resolveBudgetEnvelope(client, {
-        departmentId: requestMeta.department_id,
-        projectId: requestMeta.project_id || null,
-        currency: 'USD',
-      });
-      derivedBudgetCostCenter = derivedBudgetCostCenter || budgetEnvelope?.cost_center_code || budgetEnvelope?.cost_center_name || budgetEnvelope?.code || null;
-      sourceType = source_document_type || (normalizedFulfillmentMethod === 'CSCC' ? 'CSCC_REQUEST' : normalizedFulfillmentMethod === 'DIRECT_PURCHASE' ? 'DIRECT_PURCHASE_PO' : (derivedContractReference ? 'ACTIVE_CONTRACT' : 'PURCHASE_REQUEST'));
-    }
-
-    let resolvedSupplierId = supplier_id;
-    let resolvedSupplierName = supplier_name;
-    if (normalizedFulfillmentMethod === 'CSCC' && !resolvedSupplierId && !resolvedSupplierName) {
-      const csccRes = await client.query(
-        `SELECT id, name
-           FROM suppliers
-          WHERE LOWER(name) IN (LOWER('Central Supply Chain Center'), LOWER('CSCC'))
-             OR LOWER(name) LIKE LOWER('%Central Supply Chain Center%')
-          ORDER BY CASE WHEN LOWER(name) = LOWER('Central Supply Chain Center') THEN 0 ELSE 1 END, id
-          LIMIT 1`
-      );
-      if (csccRes.rowCount > 0) {
-        resolvedSupplierId = csccRes.rows[0].id;
-        resolvedSupplierName = csccRes.rows[0].name;
-      } else {
-        resolvedSupplierName = 'Central Supply Chain Center';
-      }
-    }
-
-    const supplierRef = await resolveSupplierReference(client, {
-      supplierId: resolvedSupplierId,
-      supplierName: resolvedSupplierName,
-      requireSupplier: false,
-    });
-
-    const sourceItems = items.length ? items : requestItems;
-    const normalizedItems = sourceItems.map((item) => ({
-      requested_item_id: item.requested_item_id || null,
-      item_name: item.item_name,
-      quantity: Number(item.quantity) || 0,
-      unit_price: Number(item.unit_price) || 0,
-      generic_item_id: item.generic_item_id || null,
-      approved_product_id: item.approved_product_id || null,
-      supplier_catalog_item_id: item.supplier_catalog_item_id || null,
-    })).filter((item) => item.item_name && item.quantity > 0);
-
-    if (requestIdOrNull) {
-      const remainingByRequestedItem = new Map(
-        requestItems.map((item) => [Number(item.requested_item_id), Number(item.quantity) || 0])
-      );
-      for (const item of normalizedItems) {
-        if (!item.requested_item_id) continue;
-        const remainingQuantity = remainingByRequestedItem.get(Number(item.requested_item_id)) || 0;
-        if (item.quantity > remainingQuantity) {
-          throw createHttpError(400, `${item.item_name} exceeds the remaining purchase request quantity available for new POs`);
-        }
-      }
-    }
-
-    const isKpiOnlyPo = Boolean(normalizedFulfillmentMethod);
-    const requiresApproval = !isKpiOnlyPo;
-
-    const validationErrors = isKpiOnlyPo ? [] : validatePurchaseOrderForIssuance({
-      supplierId: supplierRef.supplierId,
-      supplierName: supplierRef.supplierName,
-      items: normalizedItems,
-      deliveryDate: expected_delivery_date,
-      deliveryLocation: derivedDeliveryLocation,
-      budgetCostCenter: derivedBudgetCostCenter,
-      taxTerms: tax_terms,
-      paymentTerms: payment_terms || terms,
-    });
-
-    if (validationErrors.length > 0) {
-      throw createHttpError(400, `Purchase order is missing mandatory data: ${validationErrors.join('; ')}`);
-    }
-
-    const poNumberPrefix = normalizedFulfillmentMethod === 'CSCC' ? 'CSCC' : normalizedFulfillmentMethod === 'DIRECT_PURCHASE' ? 'DP' : 'PO';
-    const poNumber = `${poNumberPrefix}-${requestIdOrNull ? String(requestIdOrNull) : 'DIRECT'}-${Math.floor(Date.now() / 1000)}`;
-    const poStatus = requiresApproval ? 'PO_PENDING_APPROVAL' : 'PO_ISSUED';
-    const approvalRouteValue = requiresApproval ? (approval_route || 'SCM_APPROVAL_AUTHORITY') : null;
-    const approvedAt = requiresApproval ? null : new Date();
-    const issuedAt = requiresApproval ? null : new Date();
-
-    const poRes = await client.query(
-      `INSERT INTO purchase_orders (
-        request_id,
-        po_number,
-        supplier_id,
-        supplier_name,
-        source_document_type,
-        source_document_id,
-        contract_reference,
-        expected_delivery_date,
-        delivery_location,
-        budget_cost_center,
-        tax_terms,
-        payment_terms,
-        terms,
-        supplier_contact_email,
-        approval_required,
-        approval_route,
-        approved_by,
-        approved_at,
-        status,
-        issue_event_at,
-        issued_to_supplier_at,
-        created_by,
-        issued_by,
-        issued_at
-      )
-       VALUES (
-        $1,
-        $2,
-        $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
-      )
-       RETURNING *`,
-      [
-        requestIdOrNull,
-        poNumber,
-        supplierRef.supplierId,
-        supplierRef.supplierName || null,
-        sourceType,
-        sourceId,
-        derivedContractReference,
-        expected_delivery_date,
-        derivedDeliveryLocation,
-        derivedBudgetCostCenter,
-        tax_terms,
-        payment_terms || terms,
-        terms,
-        supplier_contact_email,
-        requiresApproval,
-        approvalRouteValue,
-        requiresApproval ? null : req.user.id,
-        approvedAt,
-        poStatus,
-        issuedAt,
-        issuedAt,
-        req.user.id,
-        requiresApproval ? null : req.user.id,
-        issuedAt,
-      ]
-    );
-
-    for (const item of normalizedItems) {
-      await client.query(
-        `INSERT INTO purchase_order_items (purchase_order_id,requested_item_id,item_name,quantity,unit_price,generic_item_id,approved_product_id,supplier_catalog_item_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [poRes.rows[0].id,item.requested_item_id,item.item_name,item.quantity,item.unit_price,item.generic_item_id,item.approved_product_id,item.supplier_catalog_item_id]
-      );
-    }
-
-    const createdPo = annotatePurchaseOrder(poRes.rows[0]);
-
-    if (requestIdOrNull) {
-      await linkDocuments(client, {
-        requestId: requestIdOrNull,
-        sourceType: sourceType,
-        sourceId: sourceId || requestIdOrNull,
-        targetType: 'PURCHASE_ORDER',
-        targetId: createdPo.id,
-        metadata: {
-          po_number: createdPo.po_number,
-          contract_reference: createdPo.contract_reference,
-        },
-        createdBy: req.user.id,
-      });
-
-      const lifecycleTarget = requiresApproval ? LIFECYCLE_STATES.PO_PENDING_APPROVAL : LIFECYCLE_STATES.PO_ISSUED;
-      await transitionLifecycleState(client, requestIdOrNull, lifecycleTarget, req.user.id, normalizedFulfillmentMethod === 'CSCC' ? 'Request sent to Central Supply Chain Center' : requiresApproval ? 'Purchase order submitted for approval' : 'Direct purchase PO created');
-      await logFinanceAction(client, requestIdOrNull, req.user.id, 'PURCHASE_ORDER_CREATED', {
-        purchase_order_id: createdPo.id,
-        supplier_id: supplierRef.supplierId,
-        source_document_type: sourceType,
-        source_document_id: sourceId || requestIdOrNull,
-        contract_reference: createdPo.contract_reference,
-        approval_required: requiresApproval,
-        fulfillment_method: normalizedFulfillmentMethod,
-      });
-    }
-
-    await client.query('COMMIT');
-    res.status(201).json({
-      purchase_order: createdPo,
-      validation: {
-        mandatory_fields_complete: true,
-        approval_required: requiresApproval,
+    const awardIds = selections.map((entry) => Number(entry.award_id));
+    if (awardIds.some((id) => !Number.isInteger(id) || id <= 0)) throw createHttpError(400, 'Invalid award_id');
+    const quantities = Object.fromEntries(selections.map((entry) => [String(entry.award_id), String(entry.quantity)]));
+    const purchaseOrder = await purchaseOrderService.createPurchaseOrderFromAwards({
+      repository: createTransactionalP2PRepository(pool),
+      awardIds,
+      quantities,
+      actor: req.user,
+      input: {
+        expected_delivery_date: req.body.expected_delivery_date || null,
+        delivery_location: req.body.delivery_location || null,
+        budget_cost_center: req.body.budget_cost_center || null,
       },
     });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally { client.release(); }
+    res.status(201).json({ purchase_order: purchaseOrder });
+  } catch (error) { next(error); }
 };
 
 const listPurchaseOrders = async (req, res, next) => {

@@ -67,11 +67,26 @@ describe('Phase 4 connection corrections', () => {
   test('PO inherits award traceability and rejects a supplied wrong supplier', async () => {
     const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
     const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, status: 'ACTIVE', awarded_quantity: '10', unit_price: '4', currency: 'USD', source_type: 'QUOTATION', source_id: 6 };
-    const tx = { lockAwards: async () => [award], insertHeader: async row => ({ id: 9, ...row }), insertLine: async row => row };
+    const tx = { lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), insertHeader: async row => ({ id: 9, ...row }), insertLine: async row => row };
     const repository = { withTransaction: work => work(tx) };
     const po = await createPurchaseOrderFromAwards({ repository, awardIds: [8], actor: { id: 7 } });
     expect(po).toMatchObject({ supplier_id: 3, request_id: 1, lines: [{ award_id: 8, request_item_id: 2, quantity: '10', price_source_type: 'QUOTATION' }] });
     await expect(createPurchaseOrderFromAwards({ repository, awardIds: [8], actor: { id: 7 }, input: { supplier_id: 99 } })).rejects.toMatchObject({ code: 'PO_SUPPLIER_MISMATCH' });
+  });
+
+  test('partial award conversion permits 60 plus 40 and rejects the next unit', async () => {
+    const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
+    const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, status: 'ACTIVE', awarded_quantity: '100', unit_price: '1', currency: 'USD', source_type: 'AWARD' };
+    let ordered = 0;
+    const repository = { withTransaction: async work => work({
+      lockAwards: async () => [award],
+      getAwardConversion: async () => ({ remaining_quantity: String(100 - ordered) }),
+      insertHeader: async () => ({ id: ordered + 1 }),
+      insertLine: async row => { ordered += Number(row.quantity); return row; },
+    }) };
+    await createPurchaseOrderFromAwards({ repository, awardIds: [8], quantities: { 8: '60' }, actor: { id: 1 } });
+    await createPurchaseOrderFromAwards({ repository, awardIds: [8], quantities: { 8: '40' }, actor: { id: 1 } });
+    await expect(createPurchaseOrderFromAwards({ repository, awardIds: [8], quantities: { 8: '1' }, actor: { id: 1 } })).rejects.toMatchObject({ code: 'AWARD_QUANTITY_EXCEEDED' });
   });
 
   test('cumulative invoice quantities exclude voids and prevent 70 plus 70 against 100', () => {

@@ -35,25 +35,25 @@ const createConnectedP2PRepository = (client) => ({
   releasePurchaseOrder: (id,t) => one(client,"UPDATE purchase_orders SET subtotal=$2,total_amount=$3,status='PO_ISSUED',issued_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *",[id,t.subtotal,t.grand_total]),
 
   lockBudgetEnvelope: (id) => one(client,'SELECT * FROM budget_envelopes WHERE id=$1 FOR UPDATE',[id]),
-  sumActiveEncumbrances: async (id) => (await one(client,"SELECT COALESCE(SUM(amount),0)::text amount FROM commitment_ledger WHERE budget_envelope_id=$1 AND commitment_type='ENCUMBRANCE' AND status='ACTIVE'",[id])).amount,
+  sumActiveEncumbrances: async (id) => (await one(client,"SELECT COALESCE(SUM(amount),0)::text amount FROM commitment_ledger WHERE budget_envelope_id=$1 AND stage='encumbrance' AND state='ACTIVE'",[id])).amount,
   findCommitmentByIdempotency: (key) => one(client,'SELECT * FROM commitment_ledger WHERE idempotency_key=$1',[key]),
-  insertEncumbrance: (c) => one(client,`INSERT INTO commitment_ledger (budget_envelope_id,purchase_order_id,commitment_type,status,amount,idempotency_key,created_by)
-    VALUES ($1,$2,'ENCUMBRANCE','ACTIVE',$3,$4,$5) RETURNING *`,[c.budget_envelope_id,c.purchase_order_id,c.amount,c.idempotency_key,c.created_by]),
-  releaseCommitment: (id,actorId) => one(client,"UPDATE commitment_ledger SET status='RELEASED',released_at=NOW(),released_by=$2 WHERE id=$1 AND status='ACTIVE' RETURNING *",[id,actorId]),
+  insertEncumbrance: (c) => one(client,`INSERT INTO commitment_ledger (request_id,budget_envelope_id,purchase_order_id,stage,state,amount,currency,source_type,source_id,idempotency_key,actor_id)
+    VALUES ($1,$2,$3,'encumbrance','ACTIVE',$4,$5,'purchase_order',$3::text,$6,$7) RETURNING *`,[c.request_id,c.budget_envelope_id,c.purchase_order_id,c.amount,c.currency,c.idempotency_key,c.actor_id]),
+  releaseCommitment: (id) => one(client,"UPDATE commitment_ledger SET state='RELEASED' WHERE id=$1 AND stage='encumbrance' AND state='ACTIVE' RETURNING *",[id]),
 
   lockPurchaseOrderLine: (id) => one(client,'SELECT * FROM purchase_order_items WHERE id=$1 FOR UPDATE',[id]),
-  loadCumulativeReceipts: async (id) => (await one(client,"SELECT COALESCE(SUM(grl.accepted_quantity),0)::text quantity FROM goods_receipt_lines grl JOIN goods_receipts gr ON gr.id=grl.goods_receipt_id WHERE grl.purchase_order_item_id=$1 AND gr.status<>'CANCELLED'",[id])).quantity,
+  loadCumulativeReceipts: async (id) => (await one(client,"SELECT COALESCE(SUM(gri.received_quantity),0)::text quantity FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=$1",[id])).quantity,
   findReceiptByIdempotency: (key) => one(client,'SELECT * FROM goods_receipts WHERE idempotency_key=$1',[key]),
-  insertGoodsReceipt: (r) => one(client,'INSERT INTO goods_receipts (purchase_order_id,request_id,idempotency_key,received_at,received_by,status) VALUES ($1,$2,$3,COALESCE($4,NOW()),$5,\'POSTED\') RETURNING *',[r.purchase_order_id,r.request_id,r.idempotency_key,r.received_at,r.received_by]),
-  insertGoodsReceiptLine: (l) => one(client,'INSERT INTO goods_receipt_lines (goods_receipt_id,purchase_order_item_id,accepted_quantity,line_type) VALUES ($1,$2,$3,$4) RETURNING *',[l.goods_receipt_id,l.purchase_order_item_id,l.accepted_quantity,l.line_type]),
+  insertGoodsReceipt: (r) => one(client,'INSERT INTO goods_receipts (purchase_order_id,request_id,idempotency_key,received_at,received_by) VALUES ($1,$2,$3,COALESCE($4,NOW()),$5) RETURNING *',[r.purchase_order_id,r.request_id,r.idempotency_key,r.received_at,r.received_by]),
+  insertGoodsReceiptLine: (l) => one(client,'INSERT INTO goods_receipt_items (goods_receipt_id,purchase_order_item_id,requested_item_id,item_name,ordered_quantity,received_quantity,unit_price,line_notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',[l.goods_receipt_id,l.purchase_order_item_id,l.requested_item_id,l.item_name,l.ordered_quantity,l.accepted_quantity,l.unit_price,l.line_notes||null]),
 
   lockSupplierInvoiceIdentity: async (supplierId,number) => { await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`${supplierId}:${String(number).toLowerCase()}`]); },
   loadInvoicePurchaseOrder: (id) => one(client,'SELECT * FROM purchase_orders WHERE id=$1',[id]),
   findInvoiceByIdempotency: (key) => one(client,'SELECT * FROM supplier_invoices WHERE idempotency_key=$1',[key]),
   insertSupplierInvoice: (i) => one(client,`INSERT INTO supplier_invoices (supplier_id,purchase_order_id,invoice_number,invoice_date,currency,idempotency_key,status,created_by)
     VALUES ($1,$2,$3,$4,$5,$6,'SUBMITTED',$7) RETURNING *`,[i.supplier_id,i.purchase_order_id,i.invoice_number,i.invoice_date,i.currency,i.idempotency_key,i.created_by]),
-  insertSupplierInvoiceLine: (l) => one(client,'INSERT INTO supplier_invoice_items (supplier_invoice_id,purchase_order_item_id,quantity,unit_price) VALUES ($1,$2,$3,$4) RETURNING *',[l.supplier_invoice_id,l.purchase_order_item_id,l.quantity,l.unit_price]),
-  loadPriorValidInvoices: async (poId,excludeId) => (await client.query("SELECT sii.* FROM supplier_invoice_items sii JOIN supplier_invoices si ON si.id=sii.supplier_invoice_id WHERE si.purchase_order_id=$1 AND si.id<>$2 AND si.status NOT IN ('DECLINED','CANCELLED')",[poId,excludeId])).rows,
+  insertSupplierInvoiceLine: (l) => one(client,'INSERT INTO invoice_items (supplier_invoice_id,purchase_order_item_id,requested_item_id,description,quantity,unit_price,line_total) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',[l.supplier_invoice_id,l.purchase_order_item_id,l.requested_item_id,l.description,l.quantity,l.unit_price,l.line_total]),
+  loadPriorValidInvoices: async (poId,excludeId) => (await client.query("SELECT ii.* FROM invoice_items ii JOIN supplier_invoices si ON si.id=ii.supplier_invoice_id WHERE si.purchase_order_id=$1 AND si.id<>$2 AND si.status NOT IN ('DECLINED','CANCELLED')",[poId,excludeId])).rows,
   insertMatchResult: (m) => one(client,'INSERT INTO invoice_match_results (supplier_invoice_id,policy,match_status,variances,matched_by,matched_at) VALUES ($1,$2,$3,$4::jsonb,$5,NOW()) RETURNING *',[m.supplier_invoice_id,m.policy,m.match_status,JSON.stringify(m.variances),m.actor_id]),
   updateInvoiceLifecycle: (id,status) => one(client,'UPDATE supplier_invoices SET status=$2,updated_at=NOW() WHERE id=$1 RETURNING *',[id,status]),
 

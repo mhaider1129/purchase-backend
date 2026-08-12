@@ -10,6 +10,18 @@ const { fetchApprovalRoutes, resolveRouteDomain } = require('../controllers/util
 
 const REQUEST_TYPES = new Set(['Stock','Non-Stock','Medical Device','Medication','IT Item','Maintenance','Warehouse Supply','Printing Logbook']);
 const failure = (statusCode, message, code) => Object.assign(new Error(message), { statusCode, code });
+const RECLASSIFICATION_SCHEMA_ERRORS = new Set(['42P01', '42703']);
+
+function translateReclassificationError(error) {
+  if (!RECLASSIFICATION_SCHEMA_ERRORS.has(error?.code)) return error;
+  const schemaError = failure(
+    503,
+    'Request reclassification is temporarily unavailable because its database migration has not been applied.',
+    'REQUEST_RECLASSIFICATION_SCHEMA_UNAVAILABLE',
+  );
+  schemaError.cause = error;
+  return schemaError;
+}
 
 async function reclassifyRequest(command, suppliedClient = null) {
   const { requestId, targetRequestType, actor, reason = 'Request type corrected', correlationId = crypto.randomUUID() } = command;
@@ -52,7 +64,9 @@ async function reclassifyRequest(command, suppliedClient = null) {
       payload: { previousRequestType: before.request_type, requestType: targetRequestType, requestDomain: domain, reason } });
     return { request_id: requestId, request_type: targetRequestType, request_domain: domain, status: reset.after,
       route_snapshot_id: created.routeSnapshotId, correlation_id: correlationId };
-  }, { client: suppliedClient });
+  }, { client: suppliedClient }).catch(error => {
+    throw translateReclassificationError(error);
+  });
 }
 
-module.exports = { REQUEST_TYPES, reclassifyRequest };
+module.exports = { REQUEST_TYPES, reclassifyRequest, translateReclassificationError };

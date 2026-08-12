@@ -1,0 +1,29 @@
+'use strict';
+const service = require('../services/purchaseOrderService');
+
+const actor = { id: 9 };
+const line = { id: 1, award_id: 2, requested_item_id: 3, price_source_type: 'QUOTATION', price_source_id: 4, quantity: '70', unit_price: '1' };
+const harness = ({ status='PO_APPROVED', allocated='100', receipts=false, auditFails=false, outboxFails=false }={}) => {
+  let state = { po:{ id:1, request_id:5, supplier_id:6, currency:'USD', status, approved_at: status==='PO_APPROVED' ? new Date() : null, approved_by: status==='PO_APPROVED' ? 8 : null }, commitments:[], audits:[], outbox:[] };
+  const tx = {
+    client:{ query: async () => ({rows:[{}]}) }, lockPurchaseOrder:async()=>state.po, loadPurchaseOrder:async()=>({...state.po,lines:[line]}), loadPurchaseOrderLines:async()=>[line], loadSupplier:async()=>({is_active:true,qualification_status:'qualified'}),
+    resolveBudgetEnvelope:async()=>({id:2}), lockBudgetEnvelope:async()=>({id:2,allocated_amount:allocated,consumed_amount:'0'}), sumActiveEncumbrances:async()=>state.commitments.filter(x=>x.state==='ACTIVE').reduce((n,x)=>n+Number(x.amount),0).toString(), findCommitmentByIdempotency:async k=>state.commitments.find(x=>x.idempotency_key===k),
+    insertEncumbrance:async x=>{const row={id:state.commitments.length+1,state:'ACTIVE',stage:'encumbrance',...x};state.commitments.push(row);return row},
+    markPurchaseOrderSubmitted:async(_id,route)=>(state.po={...state.po,status:'PO_PENDING_APPROVAL',approval_route:route}), markPurchaseOrderApproved:async(_id,id)=>(state.po={...state.po,status:'PO_APPROVED',approved_by:id,approved_at:new Date()}), markPurchaseOrderIssued:async(_id,t,id)=>(state.po={...state.po,status:'PO_ISSUED',issued_by:id,total_amount:t.grand_total}), markPurchaseOrderCancelled:async(_id,reason)=>(state.po={...state.po,status:'PO_CANCELLED',cancellation_reason:reason}), hasPurchaseOrderReceipts:async()=>receipts, releaseCommitment:async id=>{const c=state.commitments.find(x=>x.id===id);c.state='RELEASED';return c}
+  };
+  const repository={withTransaction:async work=>{const before=structuredClone(state);try{return await work(tx)}catch(e){state=before;throw e}}};
+  const auditService={writeAuditEvent:async e=>{if(auditFails)throw Error('audit failed');state.audits.push({ action:e.action })}};
+  const outbox={enqueueNotification:async(_c,e)=>{if(outboxFails)throw Error('outbox failed');state.outbox.push(e)}};
+  return {repository,auditService,outbox,get state(){return state}};
+};
+const deps = h => ({repository:h.repository,actor,auditService:h.auditService,outbox:h.outbox});
+
+test('PO_DRAFT submits and invalid submit state is rejected',async()=>{let h=harness({status:'PO_DRAFT'});expect((await service.submitPurchaseOrder({...deps(h),purchaseOrderId:1})).status).toBe('PO_PENDING_APPROVAL');h=harness({status:'PO_APPROVED'});await expect(service.submitPurchaseOrder({...deps(h),purchaseOrderId:1})).rejects.toMatchObject({code:'INVALID_PO_TRANSITION'})});
+test('pending PO is approved with approval authority facts',async()=>{const h=harness({status:'PO_PENDING_APPROVAL'});const po=await service.approvePurchaseOrder({...deps(h),purchaseOrderId:1});expect(po).toMatchObject({status:'PO_APPROVED',approved_by:9});expect(po.approved_at).toBeTruthy()});
+test('issue creates one exact encumbrance and retry is idempotent',async()=>{const h=harness();let r=await service.releasePurchaseOrder({...deps(h),purchaseOrderId:1});expect(r.purchaseOrder.status).toBe('PO_ISSUED');expect(h.state.commitments).toHaveLength(1);r=await service.releasePurchaseOrder({...deps(h),purchaseOrderId:1});expect(r.commitment.id).toBe(1);expect(h.state.commitments).toHaveLength(1)});
+test('budget 100 / PO 70 succeeds while a second 70 fails under the envelope lock',async()=>{const h=harness();await service.releasePurchaseOrder({...deps(h),purchaseOrderId:1});h.state.po={...h.state.po,id:2,status:'PO_APPROVED',approved_at:new Date(),approved_by:8};await expect(service.releasePurchaseOrder({...deps(h),purchaseOrderId:2})).rejects.toMatchObject({code:'BUDGET_INSUFFICIENT'});expect(h.state.po.status).toBe('PO_APPROVED')});
+test('budget failure leaves PO approved',async()=>{const h=harness({allocated:'69.99'});await expect(service.releasePurchaseOrder({...deps(h),purchaseOrderId:1})).rejects.toMatchObject({code:'BUDGET_INSUFFICIENT'});expect(h.state.po.status).toBe('PO_APPROVED');expect(h.state.commitments).toHaveLength(0)});
+test.each([['audit',true,false],['outbox',false,true]])('%s failure rolls back issue and commitment',async(_n,auditFails,outboxFails)=>{const h=harness({auditFails,outboxFails});await expect(service.releasePurchaseOrder({...deps(h),purchaseOrderId:1})).rejects.toThrow();expect(h.state.po.status).toBe('PO_APPROVED');expect(h.state.commitments).toHaveLength(0)});
+test('cancel unreceived PO releases commitment and retry is safe',async()=>{const h=harness();await service.releasePurchaseOrder({...deps(h),purchaseOrderId:1});let r=await service.cancelPurchaseOrder({...deps(h),purchaseOrderId:1,reason:'duplicate'});expect(r.purchaseOrder.status).toBe('PO_CANCELLED');expect(h.state.commitments[0].state).toBe('RELEASED');r=await service.cancelPurchaseOrder({...deps(h),purchaseOrderId:1,reason:'duplicate'});expect(r.purchaseOrder.status).toBe('PO_CANCELLED')});
+test('cancel with receipt requires return or reversal',async()=>{const h=harness({receipts:true});await expect(service.cancelPurchaseOrder({...deps(h),purchaseOrderId:1,reason:'x'})).rejects.toMatchObject({code:'RECEIPT_RETURN_OR_REVERSAL_REQUIRED'});expect(h.state.po.status).toBe('PO_APPROVED')});
+test('canonical events and statuses are used',async()=>{const h=harness();await service.releasePurchaseOrder({...deps(h),purchaseOrderId:1});expect(h.state.outbox.map(x=>x.type)).toEqual(['BUDGET_COMMITTED','PO_ISSUED']);expect(JSON.stringify(h.state)).not.toMatch(/"(?:APPROVED|RELEASED)"/)});

@@ -1,6 +1,9 @@
 'use strict';
 const { assertSupplierEligible } = require('./supplierEligibilityService');
 const { calculatePurchaseOrderTotals, compareDecimal } = require('./purchaseOrderTotalsService');
+const { commitPurchaseOrder } = require('./budgetCommitmentService');
+const defaultAudit = require('./auditService');
+const defaultOutbox = require('./notificationOutboxService');
 const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities = {}, actor, input = {} }) => repository.withTransaction(async (tx) => {
   if (!Array.isArray(awardIds) || !awardIds.length) throw Object.assign(new Error('At least one award is required'), { code: 'AWARD_REQUIRED' });
   const awards = await tx.lockAwards(awardIds);
@@ -23,16 +26,27 @@ const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities 
   for (const award of awards) lines.push(await tx.insertLine({ purchase_order_id: header.id, request_id: award.request_id, request_item_id: award.request_item_id, requested_item_id: award.request_item_id, award_id: award.id, quantity: conversions.get(String(award.id)), unit_price: award.unit_price, price_source_type: award.source_type, price_source_id: award.source_id || award.id, line_type: award.line_type }));
   return { ...header, lines };
 });
-const releasePurchaseOrder = async ({ withTransaction, repository, supplier, purchaseOrder, budgetService, auditService, outbox, actor }) => withTransaction(async (client) => {
-  if (purchaseOrder.status === 'RELEASED') return purchaseOrder;
-  if (purchaseOrder.status !== 'APPROVED') throw Object.assign(new Error('PO must be approved before release'), { code: 'INVALID_PO_TRANSITION' });
-  assertSupplierEligible(supplier);
-  for (const line of purchaseOrder.lines) if (!line.award_id || !line.request_id || !line.request_item_id || !line.price_source_type || !line.price_source_id) throw Object.assign(new Error('PO line traceability and price provenance are required'), { code: 'PO_LINE_TRACE_REQUIRED' });
-  const totals = calculatePurchaseOrderTotals({ lines: purchaseOrder.lines, freight: purchaseOrder.freight, charges: purchaseOrder.charges });
-  const commitment = await budgetService({ repository: repository.forClient(client), purchaseOrder: { ...purchaseOrder, grand_total: totals.grand_total }, idempotencyKey: `po-release:${purchaseOrder.id}` });
-  const released = await repository.forClient(client).release(purchaseOrder.id, totals);
-  await auditService.record(client, { action: 'PO_RELEASED', entity_type: 'purchase_order', entity_id: purchaseOrder.id, actor_id: actor.id, metadata: { commitment_id: commitment.id } });
-  await outbox.enqueue(client, { event_type: 'PO_RELEASED', aggregate_type: 'purchase_order', aggregate_id: purchaseOrder.id, payload: { purchase_order_id: purchaseOrder.id } });
-  return released;
+const event = async (tx, auditService, outbox, action, po, actor, metadata = {}) => {
+  await auditService.writeAuditEvent({ client: tx.client, entityType: 'purchase_order', entityId: po.id, requestId: po.request_id, action, actorUserId: actor.id, metadata });
+  await outbox.enqueueNotification(tx.client, { type: action, entityType: 'purchase_order', entityId: po.id, payload: { purchase_order_id: po.id, ...metadata }, idempotencyKey: `${action.toLowerCase()}:${po.id}` });
+};
+const releasePurchaseOrder = async ({ repository, purchaseOrderId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
+  const po = await tx.lockPurchaseOrder(purchaseOrderId);
+  if (!po) throw Object.assign(new Error('Purchase order not found'), { code: 'PO_NOT_FOUND', statusCode: 404 });
+  const key = `po-release:${purchaseOrderId}`;
+  if (po.status === 'PO_ISSUED') return { purchaseOrder: await tx.loadPurchaseOrder(po.id), commitment: await tx.findCommitmentByIdempotency(key) };
+  if (po.status !== 'PO_APPROVED' || !po.approved_at || !po.approved_by) throw Object.assign(new Error('PO must have completed approval before issue'), { code: 'INVALID_PO_TRANSITION', statusCode: 409 });
+  const lines = await tx.loadPurchaseOrderLines(po.id);
+  assertSupplierEligible(await tx.loadSupplier(po.supplier_id));
+  for (const line of lines) if (!line.award_id || !line.requested_item_id || !line.price_source_type || !line.price_source_id) throw Object.assign(new Error('PO line traceability and price provenance are required'), { code: 'PO_LINE_TRACE_REQUIRED', statusCode: 409 });
+  const totals = calculatePurchaseOrderTotals({ lines, freight: po.freight, charges: po.charges });
+  const commitment = await commitPurchaseOrder({ repository: tx, purchaseOrder: { ...po, grand_total: totals.grand_total }, idempotencyKey: key, actor });
+  const issued = await tx.markPurchaseOrderIssued(po.id, totals, actor.id);
+  await event(tx, auditService, outbox, 'BUDGET_COMMITTED', issued, actor, { commitment_id: commitment.id });
+  await event(tx, auditService, outbox, 'PO_ISSUED', issued, actor, { commitment_id: commitment.id });
+  return { purchaseOrder: { ...issued, lines }, commitment };
 });
-module.exports = { createPurchaseOrderFromAwards, releasePurchaseOrder };
+const submitPurchaseOrder = ({ repository, purchaseOrderId, actor, approvalRoute, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async tx => { const po=await tx.lockPurchaseOrder(purchaseOrderId); if (!po) throw Object.assign(new Error('Purchase order not found'),{statusCode:404}); if(po.status!=='PO_DRAFT') throw Object.assign(new Error(`Purchase order cannot be submitted from ${po.status}`),{code:'INVALID_PO_TRANSITION',statusCode:409}); const updated=await tx.markPurchaseOrderSubmitted(po.id,approvalRoute); await event(tx,auditService,outbox,'PO_SUBMITTED_FOR_APPROVAL',updated,actor); return updated; });
+const approvePurchaseOrder = ({ repository, purchaseOrderId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async tx => { const po=await tx.lockPurchaseOrder(purchaseOrderId); if (!po) throw Object.assign(new Error('Purchase order not found'),{statusCode:404}); if(po.status!=='PO_PENDING_APPROVAL') throw Object.assign(new Error(`Purchase order cannot be approved from ${po.status}`),{code:'INVALID_PO_TRANSITION',statusCode:409}); const updated=await tx.markPurchaseOrderApproved(po.id,actor.id); await event(tx,auditService,outbox,'PO_APPROVED',updated,actor); return updated; });
+const cancelPurchaseOrder = ({ repository, purchaseOrderId, reason, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async tx => { const po=await tx.lockPurchaseOrder(purchaseOrderId); if(!po) throw Object.assign(new Error('Purchase order not found'),{statusCode:404}); if(po.status==='PO_CANCELLED') return { purchaseOrder:po,commitment:await tx.findCommitmentByIdempotency(`po-release:${po.id}`) }; if(await tx.hasPurchaseOrderReceipts(po.id)) throw Object.assign(new Error('Receipt return or reversal is required'),{code:'RECEIPT_RETURN_OR_REVERSAL_REQUIRED',statusCode:409}); const commitment=await tx.findCommitmentByIdempotency(`po-release:${po.id}`); const updated=await tx.markPurchaseOrderCancelled(po.id,reason,actor.id); if(commitment?.state==='ACTIVE'){ await tx.releaseCommitment(commitment.id); await event(tx,auditService,outbox,'BUDGET_COMMITMENT_RELEASED',updated,actor,{commitment_id:commitment.id}); } await event(tx,auditService,outbox,'PO_CANCELLED',updated,actor,{reason}); return {purchaseOrder:updated,commitment}; });
+module.exports = { createPurchaseOrderFromAwards, releasePurchaseOrder, submitPurchaseOrder, approvePurchaseOrder, cancelPurchaseOrder };

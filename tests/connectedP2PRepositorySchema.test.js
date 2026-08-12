@@ -39,11 +39,14 @@ describe('connected P2P repository checked-in schema contract', () => {
   test('receipt operations execute against goods_receipt_items and its real quantity columns', async () => {
     const client = mockClient();
     const repository = createConnectedP2PRepository(client);
-    await repository.loadCumulativeReceipts(4);
+    await repository.lockGoodsReceiptOperation('receipt-1');
+    await repository.loadCumulativeAcceptedReceipts(4);
     await repository.insertGoodsReceiptLine({ goods_receipt_id: 1, purchase_order_item_id: 4, requested_item_id: 2, item_name: 'Gloves', ordered_quantity: '10', accepted_quantity: '4', unit_price: '2' });
     const executed = client.queries.map(({ sql }) => sql).join('\n');
     expect(executed).toContain('goods_receipt_items');
     expect(executed).toContain('received_quantity');
+    expect(executed).toContain('received_quantity-gri.damaged_quantity-gri.short_quantity');
+    expect(executed).toContain('pg_advisory_xact_lock');
     expect(executed).not.toContain('goods_receipt_lines');
   });
 

@@ -22,6 +22,8 @@ DO $$ DECLARE duplicate_found boolean; BEGIN
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='payment_records' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.payment_records WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate payment idempotency keys'; END IF; END IF;
  IF EXISTS (SELECT 1 FROM public.requested_items WHERE supplier_name IS NOT NULL OR unit_cost IS NOT NULL) THEN RAISE NOTICE 'Preflight: legacy award-like requested_items fields require reconciliation'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='budget_envelopes' AND column_name IN ('allocated_amount','consumed_amount') GROUP BY table_name HAVING count(*)=2) THEN RAISE EXCEPTION 'Preflight: incompatible budget_envelopes balance columns'; END IF;
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name IN ('request_id','budget_envelope_id','stage','amount','currency','source_type','source_id','notes','actor_id') GROUP BY table_name HAVING count(*)=9) THEN RAISE EXCEPTION 'Preflight: incompatible commitment_ledger base columns'; END IF;
+ IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name IN ('commitment_type','status')) THEN RAISE EXCEPTION 'Preflight: incompatible commitment_ledger legacy columns found'; END IF;
 END $$;
 
 -- requests/requested_items/suppliers/users use INTEGER PKs; document tables use BIGINT PKs.

@@ -91,9 +91,12 @@ describe('parallel ApprovalEngine groups', () => {
     expect(changed).toMatchObject({ approver_id: 25, approval_level: 1, approval_route_version: 4, route_snapshot_id: 'snap' });
   });
 
-  test('engine SQL uses the corrected migration conflict identity', () => {
+  test('engine SQL de-duplicates by the route member identity without requiring a unique index', () => {
     const source = fs.readFileSync(path.join(__dirname, '../services/approvalEngine.js'), 'utf8');
-    expect(source).toContain('ON CONFLICT (request_id,approval_route_version,approval_level,approver_id)');
+    expect(source).toContain('WHERE NOT EXISTS (');
+    expect(source).toContain('approval_route_version=$5');
+    expect(source).toContain('approval_level=$3');
+    expect(source).toContain('approver_id=$2');
   });
 
   test('audit and outbox failures propagate so the surrounding transaction can roll back', async () => {

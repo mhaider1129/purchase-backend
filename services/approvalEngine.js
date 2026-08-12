@@ -72,10 +72,20 @@ function createApprovalEngine(dependencies = {}) {
       const created = [];
       for (const step of snapshotSteps(routeSnapshot)) {
         if (!step.approverId) throw new ApprovalEngineError('Every canonical route member must resolve to a user', 'MISSING_APPROVER');
+        // The request lock serializes workflow creation for this request.  Use an
+        // explicit existence check so reclassification also works on installations
+        // where the route-member unique index has not yet been added.
         const result = await client.query(
           `INSERT INTO approvals (request_id,approver_id,approval_level,status,is_active,route_snapshot_id,approval_route_version)
-           VALUES ($1,$2,$3,'Pending',FALSE,$4,$5)
-           ON CONFLICT (request_id,approval_route_version,approval_level,approver_id) DO NOTHING RETURNING *`,
+           SELECT $1,$2,$3,'Pending',FALSE,$4,$5
+           WHERE NOT EXISTS (
+             SELECT 1 FROM approvals
+              WHERE request_id=$1
+                AND approval_route_version=$5
+                AND approval_level=$3
+                AND approver_id=$2
+           )
+           RETURNING *`,
           [requestId, step.approverId, step.level, routeSnapshot.snapshotId, routeSnapshot.version]);
         if (result.rows[0]) created.push(result.rows[0]);
       }

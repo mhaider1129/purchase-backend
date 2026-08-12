@@ -18,4 +18,8 @@ const assertSupplierEligible = (supplier, context) => {
   if (!result.eligible) { const error = new Error(`Supplier is ineligible: ${result.reasons.join(', ')}`); error.code = 'SUPPLIER_INELIGIBLE'; error.reasons = result.reasons; throw error; }
   return result;
 };
-module.exports = { evaluateSupplierEligibility, assertSupplierEligible };
+const loadAndAssertSupplierEligible = async (repository, supplierId, context) => {
+  const facts = await repository.getEligibilityFacts(supplierId, context);
+  return { supplier: facts.supplier, ...assertSupplierEligible(facts.supplier, { ...context, categoryId: null, contractId: null }), deferred: facts.deferred || [] };
+};
+module.exports = { evaluateSupplierEligibility, assertSupplierEligible, loadAndAssertSupplierEligible };

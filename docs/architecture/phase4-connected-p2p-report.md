@@ -32,3 +32,13 @@ SQL 006 adds only awards, PO traceability/provenance/currency, formal budget com
 Operationalize AP/accounting: governed exception/tolerance approval, credit/debit notes and reversals, contract consumption, FX governance, bank/payment reconciliation, tax reporting, outbox operations, projection rebuild jobs, and observability/SLA dashboards—without changing the Phase 3 inventory ledger.
 
 No SQL was executed against Supabase.
+
+## Connection-and-schema correction addendum (2026-08-11)
+
+The authority is `public.requests(id INTEGER)`, not `purchase_requests`; invoice PO linkage is `purchase_order_id`. Document PKs are BIGINT while request, item, supplier and user PKs are INTEGER. SQL 006 fails if a base table is absent, preflights invalid legacy data, extends `commitment_ledger`, and creates no parallel budget/payment subsystem.
+
+`repositories/connectedP2PRepository.js` performs real `requested_items FOR UPDATE`, active-award sum, award insert, supplier and compliance queries. Services now enforce fingerprints, inherited PO provenance, supplier equality, cumulative invoice quantity, existing budget authority, and scaled-integer money. Live endpoints are in `routes/procureToPay.js` and `routes/requestedItems.js`; exact remaining writers are in the closure report. Controller cutover, PostgreSQL race tests, normalized contract-line pricing, category qualification and blacklist registries remain gaps because SQL was not deployed and no database was connected.
+
+Prerequisites: backup; reconcile invoice duplicates, NULL PO suppliers, orphan items, duplicate idempotency values and award-like fields; deploy the 2026-03-12/13 foundations; review SQL 006 preflight; then enable adapters. Jest covers fingerprints, locked award ceilings, PO inheritance/wrong supplier, cumulative matching, payments, completion, totals, eligibility and pricing.
+
+No SQL was executed against Supabase.

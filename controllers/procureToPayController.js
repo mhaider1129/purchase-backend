@@ -22,7 +22,7 @@ const { resolveSupplierReference } = require('../services/supplierReferenceServi
 const { linkDocuments } = require('../services/documentFlowService');
 const { PAYABLE_STATUS, PAYMENT_STATUS } = require('../constants/statusCatalog');
 const purchaseOrderService = require('../services/purchaseOrderService');
-const { createTransactionalP2PRepository } = require('../repositories/connectedP2PRepository');
+const { createConnectedP2PRepository, createTransactionalP2PRepository } = require('../repositories/connectedP2PRepository');
 const {
   assertBudgetCanCover,
   recordCommitment,
@@ -179,18 +179,11 @@ const verifyFinanceRecord = async (req, res, next) => {
     await client.query('BEGIN');
     await ensureProcureToPayTables(client);
 
-    const latestMatch = await client.query(
-      `SELECT * FROM invoice_match_results
-       WHERE request_id = $1
-       ORDER BY matched_at DESC
-       LIMIT 1`,
-      [requestId]
-    );
-
-    const match = latestMatch.rows[0];
-    if (!match || !['MATCHED', 'OVERRIDDEN'].includes(match.match_status)) {
-      throw createHttpError(400, 'Invoice matching must pass or be overridden before finance verification');
-    }
+    const repository = createConnectedP2PRepository(client);
+    const invoiceIds = await repository.loadInvoiceIdsForRequest(requestId);
+    if (!invoiceIds.length) throw createHttpError(400, 'At least one supplier invoice is required before finance verification');
+    const effectiveMatches = [];
+    for (const invoiceId of invoiceIds) effectiveMatches.push(await supplierInvoiceService.assertInvoiceMatchApproved({ repository, invoiceId }));
 
     await client.query(
       `UPDATE procurement_lifecycle_states
@@ -200,7 +193,7 @@ const verifyFinanceRecord = async (req, res, next) => {
     );
 
     await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'Finance verified');
-    await logFinanceAction(client, requestId, req.user.id, 'FINANCE_VERIFIED', {});
+    await logFinanceAction(client, requestId, req.user.id, 'FINANCE_VERIFIED', { invoice_matches: effectiveMatches });
 
     await client.query('COMMIT');
     res.json({ message: 'Finance record verified' });
@@ -588,8 +581,8 @@ const getProcureToPayDashboard = async (req, res, next) => {
     const [awaitingPo, awaitingReceipt, pendingMatch, matchException, dueToday, overdue, paymentsWeek] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status = 'approved' AND id NOT IN (SELECT request_id FROM purchase_orders)`),
       pool.query(`SELECT COUNT(*)::int AS count FROM purchase_orders po WHERE NOT EXISTS (SELECT 1 FROM goods_receipts gr WHERE gr.purchase_order_id = po.id)`),
-      pool.query(`SELECT COUNT(*)::int AS count FROM supplier_invoices si LEFT JOIN invoice_match_results imr ON imr.supplier_invoice_id = si.id WHERE imr.id IS NULL OR imr.match_status = 'PENDING_MATCH'`),
-      pool.query(`SELECT COUNT(*)::int AS count FROM invoice_match_results WHERE match_status IN ('MISMATCH', 'OVERRIDDEN')`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM supplier_invoices si WHERE NOT EXISTS (SELECT 1 FROM invoice_match_results imr WHERE imr.supplier_invoice_id = si.id)`),
+      pool.query(`SELECT COUNT(*)::int AS count FROM supplier_invoices si JOIN LATERAL (SELECT match_status FROM invoice_match_results WHERE supplier_invoice_id=si.id ORDER BY matched_at DESC,id DESC LIMIT 1) imr ON TRUE WHERE imr.match_status='MATCH_EXCEPTION'`),
       pool.query(`SELECT COUNT(*)::int AS count FROM ap_payables WHERE open_balance > 0 AND due_date = CURRENT_DATE`),
       pool.query(`SELECT COUNT(*)::int AS count FROM ap_payables WHERE open_balance > 0 AND due_date < CURRENT_DATE`),
       pool.query(`SELECT COALESCE(SUM(amount_paid), 0) AS total FROM payment_records WHERE paid_at >= date_trunc('week', NOW())`),
@@ -793,18 +786,17 @@ const listInvoiceMatchingQueue = async (req, res, next) => {
     await ensureProcureToPayTables();
     const { rows } = await pool.query(
       `SELECT si.id AS invoice_id, si.request_id, si.invoice_number, si.supplier,
-              COALESCE(imr.match_status, 'PENDING_MATCH') AS match_status,
+              COALESCE(imr.match_status, 'MATCH_PENDING') AS match_status,
               COALESCE(imr.mismatch_reasons, '[]'::jsonb) AS mismatch_reasons,
-              COALESCE(imr.override_approved, FALSE) AS override_approved
+              COALESCE(imr.override_decision = 'APPROVED', FALSE) AS override_approved
        FROM supplier_invoices si
        LEFT JOIN LATERAL (
-         SELECT match_status, mismatch_reasons, override_approved
-         FROM invoice_match_results
-         WHERE supplier_invoice_id = si.id
-         ORDER BY matched_at DESC
+         SELECT latest.match_status, latest.mismatch_reasons, decision.decision AS override_decision
+         FROM LATERAL (SELECT * FROM invoice_match_results WHERE supplier_invoice_id = si.id ORDER BY matched_at DESC,id DESC LIMIT 1) latest
+         LEFT JOIN LATERAL (SELECT d.decision FROM invoice_match_override_decisions d WHERE d.invoice_match_result_id=latest.id ORDER BY d.decided_at DESC,d.id DESC LIMIT 1) decision ON TRUE
          LIMIT 1
        ) imr ON TRUE
-       WHERE COALESCE(imr.match_status, 'PENDING_MATCH') IN ('PENDING_MATCH', 'EXCEPTION', 'MISMATCH')
+       WHERE COALESCE(imr.match_status, 'MATCH_PENDING') IN ('MATCH_PENDING', 'MATCH_EXCEPTION')
        ORDER BY si.submitted_at DESC`
     );
     res.json({ data: rows });

@@ -12,7 +12,8 @@ const matchInvoice = ({ invoice, purchaseOrder, acceptedReceipts = [], priorQuan
   }
   if (!priorQuantities.length && priorInvoices.length) {
     const qty = new Map(), value = new Map();
-    for (const prior of priorInvoices.filter(x => !['CANCELLED','DECLINED','REJECTED','VOIDED','MATCH_EXCEPTION'].includes(String(x.status).toUpperCase()))) for (const line of prior.lines || []) {
+    const consumingStates = new Set(['MATCH_VERIFIED','MATCH_VERIFIED_BY_OVERRIDE','FINANCE_REVIEW_PENDING','FINANCE_VERIFIED','AP_VOUCHER_CREATED','AP_POSTED','PAYMENT_PENDING','PARTIALLY_PAID','PAID','CLOSED']);
+    for (const prior of priorInvoices.filter(x => consumingStates.has(String(x.effective_status || x.status).toUpperCase()))) for (const line of prior.lines || []) {
       const id=String(line.purchase_order_item_id ?? line.po_line_id); qty.set(id,addDecimal(qty.get(id)||0,line.quantity)); value.set(id,addDecimal(value.get(id)||0,calculateLine(line).line_total));
     }
     priorQuantities=[...qty].map(([purchase_order_item_id,invoiced_quantity])=>({purchase_order_item_id,invoiced_quantity}));

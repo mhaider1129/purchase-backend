@@ -95,7 +95,7 @@ describe('Phase 4 connection corrections', () => {
 
   test('cumulative invoice quantities exclude voids and prevent 70 plus 70 against 100', () => {
     const { matchInvoice } = require('../services/invoiceMatchingService');
-    const result = matchInvoice({ policy: 'THREE_WAY', purchaseOrder: { supplier_id: 1, currency: 'USD', lines: [{ id: 2, quantity: '100', unit_price: '1' }] }, receipts: [{ lines: [{ po_line_id: 2, quantity: '100' }] }], priorInvoices: [{ status: 'MATCHED', lines: [{ po_line_id: 2, quantity: '70' }] }, { status: 'VOIDED', lines: [{ po_line_id: 2, quantity: '99' }] }], invoice: { supplier_id: 1, currency: 'USD', lines: [{ id: 4, po_line_id: 2, quantity: '70', unit_price: '1' }] } });
+    const result = matchInvoice({ policy: 'THREE_WAY', purchaseOrder: { supplier_id: 1, currency: 'USD', lines: [{ id: 2, quantity: '100', unit_price: '1' }] }, receipts: [{ lines: [{ po_line_id: 2, quantity: '100' }] }], priorInvoices: [{ status: 'MATCH_VERIFIED', lines: [{ po_line_id: 2, quantity: '70' }] }, { status: 'VOIDED', lines: [{ po_line_id: 2, quantity: '99' }] }], invoice: { supplier_id: 1, currency: 'USD', lines: [{ id: 4, po_line_id: 2, quantity: '70', unit_price: '1' }] } });
     expect(result.variances).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'QUANTITY_VARIANCE', reason: 'OVER_INVOICED' })]));
   });
 });

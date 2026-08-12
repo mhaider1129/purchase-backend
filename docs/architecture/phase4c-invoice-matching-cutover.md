@@ -33,13 +33,19 @@ Caller subtotal/tax/total are ignored. Shared scaled-integer arithmetic accepts 
 
 Non-service lines use exact 3-way matching. Accepted receipt quantity is `received - damaged - short` across all receipts. Accepted quarantined quantity presently counts because Phase 4B separates financial acceptance from stock availability and contains no quality-release financial authority; this explicit governance choice should be revisited when quality release exists. Service lines use exact 2-way PO/invoice matching because no service confirmation exists; no fake receipt is created.
 
-The coordinator ignores caller arrays, totals, tolerance, and policy. It locks invoice and PO, then loads invoice/PO lines, accepted receipts, and prior valid invoice quantities/values. `CANCELLED`, `DECLINED`, `VOIDED`, and `MATCH_EXCEPTION` do not consume capacity; other submitted/pending/verified invoices do. The PO lock serializes competing matches. It checks prior + current quantity against accepted and ordered quantity, and prior + current value against PO line value.
+The coordinator ignores caller arrays, totals, tolerance, and policy. It locks invoice and PO, then loads invoice/PO lines, accepted receipts, and prior financially valid invoice quantities/values. Capacity uses a positive allowlist: the invoice must be in `MATCH_VERIFIED` or a later finance/AP/payment lifecycle state, and its latest match result must be `MATCH_VERIFIED` or its latest decision for that specific result must be `APPROVED`. Submitted, pending, unapproved/declined exceptions, cancelled, declined, and voided invoices do not count. Thus a pending competitor cannot poison the first match, while an approved override consumes capacity. The PO lock serializes competing matches. It checks prior + current quantity against accepted and ordered quantity, and prior + current value against PO line value.
 
 Structured codes are `QUANTITY_VARIANCE`, `PRICE_VARIANCE`, `VALUE_VARIANCE`, `MISSING_RECEIPT`, `SUPPLIER_MISMATCH`, `CURRENCY_MISMATCH`, `PO_LINE_NOT_FOUND`, and `OVER_INVOICED`, with line identity, expected/actual/difference, currency/UOM as applicable. Persisted states are `MATCH_VERIFIED` and `MATCH_EXCEPTION`; each run appends history.
 
 ## Overrides, cancellation, and frontend
 
 The existing `finance.override-mismatch` permission governs override. A reason is mandatory, only an exception may be decided, and actor/time/decision/reason/original variances are appended. Approval advances invoice status; decline retains the exception. Invoice deletion is prohibited; cancellation UI/process is deferred, paid invoices require future credit/reversal, and terminal invalid statuses are excluded from cumulative controls.
+
+## Effective state and finance handoff
+
+Match results remain immutable append-only evidence. The authoritative result is the latest by `matched_at` and `id`; only the latest override decision attached to that exact result can affect it. A direct `MATCH_VERIFIED` is effective verified, while a `MATCH_EXCEPTION` is effective `MATCH_VERIFIED_BY_OVERRIDE` only when that result's latest decision is `APPROVED`. An older result's approval never validates a later exception. Finance verification calls this authority for every invoice on the request and rejects pending or unresolved/declined exceptions.
+
+Invoice submission and matching deliberately do not post actual commitments or GL entries. Phase 4D owns the handoff: **MATCH VERIFIED → FINANCE VERIFIED / AP POSTED → commitment actualization → liability/GL recognition**. Payment and AP settlement remain outside Phase 4C.
 
 The API accepts PO/supplier IDs, number/date/currency, idempotency key, and PO-line-bound lines. Compatibility `items` is accepted but no free-text identity, caller totals, receipts, prior invoices, or results are authoritative. Existing pages still require UX work for PO/line selection. Matching calls can no longer weaken server policy; screens should render server totals and structured variances.
 

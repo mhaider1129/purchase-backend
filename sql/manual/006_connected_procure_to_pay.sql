@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS public.invoice_match_override_decisions (
  decided_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS invoice_match_history_idx ON public.invoice_match_results(supplier_invoice_id,matched_at DESC);
+CREATE INDEX IF NOT EXISTS invoice_match_override_history_idx ON public.invoice_match_override_decisions(invoice_match_result_id,decided_at DESC,id DESC);
 
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS supplier_invoice_id BIGINT REFERENCES public.supplier_invoices(id);

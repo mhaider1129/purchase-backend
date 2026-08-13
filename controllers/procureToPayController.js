@@ -24,6 +24,7 @@ const { PAYABLE_STATUS, PAYMENT_STATUS } = require('../constants/statusCatalog')
 const purchaseOrderService = require('../services/purchaseOrderService');
 const financeVerificationService = require('../services/financeVerificationService');
 const accountsPayableService = require('../services/accountsPayableService');
+const apPostingService = require('../services/apPostingService');
 const paymentService = require('../services/paymentService');
 const { createConnectedP2PRepository, createTransactionalP2PRepository } = require('../repositories/connectedP2PRepository');
 const {
@@ -179,9 +180,9 @@ const verifyFinanceRecord = async (req, res, next) => {
     requirePermission(req, 'finance.verify', ['finance', 'scm', 'admin']);
     const requestId = Number(req.params.requestId);
     const repository = createTransactionalP2PRepository(pool);
-    repository.loadFinanceEligibleInvoiceIdsForRequest = async (id) => {
+    repository.loadRequestFinanceReadiness = async (id) => {
       const client = await pool.connect();
-      try { return createConnectedP2PRepository(client).loadFinanceEligibleInvoiceIdsForRequest(id); } finally { client.release(); }
+      try { return createConnectedP2PRepository(client).loadRequestFinanceReadiness(id); } finally { client.release(); }
     };
     const result = await financeVerificationService.verifyRequestForFinance({ repository, requestId, actor: req.user });
     res.json({ message: 'Finance record verified', ...result });
@@ -200,63 +201,30 @@ const createApVoucher = async (req, res, next) => {
   }
 };
 
+const verifyApVoucher = async (req, res, next) => {
+  try {
+    requirePermission(req, 'finance.voucher.verify', ['finance', 'financeapprover', 'admin']);
+    const result = await accountsPayableService.verifyApVoucher({ repository: createTransactionalP2PRepository(pool), voucherId: Number(req.params.voucherId), actor: req.user });
+    res.json(result);
+  } catch (error) { next(error); }
+};
+
 const postToInternalLedger = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.post-ledger', ['finance', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
-    const { ap_voucher_id, liability_recognized_amount, posting_reference = null } = req.body;
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const posting = await client.query(
-      `INSERT INTO finance_postings (request_id, ap_voucher_id, posting_status, posting_reference, liability_recognized_amount, posted_by, posted_at)
-       VALUES ($1,$2,'posted',$3,$4,$5,NOW())
-       RETURNING *`,
-      [requestId, ap_voucher_id || null, posting_reference, liability_recognized_amount || 0, req.user.id]
-    );
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.AP_POSTED, req.user.id, 'Posted to internal ledger');
-    await logFinanceAction(client, requestId, req.user.id, 'POSTED_TO_INTERNAL_LEDGER', { finance_posting_id: posting.rows[0].id });
-
-    await client.query('COMMIT');
-    res.status(201).json({ posting: posting.rows[0] });
+    const result = await apPostingService.postApVoucher({ repository: createTransactionalP2PRepository(pool), voucherId: Number(req.body.ap_voucher_id), actor: req.user, idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key });
+    res.status(result.idempotent ? 200 : 201).json(result);
   } catch (error) {
-    await client.query('ROLLBACK');
     next(error);
-  } finally {
-    client.release();
   }
 };
 
 const markPaymentPending = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.payment.manage', ['finance', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
-    const { ap_voucher_id = null, payment_reference = null } = req.body;
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const payment = await client.query(
-      `INSERT INTO payment_records (request_id, ap_voucher_id, payment_status, payment_reference)
-       VALUES ($1,$2,$4,$3)
-       RETURNING *`,
-      [requestId, ap_voucher_id, payment_reference, PAYMENT_STATUS.PENDING]
-    );
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.PAYMENT_PENDING, req.user.id, 'Payment pending');
-    await logFinanceAction(client, requestId, req.user.id, 'PAYMENT_PENDING_SET', { payment_record_id: payment.rows[0].id });
-
-    await client.query('COMMIT');
-    res.status(201).json({ payment: payment.rows[0] });
+    throw createHttpError(410, 'Legacy payment-pending records are disabled; post a real payable payment');
   } catch (error) {
-    await client.query('ROLLBACK');
     next(error);
-  } finally {
-    client.release();
   }
 };
 
@@ -730,32 +698,10 @@ const getPurchaseOrderDetail = async (req, res, next) => {
 };
 
 const postPayableFromInvoice = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.verify', ['finance', 'financeapprover', 'admin']);
-    const invoiceId = Number(req.params.invoiceId);
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-    const inv = await client.query(`SELECT * FROM supplier_invoices WHERE id=$1 FOR UPDATE`, [invoiceId]);
-    if (!inv.rowCount) throw createHttpError(404, 'Invoice not found');
-    const invoice = inv.rows[0];
-    const payable = await client.query(`INSERT INTO ap_payables (request_id, supplier_invoice_id, supplier_name, invoice_total, open_balance, due_date, posted_by)
-      VALUES ($1,$2,$3,$4,$4,($5::date + INTERVAL '30 day')::date,$6) RETURNING *`,
-      [invoice.request_id, invoice.id, invoice.supplier, invoice.total_amount, invoice.invoice_date, req.user.id]);
-
-    await linkDocuments(client, {
-      requestId: invoice.request_id,
-      sourceType: 'AP_INVOICE',
-      sourceId: invoice.id,
-      targetType: 'ACCOUNTS_PAYABLE',
-      targetId: payable.rows[0].id,
-      createdBy: req.user.id,
-    });
-    await transitionLifecycleState(client, invoice.request_id, LIFECYCLE_STATES.AP_POSTED, req.user.id, 'Invoice posted to AP');
-    await logFinanceAction(client, invoice.request_id, req.user.id, 'AP_PAYABLE_POSTED', { ap_payable_id: payable.rows[0].id });
-    await client.query('COMMIT');
-    res.status(201).json({ payable: payable.rows[0] });
-  } catch (error) { await client.query('ROLLBACK'); next(error);} finally { client.release(); }
+    throw createHttpError(410, 'Direct invoice-to-payable posting is disabled; create, verify, and post an AP voucher');
+  } catch (error) { next(error); }
 };
 
 const listAccountsPayable = async (req, res, next) => {
@@ -992,6 +938,7 @@ module.exports = {
   listDocumentFlow,
   getDocumentFlow,
   createApVoucher,
+  verifyApVoucher,
   verifyFinanceRecord,
   postToInternalLedger,
   markPaymentPending,

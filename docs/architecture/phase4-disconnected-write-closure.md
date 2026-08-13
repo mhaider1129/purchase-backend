@@ -49,3 +49,18 @@ The request-scoped invoice submission, matching, approval, and decline endpoints
 Canonical repository writes now cover finance-eligible invoice selection, voucher/payable creation, payment records, allocations, payable synchronization, invoice payment projection, and document links. Controller payment and voucher writes were cut over. `markPaid` is disabled.
 
 Remaining **LEGACY ACTIVE** writers are `postPayableFromInvoice`, `postToInternalLedger`, and the zero-value `markPaymentPending` scheduler. Existing migration/ensure-table DDL is **HISTORICAL/IMPORT**, test fixtures are **TEST**, lifecycle and invoice paid states are **COMPATIBILITY PROJECTION**, and `connectedP2PRepository` is the **CANONICAL REPOSITORY**. Production rollout is blocked until legacy posting/payable routes and the frontend quick action are removed or delegated to the atomic AP posting workflow.
+# Phase 4D final direct-write closure
+
+The live `postToInternalLedger` controller delegates to `apPostingService`; it no
+longer inserts finance postings or accepts a caller-selected liability. Voucher
+verification delegates to `accountsPayableService`, and payable payments delegate
+to `paymentService`. The legacy direct invoice-to-payable and payment-pending
+controllers are disabled with HTTP 410.
+
+Production financial SQL is intentionally confined to repository gateways and
+the pre-existing `financeCoreService` PO-encumbrance writer. In
+`connectedP2PRepository`, AP posting owns finance posting, actual evidence,
+remaining encumbrance, consumed projection, and payable activation; payment owns
+the payment header/allocation and balance projection. Read-only reporting queries
+in controllers remain non-authoritative. Lifecycle projection writes remain in
+the lifecycle service/repository boundaries and are not accounting evidence.

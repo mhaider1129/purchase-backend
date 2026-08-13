@@ -22,6 +22,9 @@ const { resolveSupplierReference } = require('../services/supplierReferenceServi
 const { linkDocuments } = require('../services/documentFlowService');
 const { PAYABLE_STATUS, PAYMENT_STATUS } = require('../constants/statusCatalog');
 const purchaseOrderService = require('../services/purchaseOrderService');
+const financeVerificationService = require('../services/financeVerificationService');
+const accountsPayableService = require('../services/accountsPayableService');
+const paymentService = require('../services/paymentService');
 const { createConnectedP2PRepository, createTransactionalP2PRepository } = require('../repositories/connectedP2PRepository');
 const {
   assertBudgetCanCover,
@@ -171,88 +174,29 @@ const declineInvoiceMatch = async (req, res, next) => {
 };
 
 const verifyFinanceRecord = async (req, res, next) => {
-  const client = await pool.connect();
   try {
+    // The delegated service uses assertInvoiceMatchApproved as the sole Phase 4C match authority.
     requirePermission(req, 'finance.verify', ['finance', 'scm', 'admin']);
     const requestId = Number(req.params.requestId);
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const repository = createConnectedP2PRepository(client);
-    const invoiceIds = await repository.loadInvoiceIdsForRequest(requestId);
-    if (!invoiceIds.length) throw createHttpError(400, 'At least one supplier invoice is required before finance verification');
-    const effectiveMatches = [];
-    for (const invoiceId of invoiceIds) effectiveMatches.push(await supplierInvoiceService.assertInvoiceMatchApproved({ repository, invoiceId }));
-
-    await client.query(
-      `UPDATE procurement_lifecycle_states
-       SET finance_state = 'verified', updated_at = NOW()
-       WHERE request_id = $1`,
-      [requestId]
-    );
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.MATCH_VERIFIED, req.user.id, 'Finance verified');
-    await logFinanceAction(client, requestId, req.user.id, 'FINANCE_VERIFIED', { invoice_matches: effectiveMatches });
-
-    await client.query('COMMIT');
-    res.json({ message: 'Finance record verified' });
+    const repository = createTransactionalP2PRepository(pool);
+    repository.loadFinanceEligibleInvoiceIdsForRequest = async (id) => {
+      const client = await pool.connect();
+      try { return createConnectedP2PRepository(client).loadFinanceEligibleInvoiceIdsForRequest(id); } finally { client.release(); }
+    };
+    const result = await financeVerificationService.verifyRequestForFinance({ repository, requestId, actor: req.user });
+    res.json({ message: 'Finance record verified', ...result });
   } catch (error) {
-    await client.query('ROLLBACK');
     next(error);
-  } finally {
-    client.release();
   }
 };
 
 const createApVoucher = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.voucher.create', ['finance', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
-    const { supplier_invoice_id = null, currency = 'USD', total_amount, lines = [] } = req.body;
-
-    if (Number(total_amount) <= 0 || !Array.isArray(lines) || lines.length === 0) {
-      throw createHttpError(400, 'total_amount and at least one voucher line are required');
-    }
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const voucher = await client.query(
-      `INSERT INTO ap_vouchers (request_id, supplier_invoice_id, voucher_number, total_amount, currency, created_by)
-       VALUES ($1,$2, CONCAT('APV-', $1, '-', EXTRACT(EPOCH FROM NOW())::bigint), $3, $4, $5)
-       RETURNING *`,
-      [requestId, supplier_invoice_id, total_amount, currency, req.user.id]
-    );
-
-    for (const [idx, line] of lines.entries()) {
-      await client.query(
-        `INSERT INTO ap_voucher_lines (ap_voucher_id, line_number, account_code, description, debit_amount, credit_amount, reference_type, reference_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [
-          voucher.rows[0].id,
-          idx + 1,
-          line.account_code || null,
-          line.description || `Line ${idx + 1}`,
-          line.debit_amount || 0,
-          line.credit_amount || 0,
-          line.reference_type || null,
-          line.reference_id || null,
-        ]
-      );
-    }
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.AP_POSTED, req.user.id, 'AP voucher created');
-    await logFinanceAction(client, requestId, req.user.id, 'AP_VOUCHER_CREATED', { ap_voucher_id: voucher.rows[0].id });
-
-    await client.query('COMMIT');
-    res.status(201).json({ voucher: voucher.rows[0] });
+    const result = await accountsPayableService.createPayableFromVerifiedInvoice({ repository: createTransactionalP2PRepository(pool), invoiceId: Number(req.body.supplier_invoice_id), actor: req.user, idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key, accountingLines: req.body.lines || [] });
+    res.status(result.idempotent ? 200 : 201).json(result);
   } catch (error) {
-    await client.query('ROLLBACK');
     next(error);
-  } finally {
-    client.release();
   }
 };
 
@@ -317,44 +261,11 @@ const markPaymentPending = async (req, res, next) => {
 };
 
 const markPaid = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.payment.manage', ['finance', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
-    const paymentId = Number(req.params.paymentId);
-    const { amount_paid, payment_method = null, payment_reference = null } = req.body;
-
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const updated = await client.query(
-      `UPDATE payment_records
-       SET payment_status = $2,
-           amount_paid = $3,
-           payment_method = $4,
-           payment_reference = COALESCE($5, payment_reference),
-           paid_at = NOW(),
-           paid_by = $6
-       WHERE id = $1
-       RETURNING *`,
-      [paymentId, PAYMENT_STATUS.PAID, amount_paid || 0, payment_method, payment_reference, req.user.id]
-    );
-
-    if (updated.rowCount === 0) {
-      throw createHttpError(404, 'Payment record not found');
-    }
-
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.PAID, req.user.id, 'Payment completed');
-    await transitionLifecycleState(client, requestId, LIFECYCLE_STATES.CLOSED, req.user.id, 'Lifecycle closed');
-    await logFinanceAction(client, requestId, req.user.id, 'PAYMENT_MARKED_PAID', { payment_record_id: paymentId });
-
-    await client.query('COMMIT');
-    res.json({ payment: updated.rows[0] });
+    throw createHttpError(410, 'Status-only markPaid is disabled; post a payment against an open payable');
   } catch (error) {
-    await client.query('ROLLBACK');
     next(error);
-  } finally {
-    client.release();
   }
 };
 
@@ -910,41 +821,12 @@ const listPayments = async (req, res, next) => {
 };
 
 const recordPayablePayment = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'finance.payment.manage', ['finance', 'financeapprover', 'admin']);
     const payableId = Number(req.params.payableId);
-    const { amount, payment_method = null, payment_reference = null, payment_date = null } = req.body || {};
-    const paidAmount = Number(amount);
-    if (!Number.isFinite(paidAmount) || paidAmount <= 0) throw createHttpError(400, 'Valid amount is required');
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-    const payRes = await client.query(`SELECT * FROM ap_payables WHERE id=$1 FOR UPDATE`, [payableId]);
-    if (!payRes.rowCount) throw createHttpError(404, 'Payable not found');
-    const payable = payRes.rows[0];
-    if (paidAmount > Number(payable.open_balance)) throw createHttpError(400, 'Amount exceeds open balance');
-    const payment = await client.query(`INSERT INTO payment_records (request_id, payment_status, payment_reference, payment_method, amount_paid, paid_by, paid_at)
-      VALUES ($1,$7,$2,$3,$4,$5,COALESCE($6::timestamptz, NOW())) RETURNING *`,
-      [payable.request_id, payment_reference, payment_method, paidAmount, req.user.id, payment_date, PAYMENT_STATUS.PAID]);
-    await client.query(`INSERT INTO payment_allocations (payment_record_id, ap_payable_id, amount) VALUES ($1,$2,$3)`, [payment.rows[0].id, payableId, paidAmount]);
-
-    await linkDocuments(client, {
-      requestId: payable.request_id,
-      sourceType: 'ACCOUNTS_PAYABLE',
-      sourceId: payableId,
-      targetType: 'PAYMENT',
-      targetId: payment.rows[0].id,
-      metadata: { amount: paidAmount },
-      createdBy: req.user.id,
-    });
-    const nextBal = Number(payable.open_balance) - paidAmount;
-    const status = nextBal <= 0 ? PAYABLE_STATUS.PAID : PAYABLE_STATUS.PARTIALLY_PAID;
-    await client.query(`UPDATE ap_payables SET open_balance=$2, payable_status=$3 WHERE id=$1`, [payableId, nextBal, status]);
-    await transitionLifecycleState(client, payable.request_id, nextBal <= 0 ? LIFECYCLE_STATES.PAID : LIFECYCLE_STATES.PARTIALLY_PAID, req.user.id, 'Payment allocation recorded');
-    await logFinanceAction(client, payable.request_id, req.user.id, 'PAYMENT_ALLOCATION_CREATED', { payable_id: payableId, amount: paidAmount });
-    await client.query('COMMIT');
-    res.status(201).json({ payment: payment.rows[0], open_balance: nextBal, payable_status: status });
-  } catch (error) { await client.query('ROLLBACK'); next(error);} finally { client.release(); }
+    const result = await paymentService.postPayment({ repository: createTransactionalP2PRepository(pool), payableId, amount: req.body.amount, currency: req.body.currency, paymentReference: req.body.payment_reference, paymentMethod: req.body.payment_method, idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key, actor: req.user });
+    res.status(result.idempotent ? 200 : 201).json(result);
+  } catch (error) { next(error); }
 };
 
 const getDocumentFlow = async (req, res, next) => {

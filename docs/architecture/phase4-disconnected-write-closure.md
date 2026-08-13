@@ -44,3 +44,8 @@ No active live PO receipt path directly updates warehouse balances or `warehouse
 ## Phase 4C invoice/match closure (2026-08-12)
 
 The request-scoped invoice submission, matching, approval, and decline endpoints now delegate to `supplierInvoiceService`. Runtime invoice header/line/result SQL is confined to `connectedP2PRepository`. `procureToPayPersistenceService.insertSupplierInvoice` remains classified **LEGACY / TO_DISABLE** for compatibility but has no live controller caller. Override evidence is append-only; request lifecycle, finance ledger, payable, and payment writers are projections or later-phase authorities.
+## Phase 4D finance closure addendum
+
+Canonical repository writes now cover finance-eligible invoice selection, voucher/payable creation, payment records, allocations, payable synchronization, invoice payment projection, and document links. Controller payment and voucher writes were cut over. `markPaid` is disabled.
+
+Remaining **LEGACY ACTIVE** writers are `postPayableFromInvoice`, `postToInternalLedger`, and the zero-value `markPaymentPending` scheduler. Existing migration/ensure-table DDL is **HISTORICAL/IMPORT**, test fixtures are **TEST**, lifecycle and invoice paid states are **COMPATIBILITY PROJECTION**, and `connectedP2PRepository` is the **CANONICAL REPOSITORY**. Production rollout is blocked until legacy posting/payable routes and the frontend quick action are removed or delegated to the atomic AP posting workflow.

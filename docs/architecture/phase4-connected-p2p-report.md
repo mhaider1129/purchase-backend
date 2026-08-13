@@ -42,3 +42,10 @@ The authority is `public.requests(id INTEGER)`, not `purchase_requests`; invoice
 Prerequisites: backup; reconcile invoice duplicates, NULL PO suppliers, orphan items, duplicate idempotency values and award-like fields; deploy the 2026-03-12/13 foundations; review SQL 006 preflight; then enable adapters. Jest covers fingerprints, locked award ceilings, PO inheritance/wrong supplier, cumulative matching, payments, completion, totals, eligibility and pricing.
 
 No SQL was executed against Supabase.
+## Phase 4D finance connectivity addendum
+
+The intended chain is: **Approved Request → Award → PO → Encumbrance → Receipt → Inventory → Invoice → Match → Finance Verification → AP Liability → Actualization → Payment → Completion**.
+
+Authoritative services are `supplierInvoiceService`, `financeVerificationService`, `accountsPayableService`, `paymentService`, purchase-order/cancellation services, and the connected repository transaction boundary. Invoice/lifecycle/request completion fields and `budget_envelopes.consumed_amount` are derived projections. Remaining legacy paths are listed in the finance cutover and disconnected-write closure documents.
+
+SQL 006 must receive DBA review and pass diagnostics for duplicate payables/idempotency, invalid balances, over-allocation, inconsistent encumbrances, orphan postings, and status-only historical payments. A complete atomic AP posting/partial actualization service and governed account mapping remain rollout prerequisites.

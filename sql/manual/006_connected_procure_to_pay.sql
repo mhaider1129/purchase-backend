@@ -35,6 +35,11 @@ BEGIN
  IF EXISTS (SELECT 1 FROM public.invoice_items ii LEFT JOIN public.supplier_invoices si ON si.id=ii.supplier_invoice_id WHERE si.id IS NULL) THEN RAISE EXCEPTION 'Preflight: orphan invoice items'; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='supplier_invoices' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.supplier_invoices WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate invoice idempotency keys'; END IF; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='payment_records' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.payment_records WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate payment idempotency keys'; END IF; END IF;
+ IF to_regclass('public.ap_payables') IS NOT NULL AND EXISTS (SELECT 1 FROM public.ap_payables WHERE open_balance < 0 OR open_balance > invoice_total) THEN RAISE EXCEPTION 'Preflight: invalid payable open balances'; END IF;
+ IF to_regclass('public.ap_payables') IS NOT NULL AND EXISTS (SELECT 1 FROM public.ap_payables WHERE payable_status IN ('OPEN','PARTIALLY_PAID') GROUP BY supplier_invoice_id HAVING count(*) > 1) THEN RAISE EXCEPTION 'Preflight: duplicate active AP payables per invoice'; END IF;
+ IF to_regclass('public.finance_postings') IS NOT NULL AND EXISTS (SELECT 1 FROM public.finance_postings fp LEFT JOIN public.ap_vouchers av ON av.id=fp.ap_voucher_id WHERE fp.ap_voucher_id IS NOT NULL AND av.id IS NULL) THEN RAISE EXCEPTION 'Preflight: orphan finance postings'; END IF;
+ IF to_regclass('public.payment_allocations') IS NOT NULL AND EXISTS (SELECT 1 FROM public.ap_payables ap LEFT JOIN LATERAL (SELECT COALESCE(SUM(pa.amount),0) paid FROM public.payment_allocations pa JOIN public.payment_records pr ON pr.id=pa.payment_record_id WHERE pa.ap_payable_id=ap.id AND pr.payment_status='paid') p ON TRUE WHERE p.paid > ap.invoice_total) THEN RAISE EXCEPTION 'Preflight: allocated payments exceed invoice totals'; END IF;
+ IF EXISTS (SELECT 1 FROM public.payment_records pr WHERE pr.payment_status='paid' AND NOT EXISTS (SELECT 1 FROM public.payment_allocations pa WHERE pa.payment_record_id=pr.id)) THEN RAISE EXCEPTION 'Preflight: historical status-only PAID payment records require reconciliation'; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='goods_receipts' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.goods_receipts WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate goods receipt idempotency keys'; END IF; END IF;
  IF EXISTS (SELECT 1 FROM public.goods_receipts WHERE receipt_number IS NOT NULL GROUP BY receipt_number HAVING count(*) > 1) THEN RAISE EXCEPTION 'Preflight: duplicate goods receipt numbers'; END IF;
  -- Schema generations differ: unit_cost may exist while supplier_name may not.
@@ -93,6 +98,9 @@ CREATE INDEX IF NOT EXISTS po_items_award_idx ON public.purchase_order_items(awa
 ALTER TABLE public.commitment_ledger ADD COLUMN IF NOT EXISTS purchase_order_id BIGINT REFERENCES public.purchase_orders(id);
 ALTER TABLE public.commitment_ledger ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE public.commitment_ledger ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (state IN ('ACTIVE','ACTUALIZED','RELEASED','REVERSED'));
+ALTER TABLE public.commitment_ledger ADD COLUMN IF NOT EXISTS parent_commitment_id BIGINT REFERENCES public.commitment_ledger(id);
+ALTER TABLE public.commitment_ledger ADD COLUMN IF NOT EXISTS supplier_invoice_id BIGINT REFERENCES public.supplier_invoices(id);
+ALTER TABLE public.commitment_ledger ADD COLUMN IF NOT EXISTS ap_voucher_id BIGINT REFERENCES public.ap_vouchers(id);
 CREATE UNIQUE INDEX IF NOT EXISTS commitment_ledger_idempotency_uq ON public.commitment_ledger(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_po_commitment_idx ON public.commitment_ledger(purchase_order_id) WHERE stage='encumbrance' AND state='ACTIVE';
 
@@ -123,6 +131,14 @@ CREATE INDEX IF NOT EXISTS invoice_match_override_history_idx ON public.invoice_
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS supplier_invoice_id BIGINT REFERENCES public.supplier_invoices(id);
 ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS reversal_of_payment_id BIGINT REFERENCES public.payment_records(id);
+ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS payload_fingerprint CHAR(64);
+ALTER TABLE public.payment_records ADD COLUMN IF NOT EXISTS currency VARCHAR(3);
+ALTER TABLE public.ap_vouchers ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE public.ap_vouchers ADD COLUMN IF NOT EXISTS payload_fingerprint CHAR(64);
+ALTER TABLE public.ap_payables ADD COLUMN IF NOT EXISTS currency VARCHAR(3);
+CREATE UNIQUE INDEX IF NOT EXISTS ap_voucher_idempotency_uq ON public.ap_vouchers(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_payable_per_invoice_uq ON public.ap_payables(supplier_invoice_id) WHERE payable_status IN ('OPEN','PARTIALLY_PAID');
+CREATE INDEX IF NOT EXISTS payment_allocation_payable_idx ON public.payment_allocations(ap_payable_id);
 CREATE UNIQUE INDEX IF NOT EXISTS payment_idempotency_uq ON public.payment_records(idempotency_key) WHERE idempotency_key IS NOT NULL;
 ALTER TABLE public.goods_receipts ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
 ALTER TABLE public.goods_receipts ADD COLUMN IF NOT EXISTS payload_fingerprint CHAR(64);

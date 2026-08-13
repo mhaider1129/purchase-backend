@@ -1,5 +1,46 @@
 # Phase 4 connected procure-to-pay report
 
+## Final RFx pricing correction (2026-08-13)
+
+The audited quotation model is aggregate-only. `rfx_responses` stores one
+nullable response-level `bid_amount NUMERIC` plus free-form `response_data
+JSONB`. There is no governed RFx response-item relation, requested-item foreign
+key, submitted line quantity, line unit price, or line currency. The submission
+endpoint and supplier portal accept one aggregate bid, notes, and generic
+response data; comparison ranks and displays that aggregate. Attachments are
+document evidence, not relational line-price facts.
+
+RFx is therefore an intentional whole-request, one-winning-supplier workflow,
+not an item-level split-award workflow. The broader canonical award/PO model
+continues to support split awards. A future compatible extension should add an
+`rfx_response_items` relation with response and requested-item foreign keys,
+quoted quantity, unit price, currency, and only those adjustments, lead-time,
+and note facts governed by RFx rules. SQL 006 was not extended because current
+RFx submission and comparison do not capture or govern those facts.
+
+Award completion now rejects every aggregate-only multi-item response with
+`RFX_LINE_PRICING_REQUIRED`. A single-item response may derive unit price from
+the aggregate bid and governed quantity using the fixed-scale BigInt decimal
+helpers; non-exact or non-reconciling division fails with
+`RFX_PRICING_INCONSISTENT`. The canonical award retains the real response ID as
+`source_id`, `source_type='QUOTATION'`, supplier, actor, selection reason, and a
+response/item idempotency key. Completion creates canonical awards and a
+`PO_DRAFT`; it neither issues the PO nor encumbers budget. The ordinary submit,
+approve, and issue workflow remains authoritative.
+
+Retry lookup is keyed by `(rfx_id, rfx_response_id)`, rather than an arbitrary
+PO for the request. The same winner returns its existing PO; a different active
+winner is rejected with `RFX_WINNER_CONFLICT`. Executable tests cover exact
+single-item pricing and total reconciliation, aggregate multi-item rejection,
+rejection rather than decimal rounding, and `DELETE FROM` canonical-writer
+detection. Existing connected-P2P tests cover eligibility, award ceilings,
+provenance, draft creation, no issue/encumbrance at draft, and normal lifecycle.
+
+With fabricated RFx item pricing removed, no repository-level Phase 4 blocker
+remains. Phase 4 is complete at repository level. SQL 006 is unchanged and is
+ready for manual DBA-reviewed execution subject to its documented backup,
+preflight, reconciliation, and live-schema gates. No SQL was executed.
+
 ## Architecture findings and new flow
 The prior application had usable request assignment, RFx/evaluation, contracts, budget, PO/receipt/invoice/payment documents, canonical inventory, audit, and outbox foundations, but controllers connected them through mutable request cost/name/status fields and independent calculations. The authoritative flow is now defined as: approved request/assignment → sourcing → durable split award → provenance-backed PO → atomic release/commitment → typed receipt → canonical inventory when applicable → supplier invoice → exact structured two/three-way match → AP approval → idempotent partial/final payment → derived closure.
 

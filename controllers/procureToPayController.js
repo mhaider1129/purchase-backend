@@ -280,73 +280,11 @@ const cancelPurchaseOrder = async (req, res, next) => {
 };
 
 const closePurchaseOrder = async (req, res, next) => {
-  const client = await pool.connect();
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['buyer', 'scm', 'procurementspecialist', 'admin']);
-    const poId = Number(req.params.poId);
-    const reason = String(req.body?.reason || '').trim();
-    await client.query('BEGIN');
-    await ensureProcureToPayTables(client);
-
-    const poRes = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [poId]);
-    if (!poRes.rowCount) {
-      throw createHttpError(404, 'Purchase order not found');
-    }
-
-    const itemsRes = await client.query(
-      `SELECT COALESCE(SUM(quantity), 0) AS ordered_quantity,
-              COALESCE(SUM(received_quantity), 0) AS received_quantity
-         FROM purchase_order_items
-        WHERE purchase_order_id = $1`,
-      [poId]
-    );
-
-    const totals = itemsRes.rows[0] || {};
-    const derivedStatus = derivePurchaseOrderStatus({
-      currentStatus: poRes.rows[0].status,
-      orderedQuantity: totals.ordered_quantity,
-      receivedQuantity: totals.received_quantity,
-      approvedAt: poRes.rows[0].approved_at,
-      issuedAt: poRes.rows[0].issued_at || poRes.rows[0].issue_event_at,
-    });
-
-    if (derivedStatus !== 'PO_DELIVERED' && !reason) {
-      throw createHttpError(400, 'Reason is required to close a PO before full delivery');
-    }
-
-    const updated = await client.query(
-      `UPDATE purchase_orders
-          SET status = 'PO_CLOSED',
-              amendment_reason = COALESCE($2, amendment_reason),
-              updated_at = NOW()
-        WHERE id = $1
-        RETURNING *`,
-      [poId, reason || null]
-    );
-
-    const po = poRes.rows[0];
-    if (po.request_id) {
-      await transitionLifecycleState(client, po.request_id, LIFECYCLE_STATES.PO_CLOSED, req.user.id, 'Purchase order closed', reason ? { reason } : null);
-      await logFinanceAction(client, po.request_id, req.user.id, 'PURCHASE_ORDER_CLOSED', { purchase_order_id: poId, reason: reason || null });
-    }
-
-    await client.query('COMMIT');
-    await sendRequestWorkflowEmail({
-      requestId: po.request_id,
-      subject: `Purchase order closed for request #${po.request_id}`,
-      message: [
-        `${req.user?.name || 'A procurement user'} closed purchase order ${updated.rows[0].po_number || `#${poId}`} for request #${po.request_id}.`,
-        reason ? `Reason: ${reason}` : 'The purchase order was closed after delivery.',
-      ].join('\n'),
-      logLabel: 'purchase order closure notification',
-    });
-    res.json({ purchase_order: annotatePurchaseOrder(updated.rows[0]) });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
+    const result = await purchaseOrderService.closePurchaseOrder({ repository: createTransactionalP2PRepository(pool), purchaseOrderId: parsePurchaseOrderId(req.params.poId), reason: req.body?.reason, actor: req.user });
+    res.json({ purchase_order: annotatePurchaseOrder(result.purchaseOrder), commitment: result.commitment });
+  } catch (error) { next(error); }
 };
 
 const createPurchaseOrder = async (req, res, next) => {

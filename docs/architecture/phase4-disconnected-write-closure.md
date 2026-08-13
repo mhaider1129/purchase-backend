@@ -64,3 +64,15 @@ remaining encumbrance, consumed projection, and payable activation; payment owns
 the payment header/allocation and balance projection. Read-only reporting queries
 in controllers remain non-authoritative. Lifecycle projection writes remain in
 the lifecycle service/repository boundaries and are not accounting evidence.
+
+## Final closure correction (2026-08-13)
+
+The authoritative connected sequence is **Approved Request → Award → PO → Encumbrance → Receipt → Inventory → Invoice → Match → Finance Verification → AP Voucher → AP Posting → Actualization → Payable → Payment → Close**. PO close is no longer a controller-owned transaction: the controller delegates to `purchaseOrderService`, which uses `connectedP2PRepository` for the PO lock, accepted receipt totals, sole active encumbrance lock/release, consumed projection synchronization, and PO close write. Audit and outbox writes remain inside the same transaction. Retrying `PO_CLOSED` produces no second release or event.
+
+The remaining encumbrance is released in place; actualization rows are never released or reversed. Thus a 1,000 commitment with 900 of active actual evidence closes by changing only the remaining 100 encumbrance to `RELEASED`, leaving consumed budget at 900 and restoring 100 of availability. A fully actualized PO has no release effect.
+
+An updated production SQL-writer search still finds two active/non-test writers outside the canonical connected services/repository: the RFx portal controller directly inserts a PO, and `financeCoreService` directly inserts commitment-ledger entries for its older finance flow. The retained `procureToPayPersistenceService` receipt/invoice writers remain legacy/to-disable and are not known to have a live controller caller. Therefore this report does not claim zero remaining legacy code, and canonical-writer closure remains a rollout blocker until those paths are delegated, disabled, or proven unreachable.
+
+SQL 006 remains manual-only. Its non-mutating preflight uses catalog checks plus dynamic SQL for self-introduced optional columns, especially `commitment_ledger.ap_voucher_id`, so a pre-006 schema does not bind an absent column. Subject to DBA review, backup, legacy-data reconciliation, and live-schema confirmation, SQL 006 is ready for manual execution; application rollout is still blocked by the writer paths above.
+
+No SQL was executed against Supabase.

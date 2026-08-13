@@ -39,8 +39,27 @@ BEGIN
  IF to_regclass('public.ap_payables') IS NOT NULL AND EXISTS (SELECT 1 FROM public.ap_payables WHERE payable_status IN ('OPEN','PARTIALLY_PAID') GROUP BY supplier_invoice_id HAVING count(*) > 1) THEN RAISE EXCEPTION 'Preflight: duplicate active AP payables per invoice'; END IF;
  IF to_regclass('public.finance_postings') IS NOT NULL AND EXISTS (SELECT 1 FROM public.finance_postings fp LEFT JOIN public.ap_vouchers av ON av.id=fp.ap_voucher_id WHERE fp.ap_voucher_id IS NOT NULL AND av.id IS NULL) THEN RAISE EXCEPTION 'Preflight: orphan finance postings'; END IF;
  IF to_regclass('public.ap_payables') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='ap_payables' AND column_name='ap_voucher_id') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.ap_payables WHERE ap_voucher_id IS NULL)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: payables without vouchers require manual reconciliation'; END IF; END IF;
- IF to_regclass('public.finance_postings') IS NOT NULL AND to_regclass('public.commitment_ledger') IS NOT NULL AND EXISTS (SELECT 1 FROM public.finance_postings fp WHERE fp.posting_status='posted' AND fp.ap_voucher_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.commitment_ledger cl WHERE cl.ap_voucher_id=fp.ap_voucher_id AND cl.stage='actual')) THEN RAISE EXCEPTION 'Preflight: finance postings without actualization require manual reconciliation'; END IF;
- IF to_regclass('public.commitment_ledger') IS NOT NULL AND EXISTS (SELECT 1 FROM public.commitment_ledger WHERE stage='encumbrance' AND state='ACTIVE' AND amount < 0) THEN RAISE EXCEPTION 'Preflight: negative active encumbrance'; END IF;
+ -- ap_voucher_id and state are introduced later by this migration. Catalog
+ -- guards alone do not make static PL/pgSQL expressions safe: PostgreSQL can
+ -- bind every referenced column before evaluating an IF branch. Execute only
+ -- after all columns needed by each diagnostic are known to exist.
+ IF to_regclass('public.finance_postings') IS NOT NULL
+    AND to_regclass('public.commitment_ledger') IS NOT NULL
+    AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='finance_postings' AND column_name='ap_voucher_id')
+    AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name='ap_voucher_id')
+ THEN
+   EXECUTE $preflight$SELECT EXISTS (
+     SELECT 1 FROM public.finance_postings fp
+     WHERE fp.posting_status='posted' AND fp.ap_voucher_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM public.commitment_ledger cl
+                       WHERE cl.ap_voucher_id=fp.ap_voucher_id AND cl.stage='actual')
+   )$preflight$ INTO duplicate_found;
+   IF duplicate_found THEN RAISE EXCEPTION 'Preflight: finance postings without actualization require manual reconciliation'; END IF;
+ END IF;
+ IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name='state') THEN
+   EXECUTE $preflight$SELECT EXISTS (SELECT 1 FROM public.commitment_ledger WHERE stage='encumbrance' AND state='ACTIVE' AND amount < 0)$preflight$ INTO duplicate_found;
+   IF duplicate_found THEN RAISE EXCEPTION 'Preflight: negative active encumbrance'; END IF;
+ END IF;
  IF to_regclass('public.payment_allocations') IS NOT NULL AND EXISTS (SELECT 1 FROM public.ap_payables ap LEFT JOIN LATERAL (SELECT COALESCE(SUM(pa.amount),0) paid FROM public.payment_allocations pa JOIN public.payment_records pr ON pr.id=pa.payment_record_id WHERE pa.ap_payable_id=ap.id AND pr.payment_status='paid') p ON TRUE WHERE p.paid > ap.invoice_total) THEN RAISE EXCEPTION 'Preflight: allocated payments exceed invoice totals'; END IF;
  IF EXISTS (SELECT 1 FROM public.payment_records pr WHERE pr.payment_status='paid' AND NOT EXISTS (SELECT 1 FROM public.payment_allocations pa WHERE pa.payment_record_id=pr.id)) THEN RAISE EXCEPTION 'Preflight: historical status-only PAID payment records require reconciliation'; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='goods_receipts' AND column_name='idempotency_key') THEN EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.goods_receipts WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key HAVING count(*) > 1)' INTO duplicate_found; IF duplicate_found THEN RAISE EXCEPTION 'Preflight: duplicate goods receipt idempotency keys'; END IF; END IF;

@@ -56,6 +56,7 @@ const createConnectedP2PRepository = (client) => ({
   markPurchaseOrderApproved: (id,actorId) => one(client,"UPDATE purchase_orders SET status='PO_APPROVED',approval_required=TRUE,approved_by=$2,approved_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *",[id,actorId]),
   markPurchaseOrderIssued: (id,t,actorId) => one(client,"UPDATE purchase_orders SET total_amount=$2,status='PO_ISSUED',issued_at=NOW(),issue_event_at=NOW(),issued_to_supplier_at=NOW(),issued_by=$3,updated_at=NOW() WHERE id=$1 RETURNING *",[id,t.grand_total,actorId]),
   markPurchaseOrderCancelled: (id,reason) => one(client,"UPDATE purchase_orders SET status='PO_CANCELLED',cancellation_reason=$2,updated_at=NOW() WHERE id=$1 RETURNING *",[id,reason]),
+  markPurchaseOrderClosed: (id,reason) => one(client,"UPDATE purchase_orders SET status='PO_CLOSED',amendment_reason=COALESCE($2,amendment_reason),updated_at=NOW() WHERE id=$1 RETURNING *",[id,reason]),
   hasPurchaseOrderReceipts: async (id) => Boolean(await one(client, `SELECT 1 FROM goods_receipts gr JOIN goods_receipt_items gri ON gri.goods_receipt_id=gr.id
     WHERE gr.purchase_order_id=$1 AND COALESCE(gri.received_quantity,0)>0 LIMIT 1`, [id])),
 

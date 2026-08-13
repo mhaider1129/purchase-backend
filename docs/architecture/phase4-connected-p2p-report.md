@@ -33,6 +33,18 @@ Operationalize AP/accounting: governed exception/tolerance approval, credit/debi
 
 No SQL was executed against Supabase.
 
+## Final Phase 4 closure correction (2026-08-13)
+
+The final authoritative chain is **Approved Request → Award → PO → Encumbrance → Receipt → Inventory → Invoice → Match → Finance Verification → AP Voucher → AP Posting → Actualization → Payable → Payment → Close**.
+
+PO close now belongs to `purchaseOrderService` and the connected repository transaction. It locks the PO, derives full delivery from ordered/accepted receipt facts, requires a governed reason for an early close, locks and releases only the remaining active `stage='encumbrance'` row, leaves every `stage='actual'` row unchanged, repairs the consumed projection from active actual evidence, writes audit/outbox evidence, and then commits `PO_CLOSED`. A closed retry returns before financial or event writes. A fully actualized PO with no active encumbrance closes without fabricating a release.
+
+The production-writer search does **not** support claiming zero legacy code. `controllers/rfxPortalController.js` still directly inserts purchase orders, and `financeCoreService.js` remains a pre-existing direct commitment-ledger writer. `procureToPayPersistenceService` also retains legacy receipt/invoice SQL, although prior call-site audits found no live cut-over controller caller. These are remaining production-surface risks outside the connected repository and should be removed, delegated, or conclusively proven unreachable before declaring all Phase 4 financial-effect writing canonical.
+
+SQL 006 preflight now catalog-guards and dynamically executes diagnostics involving columns introduced by SQL 006, including `commitment_ledger.ap_voucher_id` and `commitment_ledger.state`; the complete requested self-introduced-column list was audited. This makes review of SQL 006 safe for a pre-006 schema without allowing preflight to mutate it. Manual execution is recommended only after DBA review, backup, prerequisite reconciliation, and confirmation of live schema/FKs; it was not executed in this work session.
+
+No SQL was executed against Supabase.
+
 ## Connection-and-schema correction addendum (2026-08-11)
 
 The authority is `public.requests(id INTEGER)`, not `purchase_requests`; invoice PO linkage is `purchase_order_id`. Document PKs are BIGINT while request, item, supplier and user PKs are INTEGER. SQL 006 fails if a base table is absent, preflights invalid legacy data, extends `commitment_ledger`, and creates no parallel budget/payment subsystem.

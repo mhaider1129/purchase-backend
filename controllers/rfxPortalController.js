@@ -4,6 +4,7 @@ const { ensureSuppliersTable, findOrCreateSupplierByName } = require('./supplier
 const { createAward } = require('../services/procurementAwardService');
 const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
 const { createConnectedP2PRepository } = require('../repositories/connectedP2PRepository');
+const { priceAggregateRfxResponse } = require('../services/rfxAwardPricingService');
 
 let rfxTablesEnsured = false;
 let ensuringPromise = null;
@@ -612,15 +613,11 @@ const awardRfxResponse = async (req, res, next) => {
     }
 
     const existingPo = await client.query(
-      `SELECT * FROM purchase_orders WHERE request_id = $1 LIMIT 1`,
-      [requestId]
+      `SELECT * FROM purchase_orders WHERE rfx_id = $1 AND rfx_response_id = $2 ORDER BY id LIMIT 1`,
+      [rfxId, responseId]
     );
 
     if (existingPo.rowCount > 0) {
-      if (String(existingPo.rows[0].rfx_response_id || '') !== String(responseId)) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(409, `Request already has a purchase order (${existingPo.rows[0].po_number})`));
-      }
       await client.query('COMMIT');
       return res.json({ message: 'Supplier award already recorded', rfx_id: rfxId, request_id: requestId,
         awarded_response_id: responseId, purchase_order: existingPo.rows[0], idempotent: true });
@@ -629,24 +626,36 @@ const awardRfxResponse = async (req, res, next) => {
     const itemResult = await client.query(
       `SELECT * FROM requested_items WHERE request_id=$1 ORDER BY id FOR UPDATE`, [requestId]
     );
-    if (!itemResult.rowCount) throw createHttpError(409, 'RFX request has no approved request items to award');
-    const totalQuantity = itemResult.rows.reduce((sum, item) => sum + Number(item.approved_quantity ?? item.quantity ?? 0), 0);
-    if (!(totalQuantity > 0) || !(Number(responseRow.bid_amount) >= 0)) throw createHttpError(409, 'Winning quotation requires a valid price and approved quantity');
+    const conflictingPo = await client.query(
+      `SELECT po.* FROM purchase_orders po
+        WHERE po.rfx_id = $1 AND po.rfx_response_id IS DISTINCT FROM $2
+          AND po.status NOT IN ('PO_CANCELLED', 'CANCELLED')
+        ORDER BY po.id LIMIT 1 FOR UPDATE`,
+      [rfxId, responseId]
+    );
+    if (conflictingPo.rowCount) {
+      throw Object.assign(createHttpError(409, 'RFX already has a different canonical winning response'), {
+        code: 'RFX_WINNER_CONFLICT',
+      });
+    }
+    const pricedItems = priceAggregateRfxResponse({
+      bidAmount: responseRow.bid_amount,
+      requestItems: itemResult.rows,
+      currency: 'USD',
+    });
 
     // The connected repository is bound to this RFx transaction.  Service-level
     // transactions therefore compose without opening an independent connection.
     const repository = createConnectedP2PRepository(client);
     repository.withTransaction = async (work) => work(repository);
     const actor = { id: req.user?.id || null };
-    const unitPrice = (Number(responseRow.bid_amount) / totalQuantity).toFixed(4);
     const awards = [];
-    for (const item of itemResult.rows) {
-      const quantity = String(item.approved_quantity ?? item.quantity);
-      awards.push(await createAward({ repository, requestItem: item,
+    for (const priced of pricedItems) {
+      awards.push(await createAward({ repository, requestItem: priced.requestItem,
         supplier: { id: responseRow.supplier_id }, actor,
-        input: { awarded_quantity: quantity, unit_price: unitPrice, currency: 'USD',
+        input: { awarded_quantity: priced.quantity, unit_price: priced.unitPrice, currency: priced.currency,
           source_type: 'QUOTATION', source_id: String(responseId), selection_reason: awardNotes || `Winning RFx response ${responseId}`,
-          idempotency_key: `rfx:${rfxId}:response:${responseId}:item:${item.id}` } }));
+          idempotency_key: `rfx:${rfxId}:response:${responseId}:item:${priced.requestItem.id}` } }));
     }
     const poRow = await createPurchaseOrderFromAwards({ repository,
       awardIds: awards.map((award) => award.id), actor,

@@ -23,7 +23,7 @@ const productionFiles = (directory) => fs.readdirSync(directory, { withFileTypes
 
 describe('Phase 4 canonical SQL writer boundary', () => {
   test.each(tables)('%s mutations are confined to the connected repository', (table) => {
-    const mutation = new RegExp(`\\b(?:INSERT\\s+INTO|UPDATE)\\s+${table}\\b`, 'i');
+    const mutation = new RegExp(`\\b(?:INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)\\s+${table}\\b`, 'i');
     const offenders = productionFiles(root)
       .filter((file) => file !== approvedWriter)
       .filter((file) => mutation.test(fs.readFileSync(file, 'utf8')))

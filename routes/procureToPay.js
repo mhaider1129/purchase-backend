@@ -38,6 +38,7 @@ const {
   createApVoucher,
   verifyFinanceRecord,
   postToInternalLedger,
+  verifyApVoucher,
   markPaymentPending,
   markPaid,
 } = require('../controllers/procureToPayController');
@@ -72,6 +73,7 @@ router.post('/ap-invoices/:invoiceId/post-payable', postPayableFromInvoice);
 router.post('/accounts-payable/:payableId/payments', recordPayablePayment);
 router.get('/document-flow/request/:requestId', getDocumentFlow);
 router.post('/requests/:requestId/vouchers', createApVoucher);
+router.post('/ap-vouchers/:voucherId/verify', verifyApVoucher);
 router.post('/requests/:requestId/verify', verifyFinanceRecord);
 router.post('/requests/:requestId/post-ledger', postToInternalLedger);
 router.post('/requests/:requestId/payment-pending', markPaymentPending);

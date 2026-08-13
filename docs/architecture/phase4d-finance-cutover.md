@@ -23,3 +23,30 @@ The remaining production blockers are the direct `postPayableFromInvoice`, `post
 ## Permissions
 
 Existing permission codes are retained: `finance.verify`, `finance.voucher.create`, `finance.voucher.verify`, `finance.voucher.post`, `finance.payment.manage`, and `finance.override-mismatch`. Existing controller fallback roles are compatibility behavior, not new finance role shortcuts.
+# Final Phase 4D accounting bridge
+
+The selected lifecycle is **Model A**: finance verification permits creation of a
+`draft` voucher, verification changes only that voucher to `verified`, and the
+canonical AP posting transaction creates the `OPEN` payable only when it changes
+the voucher to `posted`. `ap_payables.ap_voucher_id` makes invoice → voucher →
+payable explicit. Draft and verified vouchers therefore have no payment-eligible
+liability.
+
+`apPostingService.postApVoucher` is the sole AP posting orchestration boundary. It
+uses a posting-specific idempotency key and operation lock, derives liability and
+currency from the locked invoice/voucher, creates the finance posting and an
+immutable `actual` commitment row, and reduces the locked mutable active
+encumbrance. Thus a 1,000 commitment actualized by 600 is represented as 600
+actual plus 400 remaining—not 1,600 consumed. `budget_envelopes.consumed_amount`
+is a repairable projection of active `actual` rows and is synchronized only here.
+
+Payments require an `OPEN`/`PARTIALLY_PAID` payable linked to a `posted` voucher
+and an authoritative persisted payable currency. Payment allocations, rather
+than payment header amounts, are settlement truth. The legacy pending-payment
+and status-only paid endpoints return 410. Request finance verification first
+checks every non-terminal invoice and reports unresolved IDs; cancelled/voided
+invoices are excluded.
+
+Legacy payables without vouchers, paid headers without allocations, and finance
+postings without actualizations are reported by SQL 006 preflight for manual
+reconciliation. The migration deliberately does not fabricate accounting events.

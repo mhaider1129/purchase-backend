@@ -24,8 +24,14 @@ const verifyInvoiceForFinance = ({ repository, invoiceId, actor, auditService = 
   });
 
 const verifyRequestForFinance = async ({ repository, requestId, actor, auditService, outbox }) => {
-  const ids = await repository.loadFinanceEligibleInvoiceIdsForRequest(requestId);
-  if (!ids.length) throw fail('At least one financially active supplier invoice is required', 'NO_FINANCE_ELIGIBLE_INVOICES');
+  const readiness = await repository.loadRequestFinanceReadiness(requestId);
+  if (!readiness.activeInvoiceCount) throw fail('At least one financially active supplier invoice is required', 'NO_FINANCE_ELIGIBLE_INVOICES');
+  if (readiness.unresolvedInvoiceIds.length) {
+    const error = fail('All active invoices must have an approved effective match', 'REQUEST_FINANCE_NOT_READY', 409);
+    error.unresolvedInvoiceIds = readiness.unresolvedInvoiceIds;
+    throw error;
+  }
+  const ids = readiness.approvedInvoiceIds;
   const invoices = [];
   for (const invoiceId of ids) invoices.push((await verifyInvoiceForFinance({ repository, invoiceId, actor, auditService, outbox })).invoice);
   return { invoices };

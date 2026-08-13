@@ -39,7 +39,10 @@ const postPayment = ({ repository, payableId, invoiceId, amount, currency, payme
     const payable = await tx.lockPayable(payableId);
     if (!payable) throw fail('Payable not found', 'PAYABLE_NOT_FOUND', 404);
     if (!['OPEN', 'PARTIALLY_PAID'].includes(payable.payable_status)) throw fail('Payable is not open for payment', 'PAYABLE_NOT_OPEN', 409);
-    if (String(payable.currency || currency).toUpperCase() !== normalized.currency) throw fail('Payment currency does not match payable', 'PAYMENT_CURRENCY_MISMATCH', 409);
+    const authority = await tx.loadPayablePostingAuthority(payable.id);
+    if (!authority || String(authority.voucher_status).toLowerCase() !== 'posted') throw fail('AP liability has not been posted', 'PAYABLE_NOT_POSTED', 409);
+    if (!payable.currency) throw fail('Payable currency is unavailable', 'PAYABLE_CURRENCY_UNAVAILABLE', 409);
+    if (String(payable.currency).toUpperCase() !== normalized.currency) throw fail('Payment currency does not match payable', 'PAYMENT_CURRENCY_MISMATCH', 409);
     const paid = await tx.sumPostedPayments(payable.id);
     const remaining = subtractDecimal(payable.invoice_total, paid);
     if (compareDecimal(amount, '0') <= 0 || compareDecimal(amount, remaining) > 0) throw fail('Payment exceeds open payable balance', 'PAYMENT_AMOUNT_EXCEEDED', 409);

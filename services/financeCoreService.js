@@ -138,62 +138,6 @@ const assertBudgetCanCover = async (client, {
   return { envelope: coverage.envelope, snapshot: coverage.snapshot };
 };
 
-const recordCommitment = async (client, {
-  requestId,
-  budgetEnvelopeId,
-  stage,
-  amount,
-  currency = 'USD',
-  sourceType = null,
-  sourceId = null,
-  notes = null,
-  actorId = null,
-}) => {
-  const normalizedAmount = Number(amount) || 0;
-  if (normalizedAmount <= 0) {
-    return null;
-  }
-
-  const { rows } = await client.query(
-    `INSERT INTO commitment_ledger (
-      request_id,
-      budget_envelope_id,
-      stage,
-      amount,
-      currency,
-      source_type,
-      source_id,
-      notes,
-      actor_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-    RETURNING *`,
-    [
-      requestId,
-      budgetEnvelopeId,
-      stage,
-      normalizedAmount,
-      currency,
-      sourceType,
-      sourceId,
-      notes,
-      actorId,
-    ]
-  );
-
-  if (stage === 'actual') {
-    await client.query(
-      `UPDATE budget_envelopes
-          SET consumed_amount = consumed_amount + $2,
-              updated_at = NOW()
-        WHERE id = $1`,
-      [budgetEnvelopeId, normalizedAmount]
-    );
-  }
-
-  return rows[0];
-};
-
-
 const createJournalEntry = async (client, {
   requestId = null,
   journalType,
@@ -339,7 +283,6 @@ module.exports = {
   getBudgetSnapshot,
   evaluateBudgetCoverage,
   assertBudgetCanCover,
-  recordCommitment,
   createJournalEntry,
   postProcureToPayAccrual,
 };

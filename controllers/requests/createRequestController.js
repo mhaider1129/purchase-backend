@@ -18,7 +18,6 @@ const { ensureRequestedItemFinancialsTable } = require("../../utils/ensureReques
 const ensureRequestedItemUnitOfMeasureColumn = require("../../utils/ensureRequestedItemUnitOfMeasureColumn");
 const {
   evaluateBudgetCoverage,
-  recordCommitment,
 } = require("../../services/financeCoreService");
 const { validateRequestItemIdentity, auditItemMaster } = require('../../services/procurementItemIdentityService');
 
@@ -810,21 +809,9 @@ const createRequest = async (req, res, next) => {
         currency: 'USD',
       });
 
-      if (budgetCoverage.envelope) {
-        await recordCommitment(client, {
-          requestId: request.id,
-          budgetEnvelopeId: budgetCoverage.envelope.id,
-          stage: 'reservation',
-          amount: estimatedCost,
-          currency: 'USD',
-          sourceType: 'purchase_request',
-          sourceId: String(request.id),
-          notes: budgetCoverage.isOverBudget
-            ? `Over-budget reservation from purchase request ${request.id}`
-            : `Budget reservation from purchase request ${request.id}`,
-          actorId: req.user.id,
-        });
-      }
+      // Request estimates are advisory.  Financial authority begins when the
+      // canonical PO issue service creates its encumbrance; recording both here
+      // would double count the same demand.
     }
 
     if (request_type !== "Warehouse Supply") {

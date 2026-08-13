@@ -65,11 +65,32 @@ const createConnectedP2PRepository = (client) => ({
   insertEncumbrance: (c) => one(client,`INSERT INTO commitment_ledger (request_id,budget_envelope_id,purchase_order_id,stage,state,amount,currency,source_type,source_id,idempotency_key,actor_id)
     VALUES ($1,$2,$3,'encumbrance','ACTIVE',$4,$5,'purchase_order',$3::text,$6,$7) RETURNING *`,[c.request_id,c.budget_envelope_id,c.purchase_order_id,c.amount,c.currency,c.idempotency_key,c.actor_id]),
   releaseCommitment: (id) => one(client,"UPDATE commitment_ledger SET state='RELEASED' WHERE id=$1 AND stage='encumbrance' AND state='ACTIVE' RETURNING *",[id]),
-  lockActivePoEncumbrance: (id) => one(client,"SELECT * FROM commitment_ledger WHERE purchase_order_id=$1 AND stage='encumbrance' AND state='ACTIVE' ORDER BY id LIMIT 1 FOR UPDATE",[id]),
-  reduceActiveEncumbrance: (id,amount) => one(client,"UPDATE commitment_ledger SET amount=$2 WHERE id=$1 AND stage='encumbrance' AND state='ACTIVE' RETURNING *",[id,amount]),
-  insertCommitmentActualization: (c) => one(client,`INSERT INTO commitment_ledger (request_id,budget_envelope_id,purchase_order_id,stage,state,amount,currency,source_type,source_id,idempotency_key,actor_id,supplier_invoice_id,ap_voucher_id) VALUES ($1,$2,$3,'actual','ACTIVE',$4,$5,'ap_voucher',$6::text,$7,$8,$9,$6) RETURNING *`,[c.request_id,c.budget_envelope_id,c.purchase_order_id,c.amount,c.currency,c.ap_voucher_id,c.idempotency_key,c.actor_id,c.supplier_invoice_id]),
-  findActualizationByVoucher: (id) => one(client,"SELECT * FROM commitment_ledger WHERE ap_voucher_id=$1 AND stage='actual'",[id]),
-  synchronizeBudgetConsumedProjection: (id) => one(client,`UPDATE budget_envelopes be SET consumed_amount=(SELECT COALESCE(SUM(amount),0) FROM commitment_ledger WHERE budget_envelope_id=be.id AND stage='actual' AND state='ACTIVE') WHERE be.id=$1 RETURNING *`,[id]),
+  async lockActivePoEncumbrance(id) {
+    const rows = (await client.query("SELECT * FROM commitment_ledger WHERE purchase_order_id=$1 AND stage='encumbrance' AND state='ACTIVE' FOR UPDATE", [id])).rows;
+    if (rows.length > 1) throw Object.assign(new Error(`Multiple active encumbrances exist for purchase order ${id}`), { code: 'MULTIPLE_ACTIVE_PO_ENCUMBRANCES' });
+    return rows[0] || null;
+  },
+  // The locked row is reduced atomically.  A fully consumed encumbrance is
+  // ACTUALIZED so a zero row can never block completion or availability.
+  reduceActiveEncumbrance: (id,reduction) => one(client,`UPDATE commitment_ledger
+    SET amount=amount-$2, state=CASE WHEN amount-$2=0 THEN 'ACTUALIZED' ELSE 'ACTIVE' END
+    WHERE id=$1 AND stage='encumbrance' AND state='ACTIVE' AND amount >= $2 AND $2 >= 0
+    RETURNING *`,[id,reduction]),
+  insertCommitmentActualization: (c) => one(client,`INSERT INTO commitment_ledger
+    (request_id,budget_envelope_id,purchase_order_id,stage,state,amount,currency,source_type,source_id,parent_commitment_id,supplier_invoice_id,ap_voucher_id,idempotency_key,actor_id)
+    VALUES ($1,$2,$3,'actual','ACTIVE',$4,$5,'ap_voucher',$6::text,$7,$8,$6,$9,$10) RETURNING *`,
+  [c.request_id,c.budget_envelope_id,c.purchase_order_id,c.amount,c.currency,c.ap_voucher_id,c.parent_commitment_id||c.id,c.supplier_invoice_id,c.idempotency_key,c.actor_id]),
+  async findActualizationByVoucher(id) {
+    const rows=(await client.query("SELECT * FROM commitment_ledger WHERE ap_voucher_id=$1 AND stage='actual'",[id])).rows;
+    if(rows.length>1) throw Object.assign(new Error(`Multiple actualizations exist for AP voucher ${id}`),{code:'MULTIPLE_VOUCHER_ACTUALIZATIONS'});
+    return rows[0]||null;
+  },
+  // ACTIVE actual rows are immutable, financially-effective evidence.  This
+  // assignment (rather than an increment) makes the projection repairable.
+  synchronizeBudgetConsumedProjection: (id) => one(client,`UPDATE budget_envelopes be
+    SET consumed_amount=(SELECT COALESCE(SUM(amount),0) FROM commitment_ledger
+      WHERE budget_envelope_id=be.id AND stage='actual' AND state='ACTIVE')
+    WHERE be.id=$1 RETURNING *`,[id]),
 
   lockPurchaseOrderLine: (id) => one(client,'SELECT * FROM purchase_order_items WHERE id=$1 FOR UPDATE',[id]),
   lockPurchaseOrderLines: async (ids) => (await client.query('SELECT * FROM purchase_order_items WHERE id=ANY($1::bigint[]) ORDER BY id FOR UPDATE',[ids])).rows,
@@ -111,7 +132,7 @@ const createConnectedP2PRepository = (client) => ({
   getEffectiveInvoiceMatchState: (invoiceId) => one(client,`SELECT current_match.match_status,current_match.id AS match_result_id,current_decision.id AS override_decision_id,current_decision.decision AS override_decision,current_decision.reason AS override_reason,current_decision.actor_id AS override_actor_id FROM LATERAL (SELECT imr.* FROM invoice_match_results imr WHERE imr.supplier_invoice_id=$1 ORDER BY imr.matched_at DESC,imr.id DESC LIMIT 1) current_match LEFT JOIN LATERAL (SELECT d.* FROM invoice_match_override_decisions d WHERE d.invoice_match_result_id=current_match.id ORDER BY d.decided_at DESC,d.id DESC LIMIT 1) current_decision ON TRUE`,[invoiceId]),
   loadInvoiceIdsForRequest: async (requestId) => (await client.query('SELECT id FROM supplier_invoices WHERE request_id=$1 ORDER BY id',[requestId])).rows.map(row=>row.id),
   loadFinanceEligibleInvoiceIdsForRequest: async (requestId) => (await client.query("SELECT id FROM supplier_invoices WHERE request_id=$1 AND status IN ('MATCH_VERIFIED','FINANCE_REVIEW_PENDING','FINANCE_VERIFIED','AP_VOUCHER_CREATED','AP_POSTED','PAYMENT_PENDING','PARTIALLY_PAID','PAID','CLOSED') ORDER BY id",[requestId])).rows.map(row=>row.id),
-  loadRequestFinanceReadiness: async (requestId) => { const rows=(await client.query("SELECT id FROM supplier_invoices WHERE request_id=$1 AND UPPER(status) NOT IN ('CANCELLED','VOIDED','DECLINED','SUPERSEDED','REPLACED') ORDER BY id",[requestId])).rows; const approved=[],unresolved=[]; for(const row of rows){ const state=await one(client,`SELECT m.match_status,d.decision override_decision FROM LATERAL (SELECT * FROM invoice_match_results WHERE supplier_invoice_id=$1 ORDER BY matched_at DESC,id DESC LIMIT 1) m LEFT JOIN LATERAL (SELECT * FROM invoice_match_override_decisions WHERE invoice_match_result_id=m.id ORDER BY decided_at DESC,id DESC LIMIT 1) d ON TRUE`,[row.id]); ((['MATCH_VERIFIED','MATCHED'].includes(state?.match_status)||state?.override_decision==='APPROVED')?approved:unresolved).push(row.id); } return {activeInvoiceCount:rows.length,approvedMatchInvoiceCount:approved.length,approvedInvoiceIds:approved,unresolvedInvoiceIds:unresolved}; },
+  loadRequestFinanceReadiness: async (requestId) => { const rows=(await client.query("SELECT id FROM supplier_invoices WHERE request_id=$1 AND UPPER(status) NOT IN ('CANCELLED','VOIDED','DECLINED','SUPERSEDED','REPLACED') ORDER BY id",[requestId])).rows; const approved=[],unresolved=[]; for(const row of rows){ const state=await one(client,`SELECT m.match_status,d.decision override_decision FROM LATERAL (SELECT * FROM invoice_match_results WHERE supplier_invoice_id=$1 ORDER BY matched_at DESC,id DESC LIMIT 1) m LEFT JOIN LATERAL (SELECT * FROM invoice_match_override_decisions WHERE invoice_match_result_id=m.id ORDER BY decided_at DESC,id DESC LIMIT 1) d ON TRUE`,[row.id]); ((state?.match_status==='MATCH_VERIFIED'||state?.override_decision==='APPROVED')?approved:unresolved).push(row.id); } return {activeInvoiceCount:rows.length,approvedMatchInvoiceCount:approved.length,approvedInvoiceIds:approved,unresolvedInvoiceIds:unresolved}; },
   insertMatchOverrideDecision: (d) => one(client,`INSERT INTO invoice_match_override_decisions (invoice_match_result_id,decision,reason,actor_id,original_variances) VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING *`,[d.invoice_match_result_id,d.decision,d.reason,d.actor_id,JSON.stringify(d.original_variances)]),
   findFinancePostingByInvoice: (id) => one(client,`SELECT fp.* FROM finance_postings fp JOIN ap_vouchers av ON av.id=fp.ap_voucher_id WHERE av.supplier_invoice_id=$1 AND fp.posting_status='posted' LIMIT 1`,[id]),
   lockApOperation: (key) => client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`ap-operation:${key}`]),

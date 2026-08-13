@@ -46,7 +46,7 @@ const postPayment = ({ repository, payableId, invoiceId, amount, currency, payme
     const paid = await tx.sumPostedPayments(payable.id);
     const remaining = subtractDecimal(payable.invoice_total, paid);
     if (compareDecimal(amount, '0') <= 0 || compareDecimal(amount, remaining) > 0) throw fail('Payment exceeds open payable balance', 'PAYMENT_AMOUNT_EXCEEDED', 409);
-    const payment = await tx.insertPaymentRecord({ request_id: payable.request_id, ap_voucher_id: payable.ap_voucher_id, supplier_invoice_id: payable.supplier_invoice_id, amount_paid: String(amount), currency: normalized.currency, payment_reference: paymentReference, payment_method: paymentMethod, idempotency_key: key, payload_fingerprint: payloadFingerprint, paid_by: actor?.id || actorId });
+    const payment = await tx.insertPaymentRecord({ request_id: payable.request_id, ap_voucher_id: authority.ap_voucher_id, supplier_invoice_id: payable.supplier_invoice_id, amount_paid: String(amount), currency: normalized.currency, payment_reference: paymentReference, payment_method: paymentMethod, idempotency_key: key, payload_fingerprint: payloadFingerprint, paid_by: actor?.id || actorId });
     await tx.insertPaymentAllocation({ payment_record_id: payment.id, ap_payable_id: payable.id, amount: String(amount) });
     const openBalance = subtractDecimal(remaining, amount);
     const status = compareDecimal(openBalance, '0') === 0 ? 'PAID' : 'PARTIALLY_PAID';

@@ -49,4 +49,27 @@ const releasePurchaseOrder = async ({ repository, purchaseOrderId, actor, auditS
 const submitPurchaseOrder = ({ repository, purchaseOrderId, actor, approvalRoute, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async tx => { const po=await tx.lockPurchaseOrder(purchaseOrderId); if (!po) throw Object.assign(new Error('Purchase order not found'),{statusCode:404}); if(po.status!=='PO_DRAFT') throw Object.assign(new Error(`Purchase order cannot be submitted from ${po.status}`),{code:'INVALID_PO_TRANSITION',statusCode:409}); const updated=await tx.markPurchaseOrderSubmitted(po.id,approvalRoute); await event(tx,auditService,outbox,'PO_SUBMITTED_FOR_APPROVAL',updated,actor); return updated; });
 const approvePurchaseOrder = ({ repository, purchaseOrderId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async tx => { const po=await tx.lockPurchaseOrder(purchaseOrderId); if (!po) throw Object.assign(new Error('Purchase order not found'),{statusCode:404}); if(po.status!=='PO_PENDING_APPROVAL') throw Object.assign(new Error(`Purchase order cannot be approved from ${po.status}`),{code:'INVALID_PO_TRANSITION',statusCode:409}); const updated=await tx.markPurchaseOrderApproved(po.id,actor.id); await event(tx,auditService,outbox,'PO_APPROVED',updated,actor); return updated; });
 const cancelPurchaseOrder = ({ repository, purchaseOrderId, reason, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async tx => { const po=await tx.lockPurchaseOrder(purchaseOrderId); if(!po) throw Object.assign(new Error('Purchase order not found'),{statusCode:404}); if(po.status==='PO_CANCELLED') return { purchaseOrder:po,commitment:await tx.findCommitmentByIdempotency(`po-release:${po.id}`) }; if(await tx.hasPurchaseOrderReceipts(po.id)) throw Object.assign(new Error('Receipt return or reversal is required'),{code:'RECEIPT_RETURN_OR_REVERSAL_REQUIRED',statusCode:409}); const commitment=await tx.findCommitmentByIdempotency(`po-release:${po.id}`); const updated=await tx.markPurchaseOrderCancelled(po.id,reason,actor.id); if(commitment?.state==='ACTIVE'){ await tx.releaseCommitment(commitment.id); await event(tx,auditService,outbox,'BUDGET_COMMITMENT_RELEASED',updated,actor,{commitment_id:commitment.id}); } await event(tx,auditService,outbox,'PO_CANCELLED',updated,actor,{reason}); return {purchaseOrder:updated,commitment}; });
-module.exports = { createPurchaseOrderFromAwards, releasePurchaseOrder, submitPurchaseOrder, approvePurchaseOrder, cancelPurchaseOrder };
+const closePurchaseOrder = ({ repository, purchaseOrderId, reason = '', actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async tx => {
+  const po = await tx.lockPurchaseOrder(purchaseOrderId);
+  if (!po) throw Object.assign(new Error('Purchase order not found'), { code: 'PO_NOT_FOUND', statusCode: 404 });
+  if (po.status === 'PO_CLOSED') return { purchaseOrder: po, commitment: null };
+  if (!['PO_ISSUED', 'PO_PARTIAL', 'PO_DELIVERED'].includes(po.status)) throw Object.assign(new Error(`Purchase order cannot be closed from ${po.status}`), { code: 'INVALID_PO_TRANSITION', statusCode: 409 });
+
+  const totals = await tx.calculatePurchaseOrderReceiptTotals(po.id);
+  const fullyDelivered = compareDecimal(totals?.ordered_quantity || '0', '0') > 0
+    && compareDecimal(totals?.received_quantity || '0', totals?.ordered_quantity || '0') >= 0;
+  const governedReason = String(reason || '').trim();
+  if (!fullyDelivered && !governedReason) throw Object.assign(new Error('Reason is required to close a PO before full delivery'), { code: 'PO_CLOSE_REASON_REQUIRED', statusCode: 400 });
+
+  const commitment = await tx.lockActivePoEncumbrance(po.id);
+  if (commitment && compareDecimal(commitment.amount, '0') < 0) throw Object.assign(new Error('Active PO encumbrance cannot be negative'), { code: 'INVALID_PO_ENCUMBRANCE', statusCode: 409 });
+  const released = commitment ? await tx.releaseCommitment(commitment.id) : null;
+  if (commitment && !released) throw Object.assign(new Error('Active PO encumbrance changed while closing'), { code: 'PO_ENCUMBRANCE_CONFLICT', statusCode: 409 });
+  if (released?.budget_envelope_id) await tx.synchronizeBudgetConsumedProjection(released.budget_envelope_id);
+
+  const updated = await tx.markPurchaseOrderClosed(po.id, governedReason || null, actor.id);
+  if (released && compareDecimal(released.amount, '0') > 0) await event(tx, auditService, outbox, 'BUDGET_COMMITMENT_RELEASED', updated, actor, { commitment_id: released.id, amount: released.amount });
+  await event(tx, auditService, outbox, 'PO_CLOSED', updated, actor, { reason: governedReason || null });
+  return { purchaseOrder: updated, commitment: released };
+});
+module.exports = { createPurchaseOrderFromAwards, releasePurchaseOrder, submitPurchaseOrder, approvePurchaseOrder, cancelPurchaseOrder, closePurchaseOrder };

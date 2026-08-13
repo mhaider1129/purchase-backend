@@ -29,12 +29,54 @@ No SQL 006 change is required. It already adds `purchase_order_id`, `idempotency
 Executable service tests cover submit/invalid submit, approve, issue, one commitment, issue retry, exact 100/70 budget success, serialized second-70 failure, rollback on budget/audit/outbox failure, unreceived cancellation/release, received cancellation rejection, retry safety, canonical events, and canonical statuses. Controller tests exercise real controller authorization and service delegation rather than relying only on source-string assertions.
 
 No SQL was executed against Supabase.
+
+## Final canonical-writer closure (2026-08-13)
+
+### RFx production path
+
+`POST /rfx-portal/:id/award`, called by `RfxPortalPage` through `api/rfxPortal`, is the only RFx award/PO path. It selects the explicitly chosen response, locks the event, response, request, and approved request items, and rejects cancelled events, unlinked requests, missing items, invalid quotation totals, and a different pre-existing PO. The response supplier is revalidated by the canonical supplier-eligibility policy. Each approved request item becomes an idempotent `source_type='QUOTATION'` award whose `source_id` is the winning response; the quotation total is apportioned as one unit rate over the approved quantities. The same database transaction records the winning/closed response states, creates awards, creates a provenance-backed `PO_DRAFT`, and updates the RFx/request compatibility projections. A retry returns the PO created from the same response; a conflicting response is rejected.
+
+The RFx endpoint no longer issues a PO, approves it, or commits budget. Its result must follow the ordinary submit → approve → issue endpoints. Only issue creates the PO encumbrance, so RFx cannot bypass approval or budget control; once issued, the PO is an ordinary connected PO eligible for receipt, invoice, AP, payment, and close.
+
+### Commitment classification
+
+The removed `financeCoreService.recordCommitment` had one production caller: request creation. That caller wrote `stage='reservation'`, `source_type='purchase_request'`, for the request estimate. It was neither a PO encumbrance nor AP actualization, but the availability model did not consistently subtract it and there was no conversion/release operation. Retaining it would leave ambiguous, potentially double-counted financial state. Request creation now performs a read-only budget advisory check; the estimate is not financial evidence. PO encumbrance and AP actualization remain exclusively in `budgetCommitmentService`/`apPostingService` through `connectedP2PRepository`. `financeCoreService` retains budget reads and journal/accrual helpers, but no commitment-ledger writer.
+
+### Reachability and repository-wide writer audit
+
+* `procureToPayPersistenceService.insertGoodsReceipt` and `.insertSupplierInvoice`: **LEGACY_TO_REMOVE / TESTED COMPATIBILITY STUBS**. Repository-wide import search finds only their test; both now return HTTP 410 without querying. Live routes use `goodsReceiptService` and `supplierInvoiceService`.
+* `requestWorkspaceController`, `contractsController`, and `procureToPayController`: **NO DIRECT PO BUSINESS WRITER**. The live PO endpoints delegate to `purchaseOrderService`; other occurrences are reads/projections.
+* `budgetControlController`: **READ PROJECTION**. `financeCoreService`: **NO COMMITMENT WRITER**. P2P encumbrance, release, and actualization SQL exists only in the connected repository.
+* Receipt/invoice searches find no production mutation outside `connectedP2PRepository`; the legacy persistence module contains no SQL.
+* AP voucher, payable, finance posting, payment, and allocation searches find no production mutation outside `connectedP2PRepository`.
+
+`tests/phase4CanonicalWriterBoundary.test.js` recursively scans production JavaScript and permits mutations of the governed P2P tables only in the single explicitly named connected repository. This is intentionally not a directory-wide service whitelist.
+
+### Final authority table
+
+| Business fact | Canonical writer | Allowed projection writers |
+|---|---|---|
+| Procurement Award | `procurementAwardService` → `connectedP2PRepository` | RFx/request selected-supplier fields |
+| Purchase Order / PO Close | `purchaseOrderService` → `connectedP2PRepository` | request PO reference fields |
+| PO Encumbrance (`encumbrance`, `purchase_order`) | `budgetCommitmentService` → `connectedP2PRepository` | `budget_envelopes.consumed_amount` repair only |
+| Goods Receipt | `goodsReceiptService` → `connectedP2PRepository` | PO received quantity/status |
+| Inventory Movement | `goodsReceiptInventoryAdapter` → Phase 3 inventory authority | stock balance/read models |
+| Supplier Invoice | `supplierInvoiceService` → `connectedP2PRepository` | invoice lifecycle status |
+| Invoice Match | `supplierInvoiceService` → `connectedP2PRepository` | request lifecycle/read models |
+| AP Voucher | `accountsPayableService` → `connectedP2PRepository` | verification status |
+| Actualization (`actual`, `ap_voucher`) | `apPostingService` → `connectedP2PRepository` | budget consumed projection |
+| Payable | `apPostingService` → `connectedP2PRepository` | payable balance/status |
+| Payment | `paymentService` → `connectedP2PRepository` | invoice/payment status |
+
+No active duplicate P2P writer remains. Phase 4 canonical-writer closure is complete at repository level. SQL 006 may now proceed to manual DBA-reviewed execution after the already documented backup, reconciliation, preflight, and live-schema checks; application rollout must remain ordered after it.
+
+No SQL was executed against Supabase.
 ## Phase 4B receipt closure
 
 The live PO receipt route now delegates to `goodsReceiptService`; it contains no receipt, PO projection/status, or warehouse SQL. The service calls only entity-specific methods on `connectedP2PRepository`, and only `goodsReceiptInventoryAdapter` reaches the Phase 3 inventory writer.
 
 * `connectedP2PRepository`: **CANONICAL REPOSITORY** for `goods_receipts`, `goods_receipt_items`, PO-line receipt projection, and PO receipt status.
-* `procureToPayPersistenceService.insertGoodsReceipt`: **LEGACY ACTIVE only for callers not yet cut over / TO-DISABLE**; it is no longer reachable from the live PO receipt controller.
+* Historical classification (superseded by the final closure above): `procureToPayPersistenceService.insertGoodsReceipt` was legacy/to-disable and is now a fail-closed stub.
 * `ensureProcureToPayTables`: **SCHEMA FOUNDATION**, not a business writer.
 * Tests/fixtures containing receipt SQL: **TEST**.
 * Receipt list/dashboard/matching SQL: **READ PROJECTION**.
@@ -43,12 +85,12 @@ The live PO receipt route now delegates to `goodsReceiptService`; it contains no
 No active live PO receipt path directly updates warehouse balances or `warehouse_stock_movements`.
 ## Phase 4C invoice/match closure (2026-08-12)
 
-The request-scoped invoice submission, matching, approval, and decline endpoints now delegate to `supplierInvoiceService`. Runtime invoice header/line/result SQL is confined to `connectedP2PRepository`. `procureToPayPersistenceService.insertSupplierInvoice` remains classified **LEGACY / TO_DISABLE** for compatibility but has no live controller caller. Override evidence is append-only; request lifecycle, finance ledger, payable, and payment writers are projections or later-phase authorities.
+The request-scoped invoice submission, matching, approval, and decline endpoints now delegate to `supplierInvoiceService`. Runtime invoice header/line/result SQL is confined to `connectedP2PRepository`. The former legacy invoice writer is now a fail-closed compatibility stub. Override evidence is append-only; request lifecycle, finance ledger, payable, and payment writers are projections or later-phase authorities.
 ## Phase 4D finance closure addendum
 
 Canonical repository writes now cover finance-eligible invoice selection, voucher/payable creation, payment records, allocations, payable synchronization, invoice payment projection, and document links. Controller payment and voucher writes were cut over. `markPaid` is disabled.
 
-Remaining **LEGACY ACTIVE** writers are `postPayableFromInvoice`, `postToInternalLedger`, and the zero-value `markPaymentPending` scheduler. Existing migration/ensure-table DDL is **HISTORICAL/IMPORT**, test fixtures are **TEST**, lifecycle and invoice paid states are **COMPATIBILITY PROJECTION**, and `connectedP2PRepository` is the **CANONICAL REPOSITORY**. Production rollout is blocked until legacy posting/payable routes and the frontend quick action are removed or delegated to the atomic AP posting workflow.
+Historical note: `postPayableFromInvoice`, `postToInternalLedger`, and `markPaymentPending` were subsequently disabled or delegated. Existing migration/ensure-table DDL is **HISTORICAL/IMPORT**, test fixtures are **TEST**, lifecycle and invoice paid states are **COMPATIBILITY PROJECTION**, and `connectedP2PRepository` is the **CANONICAL REPOSITORY**.
 # Phase 4D final direct-write closure
 
 The live `postToInternalLedger` controller delegates to `apPostingService`; it no
@@ -57,8 +99,7 @@ verification delegates to `accountsPayableService`, and payable payments delegat
 to `paymentService`. The legacy direct invoice-to-payable and payment-pending
 controllers are disabled with HTTP 410.
 
-Production financial SQL is intentionally confined to repository gateways and
-the pre-existing `financeCoreService` PO-encumbrance writer. In
+Production financial SQL is intentionally confined to repository gateways. In
 `connectedP2PRepository`, AP posting owns finance posting, actual evidence,
 remaining encumbrance, consumed projection, and payable activation; payment owns
 the payment header/allocation and balance projection. Read-only reporting queries
@@ -71,7 +112,7 @@ The authoritative connected sequence is **Approved Request → Award → PO → 
 
 The remaining encumbrance is released in place; actualization rows are never released or reversed. Thus a 1,000 commitment with 900 of active actual evidence closes by changing only the remaining 100 encumbrance to `RELEASED`, leaving consumed budget at 900 and restoring 100 of availability. A fully actualized PO has no release effect.
 
-An updated production SQL-writer search still finds two active/non-test writers outside the canonical connected services/repository: the RFx portal controller directly inserts a PO, and `financeCoreService` directly inserts commitment-ledger entries for its older finance flow. The retained `procureToPayPersistenceService` receipt/invoice writers remain legacy/to-disable and are not known to have a live controller caller. Therefore this report does not claim zero remaining legacy code, and canonical-writer closure remains a rollout blocker until those paths are delegated, disabled, or proven unreachable.
+This historical audit found the RFx PO writer, finance commitment writer, and retained persistence SQL that the final closure section above has now removed or delegated.
 
 SQL 006 remains manual-only. Its non-mutating preflight uses catalog checks plus dynamic SQL for self-introduced optional columns, especially `commitment_ledger.ap_voucher_id`, so a pre-006 schema does not bind an absent column. Subject to DBA review, backup, legacy-data reconciliation, and live-schema confirmation, SQL 006 is ready for manual execution; application rollout is still blocked by the writer paths above.
 

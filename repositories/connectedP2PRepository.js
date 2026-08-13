@@ -22,9 +22,9 @@ const createConnectedP2PRepository = (client) => ({
     LEFT JOIN purchase_orders po ON po.id=poi.purchase_order_id WHERE a.id=$1 GROUP BY a.id`, [awardId]),
 
   insertPurchaseOrderHeader: (p) => one(client, `INSERT INTO purchase_orders
-    (request_id,supplier_id,currency,status,expected_delivery_date,delivery_location,budget_cost_center,created_by)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-  [p.request_id,p.supplier_id,p.currency,p.status,p.expected_delivery_date||null,p.delivery_location||null,p.budget_cost_center||null,p.created_by]),
+    (request_id,supplier_id,currency,status,expected_delivery_date,delivery_location,budget_cost_center,created_by,rfx_id,rfx_response_id,po_number,notes)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+  [p.request_id,p.supplier_id,p.currency,p.status,p.expected_delivery_date||null,p.delivery_location||null,p.budget_cost_center||null,p.created_by,p.rfx_id||null,p.rfx_response_id||null,p.po_number||null,p.notes||null]),
   insertPurchaseOrderLine: (l) => one(client, `INSERT INTO purchase_order_items
     (purchase_order_id,requested_item_id,award_id,quantity,unit_price,price_source_type,price_source_id,line_type)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,

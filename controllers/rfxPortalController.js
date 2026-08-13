@@ -1,6 +1,9 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureSuppliersTable, findOrCreateSupplierByName } = require('./suppliersController');
+const { createAward } = require('../services/procurementAwardService');
+const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
+const { createConnectedP2PRepository } = require('../repositories/connectedP2PRepository');
 
 let rfxTablesEnsured = false;
 let ensuringPromise = null;
@@ -184,11 +187,6 @@ const normalizeBidAmount = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
 };
-
-const generatePoNumber = () =>
-  `PO-${Date.now()}-${Math.floor(Math.random() * 100000)
-    .toString()
-    .padStart(5, '0')}`;
 
 const calculatePriceScore = (bidAmount, minBid, maxBid) => {
   if (!Number.isFinite(bidAmount) || minBid === null || maxBid === null) return null;
@@ -613,35 +611,46 @@ const awardRfxResponse = async (req, res, next) => {
       return next(createHttpError(404, 'Linked request not found'));
     }
 
-    const normalizedPoNumber = poNumberInput || generatePoNumber();
-
     const existingPo = await client.query(
-      `SELECT id, po_number FROM purchase_orders WHERE request_id = $1 LIMIT 1`,
+      `SELECT * FROM purchase_orders WHERE request_id = $1 LIMIT 1`,
       [requestId]
     );
 
     if (existingPo.rowCount > 0) {
-      await client.query('ROLLBACK');
-      return next(
-        createHttpError(400, `Request already has a purchase order (${existingPo.rows[0].po_number})`)
-      );
+      if (String(existingPo.rows[0].rfx_response_id || '') !== String(responseId)) {
+        await client.query('ROLLBACK');
+        return next(createHttpError(409, `Request already has a purchase order (${existingPo.rows[0].po_number})`));
+      }
+      await client.query('COMMIT');
+      return res.json({ message: 'Supplier award already recorded', rfx_id: rfxId, request_id: requestId,
+        awarded_response_id: responseId, purchase_order: existingPo.rows[0], idempotent: true });
     }
 
-    const poInsert = await client.query(
-      `INSERT INTO purchase_orders (request_id, rfx_id, rfx_response_id, supplier_id, po_number, total_amount, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, request_id, rfx_id, rfx_response_id, supplier_id, po_number, status, total_amount, notes, issued_at, created_at`,
-      [
-        requestId,
-        rfxId,
-        responseId,
-        responseRow.supplier_id,
-        normalizedPoNumber,
-        responseRow.bid_amount,
-        awardNotes,
-        req.user?.id || null,
-      ]
+    const itemResult = await client.query(
+      `SELECT * FROM requested_items WHERE request_id=$1 ORDER BY id FOR UPDATE`, [requestId]
     );
+    if (!itemResult.rowCount) throw createHttpError(409, 'RFX request has no approved request items to award');
+    const totalQuantity = itemResult.rows.reduce((sum, item) => sum + Number(item.approved_quantity ?? item.quantity ?? 0), 0);
+    if (!(totalQuantity > 0) || !(Number(responseRow.bid_amount) >= 0)) throw createHttpError(409, 'Winning quotation requires a valid price and approved quantity');
+
+    // The connected repository is bound to this RFx transaction.  Service-level
+    // transactions therefore compose without opening an independent connection.
+    const repository = createConnectedP2PRepository(client);
+    repository.withTransaction = async (work) => work(repository);
+    const actor = { id: req.user?.id || null };
+    const unitPrice = (Number(responseRow.bid_amount) / totalQuantity).toFixed(4);
+    const awards = [];
+    for (const item of itemResult.rows) {
+      const quantity = String(item.approved_quantity ?? item.quantity);
+      awards.push(await createAward({ repository, requestItem: item,
+        supplier: { id: responseRow.supplier_id }, actor,
+        input: { awarded_quantity: quantity, unit_price: unitPrice, currency: 'USD',
+          source_type: 'QUOTATION', source_id: String(responseId), selection_reason: awardNotes || `Winning RFx response ${responseId}`,
+          idempotency_key: `rfx:${rfxId}:response:${responseId}:item:${item.id}` } }));
+    }
+    const poRow = await createPurchaseOrderFromAwards({ repository,
+      awardIds: awards.map((award) => award.id), actor,
+      input: { rfx_id: rfxId, rfx_response_id: responseId, po_number: poNumberInput || undefined, notes: awardNotes } });
 
     await client.query(
       `UPDATE rfx_responses
@@ -659,8 +668,6 @@ const awardRfxResponse = async (req, res, next) => {
       [rfxId, requestId]
     );
 
-    const poRow = poInsert.rows[0];
-
     const requestUpdate = await client.query(
       `UPDATE requests
           SET awarded_supplier_id = $1,
@@ -668,9 +675,9 @@ const awardRfxResponse = async (req, res, next) => {
               awarded_rfx_response_id = $3,
               purchase_order_id = $4,
               purchase_order_number = $5,
-              sourcing_status = 'po_issued',
+              sourcing_status = 'awarded',
               awarded_at = COALESCE(awarded_at, NOW()),
-              po_issued_at = COALESCE(po_issued_at, NOW())
+              po_issued_at = NULL
         WHERE id = $6
         RETURNING id, status, sourcing_status, purchase_order_id, purchase_order_number, awarded_supplier_id`,
       [
@@ -696,7 +703,7 @@ const awardRfxResponse = async (req, res, next) => {
     await client.query('COMMIT');
 
     res.json({
-      message: 'Supplier awarded and purchase order issued',
+      message: 'Supplier awarded and canonical purchase order draft created',
       rfx_id: rfxId,
       request_id: requestId,
       awarded_response_id: responseId,
@@ -706,7 +713,7 @@ const awardRfxResponse = async (req, res, next) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to award RFX response:', err);
-    next(createHttpError(500, 'Failed to award supplier and issue purchase order'));
+    next(err.statusCode || err.status ? err : createHttpError(500, 'Failed to award supplier and create purchase order draft'));
   } finally {
     client.release();
   }

@@ -33,6 +33,14 @@ Operationalize AP/accounting: governed exception/tolerance approval, credit/debi
 
 No SQL was executed against Supabase.
 
+## Canonical-writer closure declaration (2026-08-13)
+
+The final writer audit is closed. RFx selection now composes canonical award and `PO_DRAFT` creation in its existing governed transaction; it cannot issue, approve, or encumber a PO. The former request-estimate commitment writer was removed because it had no safe conversion/release model, while request budget feedback remains advisory. The unreachable receipt/invoice persistence writers are fail-closed HTTP 410 compatibility exports with no SQL. A production-source architecture test restricts PO, receipt, invoice, match, commitment, AP, posting, payable, and payment mutations to `repositories/connectedP2PRepository.js`.
+
+The authoritative chain and authority table are detailed in `phase4-disconnected-write-closure.md`. No unexplained active duplicate writer remains, so Phase 4 can be declared canonical-writer complete. SQL 006 remains unchanged and unexecuted; it should be manually executed only by the DBA after the documented review gates.
+
+No SQL was executed against Supabase.
+
 ## Final Phase 4 closure correction (2026-08-13)
 
 The final authoritative chain is **Approved Request → Award → PO → Encumbrance → Receipt → Inventory → Invoice → Match → Finance Verification → AP Voucher → AP Posting → Actualization → Payable → Payment → Close**.

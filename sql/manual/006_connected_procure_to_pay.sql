@@ -77,6 +77,23 @@ BEGIN
    legacy_award_found := legacy_award_found OR duplicate_found;
  END LOOP;
  IF legacy_award_found THEN RAISE NOTICE 'Preflight: populated legacy award-like requested_items fields require reconciliation'; END IF;
+ IF to_regclass('public.rfx_response_items') IS NULL THEN
+   SELECT EXISTS (
+     SELECT 1 FROM public.rfx_responses rr JOIN public.rfx_events re ON re.id=rr.rfx_id
+     WHERE re.request_id IS NOT NULL AND jsonb_typeof(rr.response_data->'items')='array'
+       AND jsonb_array_length(rr.response_data->'items') > 0
+       AND (SELECT count(*) FROM public.requested_items ri WHERE ri.request_id=re.request_id) > 1
+   ) INTO duplicate_found;
+ ELSE
+   EXECUTE $preflight$SELECT EXISTS (
+     SELECT 1 FROM public.rfx_responses rr JOIN public.rfx_events re ON re.id=rr.rfx_id
+     WHERE re.request_id IS NOT NULL AND jsonb_typeof(rr.response_data->'items')='array'
+       AND jsonb_array_length(rr.response_data->'items') > 0
+       AND (SELECT count(*) FROM public.requested_items ri WHERE ri.request_id=re.request_id) > 1
+       AND NOT EXISTS (SELECT 1 FROM public.rfx_response_items rri WHERE rri.rfx_response_id=rr.id)
+   )$preflight$ INTO duplicate_found;
+ END IF;
+ IF duplicate_found THEN RAISE NOTICE 'Preflight: multi-item RFx JSON pricing lacks normalized lines and requires manual identity reconciliation'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='budget_envelopes' AND column_name IN ('allocated_amount','consumed_amount') GROUP BY table_name HAVING count(*)=2) THEN RAISE EXCEPTION 'Preflight: incompatible budget_envelopes balance columns'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name IN ('request_id','budget_envelope_id','stage','amount','currency','source_type','source_id','notes','actor_id') GROUP BY table_name HAVING count(*)=9) THEN RAISE EXCEPTION 'Preflight: incompatible commitment_ledger base columns'; END IF;
  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='commitment_ledger' AND column_name IN ('commitment_type','status')) THEN RAISE EXCEPTION 'Preflight: incompatible commitment_ledger legacy columns found'; END IF;
@@ -90,6 +107,25 @@ BEGIN
    GROUP BY table_name HAVING count(*)=15
  ) THEN RAISE EXCEPTION 'Preflight: existing procurement_awards relation is incompatible with SQL 006'; END IF;
 END $$;
+
+-- Sequence allocation is atomic under concurrency. Gaps are intentional: an
+-- allocated identity is never recycled after transaction rollback.
+CREATE SEQUENCE IF NOT EXISTS public.purchase_order_number_seq AS BIGINT START WITH 1;
+
+CREATE TABLE IF NOT EXISTS public.rfx_response_items (
+ id BIGSERIAL PRIMARY KEY,
+ rfx_response_id INTEGER NOT NULL REFERENCES public.rfx_responses(id) ON DELETE CASCADE,
+ requested_item_id INTEGER NOT NULL REFERENCES public.requested_items(id),
+ quoted_quantity NUMERIC(18,4) NOT NULL CHECK (quoted_quantity > 0),
+ free_quantity NUMERIC(18,4) NOT NULL DEFAULT 0 CHECK (free_quantity >= 0),
+ unit_price NUMERIC(18,4) NOT NULL CHECK (unit_price >= 0),
+ currency VARCHAR(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+ brand TEXT, offered_specs TEXT, notes TEXT,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE (rfx_response_id, requested_item_id)
+);
+CREATE INDEX IF NOT EXISTS rfx_response_items_response_idx ON public.rfx_response_items(rfx_response_id);
+CREATE INDEX IF NOT EXISTS rfx_response_items_requested_item_idx ON public.rfx_response_items(requested_item_id);
 
 -- requests/requested_items/suppliers/users use INTEGER PKs; document tables use BIGINT PKs.
 CREATE TABLE IF NOT EXISTS public.procurement_awards (
@@ -193,5 +229,8 @@ CREATE INDEX IF NOT EXISTS po_items_award_quantity_idx
 DO $$ BEGIN
  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='goods_receipt_idempotency_uq') THEN RAISE EXCEPTION 'Post-validation: goods receipt idempotency index missing'; END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='goods_receipts' AND column_name='payload_fingerprint') THEN RAISE EXCEPTION 'Post-validation: receipt payload fingerprint missing'; END IF;
+ IF to_regclass('public.purchase_order_number_seq') IS NULL THEN RAISE EXCEPTION 'Post-validation: PO number sequence missing'; END IF;
+ IF to_regclass('public.rfx_response_items') IS NULL THEN RAISE EXCEPTION 'Post-validation: RFx response items missing'; END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='rfx_response_items' AND indexdef LIKE '%UNIQUE%rfx_response_id, requested_item_id%') THEN RAISE EXCEPTION 'Post-validation: RFx response-line uniqueness missing'; END IF;
 END $$;
 COMMIT;

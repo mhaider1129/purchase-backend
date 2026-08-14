@@ -2,23 +2,35 @@
 
 ## Final RFx pricing correction (2026-08-13)
 
-The audited quotation model is aggregate-only. `rfx_responses` stores one
-nullable response-level `bid_amount NUMERIC` plus free-form `response_data
-JSONB`. There is no governed RFx response-item relation, requested-item foreign
-key, submitted line quantity, line unit price, or line currency. The submission
-endpoint and supplier portal accept one aggregate bid, notes, and generic
-response data; comparison ranks and displays that aggregate. Attachments are
-document evidence, not relational line-price facts.
+Before this correction, the relational quotation model had an aggregate header
+(`rfx_responses.bid_amount`) **and uncontrolled JSON line detail**. The supplier
+portal already captured `response_data.items[].unit_cost`, quantity, brand,
+specs, notes, and free quantity, but those JSON objects had no governed
+`requested_items` identity and were not pricing authority. They must not be
+described as nonexistent line data or silently migrated by array position.
 
-RFx is therefore an intentional whole-request, one-winning-supplier workflow,
+After this correction, `rfx_response_items` is pricing authority. Each line has
+response and requested-item foreign keys, payable quoted quantity, bonus/free
+quantity, exact unit price, currency, brand, offered specifications and notes;
+the response/requested-item pair is unique. Linked-request submissions require
+`requested_item_id`, validate request membership and supplier context on the
+backend, and persist header plus lines atomically. JSON remains only compatible
+questionnaire/evidence data.
+
+RFx remains an intentional whole-request, one-winning-supplier workflow,
 not an item-level split-award workflow. The broader canonical award/PO model
-continues to support split awards. A future compatible extension should add an
-`rfx_response_items` relation with response and requested-item foreign keys,
-quoted quantity, unit price, currency, and only those adjustments, lead-time,
-and note facts governed by RFx rules. SQL 006 was not extended because current
-RFx submission and comparison do not capture or govern those facts.
+continues to support one request → multiple awards → multiple POs. A future
+compatible extension may add item-level RFx winners without changing that P2P
+model.
 
-Award completion now rejects every aggregate-only multi-item response with
+Award completion loads normalized lines and creates one canonical award per
+line. Its unit price/currency come from the quotation line and its quotation
+`source_id` is the real response-line ID, so no aggregate average is synthesized.
+Payable quotation total is calculated on the backend as the exact decimal sum
+of `quoted_quantity × unit_price`; `free_quantity` is excluded. A supplied
+header mismatch fails with `RFX_QUOTATION_TOTAL_MISMATCH`.
+
+Legacy award completion rejects every aggregate-only multi-item response with
 `RFX_LINE_PRICING_REQUIRED`. A single-item response may derive unit price from
 the aggregate bid and governed quantity using the fixed-scale BigInt decimal
 helpers; non-exact or non-reconciling division fails with
@@ -36,9 +48,17 @@ rejection rather than decimal rounding, and `DELETE FROM` canonical-writer
 detection. Existing connected-P2P tests cover eligibility, award ceilings,
 provenance, draft creation, no issue/encumbrance at draft, and normal lifecycle.
 
-With fabricated RFx item pricing removed, no repository-level Phase 4 blocker
-remains. Phase 4 is complete at repository level. SQL 006 is unchanged and is
-ready for manual DBA-reviewed execution subject to its documented backup,
+PO identity is allocated inside the canonical PO transaction. Explicit numbers
+are trimmed, uppercased, uniqueness-checked and preserved; missing numbers use
+the PostgreSQL `purchase_order_number_seq` in `PO-YYYY-NNNNNN` form. Sequence
+allocation plus the existing unique PO constraint is concurrency-safe without
+time/random/count-based identity.
+
+SQL 006 now adds the durable PO-number sequence and normalized quotation lines,
+indexes and constraints. Its preflight reports ambiguous historical multi-item
+JSON quotations for manual reconciliation and never infers identity. Phase 4 is
+complete at repository level after manual deployment; SQL 006 is ready for
+manual DBA-reviewed execution subject to its documented backup,
 preflight, reconciliation, and live-schema gates. No SQL was executed.
 
 ## Architecture findings and new flow

@@ -17,11 +17,15 @@ const foundation = require('../controllers/itemMasterFoundationController');
 // interpret "foundation" or "reference" as a legacy numeric identifier.
 router.get('/foundation/generic-items', foundation.requirePermission('item-master.view'), foundation.searchGeneric);
 router.get('/foundation/references', foundation.requirePermission('item-master.view'), foundation.referenceData);
+router.get('/foundation/references/:type', foundation.requirePermission('item-master.view'), foundation.searchReferences);
+router.post('/foundation/references/:type', foundation.requirePermission('item-master.references-maintain'), foundation.createReference);
+router.delete('/foundation/references/:type/:id', foundation.requirePermission('item-master.references-maintain'), foundation.deactivateReference);
 router.post('/foundation/generic-items', foundation.requirePermission('item-master.create'), foundation.createGeneric);
 router.post('/foundation/generic-items/:id/transition', foundation.requireTransitionPermission, foundation.transitionGeneric);
 router.get('/foundation/products', foundation.requirePermission('item-master.view'), foundation.searchProducts);
 router.post('/foundation/products', foundation.requirePermission('item-master.products'), foundation.createProduct);
 router.post('/foundation/products/:id/approve', foundation.requirePermission('item-master.products.approve'), foundation.approveProduct);
+router.post('/foundation/products/:id/decision', foundation.requirePermission('item-master.products.approve'), foundation.transitionProduct);
 router.get('/foundation/supplier-catalog', foundation.requirePermission('item-master.view'), foundation.searchCatalog);
 router.post('/foundation/supplier-catalog', foundation.requirePermission('item-master.suppliers'), foundation.createCatalog);
 router.put('/foundation/supplier-catalog/:id', foundation.requirePermission('item-master.suppliers'), foundation.updateCatalog);

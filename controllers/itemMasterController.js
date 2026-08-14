@@ -165,7 +165,9 @@ const getItemById = async (req, res, next) => {
 
 const createItem = async (req, res, next) => {
   if (!req.user?.hasPermission('item-master.legacy-maintain')) {
-    return next(createHttpError(403, 'You do not have permission to create item master records'));
+    const error=createHttpError(403,'Legacy Item Master is read-only; use the canonical Generic Item workflow');
+    error.code='LEGACY_ITEM_MASTER_READ_ONLY';
+    return next(error);
   }
 
   let payload;

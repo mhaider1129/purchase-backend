@@ -123,14 +123,28 @@ class ItemMasterFoundationService {
       const uom=await this.db.query('SELECT uom_code FROM item_uom WHERE id=$1',[p.product_uom_id]);
       if(!manufacturer.rowCount||!uom.rowCount)throw createHttpError(400,'Manufacturer or product UOM is invalid');
       const result = await this.db.query(`INSERT INTO approved_products (generic_item_id,product_identifier,manufacturer,manufacturer_id,product_name,product_description,manufacturer_part_number,normalized_manufacturer_part_number,model,technical_specifications,package_quantity,product_uom,product_uom_id,inventory_conversion_factor,regulatory_identifiers,technical_notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`, [p.generic_item_id,p.product_identifier,manufacturer.rows[0].manufacturer_name,p.manufacturer_id,p.product_name,p.product_description,p.manufacturer_part_number,p.normalized_manufacturer_part_number,p.model,p.technical_specifications,p.package_quantity,uom.rows[0].uom_code,p.product_uom_id,p.inventory_conversion_factor,p.regulatory_identifiers,p.technical_notes,actorId]);
-      await this.db.query(`INSERT INTO item_master_audit_events (entity_type,entity_id,action,actor_id,new_values) VALUES ('approved_product',$1,'created',$2,$3)`,[result.rows[0].id,actorId,result.rows[0]]);
+      await this.db.query(`INSERT INTO item_master_audit_events (entity_type,entity_id,action,actor_id,new_values) VALUES ('approved_product',$1,'PRODUCT_CREATED',$2,$3)`,[result.rows[0].id,actorId,result.rows[0]]);
       return result.rows[0];
     } catch (error) { if (error.code === '23505') throw createHttpError(409, 'Manufacturer part number already exists'); throw error; }
   }
 
   async approveProduct(id, actorId) {
-    const result = await this.db.query("UPDATE approved_products SET approval_status='approved',approved_by=$2,approved_at=NOW(),updated_at=NOW() WHERE id=$1 AND approval_status IN ('draft','pending') RETURNING *", [id, actorId]);
-    if (!result.rowCount) throw createHttpError(409, 'Product is not awaiting approval'); return result.rows[0];
+    return this.transitionProduct(id, 'approved', actorId);
+  }
+
+  async transitionProduct(id, status, actorId) {
+    const actions={approved:'PRODUCT_APPROVED',rejected:'PRODUCT_REJECTED',retired:'PRODUCT_RETIRED'};
+    if(!actions[status]) throw createHttpError(400,'Unsupported product lifecycle decision');
+    const client=await this.db.connect();
+    try { await client.query('BEGIN');
+      const before=await client.query('SELECT * FROM approved_products WHERE id=$1 FOR UPDATE',[id]);
+      if(!before.rowCount) throw createHttpError(404,'Product not found');
+      const allowed=status==='retired'?['approved']:['draft','pending'];
+      if(!allowed.includes(before.rows[0].approval_status)) throw createHttpError(409,'Product is not eligible for this decision');
+      const result=await client.query(`UPDATE approved_products SET approval_status=$2,is_active=($2='approved'),approved_by=CASE WHEN $2='approved' THEN $3 ELSE approved_by END,approved_at=CASE WHEN $2='approved' THEN NOW() ELSE approved_at END,updated_at=NOW() WHERE id=$1 RETURNING *`,[id,status,actorId]);
+      await client.query(`INSERT INTO item_master_audit_events (entity_type,entity_id,action,actor_id,previous_values,new_values) VALUES ('approved_product',$1,$2,$3,$4,$5)`,[id,actions[status],actorId,before.rows[0],result.rows[0]]);
+      await client.query('COMMIT'); return result.rows[0];
+    } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
   }
 
   async searchCatalog(query = {}) {
@@ -144,11 +158,10 @@ class ItemMasterFoundationService {
 
   async createCatalog(payload, actorId) {
     const c=validator.catalog(payload||{});
-    if (c.unit_price != null && (!Number.isFinite(c.unit_price)||c.unit_price<0)) throw createHttpError(400,'unit_price must be non-negative');
     if (c.currency && !/^[A-Z]{3}$/.test(c.currency)) throw createHttpError(400,'currency must be an ISO 4217 code');
     const product=await this.db.query("SELECT 1 FROM approved_products WHERE id=$1 AND approval_status='approved' AND is_active",[c.approved_product_id]);
     if(!product.rowCount) throw createHttpError(409,'Supplier catalog requires an active approved product');
-    try { const result=await this.db.query(`INSERT INTO supplier_catalog_items (supplier_id,approved_product_id,supplier_item_code,supplier_description,purchasing_uom,conversion_factor,package_size,minimum_order_quantity,order_multiple,unit_price,currency,lead_time_days,is_preferred_supplier,is_approved_supplier,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15) RETURNING *`,Object.values(c).concat(actorId)); return result.rows[0]; }
+    try { const result=await this.db.query(`INSERT INTO supplier_catalog_items (supplier_id,approved_product_id,supplier_item_code,supplier_description,purchasing_uom,conversion_factor,package_size,minimum_order_quantity,order_multiple,unit_price,currency,lead_time_days,is_preferred_supplier,is_approved_supplier,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15) RETURNING *`,Object.values(c).concat(actorId)); await this.auditCatalog('CATALOG_CREATED',result.rows[0].id,actorId,null,result.rows[0]); return result.rows[0]; }
     catch(error){if(error.code==='23505')throw createHttpError(409,'Supplier item code already exists for this supplier');throw error;}
   }
 
@@ -156,15 +169,38 @@ class ItemMasterFoundationService {
     const current = await this.db.query('SELECT * FROM supplier_catalog_items WHERE id=$1', [id]);
     if (!current.rowCount) throw createHttpError(404, 'Supplier catalog item not found');
     const merged = validator.catalog({ ...current.rows[0], ...(payload || {}) });
-    if (merged.unit_price != null && (!Number.isFinite(merged.unit_price) || merged.unit_price < 0)) throw createHttpError(400, 'unit_price must be non-negative');
     const result = await this.db.query(`UPDATE supplier_catalog_items SET supplier_id=$2,approved_product_id=$3,supplier_item_code=$4,supplier_description=$5,purchasing_uom=$6,conversion_factor=$7,package_size=$8,minimum_order_quantity=$9,order_multiple=$10,unit_price=$11,currency=$12,lead_time_days=$13,is_preferred_supplier=$14,is_approved_supplier=$15,updated_by=$16,updated_at=NOW() WHERE id=$1 RETURNING *`, [id, ...Object.values(merged), actorId]);
-    return result.rows[0];
+    await this.auditCatalog('CATALOG_UPDATED',id,actorId,current.rows[0],result.rows[0]); return result.rows[0];
   }
 
   async deactivateCatalog(id, actorId) {
     const result = await this.db.query('UPDATE supplier_catalog_items SET is_active=FALSE,updated_by=$2,updated_at=NOW() WHERE id=$1 AND is_active RETURNING *', [id, actorId]);
     if (!result.rowCount) throw createHttpError(404, 'Active supplier catalog item not found');
-    return result.rows[0];
+    await this.auditCatalog('CATALOG_DEACTIVATED',id,actorId,null,result.rows[0]); return result.rows[0];
+  }
+
+  async auditCatalog(action,id,actorId,before,after){
+    await this.db.query(`INSERT INTO item_master_audit_events (entity_type,entity_id,action,actor_id,previous_values,new_values) VALUES ('supplier_catalog_item',$1,$2,$3,$4,$5)`,[id,action,actorId,before,after]);
+  }
+
+  async searchReferences(type, query={}) {
+    const definitions={categories:['item_categories','category_name','normalized_name'],manufacturers:['item_manufacturers','manufacturer_name','normalized_name'],uom:['item_uom','uom_code','normalized_uom_code']};
+    const definition=definitions[type]; if(!definition) throw createHttpError(400,'Invalid reference type');
+    const [table,name]=definition; const q=String(query.q||'').trim();
+    const result=await this.db.query(`SELECT * FROM ${table} WHERE ($1='' OR ${name} ILIKE $2) ORDER BY ${name} LIMIT 100`,[q,`%${q}%`]); return result.rows;
+  }
+
+  async createReference(type,payload,actorId){
+    const definitions={categories:['item_categories','category_name','normalized_name','lower'],manufacturers:['item_manufacturers','manufacturer_name','normalized_name','lower'],uom:['item_uom','uom_code','normalized_uom_code','upper']};
+    const d=definitions[type]; if(!d)throw createHttpError(400,'Invalid reference type');
+    const raw=String(payload.name||payload.code||'').trim(); if(!raw)throw createHttpError(400,'Reference name/code is required');
+    const normalized=d[3]==='upper'?raw.toUpperCase().replace(/[^A-Z0-9]/g,''):raw.toLowerCase().replace(/\s+/g,' ');
+    try { const result=await this.db.query(`INSERT INTO ${d[0]} (${d[1]},${d[2]},is_active,created_by) VALUES ($1,$2,TRUE,$3) RETURNING *`,[raw,normalized,actorId]); await this.db.query(`INSERT INTO item_master_audit_events(entity_type,entity_id,action,actor_id,new_values) VALUES ($1,$2,'REFERENCE_CREATED',$3,$4)`,[d[0],result.rows[0].id,actorId,result.rows[0]]); return result.rows[0]; } catch(error){if(error.code==='23505')throw createHttpError(409,'Normalized reference already exists');throw error;}
+  }
+
+  async deactivateReference(type,id,actorId){
+    const tables={categories:'item_categories',manufacturers:'item_manufacturers',uom:'item_uom'}; const table=tables[type]; if(!table)throw createHttpError(400,'Invalid reference type');
+    const result=await this.db.query(`UPDATE ${table} SET is_active=FALSE,updated_by=$2 WHERE id=$1 AND is_active RETURNING *`,[id,actorId]); if(!result.rowCount)throw createHttpError(404,'Active reference not found'); await this.db.query(`INSERT INTO item_master_audit_events(entity_type,entity_id,action,actor_id,new_values) VALUES ($1,$2,'REFERENCE_DEACTIVATED',$3,$4)`,[table,id,actorId,result.rows[0]]); return result.rows[0];
   }
 
   async submitPending(payload, actorId) {

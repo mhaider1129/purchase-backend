@@ -5,8 +5,8 @@ const { parseDecimal, formatDecimal, compareDecimal, calculatePurchaseOrderTotal
 const fail = (message, code) => Object.assign(new Error(message), { code, statusCode: 409 });
 
 /**
- * The current RFx contract has one aggregate bid_amount and no governed quote
- * line relation.  It is therefore authoritative only for a one-item request.
+ * Controlled compatibility for legacy aggregate responses that predate the
+ * governed rfx_response_items relation. It is authoritative only for one item.
  */
 function priceAggregateRfxResponse({ bidAmount, requestItems, currency = 'USD' }) {
   if (!Array.isArray(requestItems) || requestItems.length === 0) {

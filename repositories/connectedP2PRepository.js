@@ -21,6 +21,10 @@ const createConnectedP2PRepository = (client) => ({
     FROM procurement_awards a LEFT JOIN purchase_order_items poi ON poi.award_id=a.id
     LEFT JOIN purchase_orders po ON po.id=poi.purchase_order_id WHERE a.id=$1 GROUP BY a.id`, [awardId]),
 
+  nextPurchaseOrderNumber: () => one(client, `SELECT 'PO-' || to_char(CURRENT_DATE, 'YYYY') || '-' ||
+    lpad(nextval('public.purchase_order_number_seq')::text, 6, '0') AS po_number`),
+  findPurchaseOrderByNumber: (number) => one(client, 'SELECT id FROM purchase_orders WHERE po_number=$1', [number]),
+
   insertPurchaseOrderHeader: (p) => one(client, `INSERT INTO purchase_orders
     (request_id,supplier_id,currency,status,expected_delivery_date,delivery_location,budget_cost_center,created_by,rfx_id,rfx_response_id,po_number,notes)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,

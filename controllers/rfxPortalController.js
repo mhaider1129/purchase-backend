@@ -5,6 +5,7 @@ const { createAward } = require('../services/procurementAwardService');
 const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
 const { createConnectedP2PRepository } = require('../repositories/connectedP2PRepository');
 const { priceAggregateRfxResponse } = require('../services/rfxAwardPricingService');
+const { submitLinkedRfxResponse } = require('../services/rfxResponseService');
 
 let rfxTablesEnsured = false;
 let ensuringPromise = null;
@@ -258,7 +259,7 @@ const createRfxEvent = async (req, res, next) => {
   const title = normalizeText(req.body?.title);
   const rfxType = normalizeText(req.body?.rfx_type || req.body?.type).toLowerCase();
   const description = normalizeText(req.body?.description) || null;
-  const incomingDetails = req.body?.details ?? (req.body?.items ? { items: req.body.items } : null);
+  let incomingDetails = req.body?.details ?? (req.body?.items ? { items: req.body.items } : null);
   const requestIdRaw = req.body?.request_id ?? req.body?.requestId;
   const dueDateRaw = normalizeText(req.body?.due_date);
   const allowedTypes = new Set(['rfq', 'rfp', 'rfi', 'itt', 'rft']);
@@ -294,6 +295,8 @@ const createRfxEvent = async (req, res, next) => {
       if (rowCount === 0) {
         return next(createHttpError(404, 'Linked request not found'));
       }
+      const requestItems = await pool.query('SELECT id AS requested_item_id, item_name, specs, quantity, approval_comments AS notes FROM requested_items WHERE request_id=$1 ORDER BY id', [requestId]);
+      incomingDetails = { ...(incomingDetails || {}), items: requestItems.rows };
     }
 
     const { rows } = await pool.query(
@@ -319,7 +322,7 @@ const submitRfxResponse = async (req, res, next) => {
 
   const rfxId = Number(req.params.id);
   const supplierName = normalizeText(req.body?.supplier_name);
-  const bidAmount = req.body?.bid_amount !== undefined ? Number(req.body.bid_amount) : null;
+  const bidAmount = req.body?.bid_amount;
   const notes = normalizeText(req.body?.notes) || null;
   const responseData = req.body?.response_data || req.body?.details || null;
 
@@ -329,10 +332,6 @@ const submitRfxResponse = async (req, res, next) => {
 
   if (!supplierName) {
     return next(createHttpError(400, 'Supplier name is required'));
-  }
-
-  if (bidAmount !== null && Number.isNaN(bidAmount)) {
-    return next(createHttpError(400, 'Bid amount must be a number'));
   }
 
   try {
@@ -361,16 +360,33 @@ const submitRfxResponse = async (req, res, next) => {
 
     const supplier = await findOrCreateSupplierByName(pool, supplierName);
 
-    const { rows } = await pool.query(
-      `INSERT INTO rfx_responses (rfx_id, request_id, supplier_id, submitted_by, bid_amount, notes, response_data)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, rfx_id, request_id, supplier_id, bid_amount, notes, response_data, status, created_at`,
-      [rfxId, event.request_id, supplier.id, req.user?.id || null, bidAmount, notes, responseData]
-    );
-
-    res.status(201).json(rows[0]);
+    if (!event.request_id) {
+      const { rows } = await pool.query(
+        `INSERT INTO rfx_responses (rfx_id, request_id, supplier_id, submitted_by, bid_amount, notes, response_data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, rfx_id, request_id, supplier_id, bid_amount, notes, response_data, status, created_at`,
+        [rfxId, null, supplier.id, req.user?.id || null, bidAmount || null, notes, responseData]
+      );
+      return res.status(201).json(rows[0]);
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const repository = {
+        loadRequestedItems: async (requestId) => (await client.query('SELECT * FROM requested_items WHERE request_id=$1 ORDER BY id', [requestId])).rows,
+        insertResponse: async (row) => (await client.query(`INSERT INTO rfx_responses (rfx_id,request_id,supplier_id,submitted_by,bid_amount,notes,response_data) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [row.rfx_id,row.request_id,row.supplier_id,row.submitted_by,row.bid_amount,row.notes,row.response_data])).rows[0],
+        insertResponseItem: async (row) => (await client.query(`INSERT INTO rfx_response_items (rfx_response_id,requested_item_id,quoted_quantity,free_quantity,unit_price,currency,brand,offered_specs,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [row.rfx_response_id,row.requested_item_id,row.quoted_quantity,row.free_quantity,row.unit_price,row.currency,row.brand,row.offered_specs,row.notes])).rows[0],
+      };
+      const result = await submitLinkedRfxResponse({ repository, event, supplierId: supplier.id, submittedBy: req.user?.id || null, bidAmount, notes, responseData, lines: req.body?.items || responseData?.items });
+      await client.query('COMMIT');
+      return res.status(201).json(result);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
   } catch (err) {
     console.error('❌ Failed to submit RFX response:', err);
+    if (err.code?.startsWith('RFX_')) return next(Object.assign(createHttpError(err.statusCode || 400, err.message), { code: err.code }));
     next(createHttpError(500, 'Failed to submit response'));
   }
 };
@@ -626,6 +642,9 @@ const awardRfxResponse = async (req, res, next) => {
     const itemResult = await client.query(
       `SELECT * FROM requested_items WHERE request_id=$1 ORDER BY id FOR UPDATE`, [requestId]
     );
+    const responseItems = await client.query(
+      `SELECT * FROM rfx_response_items WHERE rfx_response_id=$1 ORDER BY id`, [responseId]
+    );
     const conflictingPo = await client.query(
       `SELECT po.* FROM purchase_orders po
         WHERE po.rfx_id = $1 AND po.rfx_response_id IS DISTINCT FROM $2
@@ -638,11 +657,11 @@ const awardRfxResponse = async (req, res, next) => {
         code: 'RFX_WINNER_CONFLICT',
       });
     }
-    const pricedItems = priceAggregateRfxResponse({
-      bidAmount: responseRow.bid_amount,
-      requestItems: itemResult.rows,
-      currency: 'USD',
-    });
+    const pricedItems = responseItems.rows.length ? responseItems.rows.map((line) => ({
+      requestItem: itemResult.rows.find((item) => String(item.id) === String(line.requested_item_id)),
+      quantity: line.quoted_quantity, unitPrice: line.unit_price, currency: line.currency, sourceId: line.id,
+    })) : priceAggregateRfxResponse({ bidAmount: responseRow.bid_amount, requestItems: itemResult.rows, currency: 'USD' });
+    if (pricedItems.some((priced) => !priced.requestItem)) throw Object.assign(createHttpError(409, 'RFx response line is not linked to this request'), { code: 'RFX_REQUESTED_ITEM_MISMATCH' });
 
     // The connected repository is bound to this RFx transaction.  Service-level
     // transactions therefore compose without opening an independent connection.
@@ -654,7 +673,7 @@ const awardRfxResponse = async (req, res, next) => {
       awards.push(await createAward({ repository, requestItem: priced.requestItem,
         supplier: { id: responseRow.supplier_id }, actor,
         input: { awarded_quantity: priced.quantity, unit_price: priced.unitPrice, currency: priced.currency,
-          source_type: 'QUOTATION', source_id: String(responseId), selection_reason: awardNotes || `Winning RFx response ${responseId}`,
+          source_type: 'QUOTATION', source_id: String(priced.sourceId || responseId), selection_reason: awardNotes || `Winning RFx response ${responseId}`,
           idempotency_key: `rfx:${rfxId}:response:${responseId}:item:${priced.requestItem.id}` } }));
     }
     const poRow = await createPurchaseOrderFromAwards({ repository,

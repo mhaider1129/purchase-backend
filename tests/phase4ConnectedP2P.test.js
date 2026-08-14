@@ -71,7 +71,7 @@ describe('Phase 4 connection corrections', () => {
   test('PO inherits award traceability and rejects a supplied wrong supplier', async () => {
     const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
     const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, status: 'ACTIVE', awarded_quantity: '10', unit_price: '4', currency: 'USD', source_type: 'QUOTATION', source_id: 6 };
-    const tx = { lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), insertHeader: async row => ({ id: 9, ...row }), insertLine: async row => row };
+    const tx = { lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), nextPurchaseOrderNumber: async () => ({ po_number: 'PO-2026-000001' }), findPurchaseOrderByNumber: async () => null, insertHeader: async row => ({ id: 9, ...row }), insertLine: async row => row };
     const repository = { withTransaction: work => work(tx) };
     const po = await createPurchaseOrderFromAwards({ repository, awardIds: [8], actor: { id: 7 } });
     expect(po).toMatchObject({ supplier_id: 3, request_id: 1, lines: [{ award_id: 8, request_item_id: 2, quantity: '10', price_source_type: 'QUOTATION' }] });
@@ -85,6 +85,8 @@ describe('Phase 4 connection corrections', () => {
     const repository = { withTransaction: async work => work({
       lockAwards: async () => [award],
       getAwardConversion: async () => ({ remaining_quantity: String(100 - ordered) }),
+      nextPurchaseOrderNumber: async () => ({ po_number: `PO-2026-${String(ordered + 1).padStart(6, '0')}` }),
+      findPurchaseOrderByNumber: async () => null,
       insertHeader: async () => ({ id: ordered + 1 }),
       insertLine: async row => { ordered += Number(row.quantity); return row; },
     }) };

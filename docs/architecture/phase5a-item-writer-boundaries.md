@@ -26,3 +26,8 @@ The normalized hierarchy itself is migration-owned by `20260727_item_master_foun
 ## Financial precision inventory
 
 Item-authoritative violations to correct later: catalog validator coerces `unit_price`, conversion factors, package size, MOQ, order multiple and lead time with `Number`; catalog service tests finiteness as Number; `uomConversionService` converts package price with `Number`; legacy controller numeric helper converts `standard_cost`, reorder and safety values; supplier controller numeric normalization may cover commercial values. Dashboard reporting also uses `parseFloat`; Phase 4 pricing/totals use `Number` in `procureToPayService`, `procurementPricingService`, RFx pricing and dashboards. These are enumerated rather than silently accepted: authoritative money should cross boundaries as decimal strings/minor units and use exact decimal arithmetic.
+## Phase 5A.2 conversion writer boundary
+
+`ItemMasterFoundationService` is the sole canonical writer for controlled UOM identity, Product packaging, and Supplier Catalog packaging. It derives compatibility `inventory_conversion_factor` from `package_quantity`. `InventoryItemCreationService` may only project an active `inventory_uom_id`. Goods Receipt and Inventory Posting write immutable snapshots and ledger results, not master conversion rules. `uomConversionService` is the one canonical calculation module.
+
+`ensureItemMasterTables` creates legacy `item_conversion`, but canonical DML does not use it. `generic_items.conversion_rules`, UOM text, Product factor, and Catalog `package_size` are compatibility fields. Migration-owned `item_uom_conversions` accepts universal ratios only and never product packaging.

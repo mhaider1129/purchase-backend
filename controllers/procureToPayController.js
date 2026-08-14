@@ -427,18 +427,16 @@ const getPoSourceRequests = async (req, res, next) => {
     const filters = [
       `LOWER(r.status) = 'approved'`,
       `EXISTS (
-        SELECT 1
-          FROM requested_items ri
-          LEFT JOIN LATERAL (
-            SELECT COALESCE(SUM(poi.quantity), 0) AS ordered_quantity
-              FROM purchase_order_items poi
-              JOIN purchase_orders po ON po.id = poi.purchase_order_id
-             WHERE po.request_id = ri.request_id
-               AND poi.requested_item_id = ri.id
-               AND po.status <> 'PO_CANCELLED'
-          ) po_allocated ON TRUE
-         WHERE ri.request_id = r.id
-           AND GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) > 0
+        SELECT 1 FROM procurement_awards pa
+         WHERE pa.request_id = r.id
+           AND pa.status = 'ACTIVE'
+           AND pa.awarded_quantity > COALESCE((
+             SELECT SUM(poi.quantity)
+               FROM purchase_order_items poi
+               JOIN purchase_orders po ON po.id = poi.purchase_order_id
+              WHERE poi.award_id = pa.id
+                AND po.status NOT IN ('PO_CANCELLED', 'CANCELLED')
+           ), 0)
       )`,
     ];
 
@@ -464,32 +462,42 @@ const getPoSourceRequests = async (req, res, next) => {
          SELECT json_agg(
                   json_build_object(
                     'requested_item_id', remaining.requested_item_id,
+                    'award_id', remaining.award_id,
                     'item_name', remaining.item_name,
                     'requested_quantity', remaining.requested_quantity,
                     'po_allocated_quantity', remaining.po_allocated_quantity,
                     'remaining_quantity', remaining.remaining_quantity,
-                    'unit_price', remaining.unit_price
+                    'unit_price', remaining.unit_price,
+                    'currency', remaining.currency,
+                    'supplier_id', remaining.supplier_id,
+                    'supplier_name', remaining.supplier_name
                   )
                   ORDER BY remaining.requested_item_id
                 ) AS items
            FROM (
              SELECT ri.id AS requested_item_id,
+                    pa.id AS award_id,
                     ri.item_name,
-                    COALESCE(ri.quantity, 0) AS requested_quantity,
+                    pa.awarded_quantity AS requested_quantity,
                     COALESCE(po_allocated.ordered_quantity, 0) AS po_allocated_quantity,
-                    GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) AS remaining_quantity,
-                    COALESCE(ri.unit_cost, 0) AS unit_price
-               FROM requested_items ri
+                    GREATEST(pa.awarded_quantity - COALESCE(po_allocated.ordered_quantity, 0), 0) AS remaining_quantity,
+                    pa.unit_price,
+                    pa.currency,
+                    pa.supplier_id,
+                    s.name AS supplier_name
+               FROM procurement_awards pa
+               JOIN requested_items ri ON ri.id = pa.request_item_id
+               JOIN suppliers s ON s.id = pa.supplier_id
                LEFT JOIN LATERAL (
                  SELECT COALESCE(SUM(poi.quantity), 0) AS ordered_quantity
                    FROM purchase_order_items poi
                    JOIN purchase_orders po ON po.id = poi.purchase_order_id
-                  WHERE po.request_id = ri.request_id
-                    AND poi.requested_item_id = ri.id
-                    AND po.status <> 'PO_CANCELLED'
+                  WHERE poi.award_id = pa.id
+                    AND po.status NOT IN ('PO_CANCELLED', 'CANCELLED')
                ) po_allocated ON TRUE
-              WHERE ri.request_id = r.id
-                AND GREATEST(COALESCE(ri.quantity, 0) - COALESCE(po_allocated.ordered_quantity, 0), 0) > 0
+              WHERE pa.request_id = r.id
+                AND pa.status = 'ACTIVE'
+                AND GREATEST(pa.awarded_quantity - COALESCE(po_allocated.ordered_quantity, 0), 0) > 0
            ) remaining
        ) remaining_items ON TRUE
        ${whereClause}

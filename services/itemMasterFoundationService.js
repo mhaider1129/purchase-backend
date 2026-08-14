@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const validator = require('../validators/itemMasterFoundationValidator');
+const uomAuthority = require('./uomConversionService');
 
 const SORTS = Object.freeze({ name: 'generic_name', code: 'item_code', updated: 'updated_at', created: 'created_at' });
 const pageOptions = query => ({
@@ -40,8 +41,8 @@ class ItemMasterFoundationService {
       await client.query('BEGIN');
       const references = await client.query(`SELECT
         EXISTS(SELECT 1 FROM item_categories WHERE id=$1 AND is_active=TRUE) category_ok,
-        EXISTS(SELECT 1 FROM item_uom WHERE id=$2) base_uom_ok,
-        EXISTS(SELECT 1 FROM item_uom WHERE id=$3) inventory_uom_ok`,[item.category_id,item.base_uom_id,item.inventory_uom_id]);
+        EXISTS(SELECT 1 FROM item_uom WHERE id=$2 AND is_active=TRUE) base_uom_ok,
+        EXISTS(SELECT 1 FROM item_uom WHERE id=$3 AND is_active=TRUE) inventory_uom_ok`,[item.category_id,item.base_uom_id,item.inventory_uom_id]);
       if(!Object.values(references.rows[0]).every(Boolean)) throw createHttpError(400,'One or more controlled references are invalid or inactive');
       const duplicate = await client.query(
         `SELECT id, generic_name, structured_fingerprint FROM generic_items
@@ -115,6 +116,7 @@ class ItemMasterFoundationService {
 
   async createProduct(payload, actorId) {
     const p = validator.product(payload || {});
+    uomAuthority.validateProductPackaging({ packageQuantity: p.package_quantity, productUom: p.product_uom_id });
     if (!p.manufacturer_id || !p.product_uom_id) throw createHttpError(400, 'manufacturer_id and product_uom_id are required');
     const client = await this.db.connect();
     try {
@@ -124,7 +126,7 @@ class ItemMasterFoundationService {
       const manufacturer = await client.query('SELECT manufacturer_name FROM item_manufacturers WHERE id=$1 AND is_active=TRUE FOR SHARE', [p.manufacturer_id]);
       const uom = await client.query('SELECT uom_code FROM item_uom WHERE id=$1 AND is_active=TRUE FOR SHARE', [p.product_uom_id]);
       if (!manufacturer.rowCount || !uom.rowCount) throw createHttpError(400, 'Manufacturer or product UOM is invalid');
-      const result = await client.query(`INSERT INTO approved_products (generic_item_id,product_identifier,manufacturer,manufacturer_id,product_name,product_description,manufacturer_part_number,normalized_manufacturer_part_number,model,technical_specifications,package_quantity,product_uom,product_uom_id,inventory_conversion_factor,regulatory_identifiers,technical_notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`, [p.generic_item_id,p.product_identifier,manufacturer.rows[0].manufacturer_name,p.manufacturer_id,p.product_name,p.product_description,p.manufacturer_part_number,p.normalized_manufacturer_part_number,p.model,p.technical_specifications,p.package_quantity,uom.rows[0].uom_code,p.product_uom_id,p.inventory_conversion_factor,p.regulatory_identifiers,p.technical_notes,actorId]);
+      const result = await client.query(`INSERT INTO approved_products (generic_item_id,product_identifier,manufacturer,manufacturer_id,product_name,product_description,manufacturer_part_number,normalized_manufacturer_part_number,model,technical_specifications,package_quantity,product_uom,product_uom_id,inventory_conversion_factor,regulatory_identifiers,technical_notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`, [p.generic_item_id,p.product_identifier,manufacturer.rows[0].manufacturer_name,p.manufacturer_id,p.product_name,p.product_description,p.manufacturer_part_number,p.normalized_manufacturer_part_number,p.model,p.technical_specifications,p.package_quantity,uom.rows[0].uom_code,p.product_uom_id,p.package_quantity,p.regulatory_identifiers,p.technical_notes,actorId]);
       await client.query(`INSERT INTO item_master_audit_events (entity_type,entity_id,action,actor_id,new_values) VALUES ('approved_product',$1,'PRODUCT_CREATED',$2,$3)`, [result.rows[0].id, actorId, result.rows[0]]);
       await client.query('COMMIT');
       return result.rows[0];
@@ -173,10 +175,13 @@ class ItemMasterFoundationService {
 
   async createCatalog(payload, actorId) {
     const c=validator.catalog(payload||{});
+    uomAuthority.validateSupplierPackaging({ conversionFactor:c.conversion_factor,purchasingUom:c.purchasing_uom,minimumOrderQuantity:c.minimum_order_quantity,orderMultiple:c.order_multiple });
     if (c.currency && !/^[A-Z]{3}$/.test(c.currency)) throw createHttpError(400,'currency must be an ISO 4217 code');
     try { return await this.withTransaction(async client => {
-      const product=await client.query("SELECT 1 FROM approved_products WHERE id=$1 AND approval_status='approved' AND is_active FOR SHARE",[c.approved_product_id]);
+      const product=await client.query("SELECT 1 FROM approved_products p JOIN generic_items g ON g.id=p.generic_item_id WHERE p.id=$1 AND p.approval_status='approved' AND p.is_active AND g.lifecycle_status='active' AND g.is_active FOR SHARE OF p,g",[c.approved_product_id]);
       if(!product.rowCount) throw createHttpError(409,'Supplier catalog requires an active approved product');
+      const supplier=await client.query('SELECT 1 FROM suppliers WHERE id=$1 FOR SHARE',[c.supplier_id]);
+      if(!supplier.rowCount) throw createHttpError(400,'Supplier does not exist');
       const result=await client.query(`INSERT INTO supplier_catalog_items (supplier_id,approved_product_id,supplier_item_code,supplier_description,purchasing_uom,conversion_factor,package_size,minimum_order_quantity,order_multiple,unit_price,currency,lead_time_days,is_preferred_supplier,is_approved_supplier,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15) RETURNING *`,Object.values(c).concat(actorId));
       await this.auditCatalog(client,'CATALOG_CREATED',result.rows[0].id,actorId,null,result.rows[0]); return result.rows[0];
     }); } catch(error){if(error.code==='23505')throw createHttpError(409,'Supplier item code already exists for this supplier');throw error;}
@@ -187,6 +192,12 @@ class ItemMasterFoundationService {
       const current = await client.query('SELECT * FROM supplier_catalog_items WHERE id=$1 FOR UPDATE', [id]);
       if (!current.rowCount) throw createHttpError(404, 'Supplier catalog item not found');
       const merged = validator.catalog({ ...current.rows[0], ...(payload || {}) });
+      if (merged.currency && !/^[A-Z]{3}$/.test(merged.currency)) throw createHttpError(400,'currency must be an ISO 4217 code');
+      uomAuthority.validateSupplierPackaging({ conversionFactor:merged.conversion_factor,purchasingUom:merged.purchasing_uom,minimumOrderQuantity:merged.minimum_order_quantity,orderMultiple:merged.order_multiple });
+      const product = await client.query("SELECT 1 FROM approved_products p JOIN generic_items g ON g.id=p.generic_item_id WHERE p.id=$1 AND p.approval_status='approved' AND p.is_active AND g.lifecycle_status='active' AND g.is_active FOR SHARE OF p,g", [merged.approved_product_id]);
+      if (!product.rowCount) throw createHttpError(409,'Supplier catalog requires an active approved product');
+      const supplier = await client.query('SELECT 1 FROM suppliers WHERE id=$1 FOR SHARE', [merged.supplier_id]);
+      if (!supplier.rowCount) throw createHttpError(400,'Supplier does not exist');
       const result = await client.query(`UPDATE supplier_catalog_items SET supplier_id=$2,approved_product_id=$3,supplier_item_code=$4,supplier_description=$5,purchasing_uom=$6,conversion_factor=$7,package_size=$8,minimum_order_quantity=$9,order_multiple=$10,unit_price=$11,currency=$12,lead_time_days=$13,is_preferred_supplier=$14,is_approved_supplier=$15,updated_by=$16,updated_at=NOW() WHERE id=$1 RETURNING *`, [id, ...Object.values(merged), actorId]);
       await this.auditCatalog(client,'CATALOG_UPDATED',id,actorId,current.rows[0],result.rows[0]); return result.rows[0];
     });
@@ -244,7 +255,7 @@ class ItemMasterFoundationService {
   async referenceData() {
     const [categories,uom,manufacturers] = await Promise.all([
       this.db.query('SELECT id,category_name name,description FROM item_categories WHERE is_active=TRUE ORDER BY category_name'),
-      this.db.query('SELECT id,uom_code code,uom_name name,description FROM item_uom ORDER BY uom_code'),
+      this.db.query('SELECT id,uom_code code,uom_name name,description,is_base_uom FROM item_uom WHERE is_active=TRUE ORDER BY uom_code'),
       this.db.query('SELECT id,manufacturer_name name,country_of_origin FROM item_manufacturers WHERE is_active=TRUE ORDER BY manufacturer_name'),
     ]);
     return {categories:categories.rows,uom:uom.rows,manufacturers:manufacturers.rows};

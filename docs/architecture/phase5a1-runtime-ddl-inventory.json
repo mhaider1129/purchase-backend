@@ -1,0 +1,10 @@
+[
+  {"helper":"utils/ensureItemMasterTables.js","area":"legacy Item Master and references","status":"REQUIRED COMPATIBILITY"},
+  {"helper":"utils/ensureRequestedItemApprovalColumns.js","area":"requested items","status":"MIGRATION COVERED"},
+  {"helper":"utils/ensureRequestedItemFinancialsTable.js","area":"requested items","status":"UNKNOWN"},
+  {"helper":"utils/ensureRequestedItemUnitOfMeasureColumn.js","area":"requested items","status":"UNKNOWN"},
+  {"helper":"utils/ensureItemRecallsTable.js","area":"recalls","status":"REQUIRED COMPATIBILITY"},
+  {"helper":"utils/ensureWarehouseSupplyTables.js","area":"warehouse supply","status":"REQUIRED COMPATIBILITY"},
+  {"helper":"utils/ensureWarehouseInventoryTables.js","area":"stock and warehouse identity","status":"REQUIRED COMPATIBILITY"},
+  {"helper":"utils/ensureMonthlyDispensingTables.js","area":"monthly dispensing","status":"UNKNOWN"}
+]

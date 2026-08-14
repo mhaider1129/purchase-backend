@@ -14,7 +14,7 @@ class ItemMasterRepository {
     const result = await this.client.query(`SELECT ap.*, m.name AS manufacturer_name, u.name AS product_uom_name
       FROM approved_products ap
       LEFT JOIN item_manufacturers m ON m.id = ap.manufacturer_id
-      LEFT JOIN item_uom u ON u.id = ap.uom_id
+      LEFT JOIN item_uom u ON u.id = ap.product_uom_id
       WHERE ap.id = $1 FOR SHARE`, [id]);
     return result.rows[0] || null;
   }

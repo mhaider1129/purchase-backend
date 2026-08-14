@@ -30,6 +30,19 @@ const positive = (value, field, fallback = null) => {
   return normalized;
 };
 
+// PostgreSQL NUMERIC values cross this boundary as canonical decimal strings.
+// Never convert authoritative quantities or money through IEEE-754 Number.
+const decimal = (value, field, { fallback = null, allowZero = false } = {}) => {
+  if (value == null || value === '') return fallback;
+  const normalized = String(value).trim();
+  if (!/^\+?(?:\d+)(?:\.\d+)?$/.test(normalized)) {
+    throw createHttpError(400, `${field} must be an exact decimal`);
+  }
+  const canonical = normalized.replace(/^\+/, '').replace(/^0+(?=\d)/, '');
+  if (!allowZero && /^0(?:\.0+)?$/.test(canonical)) throw createHttpError(400, `${field} must be greater than zero`);
+  return canonical;
+};
+
 const object = (value, field, fallback = {}) => {
   if (value == null) return fallback;
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -92,10 +105,10 @@ const product = payload => ({
   normalized_manufacturer_part_number: text(payload.manufacturer_part_number, 'manufacturer_part_number', true).toUpperCase().replace(/[^A-Z0-9]/g, ''),
   model: text(payload.model, 'model'),
   technical_specifications: object(payload.technical_specifications, 'technical_specifications'),
-  package_quantity: positive(payload.package_quantity, 'package_quantity', 1),
+  package_quantity: decimal(payload.package_quantity, 'package_quantity', { fallback: '1' }),
   product_uom: text(payload.product_uom, 'product_uom', true).toUpperCase(),
   product_uom_id: positive(payload.product_uom_id, 'product_uom_id'),
-  inventory_conversion_factor: positive(payload.inventory_conversion_factor, 'inventory_conversion_factor', 1),
+  inventory_conversion_factor: decimal(payload.inventory_conversion_factor, 'inventory_conversion_factor', { fallback: '1' }),
   regulatory_identifiers: object(payload.regulatory_identifiers, 'regulatory_identifiers'),
   technical_notes: text(payload.technical_notes, 'technical_notes'),
 });
@@ -106,11 +119,11 @@ const catalog = payload => ({
   supplier_item_code: text(payload.supplier_item_code, 'supplier_item_code', true),
   supplier_description: text(payload.supplier_description, 'supplier_description'),
   purchasing_uom: text(payload.purchasing_uom, 'purchasing_uom', true).toUpperCase(),
-  conversion_factor: positive(payload.conversion_factor, 'conversion_factor', 1),
-  package_size: positive(payload.package_size, 'package_size', 1),
-  minimum_order_quantity: positive(payload.minimum_order_quantity, 'minimum_order_quantity', 1),
-  order_multiple: positive(payload.order_multiple, 'order_multiple', 1),
-  unit_price: payload.unit_price == null ? null : Number(payload.unit_price),
+  conversion_factor: decimal(payload.conversion_factor, 'conversion_factor', { fallback: '1' }),
+  package_size: decimal(payload.package_size, 'package_size', { fallback: '1' }),
+  minimum_order_quantity: decimal(payload.minimum_order_quantity, 'minimum_order_quantity', { fallback: '1' }),
+  order_multiple: decimal(payload.order_multiple, 'order_multiple', { fallback: '1' }),
+  unit_price: decimal(payload.unit_price, 'unit_price', { allowZero: true }),
   currency: text(payload.currency, 'currency')?.toUpperCase() || null,
   lead_time_days: payload.lead_time_days == null ? null : Number(payload.lead_time_days),
   is_preferred_supplier: Boolean(payload.is_preferred_supplier),

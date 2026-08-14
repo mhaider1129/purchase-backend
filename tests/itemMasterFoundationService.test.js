@@ -21,13 +21,15 @@ describe('ItemMasterFoundationService', () => {
   });
 
   test('requires an active generic item before creating a product', async () => {
-    const service = new ItemMasterFoundationService({ query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }) });
+    const client = { query: jest.fn(async sql => sql.includes('SELECT 1 FROM generic_items') ? { rowCount: 0, rows: [] } : {}), release: jest.fn() };
+    const service = new ItemMasterFoundationService({ connect: jest.fn(async () => client) });
     await expect(service.createProduct({ generic_item_id: 7, manufacturer: 'Acme', manufacturer_id: 2, product_name: 'Pump Set', manufacturer_part_number: 'P-1', product_uom: 'EA', product_uom_id: 4 }, 3))
       .rejects.toMatchObject({ statusCode: 409 });
   });
 
   test('requires an approved product before creating supplier commercial data', async () => {
-    const service = new ItemMasterFoundationService({ query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }) });
+    const client = { query: jest.fn(async sql => sql.includes('SELECT 1 FROM approved_products') ? { rowCount: 0, rows: [] } : {}), release: jest.fn() };
+    const service = new ItemMasterFoundationService({ connect: jest.fn(async () => client) });
     await expect(service.createCatalog({ supplier_id: 2, approved_product_id: 8, supplier_item_code: 'S-8', purchasing_uom: 'BOX' }, 3))
       .rejects.toMatchObject({ statusCode: 409 });
   });

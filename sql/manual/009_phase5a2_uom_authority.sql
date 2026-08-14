@@ -1,0 +1,57 @@
+-- PHASE 5A.2 MANUAL MIGRATION. Review and execute manually only.
+-- Every statement before BEGIN is read-only preflight; stop on any non-zero defect.
+SELECT 'duplicate_uom_identity' check_name, COUNT(*) defect_count FROM (SELECT normalized_uom_code FROM item_uom GROUP BY normalized_uom_code HAVING COUNT(*)>1) d;
+SELECT 'invalid_generic_uom_reference', COUNT(*) FROM generic_items g LEFT JOIN item_uom b ON b.id=g.base_uom_id LEFT JOIN item_uom i ON i.id=g.inventory_uom_id WHERE (g.base_uom_id IS NOT NULL AND b.id IS NULL) OR (g.inventory_uom_id IS NOT NULL AND i.id IS NULL);
+SELECT 'nonpositive_product_package', COUNT(*) FROM approved_products WHERE package_quantity<=0 OR inventory_conversion_factor<=0;
+SELECT 'nonpositive_supplier_conversion_or_rules', COUNT(*) FROM supplier_catalog_items WHERE conversion_factor<=0 OR package_size<=0 OR minimum_order_quantity<=0 OR order_multiple<=0;
+SELECT 'supplier_uom_without_exact_code', COUNT(*) FROM supplier_catalog_items c LEFT JOIN item_uom u ON UPPER(TRIM(u.uom_code))=UPPER(TRIM(c.purchasing_uom)) WHERE u.id IS NULL;
+SELECT 'generic_uom_text_id_mismatch', COUNT(*) FROM generic_items g LEFT JOIN item_uom b ON b.id=g.base_uom_id LEFT JOIN item_uom i ON i.id=g.inventory_uom_id WHERE (b.id IS NOT NULL AND UPPER(TRIM(g.base_uom))<>UPPER(TRIM(b.uom_code))) OR (i.id IS NOT NULL AND UPPER(TRIM(g.inventory_uom))<>UPPER(TRIM(i.uom_code)));
+SELECT 'product_uom_text_id_mismatch', COUNT(*) FROM approved_products p JOIN item_uom u ON u.id=p.product_uom_id WHERE UPPER(TRIM(p.product_uom))<>UPPER(TRIM(u.uom_code));
+SELECT 'stock_inventory_uom_missing', COUNT(*) FROM stock_items WHERE inventory_uom_id IS NULL;
+SELECT 'po_snapshot_missing', COUNT(*) FROM purchase_order_items; -- all deployed rows need governed review before backfill
+SELECT 'gr_snapshot_missing', COUNT(*) FROM goods_receipt_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
+SELECT 'inventory_snapshot_missing', COUNT(*) FROM inventory_transactions WHERE source_quantity IS NULL OR source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
+
+BEGIN;
+
+ALTER TABLE supplier_catalog_items ADD COLUMN IF NOT EXISTS purchasing_uom_id INTEGER REFERENCES item_uom(id) ON DELETE RESTRICT;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS source_uom TEXT;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS base_uom TEXT;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS conversion_factor NUMERIC;
+ALTER TABLE purchase_order_items DROP CONSTRAINT IF EXISTS purchase_order_items_positive_conversion;
+ALTER TABLE purchase_order_items ADD CONSTRAINT purchase_order_items_positive_conversion CHECK (conversion_factor IS NULL OR conversion_factor > 0) NOT VALID;
+CREATE INDEX IF NOT EXISTS supplier_catalog_items_purchasing_uom_id_idx ON supplier_catalog_items(purchasing_uom_id);
+
+-- Universal conversions only. Application governance rejects packaging units;
+-- this table deliberately has no Generic/Product/Catalog foreign key.
+CREATE TABLE IF NOT EXISTS item_uom_conversions (
+  id BIGSERIAL PRIMARY KEY,
+  from_uom_id INTEGER NOT NULL REFERENCES item_uom(id) ON DELETE RESTRICT,
+  to_uom_id INTEGER NOT NULL REFERENCES item_uom(id) ON DELETE RESTRICT,
+  conversion_factor NUMERIC(30,12) NOT NULL CHECK (conversion_factor > 0),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT item_uom_conversions_distinct CHECK (from_uom_id<>to_uom_id),
+  CONSTRAINT item_uom_conversions_unique_direction UNIQUE(from_uom_id,to_uom_id)
+);
+
+COMMENT ON TABLE item_uom_conversions IS 'Universal dimensional conversions only; product/supplier packaging is forbidden.';
+COMMENT ON COLUMN approved_products.inventory_conversion_factor IS 'Deprecated compatibility projection of package_quantity; do not write independently.';
+COMMENT ON COLUMN generic_items.conversion_rules IS 'Deprecated legacy compatibility; not a conversion authority.';
+COMMENT ON COLUMN generic_items.purchasing_uom IS 'Legacy/default display preference; Supplier Catalog purchasing UOM is authoritative.';
+COMMENT ON COLUMN supplier_catalog_items.package_size IS 'Deprecated ambiguous metadata; not used in canonical arithmetic.';
+COMMENT ON COLUMN supplier_catalog_items.conversion_factor IS 'Approved Product UOMs per Supplier Purchasing UOM.';
+COMMENT ON COLUMN purchase_order_items.conversion_factor IS 'Immutable inventory-units-per-source-UOM snapshot at PO award.';
+
+-- Safe mapping is exact controlled code only and is intentionally visible.
+UPDATE supplier_catalog_items c SET purchasing_uom_id=u.id
+FROM item_uom u
+WHERE c.purchasing_uom_id IS NULL AND UPPER(TRIM(c.purchasing_uom))=UPPER(TRIM(u.uom_code));
+
+COMMIT;
+
+-- Postflight; do not make new fields NOT NULL until historical exceptions are resolved.
+SELECT 'supplier_uom_still_unmapped' check_name, COUNT(*) defect_count FROM supplier_catalog_items WHERE purchasing_uom_id IS NULL;
+SELECT 'po_snapshot_still_missing', COUNT(*) FROM purchase_order_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;

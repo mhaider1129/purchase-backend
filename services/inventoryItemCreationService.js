@@ -16,7 +16,7 @@ function deriveIdentity(generic, product, uom) {
     categoryName: generic.category_name, subcategoryName: generic.subcategory,
     manufacturerId: product?.manufacturer_id || null, manufacturerName,
     genericItemId: generic.id, approvedProductId: product?.id || null,
-    inventoryUomId: uom.id, uomName: uom.name || uom.code,
+    inventoryUomId: uom.id, uomName: uom.uom_name || uom.uom_code,
     snapshot: { generic_item_id: generic.id, approved_product_id: product?.id || null,
       category_id: generic.category_id, manufacturer_id: product?.manufacturer_id || null,
       inventory_uom_id: uom.id, display_name: name },

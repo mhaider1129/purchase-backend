@@ -4,7 +4,7 @@ const { ensureSuppliersTable, findOrCreateSupplierByName } = require('./supplier
 const { createAward } = require('../services/procurementAwardService');
 const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
 const { createConnectedP2PRepository } = require('../repositories/connectedP2PRepository');
-const { priceAggregateRfxResponse } = require('../services/rfxAwardPricingService');
+const { priceAggregateRfxResponse, priceNormalizedRfxResponse } = require('../services/rfxAwardPricingService');
 const { submitLinkedRfxResponse } = require('../services/rfxResponseService');
 
 let rfxTablesEnsured = false;
@@ -657,11 +657,9 @@ const awardRfxResponse = async (req, res, next) => {
         code: 'RFX_WINNER_CONFLICT',
       });
     }
-    const pricedItems = responseItems.rows.length ? responseItems.rows.map((line) => ({
-      requestItem: itemResult.rows.find((item) => String(item.id) === String(line.requested_item_id)),
-      quantity: line.quoted_quantity, unitPrice: line.unit_price, currency: line.currency, sourceId: line.id,
-    })) : priceAggregateRfxResponse({ bidAmount: responseRow.bid_amount, requestItems: itemResult.rows, currency: 'USD' });
-    if (pricedItems.some((priced) => !priced.requestItem)) throw Object.assign(createHttpError(409, 'RFx response line is not linked to this request'), { code: 'RFX_REQUESTED_ITEM_MISMATCH' });
+    const pricedItems = responseItems.rows.length
+      ? priceNormalizedRfxResponse({ responseItems: responseItems.rows, requestItems: itemResult.rows })
+      : priceAggregateRfxResponse({ bidAmount: responseRow.bid_amount, requestItems: itemResult.rows, currency: 'USD' });
 
     // The connected repository is bound to this RFx transaction.  Service-level
     // transactions therefore compose without opening an independent connection.

@@ -6,6 +6,17 @@ const one = async (client, sql, values) => (await client.query(sql, values)).row
 
 const createConnectedP2PRepository = (client) => ({
   client,
+  async withSavepoint(work) {
+    await client.query('SAVEPOINT generated_po_number');
+    try {
+      const result = await work();
+      await client.query('RELEASE SAVEPOINT generated_po_number');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK TO SAVEPOINT generated_po_number');
+      throw error;
+    }
+  },
 
   lockRequestItem: (id) => one(client, 'SELECT * FROM requested_items WHERE id=$1 FOR UPDATE', [id]),
   loadActiveAwards: async (requestItemId) => (await client.query("SELECT * FROM procurement_awards WHERE request_item_id=$1 AND status='ACTIVE' ORDER BY id", [requestItemId])).rows,

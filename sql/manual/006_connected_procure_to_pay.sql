@@ -111,6 +111,22 @@ END $$;
 -- Sequence allocation is atomic under concurrency. Gaps are intentional: an
 -- allocated identity is never recycled after transaction rollback.
 CREATE SEQUENCE IF NOT EXISTS public.purchase_order_number_seq AS BIGINT START WITH 1;
+DO $sequence_seed$
+DECLARE governed_max BIGINT;
+BEGIN
+ SELECT MAX(substring(po_number FROM '^PO-[0-9]{4}-([0-9]{6})$')::BIGINT)
+   INTO governed_max
+   FROM public.purchase_orders
+  WHERE po_number ~ '^PO-[0-9]{4}-[0-9]{6}$';
+ IF governed_max IS NOT NULL THEN
+   -- setval(..., true) makes the next nextval strictly greater than the suffix.
+   PERFORM setval(
+     'public.purchase_order_number_seq',
+     GREATEST(governed_max, (SELECT last_value FROM public.purchase_order_number_seq)),
+     true
+   );
+ END IF;
+END $sequence_seed$;
 
 CREATE TABLE IF NOT EXISTS public.rfx_response_items (
  id BIGSERIAL PRIMARY KEY,

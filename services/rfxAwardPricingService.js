@@ -48,4 +48,25 @@ function priceAggregateRfxResponse({ bidAmount, requestItems, currency = 'USD' }
   return [{ requestItem: item, quantity, unitPrice, currency }];
 }
 
-module.exports = { priceAggregateRfxResponse };
+function priceNormalizedRfxResponse({ responseItems, requestItems }) {
+  if (!Array.isArray(responseItems) || !responseItems.length) throw fail('RFx response has no normalized quotation lines', 'RFX_LINE_PRICING_REQUIRED');
+  const requested = new Map(requestItems.map(item => [String(item.id), item]));
+  const seen = new Set();
+  const currencies = new Set();
+  const priced = responseItems.map((line) => {
+    const key = String(line.requested_item_id);
+    const requestItem = requested.get(key);
+    if (!requestItem) throw fail('RFx response line is not linked to this request', 'RFX_REQUESTED_ITEM_MISMATCH');
+    if (seen.has(key)) throw fail('RFx response contains duplicate requested items', 'RFX_DUPLICATE_RESPONSE_ITEM');
+    seen.add(key);
+    const required = String(requestItem.approved_quantity ?? requestItem.quantity ?? '');
+    if (compareDecimal(line.quoted_quantity, required) !== 0) throw fail('Winning response quantity no longer covers the governed request', 'RFX_QUOTATION_QUANTITY_MISMATCH');
+    currencies.add(String(line.currency).toUpperCase());
+    return { requestItem, quantity: line.quoted_quantity, unitPrice: line.unit_price, currency: String(line.currency).toUpperCase(), sourceId: line.id };
+  });
+  if (seen.size !== requested.size) throw fail('Winning response must cover every requested item', 'RFX_INCOMPLETE_QUOTATION');
+  if (currencies.size !== 1) throw fail('Winning response must use one currency', 'RFX_MIXED_CURRENCY_NOT_SUPPORTED');
+  return priced;
+}
+
+module.exports = { priceAggregateRfxResponse, priceNormalizedRfxResponse };

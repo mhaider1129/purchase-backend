@@ -5,6 +5,11 @@ const { commitPurchaseOrder } = require('./budgetCommitmentService');
 const defaultAudit = require('./auditService');
 const defaultOutbox = require('./notificationOutboxService');
 const normalizePoNumber = (value) => String(value || '').trim().toUpperCase();
+const MAX_GENERATED_NUMBER_ATTEMPTS = 5;
+const isPoNumberCollision = (error) => error?.code === '23505' && (
+  error.constraint === 'purchase_orders_po_number_key'
+  || /\bpo_number\b/i.test(String(error.detail || ''))
+);
 const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities = {}, actor, input = {} }) => repository.withTransaction(async (tx) => {
   if (!Array.isArray(awardIds) || !awardIds.length) throw Object.assign(new Error('At least one award is required'), { code: 'AWARD_REQUIRED' });
   const awards = await tx.lockAwards(awardIds);
@@ -23,14 +28,28 @@ const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities 
     conversions.set(String(award.id), quantity);
   }
   let poNumber = normalizePoNumber(input.po_number);
+  const explicitPoNumber = Boolean(poNumber);
   if (poNumber) {
     if (await tx.findPurchaseOrderByNumber(poNumber)) throw Object.assign(new Error('Purchase order number already exists'), { code: 'PO_NUMBER_DUPLICATE', statusCode: 409 });
-  } else {
-    const generated = await tx.nextPurchaseOrderNumber();
-    poNumber = normalizePoNumber(generated?.po_number);
-    if (!poNumber) throw Object.assign(new Error('Canonical purchase order number generation failed'), { code: 'PO_NUMBER_GENERATION_FAILED' });
   }
-  const header = await tx.insertHeader({ ...input, po_number: poNumber, request_id: awards[0].request_id, supplier_id: awards[0].supplier_id, currency: awards[0].currency, status: 'PO_DRAFT', created_by: actor.id });
+  let header;
+  for (let attempt = 1; attempt <= MAX_GENERATED_NUMBER_ATTEMPTS; attempt += 1) {
+    if (!explicitPoNumber) {
+      const generated = await tx.nextPurchaseOrderNumber();
+      poNumber = normalizePoNumber(generated?.po_number);
+      if (!poNumber) throw Object.assign(new Error('Canonical purchase order number generation failed'), { code: 'PO_NUMBER_GENERATION_FAILED' });
+    }
+    try {
+      const insert = () => tx.insertHeader({ ...input, po_number: poNumber, request_id: awards[0].request_id, supplier_id: awards[0].supplier_id, currency: awards[0].currency, status: 'PO_DRAFT', created_by: actor.id });
+      header = tx.withSavepoint ? await tx.withSavepoint(insert) : await insert();
+      break;
+    } catch (error) {
+      if (explicitPoNumber && isPoNumberCollision(error)) throw Object.assign(new Error('Purchase order number already exists'), { code: 'PO_NUMBER_DUPLICATE', statusCode: 409 });
+      if (!explicitPoNumber && isPoNumberCollision(error) && attempt < MAX_GENERATED_NUMBER_ATTEMPTS) continue;
+      throw error;
+    }
+  }
+  if (!header) throw Object.assign(new Error('Canonical purchase order number collided repeatedly'), { code: 'PO_NUMBER_GENERATION_FAILED', statusCode: 409 });
   const lines = [];
   for (const award of awards) lines.push(await tx.insertLine({ purchase_order_id: header.id, request_id: award.request_id, request_item_id: award.request_item_id, requested_item_id: award.request_item_id, award_id: award.id, quantity: conversions.get(String(award.id)), unit_price: award.unit_price, price_source_type: award.source_type, price_source_id: award.source_id || award.id, line_type: award.line_type }));
   return { ...header, lines };

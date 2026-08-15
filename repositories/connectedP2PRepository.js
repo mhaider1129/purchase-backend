@@ -22,15 +22,22 @@ const createConnectedP2PRepository = (client) => ({
   loadActiveAwards: async (requestItemId) => (await client.query("SELECT * FROM procurement_awards WHERE request_item_id=$1 AND status='ACTIVE' ORDER BY id", [requestItemId])).rows,
   findAwardByIdempotency: (key) => one(client, 'SELECT * FROM procurement_awards WHERE idempotency_key=$1', [key]),
   insertAward: (a) => one(client, `INSERT INTO procurement_awards
-    (request_id,request_item_id,supplier_id,awarded_quantity,unit_price,currency,source_type,source_id,selection_reason,actor_id,idempotency_key,payload_fingerprint,status)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'ACTIVE') RETURNING *`,
-  [a.request_id,a.request_item_id,a.supplier_id,a.awarded_quantity,a.unit_price,a.currency,a.source_type,a.source_id,a.selection_reason,a.actor_id,a.idempotency_key,a.payload_fingerprint]),
+    (request_id,request_item_id,supplier_id,approved_product_id,supplier_catalog_item_id,awarded_quantity,unit_price,currency,source_type,source_id,selection_reason,actor_id,idempotency_key,payload_fingerprint,status)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'ACTIVE') RETURNING *`,
+  [a.request_id,a.request_item_id,a.supplier_id,a.approved_product_id,a.supplier_catalog_item_id,a.awarded_quantity,a.unit_price,a.currency,a.source_type,a.source_id,a.selection_reason,a.actor_id,a.idempotency_key,a.payload_fingerprint]),
   lockAwards: async (ids) => (await client.query('SELECT * FROM procurement_awards WHERE id=ANY($1::bigint[]) ORDER BY id FOR UPDATE', [ids])).rows,
   getAwardConversion: (awardId) => one(client, `SELECT a.awarded_quantity::text,
     COALESCE(SUM(CASE WHEN po.status NOT IN ('PO_CANCELLED','CANCELLED') THEN poi.quantity ELSE 0 END),0)::text ordered_quantity,
     (a.awarded_quantity-COALESCE(SUM(CASE WHEN po.status NOT IN ('PO_CANCELLED','CANCELLED') THEN poi.quantity ELSE 0 END),0))::text remaining_quantity
     FROM procurement_awards a LEFT JOIN purchase_order_items poi ON poi.award_id=a.id
     LEFT JOIN purchase_orders po ON po.id=poi.purchase_order_id WHERE a.id=$1 GROUP BY a.id`, [awardId]),
+  loadAwardUomSnapshot: (awardId) => one(client, `SELECT c.purchasing_uom_id source_uom_id,su.uom_code source_uom,
+    g.base_uom_id generic_base_uom_id,g.inventory_uom_id,iu.id base_uom_id,iu.uom_code base_uom,
+    c.conversion_factor::text supplier_conversion_factor,p.package_quantity::text package_quantity
+    FROM procurement_awards a JOIN supplier_catalog_items c ON c.id=a.supplier_catalog_item_id AND c.approved_product_id=a.approved_product_id
+    JOIN approved_products p ON p.id=a.approved_product_id JOIN generic_items g ON g.id=p.generic_item_id
+    JOIN item_uom su ON su.id=c.purchasing_uom_id JOIN item_uom iu ON iu.id=g.inventory_uom_id
+    WHERE a.id=$1 AND a.supplier_id=c.supplier_id`, [awardId]),
 
   nextPurchaseOrderNumber: () => one(client, `SELECT 'PO-' || to_char(CURRENT_DATE, 'YYYY') || '-' ||
     lpad(nextval('public.purchase_order_number_seq')::text, 6, '0') AS po_number`),
@@ -41,9 +48,9 @@ const createConnectedP2PRepository = (client) => ({
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
   [p.request_id,p.supplier_id,p.currency,p.status,p.expected_delivery_date||null,p.delivery_location||null,p.budget_cost_center||null,p.created_by,p.rfx_id||null,p.rfx_response_id||null,p.po_number||null,p.notes||null]),
   insertPurchaseOrderLine: (l) => one(client, `INSERT INTO purchase_order_items
-    (purchase_order_id,requested_item_id,award_id,quantity,unit_price,price_source_type,price_source_id,line_type)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-  [l.purchase_order_id,l.requested_item_id,l.award_id,l.quantity,l.unit_price,l.price_source_type,l.price_source_id,l.line_type||'NON_INVENTORY']),
+    (purchase_order_id,requested_item_id,award_id,approved_product_id,supplier_catalog_item_id,quantity,unit_price,price_source_type,price_source_id,line_type,source_uom_id,source_uom,base_uom_id,base_uom,conversion_factor)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+  [l.purchase_order_id,l.requested_item_id,l.award_id,l.approved_product_id,l.supplier_catalog_item_id,l.quantity,l.unit_price,l.price_source_type,l.price_source_id,l.line_type||'NON_INVENTORY',l.source_uom_id,l.source_uom,l.base_uom_id,l.base_uom,l.conversion_factor]),
   lockPurchaseOrder: (id) => one(client, 'SELECT * FROM purchase_orders WHERE id=$1 FOR UPDATE', [id]),
   loadPurchaseOrder: async (id) => { const header=await one(client,'SELECT * FROM purchase_orders WHERE id=$1',[id]); if (!header) return null; header.lines=(await client.query('SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id',[id])).rows; return header; },
   loadPurchaseOrderLines: async (id) => (await client.query('SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id',[id])).rows,
@@ -117,8 +124,8 @@ const createConnectedP2PRepository = (client) => ({
   insertGoodsReceipt: (r) => one(client,`WITH identity AS (SELECT nextval(pg_get_serial_sequence('goods_receipts','id')) AS id)
     INSERT INTO goods_receipts (id,purchase_order_id,request_id,idempotency_key,payload_fingerprint,receipt_number,warehouse_location,received_at,received_by,notes,discrepancy_notes)
     SELECT id,$1,$2,$3,$4,'GR-'||id,$5,COALESCE($6,NOW()),$7,$8,$9 FROM identity RETURNING *`,[r.purchase_order_id,r.request_id,r.idempotency_key,r.payload_fingerprint,r.warehouse_location||null,r.received_at,r.received_by,r.notes||null,r.discrepancy_notes||null]),
-  insertGoodsReceiptLine: (l) => one(client,`INSERT INTO goods_receipt_items (goods_receipt_id,purchase_order_item_id,requested_item_id,item_name,ordered_quantity,received_quantity,damaged_quantity,short_quantity,unit_price,line_notes,batch_number,lot_number,serial_number,expiry_date,warehouse_id,stock_status,source_uom,base_uom,stock_item_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,[l.goods_receipt_id,l.purchase_order_item_id,l.requested_item_id,l.item_name,l.ordered_quantity,l.received_quantity,l.damaged_quantity||0,l.short_quantity||0,l.unit_price,l.line_notes||null,l.batch_number||null,l.lot_number||null,l.serial_number||null,l.expiry_date||null,l.warehouse_id||null,l.stock_status||'AVAILABLE',l.source_uom||null,l.base_uom||null,l.stock_item_id||null]),
+  insertGoodsReceiptLine: (l) => one(client,`INSERT INTO goods_receipt_items (goods_receipt_id,purchase_order_item_id,requested_item_id,item_name,ordered_quantity,received_quantity,damaged_quantity,short_quantity,unit_price,line_notes,batch_number,lot_number,serial_number,expiry_date,warehouse_id,stock_status,source_uom,base_uom,conversion_factor,stock_item_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,[l.goods_receipt_id,l.purchase_order_item_id,l.requested_item_id,l.item_name,l.ordered_quantity,l.received_quantity,l.damaged_quantity||0,l.short_quantity||0,l.unit_price,l.line_notes||null,l.batch_number||null,l.lot_number||null,l.serial_number||null,l.expiry_date||null,l.warehouse_id||null,l.stock_status||'AVAILABLE',l.source_uom,l.base_uom,l.conversion_factor,l.stock_item_id||null]),
   synchronizePurchaseOrderLineReceivedQuantity: (id) => one(client,`UPDATE purchase_order_items poi SET received_quantity=(SELECT COALESCE(SUM(gri.received_quantity-gri.damaged_quantity-gri.short_quantity),0) FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=poi.id) WHERE poi.id=$1 RETURNING *`,[id]),
   calculatePurchaseOrderReceiptTotals: (id) => one(client,`SELECT COALESCE(SUM(quantity),0)::text ordered_quantity,COALESCE(SUM(received_quantity),0)::text received_quantity FROM purchase_order_items WHERE purchase_order_id=$1`,[id]),
   markPurchaseOrderPartiallyReceived: (id) => one(client,"UPDATE purchase_orders SET status='PO_PARTIAL',updated_at=NOW() WHERE id=$1 RETURNING *",[id]),

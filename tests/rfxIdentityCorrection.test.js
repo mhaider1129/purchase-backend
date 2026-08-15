@@ -4,12 +4,12 @@ const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderServ
 const { normalizeQuotationLines, submitLinkedRfxResponse } = require('../services/rfxResponseService');
 const { priceNormalizedRfxResponse } = require('../services/rfxAwardPricingService');
 
-const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, status: 'ACTIVE', awarded_quantity: '10', unit_price: '4.25', currency: 'USD', source_type: 'QUOTATION', source_id: 6 };
+const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, status: 'ACTIVE', awarded_quantity: '10', unit_price: '4.25', currency: 'USD', source_type: 'QUOTATION', source_id: 6, approved_product_id: 20, supplier_catalog_item_id: 30 };
 const poRepository = () => {
   let sequence = 0;
   const numbers = new Set();
   const tx = {
-    lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }),
+    lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
     nextPurchaseOrderNumber: async () => ({ po_number: `PO-2026-${String(++sequence).padStart(6, '0')}` }),
     findPurchaseOrderByNumber: async number => numbers.has(number) ? { id: 1 } : null,
     insertHeader: async row => { if (numbers.has(row.po_number)) throw Object.assign(new Error('duplicate'), { code: '23505' }); numbers.add(row.po_number); return { id: numbers.size, ...row }; },

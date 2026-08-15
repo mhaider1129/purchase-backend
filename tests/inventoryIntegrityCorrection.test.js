@@ -83,11 +83,11 @@ describe('Phase 3 inventory integrity correction', () => {
 
   test('receipt quantities follow persisted gross minus damaged minus short semantics', () => {
     const context = { instituteId: 1, warehouseId: 2, actor: { id: 3 } };
-    expect(buildReceiptCommand({ id: 1 }, { id: 1, stock_item_id: 4, accepted_quantity: 7, damaged_quantity: 2, short_quantity: 1 }, context).quantity).toBe('7');
-    expect(buildReceiptCommand({ id: 1 }, { id: 2, stock_item_id: 4, received_quantity: 10, damaged_quantity: 2, short_quantity: 1 }, context).quantity).toBe('7');
+    expect(buildReceiptCommand({ id: 1 }, { id: 1, stock_item_id: 4, source_uom: 'EA', base_uom: 'EA', conversion_factor: '1', source_uom: 'EA', base_uom: 'EA', conversion_factor: '1', accepted_quantity: 7, damaged_quantity: 2, short_quantity: 1 }, context).quantity).toBe('7');
+    expect(buildReceiptCommand({ id: 1 }, { id: 2, stock_item_id: 4, source_uom: 'EA', base_uom: 'EA', conversion_factor: '1', received_quantity: 10, damaged_quantity: 2, short_quantity: 1 }, context).quantity).toBe('7');
     expect(buildReceiptCommand({ id: 1 }, { id: 3, received_quantity: 2, damaged_quantity: 2 }, context)).toBeNull();
     expect(buildReceiptCommand({ id: 1 }, { id: 4, received_quantity: 5, short_quantity: 5 }, context)).toBeNull();
-    expect(buildReceiptCommand({ id: 1 }, { id: 5, stock_item_id: 4, accepted_quantity: 1, quarantined: true }, context).stockStatus).toBe('QUARANTINE');
+    expect(buildReceiptCommand({ id: 1 }, { id: 5, stock_item_id: 4, source_uom: 'EA', base_uom: 'EA', conversion_factor: '1', source_uom: 'EA', base_uom: 'EA', conversion_factor: '1', accepted_quantity: 1, quarantined: true }, context).stockStatus).toBe('QUARANTINE');
   });
 
   test('allocation rows preserve signed quantity, tracking identity and deterministic sequence', async () => {

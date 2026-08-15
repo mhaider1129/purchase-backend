@@ -10,12 +10,13 @@ function buildReceiptCommand(receipt, line, context) {
     ? String(line.accepted_quantity)
     : String(Number(line.received_quantity ?? 0) - Number(line.damaged_quantity ?? 0) - Number(line.short_quantity ?? 0));
   if (!/^\d+(\.\d+)?$/.test(accepted) || /^0+(\.0+)?$/.test(accepted)) return null;
-  const conversionFactor = String(line.conversion_factor || '1');
+  if (!line.source_uom || !line.base_uom || !line.conversion_factor) throw Object.assign(new Error('Governed PO UOM snapshot is required'), { code: 'PO_UOM_SNAPSHOT_REQUIRED' });
+  const conversionFactor = String(line.conversion_factor);
   const ledgerQuantity = calculateBaseQuantity({ sourceQuantity: accepted, supplierConversionFactor: conversionFactor });
   return {
     movementType: 'GOODS_RECEIPT', inventoryItemId: line.stock_item_id,
     instituteId: context.instituteId, warehouseId: context.warehouseId, quantity: ledgerQuantity,
-    baseUom: line.base_uom || line.unit, sourceQuantity: accepted, sourceUom: line.source_uom || line.unit,
+    baseUom: line.base_uom, sourceQuantity: accepted, sourceUom: line.source_uom,
     conversionFactor, batchNumber: line.batch_number || null,
     lotNumber: line.lot_number || null, serialNumber: line.serial_number || null,
     expiryDate: line.expiry_date || null, stockStatus: line.quarantined ? 'QUARANTINE' : 'AVAILABLE',

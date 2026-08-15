@@ -108,7 +108,7 @@ const product = payload => ({
   package_quantity: decimal(payload.package_quantity, 'package_quantity', { fallback: '1' }),
   product_uom: text(payload.product_uom, 'product_uom', true).toUpperCase(),
   product_uom_id: positive(payload.product_uom_id, 'product_uom_id'),
-  inventory_conversion_factor: decimal(payload.inventory_conversion_factor, 'inventory_conversion_factor', { fallback: '1' }),
+  // Compatibility projection is derived by the service; caller input is not authoritative.
   regulatory_identifiers: object(payload.regulatory_identifiers, 'regulatory_identifiers'),
   technical_notes: text(payload.technical_notes, 'technical_notes'),
 });
@@ -118,7 +118,7 @@ const catalog = payload => ({
   approved_product_id: positive(payload.approved_product_id, 'approved_product_id'),
   supplier_item_code: text(payload.supplier_item_code, 'supplier_item_code', true),
   supplier_description: text(payload.supplier_description, 'supplier_description'),
-  purchasing_uom: text(payload.purchasing_uom, 'purchasing_uom', true).toUpperCase(),
+  purchasing_uom_id: positive(payload.purchasing_uom_id, 'purchasing_uom_id'),
   conversion_factor: decimal(payload.conversion_factor, 'conversion_factor', { fallback: '1' }),
   package_size: decimal(payload.package_size, 'package_size', { fallback: '1' }),
   minimum_order_quantity: decimal(payload.minimum_order_quantity, 'minimum_order_quantity', { fallback: '1' }),

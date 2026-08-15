@@ -121,8 +121,11 @@ class ItemMasterFoundationService {
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
-      const active = await client.query("SELECT 1 FROM generic_items WHERE id=$1 AND lifecycle_status='active' FOR SHARE", [p.generic_item_id]);
+      const active = await client.query("SELECT base_uom_id,inventory_uom_id FROM generic_items WHERE id=$1 AND lifecycle_status='active' FOR SHARE", [p.generic_item_id]);
       if (!active.rowCount) throw createHttpError(409, 'Approved products require an active generic item');
+      if (Number(active.rows[0].base_uom_id) !== Number(active.rows[0].inventory_uom_id)) {
+        throw Object.assign(createHttpError(409, 'A governed Generic base-to-inventory UOM conversion is required'), { code: 'GENERIC_INVENTORY_UOM_CONVERSION_REQUIRED' });
+      }
       const manufacturer = await client.query('SELECT manufacturer_name FROM item_manufacturers WHERE id=$1 AND is_active=TRUE FOR SHARE', [p.manufacturer_id]);
       const uom = await client.query('SELECT uom_code FROM item_uom WHERE id=$1 AND is_active=TRUE FOR SHARE', [p.product_uom_id]);
       if (!manufacturer.rowCount || !uom.rowCount) throw createHttpError(400, 'Manufacturer or product UOM is invalid');
@@ -161,7 +164,7 @@ class ItemMasterFoundationService {
     if (query.q) { params.push(`%${query.q}%`); filters.push(`(c.supplier_item_code ILIKE $1 OR c.supplier_description ILIKE $1 OR s.name ILIKE $1 OR p.product_name ILIKE $1)`); }
     if (query.supplier_id) { params.push(query.supplier_id); filters.push(`c.supplier_id=$${params.length}`); }
     params.push(pageSize,(page-1)*pageSize);
-    const result=await this.db.query(`SELECT c.*,s.name supplier_name,p.product_name,p.manufacturer,g.item_code,g.generic_name,COUNT(*) OVER()::INTEGER total_count FROM supplier_catalog_items c JOIN suppliers s ON s.id=c.supplier_id JOIN approved_products p ON p.id=c.approved_product_id JOIN generic_items g ON g.id=p.generic_item_id ${filters.length?`WHERE ${filters.join(' AND ')}`:''} ORDER BY c.updated_at DESC LIMIT $${params.length-1} OFFSET $${params.length}`,params);
+    const result=await this.db.query(`SELECT c.*,s.name supplier_name,p.product_name,p.manufacturer,p.product_uom,p.package_quantity,g.item_code,g.generic_name,g.inventory_uom,CASE WHEN g.base_uom_id=g.inventory_uom_id THEN c.conversion_factor*p.package_quantity END derived_inventory_conversion_factor,COUNT(*) OVER()::INTEGER total_count FROM supplier_catalog_items c JOIN suppliers s ON s.id=c.supplier_id JOIN approved_products p ON p.id=c.approved_product_id JOIN generic_items g ON g.id=p.generic_item_id ${filters.length?`WHERE ${filters.join(' AND ')}`:''} ORDER BY c.updated_at DESC LIMIT $${params.length-1} OFFSET $${params.length}`,params);
     return {data:result.rows.map(({total_count,...row})=>row),page,page_size:pageSize,total:result.rows[0]?.total_count||0};
     return {data:result.rows.map(({total_count,...row})=>row),page,page_size:pageSize,total:result.rows[0]?.total_count||0};
   }
@@ -175,14 +178,17 @@ class ItemMasterFoundationService {
 
   async createCatalog(payload, actorId) {
     const c=validator.catalog(payload||{});
-    uomAuthority.validateSupplierPackaging({ conversionFactor:c.conversion_factor,purchasingUom:c.purchasing_uom,minimumOrderQuantity:c.minimum_order_quantity,orderMultiple:c.order_multiple });
+    if (!c.purchasing_uom_id) throw createHttpError(400,'purchasing_uom_id is required');
+    uomAuthority.validateSupplierPackaging({ conversionFactor:c.conversion_factor,purchasingUom:c.purchasing_uom_id,minimumOrderQuantity:c.minimum_order_quantity,orderMultiple:c.order_multiple });
     if (c.currency && !/^[A-Z]{3}$/.test(c.currency)) throw createHttpError(400,'currency must be an ISO 4217 code');
     try { return await this.withTransaction(async client => {
       const product=await client.query("SELECT 1 FROM approved_products p JOIN generic_items g ON g.id=p.generic_item_id WHERE p.id=$1 AND p.approval_status='approved' AND p.is_active AND g.lifecycle_status='active' AND g.is_active FOR SHARE OF p,g",[c.approved_product_id]);
       if(!product.rowCount) throw createHttpError(409,'Supplier catalog requires an active approved product');
       const supplier=await client.query('SELECT 1 FROM suppliers WHERE id=$1 FOR SHARE',[c.supplier_id]);
       if(!supplier.rowCount) throw createHttpError(400,'Supplier does not exist');
-      const result=await client.query(`INSERT INTO supplier_catalog_items (supplier_id,approved_product_id,supplier_item_code,supplier_description,purchasing_uom,conversion_factor,package_size,minimum_order_quantity,order_multiple,unit_price,currency,lead_time_days,is_preferred_supplier,is_approved_supplier,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15) RETURNING *`,Object.values(c).concat(actorId));
+      const uom=await client.query('SELECT id,uom_code FROM item_uom WHERE id=$1 AND is_active=TRUE FOR SHARE',[c.purchasing_uom_id]);
+      if(!uom.rowCount) throw createHttpError(400,'Purchasing UOM is invalid or inactive');
+      const result=await client.query(`INSERT INTO supplier_catalog_items (supplier_id,approved_product_id,supplier_item_code,supplier_description,purchasing_uom_id,purchasing_uom,conversion_factor,package_size,minimum_order_quantity,order_multiple,unit_price,currency,lead_time_days,is_preferred_supplier,is_approved_supplier,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16) RETURNING *`,[c.supplier_id,c.approved_product_id,c.supplier_item_code,c.supplier_description,c.purchasing_uom_id,uom.rows[0].uom_code,c.conversion_factor,c.package_size,c.minimum_order_quantity,c.order_multiple,c.unit_price,c.currency,c.lead_time_days,c.is_preferred_supplier,c.is_approved_supplier,actorId]);
       await this.auditCatalog(client,'CATALOG_CREATED',result.rows[0].id,actorId,null,result.rows[0]); return result.rows[0];
     }); } catch(error){if(error.code==='23505')throw createHttpError(409,'Supplier item code already exists for this supplier');throw error;}
   }
@@ -192,13 +198,16 @@ class ItemMasterFoundationService {
       const current = await client.query('SELECT * FROM supplier_catalog_items WHERE id=$1 FOR UPDATE', [id]);
       if (!current.rowCount) throw createHttpError(404, 'Supplier catalog item not found');
       const merged = validator.catalog({ ...current.rows[0], ...(payload || {}) });
+      if (!merged.purchasing_uom_id) throw createHttpError(400,'purchasing_uom_id is required');
       if (merged.currency && !/^[A-Z]{3}$/.test(merged.currency)) throw createHttpError(400,'currency must be an ISO 4217 code');
-      uomAuthority.validateSupplierPackaging({ conversionFactor:merged.conversion_factor,purchasingUom:merged.purchasing_uom,minimumOrderQuantity:merged.minimum_order_quantity,orderMultiple:merged.order_multiple });
+      uomAuthority.validateSupplierPackaging({ conversionFactor:merged.conversion_factor,purchasingUom:merged.purchasing_uom_id,minimumOrderQuantity:merged.minimum_order_quantity,orderMultiple:merged.order_multiple });
       const product = await client.query("SELECT 1 FROM approved_products p JOIN generic_items g ON g.id=p.generic_item_id WHERE p.id=$1 AND p.approval_status='approved' AND p.is_active AND g.lifecycle_status='active' AND g.is_active FOR SHARE OF p,g", [merged.approved_product_id]);
       if (!product.rowCount) throw createHttpError(409,'Supplier catalog requires an active approved product');
       const supplier = await client.query('SELECT 1 FROM suppliers WHERE id=$1 FOR SHARE', [merged.supplier_id]);
       if (!supplier.rowCount) throw createHttpError(400,'Supplier does not exist');
-      const result = await client.query(`UPDATE supplier_catalog_items SET supplier_id=$2,approved_product_id=$3,supplier_item_code=$4,supplier_description=$5,purchasing_uom=$6,conversion_factor=$7,package_size=$8,minimum_order_quantity=$9,order_multiple=$10,unit_price=$11,currency=$12,lead_time_days=$13,is_preferred_supplier=$14,is_approved_supplier=$15,updated_by=$16,updated_at=NOW() WHERE id=$1 RETURNING *`, [id, ...Object.values(merged), actorId]);
+      const uom=await client.query('SELECT id,uom_code FROM item_uom WHERE id=$1 AND is_active=TRUE FOR SHARE',[merged.purchasing_uom_id]);
+      if(!uom.rowCount) throw createHttpError(400,'Purchasing UOM is invalid or inactive');
+      const result = await client.query(`UPDATE supplier_catalog_items SET supplier_id=$2,approved_product_id=$3,supplier_item_code=$4,supplier_description=$5,purchasing_uom_id=$6,purchasing_uom=$7,conversion_factor=$8,package_size=$9,minimum_order_quantity=$10,order_multiple=$11,unit_price=$12,currency=$13,lead_time_days=$14,is_preferred_supplier=$15,is_approved_supplier=$16,updated_by=$17,updated_at=NOW() WHERE id=$1 RETURNING *`, [id,merged.supplier_id,merged.approved_product_id,merged.supplier_item_code,merged.supplier_description,merged.purchasing_uom_id,uom.rows[0].uom_code,merged.conversion_factor,merged.package_size,merged.minimum_order_quantity,merged.order_multiple,merged.unit_price,merged.currency,merged.lead_time_days,merged.is_preferred_supplier,merged.is_approved_supplier,actorId]);
       await this.auditCatalog(client,'CATALOG_UPDATED',id,actorId,current.rows[0],result.rows[0]); return result.rows[0];
     });
   }

@@ -1,5 +1,5 @@
 -- PHASE 5A.2 MANUAL MIGRATION. Review and execute manually only.
--- Every statement before BEGIN is read-only preflight; stop on any non-zero defect.
+-- MIGRATION BLOCKERS. Every statement before BEGIN is read-only; stop on any non-zero defect.
 SELECT 'duplicate_uom_identity' check_name, COUNT(*) defect_count FROM (SELECT normalized_uom_code FROM item_uom GROUP BY normalized_uom_code HAVING COUNT(*)>1) d;
 SELECT 'invalid_generic_uom_reference', COUNT(*) FROM generic_items g LEFT JOIN item_uom b ON b.id=g.base_uom_id LEFT JOIN item_uom i ON i.id=g.inventory_uom_id WHERE (g.base_uom_id IS NOT NULL AND b.id IS NULL) OR (g.inventory_uom_id IS NOT NULL AND i.id IS NULL);
 SELECT 'nonpositive_product_package', COUNT(*) FROM approved_products WHERE package_quantity<=0 OR inventory_conversion_factor<=0;
@@ -8,14 +8,22 @@ SELECT 'supplier_uom_without_exact_code', COUNT(*) FROM supplier_catalog_items c
 SELECT 'generic_uom_text_id_mismatch', COUNT(*) FROM generic_items g LEFT JOIN item_uom b ON b.id=g.base_uom_id LEFT JOIN item_uom i ON i.id=g.inventory_uom_id WHERE (b.id IS NOT NULL AND UPPER(TRIM(g.base_uom))<>UPPER(TRIM(b.uom_code))) OR (i.id IS NOT NULL AND UPPER(TRIM(g.inventory_uom))<>UPPER(TRIM(i.uom_code)));
 SELECT 'product_uom_text_id_mismatch', COUNT(*) FROM approved_products p JOIN item_uom u ON u.id=p.product_uom_id WHERE UPPER(TRIM(p.product_uom))<>UPPER(TRIM(u.uom_code));
 SELECT 'stock_inventory_uom_missing', COUNT(*) FROM stock_items WHERE inventory_uom_id IS NULL;
-SELECT 'po_snapshot_missing', COUNT(*) FROM purchase_order_items; -- all deployed rows need governed review before backfill
 SELECT 'gr_snapshot_missing', COUNT(*) FROM goods_receipt_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
 SELECT 'inventory_snapshot_missing', COUNT(*) FROM inventory_transactions WHERE source_quantity IS NULL OR source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
+
+-- HISTORICAL RECONCILIATION COUNTS (informational, never migration blockers).
+SELECT 'historical_po_rows_requiring_snapshot_reconciliation' finding_name, COUNT(*) finding_count FROM purchase_order_items;
 
 BEGIN;
 
 ALTER TABLE supplier_catalog_items ADD COLUMN IF NOT EXISTS purchasing_uom_id INTEGER REFERENCES item_uom(id) ON DELETE RESTRICT;
+ALTER TABLE procurement_awards ADD COLUMN IF NOT EXISTS approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT;
+ALTER TABLE procurement_awards ADD COLUMN IF NOT EXISTS supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items(id) ON DELETE RESTRICT;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items(id) ON DELETE RESTRICT;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS source_uom_id INTEGER REFERENCES item_uom(id) ON DELETE RESTRICT;
 ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS source_uom TEXT;
+ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS base_uom_id INTEGER REFERENCES item_uom(id) ON DELETE RESTRICT;
 ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS base_uom TEXT;
 ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS conversion_factor NUMERIC;
 ALTER TABLE purchase_order_items DROP CONSTRAINT IF EXISTS purchase_order_items_positive_conversion;
@@ -37,8 +45,9 @@ CREATE TABLE IF NOT EXISTS item_uom_conversions (
   CONSTRAINT item_uom_conversions_unique_direction UNIQUE(from_uom_id,to_uom_id)
 );
 
-COMMENT ON TABLE item_uom_conversions IS 'Universal dimensional conversions only; product/supplier packaging is forbidden.';
-COMMENT ON COLUMN approved_products.inventory_conversion_factor IS 'Deprecated compatibility projection of package_quantity; do not write independently.';
+COMMENT ON TABLE item_uom_conversions IS 'MIGRATION FOUNDATION / DEFERRED: not a runtime conversion authority in Phase 5A.2; universal dimensional conversions only.';
+COMMENT ON COLUMN approved_products.package_quantity IS 'Generic base-UOM units per Product UOM.';
+COMMENT ON COLUMN approved_products.inventory_conversion_factor IS 'Deprecated compatibility projection; equals package_quantity only when Generic base and inventory UOM identities are equal.';
 COMMENT ON COLUMN generic_items.conversion_rules IS 'Deprecated legacy compatibility; not a conversion authority.';
 COMMENT ON COLUMN generic_items.purchasing_uom IS 'Legacy/default display preference; Supplier Catalog purchasing UOM is authoritative.';
 COMMENT ON COLUMN supplier_catalog_items.package_size IS 'Deprecated ambiguous metadata; not used in canonical arithmetic.';
@@ -47,11 +56,11 @@ COMMENT ON COLUMN purchase_order_items.conversion_factor IS 'Immutable inventory
 
 -- Safe mapping is exact controlled code only and is intentionally visible.
 UPDATE supplier_catalog_items c SET purchasing_uom_id=u.id
-FROM item_uom u
+FROM item_uom u JOIN (SELECT UPPER(TRIM(uom_code)) code FROM item_uom GROUP BY UPPER(TRIM(uom_code)) HAVING COUNT(*)=1) unique_code ON unique_code.code=UPPER(TRIM(u.uom_code))
 WHERE c.purchasing_uom_id IS NULL AND UPPER(TRIM(c.purchasing_uom))=UPPER(TRIM(u.uom_code));
 
 COMMIT;
 
--- Postflight; do not make new fields NOT NULL until historical exceptions are resolved.
+-- Postflight reconciliation findings; do not make new fields NOT NULL until historical exceptions are resolved.
 SELECT 'supplier_uom_still_unmapped' check_name, COUNT(*) defect_count FROM supplier_catalog_items WHERE purchasing_uom_id IS NULL;
 SELECT 'po_snapshot_still_missing', COUNT(*) FROM purchase_order_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;

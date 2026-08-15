@@ -34,8 +34,8 @@ function fingerprint(purchaseOrderId, lines) {
     lot_number: line.lot_number || null, serial_number: line.serial_number || null,
     expiry_date: line.expiry_date || null, warehouse_id: line.warehouse_id == null ? null : Number(line.warehouse_id),
     stock_status: line.stock_status || 'AVAILABLE',
-    source_uom: line.source_uom || null, base_uom: line.base_uom || null,
-    conversion_factor: canonicalQuantity(line.conversion_factor || 1, 'conversion_factor'),
+    // UOM conversion is an immutable PO-line snapshot and is deliberately not
+    // fingerprinted from caller input.
   })).sort((a, b) => a.purchase_order_item_id - b.purchase_order_item_id);
   return crypto.createHash('sha256').update(JSON.stringify({ purchase_order_id: Number(purchaseOrderId), lines: normalized })).digest('hex');
 }
@@ -70,6 +70,7 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
     const prepared = [];
     for (const input of lines) {
       const poLine = byId.get(Number(input.purchase_order_item_id));
+      if (!poLine.source_uom_id || !poLine.base_uom_id || !poLine.source_uom || !poLine.base_uom || !poLine.conversion_factor) throw Object.assign(createHttpError(409, 'PO line lacks a governed UOM conversion snapshot'), { code: 'PO_UOM_SNAPSHOT_REQUIRED' });
       const gross = decimal(input.received_quantity, 'received_quantity');
       const damaged = decimal(input.damaged_quantity || 0, 'damaged_quantity');
       const short = decimal(input.short_quantity || 0, 'short_quantity');
@@ -96,6 +97,7 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
       if (line.line_type === 'INVENTORY' && decimal(line.accepted_quantity, 'accepted_quantity') > 0n) {
         const stockItem = await tx.resolveReceiptStockItem(line.requested_item_id);
         if (!stockItem) throw createHttpError(409, `Inventory line ${line.id} is not mapped to a canonical stock item`);
+        if (!stockItem.inventory_uom_id || Number(stockItem.inventory_uom_id) !== Number(line.base_uom_id)) throw Object.assign(createHttpError(409, 'PO inventory UOM does not match the controlled Stock Item inventory UOM'), { code: 'STOCK_INVENTORY_UOM_MISMATCH' });
         const warehouse = await tx.loadWarehouseScope(Number(line.warehouse_id));
         if (!warehouse?.institute_id) throw createHttpError(400, `Inventory line ${line.id} requires a valid warehouse_id`);
         if (actor?.institute_id && Number(actor.institute_id) !== Number(warehouse.institute_id)) throw createHttpError(403, 'Receipt warehouse is outside the actor institute scope');

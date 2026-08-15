@@ -30,7 +30,7 @@ describe('ItemMasterFoundationService', () => {
   test('requires an approved product before creating supplier commercial data', async () => {
     const client = { query: jest.fn(async sql => sql.includes('SELECT 1 FROM approved_products') ? { rowCount: 0, rows: [] } : {}), release: jest.fn() };
     const service = new ItemMasterFoundationService({ connect: jest.fn(async () => client) });
-    await expect(service.createCatalog({ supplier_id: 2, approved_product_id: 8, supplier_item_code: 'S-8', purchasing_uom: 'BOX' }, 3))
+    await expect(service.createCatalog({ supplier_id: 2, approved_product_id: 8, supplier_item_code: 'S-8', purchasing_uom: 'BOX', purchasing_uom_id: 4 }, 3))
       .rejects.toMatchObject({ statusCode: 409 });
   });
 });

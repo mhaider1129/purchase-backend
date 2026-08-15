@@ -46,20 +46,21 @@ describe('connected P2P repository checked-in schema contract', () => {
     expect(migration).not.toMatch(/CREATE TABLE public\.procurement_awards/);
   });
 
-  test('award insert executes the exact SQL 006 application-column contract', async () => {
+  test('award insert includes SQL 009 Product and Catalog traceability', async () => {
     const client = mockClient();
     const repository = createConnectedP2PRepository(client);
-    const award = { request_id: 1, request_item_id: 2, supplier_id: 3, awarded_quantity: '4', unit_price: '5.25', currency: 'USD', source_type: 'QUOTATION', source_id: 6, selection_reason: 'best compliant offer', actor_id: 7, idempotency_key: 'award-8', payload_fingerprint: 'a'.repeat(64) };
+    const award = { request_id: 1, request_item_id: 2, supplier_id: 3, approved_product_id: 20, supplier_catalog_item_id: 30, awarded_quantity: '4', unit_price: '5.25', currency: 'USD', source_type: 'QUOTATION', source_id: 6, selection_reason: 'best compliant offer', actor_id: 7, idempotency_key: 'award-8', payload_fingerprint: 'a'.repeat(64) };
     await repository.insertAward(award);
     const { sql, values } = client.queries[0];
-    expect(sql).toContain('(request_id,request_item_id,supplier_id,awarded_quantity,unit_price,currency,source_type,source_id,selection_reason,actor_id,idempotency_key,payload_fingerprint,status)');
-    expect(sql).toContain("$12,'ACTIVE'");
+    expect(sql).toContain('(request_id,request_item_id,supplier_id,approved_product_id,supplier_catalog_item_id,awarded_quantity,unit_price,currency,source_type,source_id,selection_reason,actor_id,idempotency_key,payload_fingerprint,status)');
+    expect(sql).toContain("$14,'ACTIVE'");
     expect(sql).not.toContain('created_by');
-    expect(values).toEqual([1, 2, 3, '4', '5.25', 'USD', 'QUOTATION', 6, 'best compliant offer', 7, 'award-8', 'a'.repeat(64)]);
+    expect(values).toEqual([1, 2, 3, 20, 30, '4', '5.25', 'USD', 'QUOTATION', 6, 'best compliant offer', 7, 'award-8', 'a'.repeat(64)]);
     const migration = fs.readFileSync(path.join(__dirname, '../sql/manual/006_connected_procure_to_pay.sql'), 'utf8');
     const definition = migration.match(/CREATE TABLE(?: IF NOT EXISTS)? public\.procurement_awards \(([\s\S]*?)\n\);/)[1];
     const insertColumns = sql.match(/procurement_awards \(([^)]+)\)/)[1].split(',').map(value => value.trim());
-    for (const column of insertColumns) expect(definition).toMatch(new RegExp(`\\b${column}\\b`));
+    const phase5 = fs.readFileSync(path.join(__dirname, '../sql/manual/009_phase5a2_uom_authority.sql'), 'utf8');
+    for (const column of insertColumns) expect(`${definition}\n${phase5}`).toMatch(new RegExp(`\\b${column}\\b`));
     for (const required of ['selection_reason', 'actor_id', 'payload_fingerprint']) {
       expect(insertColumns).toContain(required);
       expect(values[insertColumns.indexOf(required)]).toBeTruthy();

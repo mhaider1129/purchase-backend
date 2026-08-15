@@ -11,7 +11,7 @@ function harness({ status = 'PO_ISSUED', quantity = 100, lineType = 'NON_INVENTO
     client: { query: jest.fn() }, lockGoodsReceiptOperation: jest.fn(), findReceiptByIdempotency: jest.fn(async (key) => receipts.get(key)?.receipt || null),
     loadReceiptWithLines: jest.fn(async (id) => [...receipts.values()].find((v) => v.receipt.id === id)?.receipt),
     lockPurchaseOrder: jest.fn(async () => ({ id: 4, request_id: 2, supplier_id: 8, status: poStatus })),
-    lockPurchaseOrderLines: jest.fn(async (ids) => ids.map((id) => ({ id, purchase_order_id: 4, requested_item_id: 7, item_name: 'Gloves', quantity, received_quantity: acceptedCumulative, unit_price: 2, line_type: lineType }))),
+    lockPurchaseOrderLines: jest.fn(async (ids) => ids.map((id) => ({ id, purchase_order_id: 4, requested_item_id: 7, item_name: 'Gloves', quantity, received_quantity: acceptedCumulative, unit_price: 2, line_type: lineType, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', conversion_factor: '1000' }))),
     loadCumulativeAcceptedReceipts: jest.fn(async () => String(acceptedCumulative)),
     insertGoodsReceipt: jest.fn(async (input) => ({ id: ++receiptId, ...input, receipt_number: `GR-${receiptId}` })),
     insertGoodsReceiptLine: jest.fn(async (line) => { grossCumulative += Number(line.received_quantity); acceptedCumulative += Number(line.accepted_quantity); return { id: receiptId * 10, ...line }; }),
@@ -20,7 +20,7 @@ function harness({ status = 'PO_ISSUED', quantity = 100, lineType = 'NON_INVENTO
     markPurchaseOrderPartiallyReceived: jest.fn(async () => ({ id: 4, status: (poStatus = 'PO_PARTIAL') })),
     markPurchaseOrderDelivered: jest.fn(async () => ({ id: 4, status: (poStatus = 'PO_DELIVERED') })),
     loadWarehouseScope: jest.fn(async () => ({ id: 3, institute_id: 5 })),
-    resolveReceiptStockItem: jest.fn(async () => ({ id: 11 })),
+    resolveReceiptStockItem: jest.fn(async () => ({ id: 11, inventory_uom_id: 1 })),
   };
   const repository = { withTransaction: jest.fn(async (work) => { const before = [grossCumulative, acceptedCumulative]; try { const result = await work(tx); receipts.set(result.receipt.idempotency_key, { receipt: result.receipt }); return result; } catch (error) { [grossCumulative, acceptedCumulative] = before; throw error; } }) };
   const receive = (key, received, extra = {}) => createGoodsReceipt({ repository, purchaseOrderId: 4, idempotencyKey: key,
@@ -99,8 +99,8 @@ describe('canonical goods receipt transaction', () => {
     expect(scaledBigIntToDecimalString(123456n)).toBe('12.3456');
   });
 
-  test.each(['source_uom', 'base_uom', 'conversion_factor'])('fingerprint covers %s', (field) => {
+  test.each(['source_uom', 'base_uom', 'conversion_factor'])('fingerprint ignores caller %s override', (field) => {
     const base = { purchase_order_item_id: 1, received_quantity: 1 };
-    expect(fingerprint(4, [base])).not.toBe(fingerprint(4, [{ ...base, [field]: field === 'conversion_factor' ? '2' : 'EA' }]));
+    expect(fingerprint(4, [base])).toBe(fingerprint(4, [{ ...base, [field]: field === 'conversion_factor' ? '2' : 'EA' }]));
   });
 });

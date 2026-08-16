@@ -39,6 +39,9 @@ const generateRfx = async (req, res, next) => {
     const itemsRes = await pool.query(
       `SELECT item_name,
               quantity,
+              request_mode,
+              catalog_status,
+              generic_item_id,
               NULL::text AS unit,
               COALESCE(NULLIF(TRIM(specs), ''), NULLIF(TRIM(intended_use), ''), NULLIF(TRIM(brand), '')) AS description
        FROM public.requested_items
@@ -48,6 +51,13 @@ const generateRfx = async (req, res, next) => {
     );
 
     const items = itemsRes.rows;
+    const unresolved = items.filter(item => ['free_text','pending_item_creation'].includes(item.request_mode) && !item.generic_item_id);
+    if (unresolved.length) {
+      return next(Object.assign(createHttpError(409, 'Approved request contains lines requiring item identity resolution'), {
+        code: 'ITEM_IDENTITY_RESOLUTION_REQUIRED',
+        unresolved_item_names: unresolved.map(item => item.item_name),
+      }));
+    }
     const doc = new PDFDocument();
 
     res.setHeader('Content-Type', 'application/pdf');

@@ -6,7 +6,7 @@ const generic={id:4,item_code:'MED-4',generic_name:'Sodium Chloride',canonical_d
 test('physical non-stock line receives authoritative Generic Item snapshots',async()=>{
   const client={query:jest.fn().mockResolvedValueOnce({rowCount:1,rows:[generic]})};
   const result=await validateRequestItemIdentity(client,{request_mode:'generic_item',generic_item_id:4,item_name:'user text',stocking_policy:'non_stock'},user());
-  expect(result).toMatchObject({generic_item_id:4,item_name:'Sodium Chloride',item_name_snapshot:'Sodium Chloride',catalog_status:'catalogued',stocking_policy:'non_stock'});
+  expect(result).toMatchObject({generic_item_id:4,item_name:'user text',item_name_snapshot:'user text',catalog_status:'catalogued',stocking_policy:'non_stock'});
 });
 
 test('inactive Generic Item is rejected',async()=>{

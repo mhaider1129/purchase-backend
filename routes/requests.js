@@ -7,6 +7,7 @@ const { getCompletedAssignedRequests } = require('../controllers/requests/procur
 const { addProcurementItemEvent, getProcurementItemEvents } = require('../controllers/requests/procurementItemEventsController');
 const { getFullRequestDetails, addRequestNote } = require('../controllers/requests/requestWorkspaceController');
 const upload = require('../middleware/upload');
+const { resolveIdentity, linkPending } = require('../controllers/requests/itemIdentityResolutionController');
 
 // 🧩 Controllers
 const {
@@ -83,6 +84,8 @@ router.put('/:id/cost', authenticateUser, updateRequestCost);
 router.put('/:id/edit', upload.any(), updateRequestBeforeApproval);
 router.put('/:id/request-type', rewireRequestType);
 router.post('/:requestId/items/:itemId/procurement-events', addProcurementItemEvent);
+router.post('/:requestId/items/:itemId/resolve-identity', resolveIdentity);
+router.post('/:requestId/items/:itemId/pending-item', linkPending);
 router.get('/:requestId/items/:itemId/procurement-events', getProcurementItemEvents);
 router.delete('/:id/hard-delete', deleteRequestCompletely);
 

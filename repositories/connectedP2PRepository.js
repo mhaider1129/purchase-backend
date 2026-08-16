@@ -19,6 +19,7 @@ const createConnectedP2PRepository = (client) => ({
   },
 
   lockRequestItem: (id) => one(client, 'SELECT * FROM requested_items WHERE id=$1 FOR UPDATE', [id]),
+  loadAwardCatalogIdentity: (productId,catalogId) => one(client, `SELECT c.id catalog_id,c.supplier_id,c.approved_product_id,c.purchasing_uom_id,c.conversion_factor,c.is_active catalog_active,p.generic_item_id,p.approval_status,p.is_active product_active,p.package_quantity,g.lifecycle_status,g.is_active generic_active,u.is_active uom_active FROM supplier_catalog_items c JOIN approved_products p ON p.id=c.approved_product_id JOIN generic_items g ON g.id=p.generic_item_id LEFT JOIN item_uom u ON u.id=c.purchasing_uom_id WHERE c.id=$2 AND p.id=$1`, [productId,catalogId]),
   loadActiveAwards: async (requestItemId) => (await client.query("SELECT * FROM procurement_awards WHERE request_item_id=$1 AND status='ACTIVE' ORDER BY id", [requestItemId])).rows,
   findAwardByIdempotency: (key) => one(client, 'SELECT * FROM procurement_awards WHERE idempotency_key=$1', [key]),
   insertAward: (a) => one(client, `INSERT INTO procurement_awards

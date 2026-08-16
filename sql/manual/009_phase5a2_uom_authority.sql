@@ -10,6 +10,8 @@ SELECT 'product_uom_text_id_mismatch', COUNT(*) FROM approved_products p JOIN it
 SELECT 'stock_inventory_uom_missing', COUNT(*) FROM stock_items WHERE inventory_uom_id IS NULL;
 SELECT 'gr_snapshot_missing', COUNT(*) FROM goods_receipt_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
 SELECT 'inventory_snapshot_missing', COUNT(*) FROM inventory_transactions WHERE source_quantity IS NULL OR source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
+SELECT 'duplicate_active_pending_referrals',COUNT(*) FROM (SELECT requested_item_id FROM pending_item_requests WHERE status IN ('submitted','review','needs_information') GROUP BY requested_item_id HAVING COUNT(*)>1) d;
+SELECT 'approved_requests_pending_mapping',COUNT(*) FROM requested_items ri JOIN requests r ON r.id=ri.request_id WHERE LOWER(r.status) IN ('approved','assigned','completed') AND ri.catalog_status='pending_mapping';
 
 -- HISTORICAL RECONCILIATION COUNTS (informational, never migration blockers).
 SELECT 'historical_po_rows_requiring_snapshot_reconciliation' finding_name, COUNT(*) finding_count FROM purchase_order_items;
@@ -17,6 +19,11 @@ SELECT 'historical_po_rows_requiring_snapshot_reconciliation' finding_name, COUN
 BEGIN;
 
 ALTER TABLE supplier_catalog_items ADD COLUMN IF NOT EXISTS purchasing_uom_id INTEGER REFERENCES item_uom(id) ON DELETE RESTRICT;
+ALTER TABLE rfx_response_items ADD COLUMN IF NOT EXISTS approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT;
+ALTER TABLE rfx_response_items ADD COLUMN IF NOT EXISTS supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items(id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS rfx_response_items_product_idx ON rfx_response_items(approved_product_id);
+CREATE INDEX IF NOT EXISTS rfx_response_items_catalog_idx ON rfx_response_items(supplier_catalog_item_id);
+CREATE UNIQUE INDEX IF NOT EXISTS pending_item_requests_one_active_per_item ON pending_item_requests(requested_item_id) WHERE requested_item_id IS NOT NULL AND status IN ('submitted','review','needs_information');
 ALTER TABLE procurement_awards ADD COLUMN IF NOT EXISTS approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT;
 ALTER TABLE procurement_awards ADD COLUMN IF NOT EXISTS supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items(id) ON DELETE RESTRICT;
 ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT;
@@ -62,5 +69,7 @@ WHERE c.purchasing_uom_id IS NULL AND UPPER(TRIM(c.purchasing_uom))=UPPER(TRIM(u
 COMMIT;
 
 -- Postflight reconciliation findings; do not make new fields NOT NULL until historical exceptions are resolved.
+SELECT 'historical_governed_rfx_missing_product',COUNT(*) FROM rfx_response_items x JOIN requested_items ri ON ri.id=x.requested_item_id WHERE ri.request_mode NOT IN ('service','approved_free_text_exception') AND x.approved_product_id IS NULL;
+SELECT 'historical_governed_rfx_missing_catalog',COUNT(*) FROM rfx_response_items x JOIN requested_items ri ON ri.id=x.requested_item_id WHERE ri.request_mode NOT IN ('service','approved_free_text_exception') AND x.supplier_catalog_item_id IS NULL;
 SELECT 'supplier_uom_still_unmapped' check_name, COUNT(*) defect_count FROM supplier_catalog_items WHERE purchasing_uom_id IS NULL;
 SELECT 'po_snapshot_still_missing', COUNT(*) FROM purchase_order_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;

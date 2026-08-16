@@ -1,6 +1,6 @@
 const createHttpError = require('../utils/httpError');
 
-const MODES = new Set(['generic_item','generic_item_with_preference','specific_approved_product','service','pending_item_creation','approved_free_text_exception']);
+const MODES = new Set(['free_text','generic_item','generic_item_with_preference','specific_approved_product','service','pending_item_creation','approved_free_text_exception']);
 const STOCKING_POLICIES = new Set(['stock','non_stock','consignment','direct_delivery','service']);
 
 const positiveId = (value, field) => {
@@ -33,6 +33,14 @@ const validateRequestItemIdentity = async (client, raw, user, { requireGovernedI
     if (!String(raw.item_name || '').trim()) throw createHttpError(400, 'Service description is required');
     return { ...raw, request_mode: mode, stocking_policy: 'service', catalog_status: 'approved_exception', generic_item_id: null, preferred_product_id: null, mandatory_product_id: null };
   }
+  // A non-stock requisition is a statement of demand, not an item-master
+  // transaction.  Its original wording remains authoritative until a human
+  // resolves it after approval.
+  if (mode === 'free_text') {
+    if (stockingPolicy === 'stock') throw createHttpError(400, 'Free-text request lines cannot declare themselves stocked');
+    if (!String(raw.item_name || '').trim()) throw createHttpError(400, 'Free-text item description is required');
+    return { ...raw, request_mode: mode, stocking_policy: stockingPolicy, catalog_status: 'pending_mapping', generic_item_id: null, preferred_product_id: null, mandatory_product_id: null, item_name_snapshot: String(raw.item_name).trim() };
+  }
   if (mode === 'approved_free_text_exception') {
     if (!user?.hasPermission?.('item-master.free-text-exception')) throw createHttpError(403, 'Free-text item exceptions require elevated permission');
     if (!justification) throw createHttpError(400, 'restriction_justification is required for a free-text exception');
@@ -63,7 +71,8 @@ const validateRequestItemIdentity = async (client, raw, user, { requireGovernedI
   return {
     ...raw, request_mode: mode, stocking_policy: stockingPolicy, catalog_status: 'catalogued',
     generic_item_id: genericItemId, preferred_product_id: preferredProductId, mandatory_product_id: mandatoryProductId,
-    item_name: identity.generic_name, item_name_snapshot: identity.generic_name,
+    // Never replace the requester's description with a canonical label.
+    item_name: raw.item_name || identity.generic_name, item_name_snapshot: raw.item_name_snapshot || raw.item_name || identity.generic_name,
     canonical_description_snapshot: identity.canonical_description,
     unit_of_measure: raw.unit_of_measure || identity.inventory_uom,
   };

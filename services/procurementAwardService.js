@@ -14,12 +14,13 @@ const fingerprintAward = (input) => createHash('sha256').update(JSON.stringify([
 ])).digest('hex');
 
 const createAward = async ({ repository, requestItem, supplier, input, actor, auditService = defaultAudit, outbox = defaultOutbox }) => {
-  if (Boolean(input.approved_product_id) !== Boolean(input.supplier_catalog_item_id)) throw Object.assign(new Error('Award Product and Supplier Catalog identities must be supplied together'), { code: 'AWARD_CATALOG_IDENTITY_REQUIRED' });
   if (compareDecimal(input.awarded_quantity, 0) <= 0) throw Object.assign(new Error('Award quantity must be positive'), { code: 'INVALID_AWARD_QUANTITY' });
   const fingerprint = fingerprintAward({ ...input, request_item_id: requestItem.id, supplier_id: supplier.id });
   return repository.withTransaction(async (tx) => {
     const locked = await tx.lockRequestItem(requestItem.id);
     if (!locked) throw Object.assign(new Error('Requested item not found'), { code: 'REQUEST_ITEM_NOT_FOUND', status: 404 });
+    const governedPhysical = locked.request_mode && !['service','approved_free_text_exception'].includes(locked.request_mode);
+    if (governedPhysical && (!input.approved_product_id || !input.supplier_catalog_item_id)) throw Object.assign(new Error('Governed physical awards require Product and Supplier Catalog identities'), { code: 'AWARD_CATALOG_IDENTITY_REQUIRED', status: 409 });
     await loadAndAssertSupplierEligible(tx, supplier.id);
     const existing = await tx.findByIdempotencyKey(input.idempotency_key);
     if (existing) {

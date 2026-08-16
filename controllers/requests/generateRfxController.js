@@ -2,6 +2,7 @@ const pool = require('../../config/db');
 const PDFDocument = require('pdfkit');
 const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
+const { assertRequestItemsReadyForSourcing } = require('../../services/sourcingReadinessService');
 
 const generateRfx = async (req, res, next) => {
   const { id } = req.params;
@@ -51,13 +52,7 @@ const generateRfx = async (req, res, next) => {
     );
 
     const items = itemsRes.rows;
-    const unresolved = items.filter(item => ['free_text','pending_item_creation'].includes(item.request_mode) && !item.generic_item_id);
-    if (unresolved.length) {
-      return next(Object.assign(createHttpError(409, 'Approved request contains lines requiring item identity resolution'), {
-        code: 'ITEM_IDENTITY_RESOLUTION_REQUIRED',
-        unresolved_item_names: unresolved.map(item => item.item_name),
-      }));
-    }
+    await assertRequestItemsReadyForSourcing(pool, id, items);
     const doc = new PDFDocument();
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -93,7 +88,7 @@ const generateRfx = async (req, res, next) => {
     doc.end();
   } catch (err) {
     console.error('Failed to generate RFX:', err);
-    next(createHttpError(500, 'Failed to generate document'));
+    next(err.code==='ITEM_IDENTITY_RESOLUTION_REQUIRED'?err:createHttpError(500, 'Failed to generate document'));
   }
 };
 

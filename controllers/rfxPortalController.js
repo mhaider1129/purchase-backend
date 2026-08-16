@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureSuppliersTable, findOrCreateSupplierByName } = require('./suppliersController');
 const { createAward } = require('../services/procurementAwardService');
+const { assertRequestItemsReadyForSourcing } = require('../services/sourcingReadinessService');
 const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
 const { createConnectedP2PRepository } = require('../repositories/connectedP2PRepository');
 const { priceAggregateRfxResponse, priceNormalizedRfxResponse } = require('../services/rfxAwardPricingService');
@@ -295,6 +296,7 @@ const createRfxEvent = async (req, res, next) => {
       if (rowCount === 0) {
         return next(createHttpError(404, 'Linked request not found'));
       }
+      await assertRequestItemsReadyForSourcing(pool, requestId);
       const requestItems = await pool.query('SELECT id AS requested_item_id, item_name, specs, quantity, approval_comments AS notes FROM requested_items WHERE request_id=$1 ORDER BY id', [requestId]);
       incomingDetails = { ...(incomingDetails || {}), items: requestItems.rows };
     }
@@ -374,8 +376,17 @@ const submitRfxResponse = async (req, res, next) => {
       await client.query('BEGIN');
       const repository = {
         loadRequestedItems: async (requestId) => (await client.query('SELECT * FROM requested_items WHERE request_id=$1 ORDER BY id', [requestId])).rows,
+        assertOfferIdentity: async (line,supplierId) => {
+          const result=await client.query(`SELECT c.supplier_id,c.approved_product_id,c.is_active catalog_active,c.purchasing_uom_id,c.conversion_factor,p.generic_item_id,p.approval_status,p.is_active product_active,p.package_quantity,g.lifecycle_status,g.is_active generic_active,ri.generic_item_id requested_generic_id,ri.mandatory_product_id,ri.request_mode
+            FROM requested_items ri JOIN approved_products p ON p.id=$2 JOIN generic_items g ON g.id=p.generic_item_id JOIN supplier_catalog_items c ON c.id=$3
+            WHERE ri.id=$1`,[line.requested_item_id,line.approved_product_id,line.supplier_catalog_item_id]);
+          const x=result.rows[0]; if(!x||Number(x.supplier_id)!==Number(supplierId)) throw Object.assign(new Error('Catalog does not belong to responding supplier'),{code:'RFX_CATALOG_SUPPLIER_MISMATCH',statusCode:409});
+          if(Number(x.approved_product_id)!==Number(line.approved_product_id)||!x.catalog_active||x.approval_status!=='approved'||!x.product_active||x.lifecycle_status!=='active'||!x.generic_active) throw Object.assign(new Error('Offered Product/Catalog is not active and approved'),{code:'RFX_CATALOG_IDENTITY_INVALID',statusCode:409});
+          if(Number(x.generic_item_id)!==Number(x.requested_generic_id)) throw Object.assign(new Error('Offered Product does not belong to requested Generic'),{code:'RFX_PRODUCT_GENERIC_MISMATCH',statusCode:409});
+          if(x.mandatory_product_id&&Number(x.mandatory_product_id)!==Number(line.approved_product_id)) throw Object.assign(new Error('Offered Product violates mandatory Product restriction'),{code:'RFX_MANDATORY_PRODUCT_MISMATCH',statusCode:409});
+        },
         insertResponse: async (row) => (await client.query(`INSERT INTO rfx_responses (rfx_id,request_id,supplier_id,submitted_by,bid_amount,notes,response_data) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [row.rfx_id,row.request_id,row.supplier_id,row.submitted_by,row.bid_amount,row.notes,row.response_data])).rows[0],
-        insertResponseItem: async (row) => (await client.query(`INSERT INTO rfx_response_items (rfx_response_id,requested_item_id,quoted_quantity,free_quantity,unit_price,currency,brand,offered_specs,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [row.rfx_response_id,row.requested_item_id,row.quoted_quantity,row.free_quantity,row.unit_price,row.currency,row.brand,row.offered_specs,row.notes])).rows[0],
+        insertResponseItem: async (row) => (await client.query(`INSERT INTO rfx_response_items (rfx_response_id,requested_item_id,quoted_quantity,free_quantity,unit_price,currency,brand,offered_specs,notes,approved_product_id,supplier_catalog_item_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`, [row.rfx_response_id,row.requested_item_id,row.quoted_quantity,row.free_quantity,row.unit_price,row.currency,row.brand,row.offered_specs,row.notes,row.approved_product_id,row.supplier_catalog_item_id])).rows[0],
       };
       const result = await submitLinkedRfxResponse({ repository, event, supplierId: supplier.id, submittedBy: req.user?.id || null, bidAmount, notes, responseData, lines: req.body?.items || responseData?.items });
       await client.query('COMMIT');
@@ -671,6 +682,7 @@ const awardRfxResponse = async (req, res, next) => {
       awards.push(await createAward({ repository, requestItem: priced.requestItem,
         supplier: { id: responseRow.supplier_id }, actor,
         input: { awarded_quantity: priced.quantity, unit_price: priced.unitPrice, currency: priced.currency,
+          approved_product_id: priced.responseItem?.approved_product_id, supplier_catalog_item_id: priced.responseItem?.supplier_catalog_item_id,
           source_type: 'QUOTATION', source_id: String(priced.sourceId || responseId), selection_reason: awardNotes || `Winning RFx response ${responseId}`,
           idempotency_key: `rfx:${rfxId}:response:${responseId}:item:${priced.requestItem.id}` } }));
     }

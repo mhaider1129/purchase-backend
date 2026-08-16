@@ -62,7 +62,7 @@ function priceNormalizedRfxResponse({ responseItems, requestItems }) {
     const required = String(requestItem.approved_quantity ?? requestItem.quantity ?? '');
     if (compareDecimal(line.quoted_quantity, required) !== 0) throw fail('Winning response quantity no longer covers the governed request', 'RFX_QUOTATION_QUANTITY_MISMATCH');
     currencies.add(String(line.currency).toUpperCase());
-    return { requestItem, quantity: line.quoted_quantity, unitPrice: line.unit_price, currency: String(line.currency).toUpperCase(), sourceId: line.id };
+    return { requestItem, responseItem: line, quantity: line.quoted_quantity, unitPrice: line.unit_price, currency: String(line.currency).toUpperCase(), sourceId: line.id };
   });
   if (seen.size !== requested.size) throw fail('Winning response must cover every requested item', 'RFX_INCOMPLETE_QUOTATION');
   if (currencies.size !== 1) throw fail('Winning response must use one currency', 'RFX_MIXED_CURRENCY_NOT_SUPPORTED');

@@ -48,7 +48,7 @@ function normalizeQuotationLines(lines, requestedItems, currency = 'USD') {
     }
     // Multiplying two four-place scaled integers retains all eight decimal places.
     total += quantity * unitPrice;
-    return { requested_item_id: requested.get(key).id, quoted_quantity: formatDecimal(quantity, 4), free_quantity: formatDecimal(freeQuantity, 4), unit_price: formatDecimal(unitPrice, 4), currency: lineCurrency, brand: line.brand || null, offered_specs: line.offered_specs ?? line.specs ?? null, notes: line.notes || null };
+    const requestedItem=requested.get(key); const mode=String(requestedItem.request_mode||''); const physical=Boolean(mode)&&!['service','approved_free_text_exception'].includes(mode); if(physical&&(!line.approved_product_id||!line.supplier_catalog_item_id))throw fail('Physical quotation line requires offered Product and Supplier Catalog Item','RFX_CATALOG_IDENTITY_REQUIRED',409); return { requested_item_id: requestedItem.id, quoted_quantity: formatDecimal(quantity, 4), free_quantity: formatDecimal(freeQuantity, 4), unit_price: formatDecimal(unitPrice, 4), currency: lineCurrency, brand: line.brand || null, offered_specs: line.offered_specs ?? line.specs ?? null, notes: line.notes || null, approved_product_id:line.approved_product_id||null, supplier_catalog_item_id:line.supplier_catalog_item_id||null };
   });
   if (seen.size !== requested.size) throw fail('Quotation must cover every requested item', 'RFX_INCOMPLETE_QUOTATION');
   if (currencies.size !== 1) throw fail('A quotation response must use one currency', 'RFX_MIXED_CURRENCY_NOT_SUPPORTED');
@@ -63,7 +63,7 @@ async function submitLinkedRfxResponse({ repository, event, supplierId, submitte
   if (bidAmount !== undefined && bidAmount !== null && bidAmount !== '' && parseEight(quotation.total) !== parseEight(bidAmount)) throw fail('Header bid amount does not match authoritative quotation lines', 'RFX_QUOTATION_TOTAL_MISMATCH', 409);
   const response = await repository.insertResponse({ rfx_id: event.id, request_id: event.request_id, supplier_id: supplierId, submitted_by: submittedBy, bid_amount: quotation.total, currency: quotation.currency, notes, response_data: responseData });
   const persistedLines = [];
-  for (const line of quotation.lines) persistedLines.push(await repository.insertResponseItem({ ...line, rfx_response_id: response.id }));
+  for (const line of quotation.lines) { if(repository.assertOfferIdentity) await repository.assertOfferIdentity(line,supplierId); persistedLines.push(await repository.insertResponseItem({ ...line, rfx_response_id: response.id })); }
   return { ...response, bid_amount: quotation.total, quotation_total: quotation.total, currency: quotation.currency, items: persistedLines };
 }
 

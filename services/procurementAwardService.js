@@ -21,6 +21,13 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
     if (!locked) throw Object.assign(new Error('Requested item not found'), { code: 'REQUEST_ITEM_NOT_FOUND', status: 404 });
     const governedPhysical = locked.request_mode && !['service','approved_free_text_exception'].includes(locked.request_mode);
     if (governedPhysical && (!input.approved_product_id || !input.supplier_catalog_item_id)) throw Object.assign(new Error('Governed physical awards require Product and Supplier Catalog identities'), { code: 'AWARD_CATALOG_IDENTITY_REQUIRED', status: 409 });
+    if (locked.request_mode==='approved_free_text_exception') throw Object.assign(new Error('Physical free-text exception PO conversion is not supported; use the governed direct-consumption flow'),{code:'FREE_TEXT_EXCEPTION_PO_NOT_SUPPORTED',status:409});
+    if (governedPhysical && tx.loadAwardCatalogIdentity) {
+      const x=await tx.loadAwardCatalogIdentity(input.approved_product_id,input.supplier_catalog_item_id);
+      const valid=x&&x.catalog_active&&Number(x.supplier_id)===Number(supplier.id)&&Number(x.approved_product_id)===Number(input.approved_product_id)&&x.approval_status==='approved'&&x.product_active&&x.lifecycle_status==='active'&&x.generic_active&&Number(x.generic_item_id)===Number(locked.generic_item_id)&&x.purchasing_uom_id&&x.uom_active&&Number(x.conversion_factor)>0&&Number(x.package_quantity)>0;
+      if(!valid) throw Object.assign(new Error('Award Product/Catalog relationship or UOM authority is invalid'),{code:'AWARD_CATALOG_IDENTITY_INVALID',status:409});
+      if(locked.mandatory_product_id&&Number(locked.mandatory_product_id)!==Number(input.approved_product_id)) throw Object.assign(new Error('Award violates mandatory Product restriction'),{code:'AWARD_MANDATORY_PRODUCT_MISMATCH',status:409});
+    }
     await loadAndAssertSupplierEligible(tx, supplier.id);
     const existing = await tx.findByIdempotencyKey(input.idempotency_key);
     if (existing) {

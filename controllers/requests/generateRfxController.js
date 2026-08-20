@@ -38,11 +38,14 @@ const generateRfx = async (req, res, next) => {
     await ensureRequestedItemApprovalColumns();
 
     const itemsRes = await pool.query(
-      `SELECT item_name,
+      `SELECT id, item_name,
               quantity,
               request_mode,
               catalog_status,
               generic_item_id,
+              preferred_product_id,
+              mandatory_product_id,
+              restriction_justification,
               NULL::text AS unit,
               COALESCE(NULLIF(TRIM(specs), ''), NULLIF(TRIM(intended_use), ''), NULLIF(TRIM(brand), '')) AS description
        FROM public.requested_items

@@ -46,6 +46,7 @@ const { recordDirectPurchaseCommunication } = require('./requests/directPurchase
 
 const { generateRfx } = require('./requests/generateRfxController');
 const { printRequest } = require('./requests/printRequestController');
+const { updateCentralSupplyChainStatus } = require('./requests/centralSupplyChainController');
 
 module.exports = {
   createRequest,
@@ -82,4 +83,5 @@ module.exports = {
   sendStatusCommunication,
   listStatusCommunications,
   recordDirectPurchaseCommunication,
+  updateCentralSupplyChainStatus,
 };

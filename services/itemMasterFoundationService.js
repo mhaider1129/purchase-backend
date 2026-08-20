@@ -315,7 +315,15 @@ class ItemMasterFoundationService {
          LEFT JOIN requests r ON r.id=p.request_id WHERE p.id=$1 FOR UPDATE OF p`, [id]);
       if (!pendingResult.rowCount) throw createHttpError(404, 'Pending item request not found');
       const pending = pendingResult.rows[0];
-      if (!['submitted','review','needs_information'].includes(pending.status)) throw createHttpError(409, 'Pending item has already been resolved');
+      if (!['submitted','review','needs_information'].includes(pending.status)) {
+        const sameGeneric = Number(pending.resolved_generic_item_id) === Number(payload.generic_item_id);
+        const sameProduct = (pending.resolved_product_id == null && payload.product_id == null) || Number(pending.resolved_product_id) === Number(payload.product_id);
+        if (pending.status === 'resolved' && pending.resolution_type === resolutionType && sameGeneric && sameProduct) {
+          await client.query('COMMIT');
+          return pending;
+        }
+        throw createHttpError(409, 'Pending item has already been resolved to a different governed identity');
+      }
       if (actor?.institute_id && pending.institute_id && Number(actor.institute_id) !== Number(pending.institute_id)) throw createHttpError(403, 'Pending item belongs to another institute');
       if (pending.requested_item_id) {
         const line = await client.query('SELECT id,request_id,item_name FROM requested_items WHERE id=$1 AND request_id=$2 FOR UPDATE', [pending.requested_item_id,pending.request_id]);

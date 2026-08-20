@@ -686,6 +686,7 @@ const getAllRequests = async (req, res, next) => {
     request_id,
     maintenance_ref_number,
     current_step,
+    central_supply_status,
     page = 1,
     limit = 10,
   } = req.query;
@@ -881,6 +882,12 @@ const getAllRequests = async (req, res, next) => {
         )
       )`);
     }
+  }
+
+  if (central_supply_status === 'sent') {
+    whereClauses.push('r.sent_to_central_supply_at IS NOT NULL');
+  } else if (central_supply_status === 'not_sent') {
+    whereClauses.push('r.sent_to_central_supply_at IS NULL');
   }
 
   if (Number.isInteger(req.user?.institute_id)) {

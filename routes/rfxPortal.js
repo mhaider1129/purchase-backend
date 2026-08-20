@@ -7,11 +7,13 @@ const {
   updateRfxStatus,
   analyzeQuotations,
   awardRfxResponse,
+  listValidOfferings,
 } = require('../controllers/rfxPortalController');
 
 const router = express.Router();
 
 router.get('/', listRfxEvents);
+router.get('/offerings', listValidOfferings);
 router.post('/', createRfxEvent);
 router.patch('/:id/status', updateRfxStatus);
 router.get('/:id/responses', listRfxResponses);

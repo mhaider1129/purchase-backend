@@ -1,6 +1,6 @@
 'use strict';
 
-const { parseDecimal, formatDecimal } = require('./purchaseOrderTotalsService');
+const { parseDecimal, formatDecimal, compareDecimal } = require('./purchaseOrderTotalsService');
 
 const fail = (message, code, statusCode = 400) => Object.assign(new Error(message), { code, statusCode });
 const currencyPattern = /^[A-Z]{3}$/;
@@ -63,7 +63,18 @@ async function submitLinkedRfxResponse({ repository, event, supplierId, submitte
   if (bidAmount !== undefined && bidAmount !== null && bidAmount !== '' && parseEight(quotation.total) !== parseEight(bidAmount)) throw fail('Header bid amount does not match authoritative quotation lines', 'RFX_QUOTATION_TOTAL_MISMATCH', 409);
   const response = await repository.insertResponse({ rfx_id: event.id, request_id: event.request_id, supplier_id: supplierId, submitted_by: submittedBy, bid_amount: quotation.total, currency: quotation.currency, notes, response_data: responseData });
   const persistedLines = [];
-  for (const line of quotation.lines) { if(repository.assertOfferIdentity) await repository.assertOfferIdentity(line,supplierId); persistedLines.push(await repository.insertResponseItem({ ...line, rfx_response_id: response.id })); }
+  for (const line of quotation.lines) {
+    const requested = requestedItems.find((item) => String(item.id) === String(line.requested_item_id));
+    const governedPhysical = requested?.request_mode && !['service','approved_free_text_exception'].includes(requested.request_mode);
+    if (governedPhysical && typeof repository.assertOfferIdentity !== 'function') throw fail('RFx catalog authority is not configured', 'RFX_CATALOG_AUTHORITY_REQUIRED', 500);
+    if (governedPhysical) {
+      const identity = await repository.assertOfferIdentity(line,supplierId);
+      if (!identity?.purchasing_uom_id || !identity.uom_active) throw fail('Supplier purchasing UOM is missing or inactive','RFX_PURCHASING_UOM_INVALID',409);
+      if (compareDecimal(identity.conversion_factor,0)<=0) throw fail('Supplier conversion factor must be positive','RFX_SUPPLIER_CONVERSION_INVALID',409);
+      if (compareDecimal(identity.package_quantity,0)<=0) throw fail('Product package quantity must be positive','RFX_PRODUCT_PACKAGE_INVALID',409);
+    }
+    persistedLines.push(await repository.insertResponseItem({ ...line, rfx_response_id: response.id }));
+  }
   return { ...response, bid_amount: quotation.total, quotation_total: quotation.total, currency: quotation.currency, items: persistedLines };
 }
 

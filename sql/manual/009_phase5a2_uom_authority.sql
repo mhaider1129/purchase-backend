@@ -11,9 +11,12 @@ SELECT 'stock_inventory_uom_missing', COUNT(*) FROM stock_items WHERE inventory_
 SELECT 'gr_snapshot_missing', COUNT(*) FROM goods_receipt_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
 SELECT 'inventory_snapshot_missing', COUNT(*) FROM inventory_transactions WHERE source_quantity IS NULL OR source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
 SELECT 'duplicate_active_pending_referrals',COUNT(*) FROM (SELECT requested_item_id FROM pending_item_requests WHERE status IN ('submitted','review','needs_information') GROUP BY requested_item_id HAVING COUNT(*)>1) d;
-SELECT 'approved_requests_pending_mapping',COUNT(*) FROM requested_items ri JOIN requests r ON r.id=ri.request_id WHERE LOWER(r.status) IN ('approved','assigned','completed') AND ri.catalog_status='pending_mapping';
 
--- HISTORICAL RECONCILIATION COUNTS (informational, never migration blockers).
+-- HISTORICAL RECONCILIATION COUNTS / OPERATIONAL FINDINGS (informational, never migration blockers).
+SELECT 'approved_requests_pending_mapping',COUNT(*) FROM requested_items ri JOIN requests r ON r.id=ri.request_id WHERE LOWER(r.status) IN ('approved','assigned','completed') AND ri.catalog_status='pending_mapping';
+SELECT 'sourcing_complete_unresolved_physical_item',COUNT(*) FROM requested_items ri JOIN requests r ON r.id=ri.request_id WHERE LOWER(r.status) IN ('awarded','sourcing_complete','completed') AND ri.request_mode NOT IN ('service','approved_free_text_exception') AND (ri.generic_item_id IS NULL OR ri.catalog_status<>'catalogued');
+SELECT 'purchase_order_item_unresolved_physical_item',COUNT(*) FROM purchase_order_items poi JOIN requested_items ri ON ri.id=poi.requested_item_id WHERE ri.request_mode NOT IN ('service','approved_free_text_exception') AND ri.generic_item_id IS NULL;
+SELECT 'governed_rfx_response_unresolved_generic',COUNT(*) FROM rfx_response_items x JOIN requested_items ri ON ri.id=x.requested_item_id WHERE ri.request_mode NOT IN ('service','approved_free_text_exception') AND ri.generic_item_id IS NULL;
 SELECT 'historical_po_rows_requiring_snapshot_reconciliation' finding_name, COUNT(*) finding_count FROM purchase_order_items;
 
 BEGIN;

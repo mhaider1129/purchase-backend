@@ -43,6 +43,7 @@ const {
   getClosedRequests,
   getAuditApprovedRejectedRequests,
   insertHistoricalRequest,
+  updateCentralSupplyChainStatus,
 } = require('../controllers/requestsController');
 
 const {
@@ -76,6 +77,7 @@ router.get('/closed', getClosedRequests); // Completed or rejected requests
 router.get('/audit/approved-rejected', getAuditApprovedRejectedRequests); // Audit view
 router.get('/approval-history', getApprovalHistory); // My approval history
 router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
+router.patch('/:id/central-supply-status', updateCentralSupplyChainStatus);
 router.post('/:id/request-hod-approval', requestHodApproval); // Insert additional HOD approval step
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);

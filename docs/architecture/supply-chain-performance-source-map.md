@@ -71,6 +71,21 @@ The migration seeds five permission definitions but grants none: view, manage, v
 
 ## Historical and remaining blockers
 
-No historical complexity, touches, savings, supplier interactions, responsibility time, or strategic achievements are backfilled. If cases are later deterministically backfilled from approved item rows, they must be `LEGACY_INCOMPLETE`. Before executive release, blockers are: canonical shipment milestones; governed payment-term coverage; reliable technical evaluation-to-item linkage; supplier creation provenance; an event emitted at item-level approval; and transactional hooks/outbox consumers across all RFx/award/PO/GR paths.
+No historical complexity, touches, savings, supplier interactions, responsibility time, or strategic achievements are backfilled. If cases are later deterministically backfilled from approved item rows, they must be `LEGACY_INCOMPLETE`. Remaining executive-release blockers are canonical shipment milestones, governed payment-term coverage, reliable technical evaluation-to-item linkage, supplier creation provenance, and validation of the new projections against a migrated production-like database.
+
+## Connected event contract
+
+The existing `notification_outbox` is the single committed-event transport. Its processor first projects performance evidence idempotently and then performs in-app delivery; a projection failure is recorded for retry and occurs after the producing business transaction has committed.
+
+| Producer | Outbox `event_type` | Deterministic item identity in `payload` | Performance activity |
+|---|---|---|---|
+| RFx portal create | `RFX_CREATED` | `requestedItemIds` contains every linked request item | `RFQ_CREATED` on every active item case |
+| RFx portal response | `RFX_RESPONSE_SUBMITTED` | `requestedItemIds` comes from persisted response lines | `QUOTATION_RECEIVED` on every relevant case |
+| Award service | `AWARD_CREATED` | `requestedItemIds: [locked requested item id]` | `AWARD_CREATED` |
+| PO service create | `PO_CREATED` | distinct IDs from persisted PO lines | `PO_CREATED` |
+| PO service issue | `PO_ISSUED` | distinct IDs loaded from PO lines | `PO_ISSUED` |
+| Goods receipt service | `GOODS_RECEIPT_POSTED` | distinct IDs from locked PO lines used by the receipt | `GOODS_RECEIPT` (not final delivery) |
+
+Technical evaluation is deliberately still **PARTIAL**: the current evaluation records do not provide a reliable requested-item linkage on every path, so no technical lifecycle event is fabricated. New cases consequently begin with `activity_coverage = PARTIAL`; observing one event never upgrades the case to `FULL`.
 
 Direct aggregate SQL with the supplied indexes is appropriate initially. Consider governed summary/materialized views only after measured query plans justify them; do not create a second reporting database.

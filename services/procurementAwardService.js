@@ -39,7 +39,7 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
     if (compareDecimal(addDecimal(awarded, input.awarded_quantity), locked.approved_quantity ?? locked.quantity) > 0) throw Object.assign(new Error('Award exceeds approved request quantity'), { code: 'AWARD_QUANTITY_EXCEEDED' });
     const award = await tx.insert({ request_id: locked.request_id, request_item_id: locked.id, supplier_id: supplier.id, approved_product_id: input.approved_product_id || null, supplier_catalog_item_id: input.supplier_catalog_item_id || null, awarded_quantity: String(input.awarded_quantity), unit_price: String(input.unit_price), currency: String(input.currency).toUpperCase(), source_type: input.source_type, source_id: input.source_id || null, selection_reason: input.selection_reason, actor_id: actor.id, idempotency_key: input.idempotency_key, payload_fingerprint: fingerprint });
     await auditService.writeAuditEvent({ client: tx.client, entityType: 'procurement_award', entityId: award.id, requestId: locked.request_id, action: 'AWARD_CREATED', actorUserId: actor.id, metadata: { request_item_id: locked.id, supplier_id: supplier.id } });
-    await outbox.enqueueNotification(tx.client, { type: 'AWARD_CREATED', entityType: 'procurement_award', entityId: award.id, payload: { award_id: award.id, request_id: locked.request_id }, idempotencyKey: `award-created:${award.id}` });
+    await outbox.enqueueNotification(tx.client, { type: 'AWARD_CREATED', entityType: 'procurement_award', entityId: award.id, payload: { award_id: award.id, request_id: locked.request_id, requestedItemIds: [locked.id], supplierId: supplier.id, actorId: actor.id }, idempotencyKey: `award-created:${award.id}` });
     return award;
   });
 };

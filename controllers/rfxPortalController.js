@@ -7,6 +7,7 @@ const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderServ
 const { createConnectedP2PRepository } = require('../repositories/connectedP2PRepository');
 const { priceAggregateRfxResponse, priceNormalizedRfxResponse } = require('../services/rfxAwardPricingService');
 const { submitLinkedRfxResponse } = require('../services/rfxResponseService');
+const notificationOutbox = require('../services/notificationOutboxService');
 
 let rfxTablesEnsured = false;
 let ensuringPromise = null;
@@ -323,14 +324,19 @@ const createRfxEvent = async (req, res, next) => {
       incomingDetails = { ...(incomingDetails || {}), items: requestItems.rows };
     }
 
-    const { rows } = await pool.query(
-      `INSERT INTO rfx_events (title, rfx_type, description, details, request_id, due_date, status, created_by)
+    const client=await pool.connect(); let created;
+    try { await client.query('BEGIN');
+      const { rows } = await client.query(
+       `INSERT INTO rfx_events (title, rfx_type, description, details, request_id, due_date, status, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, 'open', $7)
        RETURNING id, title, rfx_type, description, details, request_id, due_date, status, created_by, created_at, updated_at`,
       [title, rfxType.toUpperCase(), description, incomingDetails, requestId, dueDate, req.user?.id || null]
-    );
-
-    res.status(201).json(rows[0]);
+      ); created=rows[0];
+      const requestedItemIds=(incomingDetails?.items||[]).map(item=>item.requested_item_id).filter(Boolean);
+      await notificationOutbox.enqueueNotification(client,{type:'RFX_CREATED',entityType:'rfx_event',entityId:created.id,payload:{requestId,requestedItemIds,actorId:req.user?.id||null},idempotencyKey:`rfx-created:${created.id}`});
+      await client.query('COMMIT');
+    } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
+    res.status(201).json(created);
   } catch (err) {
     console.error('❌ Failed to create RFX event:', err);
     next(createHttpError(500, 'Failed to create RFX event'));
@@ -412,6 +418,7 @@ const submitRfxResponse = async (req, res, next) => {
         insertResponseItem: async (row) => (await client.query(`INSERT INTO rfx_response_items (rfx_response_id,requested_item_id,quoted_quantity,free_quantity,unit_price,currency,brand,offered_specs,notes,approved_product_id,supplier_catalog_item_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`, [row.rfx_response_id,row.requested_item_id,row.quoted_quantity,row.free_quantity,row.unit_price,row.currency,row.brand,row.offered_specs,row.notes,row.approved_product_id,row.supplier_catalog_item_id])).rows[0],
       };
       const result = await submitLinkedRfxResponse({ repository, event, supplierId: supplier.id, submittedBy: req.user?.id || null, bidAmount, notes, responseData, lines: req.body?.items || responseData?.items });
+      await notificationOutbox.enqueueNotification(client,{type:'RFX_RESPONSE_SUBMITTED',entityType:'rfx_response',entityId:result.id,payload:{rfxId:event.id,requestedItemIds:result.items.map(item=>item.requested_item_id),supplierId:supplier.id,actorId:req.user?.id||null},idempotencyKey:`rfx-response-submitted:${result.id}`});
       await client.query('COMMIT');
       return res.status(201).json(result);
     } catch (error) {

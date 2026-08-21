@@ -116,7 +116,7 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
       metadata: { receiptId: receipt.id, purchaseOrderId: po.id, supplierId: po.supplier_id, lineCount: receipt.items.length,
         receivedQuantities: receipt.items.map((line) => line.received_quantity), inventoryMovementIds: movementIds }, client: tx.client });
     await outbox.enqueueNotification(tx.client, { type: 'GOODS_RECEIPT_POSTED', entityType: 'goods_receipt', entityId: receipt.id,
-      idempotencyKey: `goods-receipt:${receipt.id}:posted`, payload: { purchaseOrderId: po.id, status: updatedPo.status } });
+      idempotencyKey: `goods-receipt:${receipt.id}:posted`, payload: { purchaseOrderId: po.id, status: updatedPo.status, requestedItemIds: [...new Set(prepared.map(line => line.requested_item_id))], supplierId: po.supplier_id, actorId: actor?.id } });
     await outbox.enqueueNotification(tx.client, { type: updatedPo.status, entityType: 'purchase_order', entityId: po.id,
       idempotencyKey: `purchase-order:${po.id}:${updatedPo.status.toLowerCase()}:receipt:${receipt.id}`, payload: { receiptId: receipt.id } });
     return { receipt, purchaseOrder: updatedPo, inventoryMovements, idempotent: false };

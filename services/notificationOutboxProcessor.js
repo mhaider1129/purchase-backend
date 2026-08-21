@@ -12,6 +12,8 @@ async function deliverInApp(client, event) {
     requestedItemIds: payload.requestedItemIds || payload.requested_item_ids || [],
     occurredAt: event.created_at, actorId: payload.actorId || payload.actor_id,
     supplierId: payload.supplierId || payload.supplier_id,
+    purchaseOrderStatus: payload.status || payload.purchase_order_status,
+    receiptComplete: payload.receiptComplete ?? payload.receipt_complete,
   } });
   if (!event.recipient_user_id) return;
   await client.query(

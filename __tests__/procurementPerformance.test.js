@@ -13,7 +13,19 @@ const repo=existing=>{const inserted=[];const activities=[];return{inserted,acti
 describe('case/activity governance',()=>{
  test('approved item creates one case and retry links existing',async()=>{const r=repo();expect((await ensureCaseForRequestedItem({repository:r,requestedItem:item,actorId:1})).case_status).toBe('ITEM_IDENTITY_RESOLUTION');expect(r.inserted).toHaveLength(1);const old={id:9};expect(await ensureCaseForRequestedItem({repository:repo(old),requestedItem:item,actorId:1})).toBe(old)});
  test.each(['DRAFT','REJECTED'])('%s does not create a case',async status=>expect(await ensureCaseForRequestedItem({repository:repo(),requestedItem:{...item,request_status:status},actorId:1})).toBeNull());
- test('two-line RFx evidence maps idempotently to both database cases',async()=>{const stored=new Map();const repository={findActiveCasesByRequestedItems:async ids=>ids.map((_,i)=>({id:i+1})),insertActivityIdempotent:async row=>{if(stored.has(row.idempotency_key))return null;stored.set(row.idempotency_key,row);return row;}};const event={type:'RFX_CREATED',entityType:'rfx',entityId:8,requestedItemIds:[7,9],occurredAt:'2026-01-01'};expect(await captureBusinessEvent({repository,event})).toHaveLength(2);expect(await captureBusinessEvent({repository,event})).toHaveLength(0);expect(stored.size).toBe(2)});
+ test('real evidence consumer is idempotent across two cases and projection never regresses',async()=>{
+  const stored=new Map();const status=new Map([[1,'READY_FOR_SOURCING'],[2,'READY_FOR_SOURCING']]);
+  const order=['READY_FOR_SOURCING','SOURCING','COMMERCIAL_EVALUATION','AWARDED','PO_PROCESSING','SUPPLIER_FULFILLMENT','DELIVERED'];
+  const repository={findActiveCasesByRequestedItems:async ids=>ids.map((_,i)=>({id:i+1})),insertActivityIdempotent:async row=>{if(stored.has(row.idempotency_key))return null;stored.set(row.idempotency_key,row);return row;},updateCaseProjection:async(id,row)=>{if(order.indexOf(row.case_status)>=order.indexOf(status.get(id)))status.set(id,row.case_status);}};
+  const send=(type,id,extra={})=>captureBusinessEvent({repository,event:{type,entityType:type.startsWith('RFX')?'rfx':'entity',entityId:id,requestedItemIds:[10,11],occurredAt:'2026-01-01',...extra}});
+  expect(await send('RFX_CREATED',8)).toHaveLength(2);expect(await send('RFX_CREATED',8)).toHaveLength(0);
+  expect(await send('RFX_RESPONSE_SUBMITTED',9)).toHaveLength(2);
+  for(const [type,id] of [['AWARD_CREATED',10],['PO_CREATED',11],['PO_ISSUED',12]])expect(await send(type,id)).toHaveLength(2);
+  expect(await send('PO_ISSUED',12)).toHaveLength(0);
+  await send('GOODS_RECEIPT_POSTED',13,{purchaseOrderStatus:'PO_PARTIAL'});expect([...status.values()]).toEqual(['SUPPLIER_FULFILLMENT','SUPPLIER_FULFILLMENT']);
+  await send('GOODS_RECEIPT_POSTED',14,{purchaseOrderStatus:'PO_DELIVERED'});expect([...status.values()]).toEqual(['DELIVERED','DELIVERED']);
+  await send('RFX_CREATED',15);expect([...status.values()]).toEqual(['DELIVERED','DELIVERED']);expect(stored.size).toBe(16);
+ });
  test('projection follows authoritative evidence precedence',()=>expect(deriveProcurementCaseStatus({approved:true,identityResolved:true,poIssued:true})).toBe('SUPPLIER_FULFILLMENT'));
  test('manual supplier work is a touch but page views are not',()=>{const manual=a.validateManualActivity({activity_type:'SUPPLIER_CONTACTED',procurement_case_id:1,activity_at:'2026-01-01',notes:'Called OEM'});expect(a.summarizeTouches([manual,{activity_type:'SUPPLIER_CONTACTED',source:'PAGE_VIEW'},{activity_type:'PAGE_VIEW'}]).total).toBe(1)});
 });
@@ -31,4 +43,5 @@ describe('clocks/pending/security/history',()=>{
  test('root causes aggregate and unresolved identity stays separate',()=>expect(aggregatePending([{case_status:'SOURCING',pending_root_cause:'ITEM_IDENTITY_RESOLUTION',opened_at:'2026-01-01'}],new Date('2026-01-03')).ITEM_IDENTITY_RESOLUTION).toEqual({count:1,averageAgeMs:172800000}));
  test('institute authorization does not broaden for a buyer',()=>{const u={institute_id:2,data_scopes:{institute_ids:[2]},hasPermission:()=>true};expect(instituteScope(u,2)).toBe(true);expect(instituteScope(u,3)).toBe(false)});
  test('legacy incomplete is unavailable rather than zero',()=>expect(metric(0,'LEGACY_INCOMPLETE','missing')).toEqual({value:null,coverage:'LEGACY_INCOMPLETE',status:'not_available',reason:'missing'}));
+ test('partial valid numerator remains visible with warning',()=>expect(metric(143,'PARTIAL','99% covered')).toEqual({value:143,coverage:'PARTIAL',warning:'99% covered'}));
 });

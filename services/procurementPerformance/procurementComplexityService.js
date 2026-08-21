@@ -18,4 +18,24 @@ function scoreFacts(facts, modelVersion = MODEL_VERSION) {
   return { score, ...classify(score), modelVersion, factors: entries };
 }
 
-module.exports = { scoreFacts, classify, MODEL_VERSION, CLASS_BANDS };
+async function assessComplexity({ repository, caseId, facts, actorId, reason, canManage, modelVersion = MODEL_VERSION }) {
+  if (!canManage) throw Object.assign(new Error('Complexity management permission required'), { statusCode: 403 });
+  if (!actorId || !String(reason || '').trim()) throw new TypeError('Actor and assessment reason are required');
+  const result = scoreFacts(facts, modelVersion);
+  return repository.withTransaction(async tx => {
+    const current = await tx.lockCase(caseId);
+    if (!current) throw Object.assign(new Error('Procurement case not found'), { statusCode: 404 });
+    if (current.closed_at) throw Object.assign(new Error('Closed case complexity is immutable'), { statusCode: 409 });
+    await tx.replaceFactorSnapshot(caseId, result.factors, modelVersion, actorId);
+    const updated = await tx.updateComplexity(caseId, { complexity_score: result.score,
+      complexity_class: result.complexityClass, workload_units: result.workloadUnits,
+      complexity_model_version: modelVersion, workload_model_version: modelVersion,
+      complexity_coverage: 'FULL', updated_by: actorId });
+    await tx.writeAudit({ entity_type: 'procurement_case', entity_id: caseId,
+      action: 'COMPLEXITY_ASSESSED', actor_user_id: actorId, reason: String(reason).trim(),
+      metadata: { model_version: modelVersion, factors: result.factors } });
+    return updated;
+  });
+}
+
+module.exports = { scoreFacts, assessComplexity, classify, MODEL_VERSION, CLASS_BANDS };

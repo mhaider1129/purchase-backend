@@ -24,7 +24,19 @@ function weightedCreditDays(awards = []) {
     value += amount;
     weighted += amount * BigInt(award.creditDays || 0);
   }
-  return value === 0n ? null : Number(weighted / value);
+  if (value === 0n) return null;
+  const hundredths = (weighted * 100n + value / 2n) / value;
+  return `${hundredths / 100n}.${String(hundredths % 100n).padStart(2, '0')}`;
 }
 
-module.exports = { verifiedHardSavings, aggregateByCurrency, weightedCreditDays };
+function validateValueEvent(input, actor) {
+  if (!actor?.canVerifySavings || !actor.id) throw Object.assign(new Error('Savings verifier permission required'), { statusCode: 403 });
+  if (String(input.enteredBy) === String(actor.id)) throw Object.assign(new Error('An ordinary event author cannot self-verify'), { statusCode: 403 });
+  if (!input.evidenceEntityType || !input.evidenceEntityId) throw new TypeError('Evidence entity reference is required');
+  if (input.valueType === 'HARD_SAVINGS') return { ...input, ...verifiedHardSavings(input), verifiedBy: actor.id };
+  if (input.valueType !== 'COST_AVOIDANCE' || !String(input.notes || '').trim()) throw new TypeError('Cost avoidance requires value, evidence and notes');
+  parseDecimal(input.verifiedValue);
+  return { ...input, currency: String(input.currency).toUpperCase(), verifiedBy: actor.id };
+}
+
+module.exports = { verifiedHardSavings, validateValueEvent, aggregateByCurrency, weightedCreditDays };

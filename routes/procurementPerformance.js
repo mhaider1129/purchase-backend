@@ -10,9 +10,14 @@ router.get('/dashboard',asyncHandler(async(req,res)=>{
   const s=scope(req);const params=[...s.params];let where=s.sql;
   if(req.query.date_from){params.push(req.query.date_from);where+=` AND pc.opened_at >= $${params.length}::date`;}
   const domains=['activity','complexity','commercial','logistics','cycle_time'];
-  const coverageColumns=domains.map(domain=>`count(*) FILTER (WHERE ${domain}_coverage='FULL')::int AS ${domain}_covered_cases,
-    CASE WHEN count(*)=0 OR count(*) FILTER (WHERE ${domain}_coverage='FULL')=0 THEN 'MISSING' WHEN count(*) FILTER (WHERE ${domain}_coverage='FULL')=count(*) THEN 'FULL' ELSE 'PARTIAL' END AS ${domain}_status,
-    to_char(CASE WHEN count(*)=0 THEN 0::numeric ELSE 100::numeric*count(*) FILTER (WHERE ${domain}_coverage='FULL')/count(*) END,'FM990.00') AS ${domain}_coverage_percent`).join(',');
+  const coverageColumns=domains.map(domain=>`count(*) FILTER (WHERE ${domain}_coverage='FULL')::int AS ${domain}_full_cases,
+    count(*) FILTER (WHERE ${domain}_coverage='PARTIAL')::int AS ${domain}_partial_cases,
+    count(*) FILTER (WHERE ${domain}_coverage='MISSING')::int AS ${domain}_missing_cases,
+    count(*) FILTER (WHERE ${domain}_coverage='LEGACY_INCOMPLETE')::int AS ${domain}_legacy_incomplete_cases,
+    count(*) FILTER (WHERE ${domain}_coverage IN ('FULL','PARTIAL'))::int AS ${domain}_usable_evidence_cases,
+    CASE WHEN count(*)=0 THEN 'MISSING' WHEN count(*) FILTER (WHERE ${domain}_coverage='FULL')=count(*) THEN 'FULL' WHEN count(*) FILTER (WHERE ${domain}_coverage IN ('FULL','PARTIAL'))>0 THEN 'PARTIAL' WHEN count(*) FILTER (WHERE ${domain}_coverage='LEGACY_INCOMPLETE')>0 THEN 'LEGACY_INCOMPLETE' ELSE 'MISSING' END AS ${domain}_status,
+    to_char(CASE WHEN count(*)=0 THEN 0::numeric ELSE 100::numeric*count(*) FILTER (WHERE ${domain}_coverage IN ('FULL','PARTIAL'))/count(*) END,'FM990.00') AS ${domain}_coverage_percent,
+    to_char(CASE WHEN count(*)=0 THEN 0::numeric ELSE 100::numeric*count(*) FILTER (WHERE ${domain}_coverage='FULL')/count(*) END,'FM990.00') AS ${domain}_full_coverage_percent`).join(',');
   const [result,complexity,pending,coverageResult,activity]=await Promise.all([
     pool.query(`SELECT count(*)::int cases,count(DISTINCT request_id)::int prs,count(DISTINCT requested_item_id)::int requested_items,count(DISTINCT department_id)::int departments FROM procurement_cases pc WHERE ${where}`,params),
     pool.query(`SELECT complexity_class AS class,count(*)::int count,COALESCE(sum(workload_units),0)::int pwu FROM procurement_cases pc WHERE ${where} AND complexity_class IS NOT NULL GROUP BY complexity_class ORDER BY complexity_class`,params),
@@ -23,10 +28,11 @@ router.get('/dashboard',asyncHandler(async(req,res)=>{
   const base=result.rows[0];const coverage=coverageResult.rows[0];
   const summary=domain=>coverageSummary(coverage,domain);
   const unavailable=domain=>({...summary(domain),value:null,status:'not_available',reason:`${domain} denominator is unsafe with incomplete source coverage`});
+  const activitySummary=summary('activity');const activityUsable=activitySummary.usable_evidence_cases>0;
   res.json({metrics:{
     demand:{prs:base.prs,requested_items:base.requested_items,departments:base.departments,coverage:'FULL'},
-    activities:{...activity.rows[0],...summary('activity'),warning:summary('activity').coverage==='PARTIAL'?'Known activities shown; some categories are not comprehensively captured':undefined},
-    complexity:{class_mix:complexity.rows,assessed_cases:summary('complexity').covered_cases,unassessed_cases:summary('complexity').total_cases-summary('complexity').covered_cases,...summary('complexity')},
+    activities:{touches:activityUsable?activity.rows[0].touches:null,rfqs:activityUsable?activity.rows[0].rfqs:null,quotations:activityUsable?activity.rows[0].quotations:null,...activitySummary,...(!activityUsable?{status:'not_available',reason:'No usable activity evidence'}:activitySummary.coverage==='PARTIAL'?{warning:'Known activities shown; some categories are not comprehensively captured'}:{})},
+    complexity:{class_mix:complexity.rows,assessed_cases:summary('complexity').usable_evidence_cases,unassessed_cases:summary('complexity').total_cases-summary('complexity').usable_evidence_cases,...summary('complexity')},
     commercial:unavailable('commercial'),logistics:unavailable('logistics'),cycle_time:unavailable('cycle_time'),
   },pending:pending.rows,buyers:[],highlights:[]});
 }));

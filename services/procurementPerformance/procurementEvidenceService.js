@@ -9,10 +9,10 @@ const ACTIVITY_MAP = Object.freeze({
 
 const PROJECTION_MAP = Object.freeze({
   RFX_CREATED: { case_status: 'SOURCING', pending_root_cause: 'AWAITING_SUPPLIER_QUOTATION', timestamp: 'sourcing_started_at' },
-  RFX_RESPONSE_SUBMITTED: { case_status: 'COMMERCIAL_EVALUATION', pending_root_cause: null, timestamp: 'commercially_ready_at' },
-  AWARD_CREATED: { case_status: 'AWARDED', pending_root_cause: null },
+  RFX_RESPONSE_SUBMITTED: { case_status: 'COMMERCIAL_EVALUATION', pending_root_cause: null },
+  AWARD_CREATED: { case_status: 'AWARDED', pending_root_cause: null, timestamp: 'commercially_ready_at' },
   PO_CREATED: { case_status: 'PO_PROCESSING', pending_root_cause: null },
-  PO_ISSUED: { case_status: 'SUPPLIER_FULFILLMENT', pending_root_cause: 'SUPPLIER_MANUFACTURING' },
+  PO_ISSUED: { case_status: 'SUPPLIER_FULFILLMENT', pending_root_cause: null },
 });
 
 function projectionForEvent(event) {
@@ -21,7 +21,7 @@ function projectionForEvent(event) {
   // the requirement is complete. A partial receipt remains supplier fulfilment.
   return event.receiptComplete === true || event.purchaseOrderStatus === 'PO_DELIVERED'
     ? { case_status: 'DELIVERED', pending_root_cause: null }
-    : { case_status: 'SUPPLIER_FULFILLMENT', pending_root_cause: 'SUPPLIER_MANUFACTURING' };
+    : { case_status: 'SUPPLIER_FULFILLMENT', pending_root_cause: null };
 }
 
 /** Outbox consumer. Core transactions already atomically publish these events; reporting retries independently. */

@@ -4,8 +4,16 @@ const DEFAULT_MAX_RETRIES = 8;
 const retryDelaySeconds = retryCount => Math.min(3600, 15 * (2 ** Math.max(0, retryCount - 1)));
 
 async function deliverInApp(client, event) {
-  if (!event.recipient_user_id) return;
+  const { captureBusinessEvent } = require('./procurementPerformance/procurementEvidenceService');
+  const { createProcurementPerformanceRepository } = require('../repositories/procurementPerformanceRepository');
   const payload = event.payload || {};
+  await captureBusinessEvent({ repository: createProcurementPerformanceRepository(client), event: {
+    type: event.event_type, entityType: event.entity_type, entityId: event.entity_id,
+    requestedItemIds: payload.requestedItemIds || payload.requested_item_ids || [],
+    occurredAt: event.created_at, actorId: payload.actorId || payload.actor_id,
+    supplierId: payload.supplierId || payload.supplier_id,
+  } });
+  if (!event.recipient_user_id) return;
   await client.query(
     `INSERT INTO notifications (user_id,title,message,link,metadata,outbox_event_id)
      VALUES ($1,$2,$3,$4,$5::jsonb,$6)

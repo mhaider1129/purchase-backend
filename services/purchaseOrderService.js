@@ -11,7 +11,7 @@ const isPoNumberCollision = (error) => error?.code === '23505' && (
   error.constraint === 'purchase_orders_po_number_key'
   || /\bpo_number\b/i.test(String(error.detail || ''))
 );
-const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities = {}, actor, input = {} }) => repository.withTransaction(async (tx) => {
+const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities = {}, actor, input = {}, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
   if (!Array.isArray(awardIds) || !awardIds.length) throw Object.assign(new Error('At least one award is required'), { code: 'AWARD_REQUIRED' });
   const awards = await tx.lockAwards(awardIds);
   if (awards.length !== awardIds.length || awards.some((award) => award.status !== 'ACTIVE')) throw Object.assign(new Error('An active award was not found'), { code: 'AWARD_NOT_FOUND' });
@@ -60,11 +60,17 @@ const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities 
   if (!header) throw Object.assign(new Error('Canonical purchase order number collided repeatedly'), { code: 'PO_NUMBER_GENERATION_FAILED', statusCode: 409 });
   const lines = [];
   for (const award of awards) { const snapshot=snapshots.get(String(award.id)); lines.push(await tx.insertLine({ purchase_order_id: header.id, request_id: award.request_id, request_item_id: award.request_item_id, requested_item_id: award.request_item_id, award_id: award.id, approved_product_id: award.approved_product_id, supplier_catalog_item_id: award.supplier_catalog_item_id, quantity: conversions.get(String(award.id)), unit_price: award.unit_price, price_source_type: award.source_type, price_source_id: award.source_id || award.id, line_type: award.line_type, source_uom_id:snapshot.source_uom_id,source_uom:snapshot.source_uom,base_uom_id:snapshot.base_uom_id,base_uom:snapshot.base_uom,conversion_factor:snapshot.conversion_factor })); }
-  return { ...header, lines };
+  const created={...header,lines};
+  // Connected repositories expose the transaction client required by the
+  // canonical audit/outbox writers; lightweight calculation adapters do not.
+  if(typeof tx.client?.query==='function') await event(tx,auditService,outbox,'PO_CREATED',created,actor,{requestedItemIds:[...new Set(lines.map(line=>line.requested_item_id))],supplierId:header.supplier_id,actorId:actor.id});
+  return created;
 });
 const event = async (tx, auditService, outbox, action, po, actor, metadata = {}) => {
   await auditService.writeAuditEvent({ client: tx.client, entityType: 'purchase_order', entityId: po.id, requestId: po.request_id, action, actorUserId: actor.id, metadata });
-  await outbox.enqueueNotification(tx.client, { type: action, entityType: 'purchase_order', entityId: po.id, payload: { purchase_order_id: po.id, ...metadata }, idempotencyKey: `${action.toLowerCase()}:${po.id}` });
+  let requestedItemIds=metadata.requestedItemIds;
+  if(!requestedItemIds&&typeof tx.loadPurchaseOrderLines==='function') requestedItemIds=(await tx.loadPurchaseOrderLines(po.id)).map(line=>line.requested_item_id).filter(Boolean);
+  await outbox.enqueueNotification(tx.client, { type: action, entityType: 'purchase_order', entityId: po.id, payload: { purchase_order_id: po.id, requestedItemIds:[...new Set(requestedItemIds||[])], supplierId:po.supplier_id, actorId:actor.id, ...metadata }, idempotencyKey: `${action.toLowerCase()}:${po.id}` });
 };
 const releasePurchaseOrder = async ({ repository, purchaseOrderId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
   const po = await tx.lockPurchaseOrder(purchaseOrderId);

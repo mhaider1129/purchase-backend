@@ -35,8 +35,20 @@ function validateValueEvent(input, actor) {
   if (!input.evidenceEntityType || !input.evidenceEntityId) throw new TypeError('Evidence entity reference is required');
   if (input.valueType === 'HARD_SAVINGS') return { ...input, ...verifiedHardSavings(input), verifiedBy: actor.id };
   if (input.valueType !== 'COST_AVOIDANCE' || !String(input.notes || '').trim()) throw new TypeError('Cost avoidance requires value, evidence and notes');
-  parseDecimal(input.verifiedValue);
-  return { ...input, currency: String(input.currency).toUpperCase(), verifiedBy: actor.id };
+  const currency=String(input.currency||'').trim().toUpperCase();
+  if(!/^[A-Z]{3}$/.test(currency)) throw new TypeError('ISO currency is required');
+  const value=parseDecimal(input.verifiedValue); if(value<0n) throw new RangeError('Cost avoidance cannot be negative');
+  return { ...input, verifiedValue:formatDecimal(value), currency, notes:String(input.notes).trim(), verifiedBy: actor.id };
 }
 
-module.exports = { verifiedHardSavings, validateValueEvent, aggregateByCurrency, weightedCreditDays };
+async function verifyValueEvent({repository,input,actor}){
+  const row=validateValueEvent(input,actor);
+  return repository.withTransaction(async tx=>{
+    const current=await tx.lockCase(row.procurementCaseId); if(!current) throw Object.assign(new Error('Procurement case not found'),{statusCode:404});
+    const saved=await tx.insertValueEvent(row);
+    await tx.writeAudit({entity_type:'procurement_value_event',entity_id:saved.id,action:`${row.valueType}_VERIFIED`,actor_user_id:actor.id,reason:row.notes||'Evidence-backed verification',metadata:{procurement_case_id:row.procurementCaseId,currency:row.currency,verified_value:row.verifiedValue}});
+    return saved;
+  });
+}
+
+module.exports = { verifiedHardSavings, validateValueEvent, verifyValueEvent, aggregateByCurrency, weightedCreditDays };

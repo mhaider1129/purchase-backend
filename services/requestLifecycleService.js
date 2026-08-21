@@ -5,6 +5,8 @@ const { validateLifecycleCommand } = require('../validators/requestLifecycleVali
 const requestPolicy = require('../policies/requestPolicy');
 const auditService = require('./auditService');
 const outbox = require('./notificationOutboxService');
+const { ensureCaseForRequestedItem } = require('./procurementPerformance/procurementCaseService');
+const { createProcurementPerformanceRepository } = require('../repositories/procurementPerformanceRepository');
 
 class RequestLifecycleError extends Error { constructor(message, code, statusCode = 409) { super(message); this.name = 'RequestLifecycleError'; this.code = code; this.statusCode = statusCode; } }
 
@@ -32,6 +34,11 @@ function createRequestLifecycleService(dependencies = {}) {
         ? `request:${request.id}:transition:${request.status}:${validation.to}:${input.idempotencyKey}`
         : `request:${request.id}:transition:${request.status}:${validation.to}:${result.rows[0].lifecycle_version ?? Date.now()}`;
       await notify(client, { type: 'request.lifecycle.changed', entityType: 'request', entityId: request.id, userId: request.requester_id, correlationId, idempotencyKey: eventKey, payload: { previousStatus: request.status, newStatus: validation.to, reason: input.reason } });
+      if (['APPROVED','FULLY_APPROVED','READY_FOR_PROCUREMENT'].includes(String(validation.to).toUpperCase())) {
+        const items=await client.query(`SELECT ri.*,r.status AS request_status,r.institute_id,r.department_id FROM requested_items ri JOIN requests r ON r.id=ri.request_id WHERE ri.request_id=$1 ORDER BY ri.id`,[request.id]);
+        const performanceRepository=createProcurementPerformanceRepository(client);
+        for(const item of items.rows) await ensureCaseForRequestedItem({repository:performanceRepository,requestedItem:item,actorId:input.actor?.id});
+      }
       return { requestId: request.id, before: request.status, after: validation.to, changed: true, idempotent: false, request: result.rows[0] };
     }, { client: suppliedClient });
   }

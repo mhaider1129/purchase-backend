@@ -6,7 +6,7 @@ DO $$
 DECLARE missing text;
 BEGIN
   SELECT string_agg(name, ', ') INTO missing
-  FROM (VALUES ('requests'),('requested_items'),('users'),('departments'),('suppliers'),('audit_logs')) required(name)
+  FROM (VALUES ('requests'),('requested_items'),('institutes'),('users'),('departments'),('suppliers'),('audit_logs'),('permissions')) required(name)
   WHERE to_regclass('public.' || name) IS NULL;
   IF missing IS NOT NULL THEN RAISE EXCEPTION '010 preflight missing: %', missing; END IF;
 END $$;
@@ -35,7 +35,11 @@ CREATE TABLE public.procurement_cases (
   alternative_product_investigated BOOLEAN,
   strategic_highlight BOOLEAN NOT NULL DEFAULT false,
   strategic_summary JSONB,
-  evidence_coverage TEXT NOT NULL DEFAULT 'FULL' CHECK (evidence_coverage IN ('FULL','PARTIAL','LEGACY_INCOMPLETE')),
+  activity_coverage TEXT NOT NULL DEFAULT 'PARTIAL' CHECK (activity_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
+  complexity_coverage TEXT NOT NULL DEFAULT 'MISSING' CHECK (complexity_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
+  commercial_coverage TEXT NOT NULL DEFAULT 'MISSING' CHECK (commercial_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
+  cycle_time_coverage TEXT NOT NULL DEFAULT 'PARTIAL' CHECK (cycle_time_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
+  logistics_coverage TEXT NOT NULL DEFAULT 'MISSING' CHECK (logistics_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by INTEGER REFERENCES public.users(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_by INTEGER REFERENCES public.users(id),
   CHECK ((complexity_score IS NULL AND complexity_class IS NULL AND complexity_model_version IS NULL AND workload_units IS NULL) OR
@@ -69,6 +73,7 @@ CREATE TABLE public.procurement_case_complexity_factors (
   model_version TEXT NOT NULL, factor_code TEXT NOT NULL, factor_value TEXT NOT NULL,
   points SMALLINT NOT NULL CHECK (points BETWEEN 1 AND 10),
   assessed_at TIMESTAMPTZ NOT NULL DEFAULT now(), assessed_by INTEGER NOT NULL REFERENCES public.users(id),
+  assessment_reason TEXT NOT NULL,
   UNIQUE(procurement_case_id, model_version, factor_code)
 );
 
@@ -82,7 +87,7 @@ CREATE TABLE public.procurement_value_events (
   entered_by INTEGER NOT NULL REFERENCES public.users(id), verified_by INTEGER REFERENCES public.users(id), verified_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK ((value_type = 'HARD_SAVINGS' AND baseline_amount IS NOT NULL AND final_amount IS NOT NULL AND baseline_amount >= final_amount AND verified_value = baseline_amount - final_amount AND verified_by IS NOT NULL AND verified_at IS NOT NULL)
-      OR (value_type = 'COST_AVOIDANCE' AND notes IS NOT NULL))
+      OR (value_type = 'COST_AVOIDANCE' AND verified_value >= 0 AND verified_by IS NOT NULL AND verified_at IS NOT NULL AND notes IS NOT NULL AND length(btrim(notes)) > 0))
 );
 CREATE INDEX procurement_value_events_case_currency_idx ON public.procurement_value_events(procurement_case_id, value_type, currency);
 

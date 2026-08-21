@@ -233,6 +233,7 @@ ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS warehouse_id BIG
 ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS stock_status TEXT NOT NULL DEFAULT 'AVAILABLE' CHECK (stock_status IN ('AVAILABLE','QUARANTINE','DAMAGED','EXPIRED','RECALLED','BLOCKED'));
 ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS source_uom TEXT;
 ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS base_uom TEXT;
+ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS conversion_factor NUMERIC;
 ALTER TABLE public.goods_receipt_items ADD COLUMN IF NOT EXISTS stock_item_id BIGINT REFERENCES public.stock_items(id);
 CREATE INDEX IF NOT EXISTS goods_receipt_items_po_line_idx ON public.goods_receipt_items(purchase_order_item_id);
 

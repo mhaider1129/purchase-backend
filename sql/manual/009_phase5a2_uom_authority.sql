@@ -8,7 +8,10 @@ SELECT 'supplier_uom_without_exact_code', COUNT(*) FROM supplier_catalog_items c
 SELECT 'generic_uom_text_id_mismatch', COUNT(*) FROM generic_items g LEFT JOIN item_uom b ON b.id=g.base_uom_id LEFT JOIN item_uom i ON i.id=g.inventory_uom_id WHERE (b.id IS NOT NULL AND UPPER(TRIM(g.base_uom))<>UPPER(TRIM(b.uom_code))) OR (i.id IS NOT NULL AND UPPER(TRIM(g.inventory_uom))<>UPPER(TRIM(i.uom_code)));
 SELECT 'product_uom_text_id_mismatch', COUNT(*) FROM approved_products p JOIN item_uom u ON u.id=p.product_uom_id WHERE UPPER(TRIM(p.product_uom))<>UPPER(TRIM(u.uom_code));
 SELECT 'stock_inventory_uom_missing', COUNT(*) FROM stock_items WHERE inventory_uom_id IS NULL;
-SELECT 'gr_snapshot_missing', COUNT(*) FROM goods_receipt_items WHERE source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
+-- Use the JSON projection for conversion_factor because older Phase 4 schemas did
+-- not create that column. Existing receipt rows still block the migration, while
+-- an empty legacy table can be upgraded safely inside the transaction below.
+SELECT 'gr_snapshot_missing', COUNT(*) FROM goods_receipt_items g WHERE source_uom IS NULL OR base_uom IS NULL OR (to_jsonb(g)->>'conversion_factor') IS NULL;
 SELECT 'inventory_snapshot_missing', COUNT(*) FROM inventory_transactions WHERE source_quantity IS NULL OR source_uom IS NULL OR base_uom IS NULL OR conversion_factor IS NULL;
 SELECT 'duplicate_active_pending_referrals',COUNT(*) FROM (SELECT requested_item_id FROM pending_item_requests WHERE status IN ('submitted','review','needs_information') GROUP BY requested_item_id HAVING COUNT(*)>1) d;
 
@@ -39,6 +42,9 @@ ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS conversion_factor NUME
 ALTER TABLE purchase_order_items DROP CONSTRAINT IF EXISTS purchase_order_items_positive_conversion;
 ALTER TABLE purchase_order_items ADD CONSTRAINT purchase_order_items_positive_conversion CHECK (conversion_factor IS NULL OR conversion_factor > 0) NOT VALID;
 CREATE INDEX IF NOT EXISTS supplier_catalog_items_purchasing_uom_id_idx ON supplier_catalog_items(purchasing_uom_id);
+ALTER TABLE goods_receipt_items ADD COLUMN IF NOT EXISTS conversion_factor NUMERIC;
+ALTER TABLE goods_receipt_items DROP CONSTRAINT IF EXISTS goods_receipt_items_positive_conversion;
+ALTER TABLE goods_receipt_items ADD CONSTRAINT goods_receipt_items_positive_conversion CHECK (conversion_factor IS NULL OR conversion_factor > 0) NOT VALID;
 
 -- Universal conversions only. Application governance rejects packaging units;
 -- this table deliberately has no Generic/Product/Catalog foreign key.

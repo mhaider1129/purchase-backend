@@ -56,4 +56,12 @@ describe('Phase 5A.2 UOM authority', () => {
     expect(sql).toContain('HISTORICAL RECONCILIATION COUNTS');
     expect(sql).not.toContain("SELECT 'po_snapshot_missing', COUNT(*) FROM purchase_order_items");
   });
+  test('SQL 009 can inspect and upgrade a Phase 4 receipt table without conversion_factor', () => {
+    const sql=fs.readFileSync(path.join(__dirname,'../sql/manual/009_phase5a2_uom_authority.sql'),'utf8');
+    const begin=sql.indexOf('BEGIN;');
+    expect(sql.slice(0,begin)).toContain("to_jsonb(g)->>'conversion_factor'");
+    expect(sql.slice(0,begin)).not.toMatch(/goods_receipt_items[^;]*\bconversion_factor\s+IS\s+NULL/i);
+    expect(sql.slice(begin)).toContain('ALTER TABLE goods_receipt_items ADD COLUMN IF NOT EXISTS conversion_factor NUMERIC;');
+    expect(sql.slice(begin)).toContain('goods_receipt_items_positive_conversion');
+  });
 });

@@ -2,7 +2,17 @@
 const { summarizeTouches } = require('./procurementActivityService');
 
 function metric(value, coverage = 'FULL', reason = null) {
-  return coverage === 'FULL' ? { value, coverage } : { value: null, coverage, status: 'not_available', reason };
+  if (coverage === 'FULL') return { value, coverage };
+  if (coverage === 'PARTIAL') return { value, coverage, warning: reason };
+  return { value: null, coverage, status: 'not_available', reason };
+}
+function coverageSummary(row, domain) {
+  return {
+    coverage: row[`${domain}_status`],
+    covered_cases: Number(row[`${domain}_covered_cases`]),
+    total_cases: Number(row.total_cases),
+    coverage_percent: row[`${domain}_coverage_percent`],
+  };
 }
 function aggregatePending(cases = [], now = new Date()) {
   const groups = {};
@@ -30,4 +40,4 @@ function buyerWorkload(cases = [], activities = []) {
   }
   return result;
 }
-module.exports = { metric, aggregatePending, buyerWorkload };
+module.exports = { metric, coverageSummary, aggregatePending, buyerWorkload };

@@ -29,7 +29,7 @@ The implementation keeps transactions authoritative and stores only case-owned c
 
 ## KPI availability contract
 
-`FULL` metrics return a value, including a legitimate zero. `PARTIAL` and `LEGACY_INCOMPLETE` metrics return `status: not_available`, a null value, and a coverage reason. Missing evidence is never rendered as zero.
+Every domain reports `coverage`, `covered_cases`, `total_cases`, and a server-calculated, two-decimal `coverage_percent`. `FULL` means every case has the required evidence. `PARTIAL` means known, valid numerators (including RFQ, quotation, and touch counts) remain visible with a warning. `MISSING` and `LEGACY_INCOMPLETE` return `not_available`; metrics whose denominator is unsafe also remain unavailable under partial coverage. Demand counts never depend on activity coverage. Complexity class/PWU aggregates include assessed cases only and separately report assessed and unassessed counts. Award value, verified savings, and normalized credit terms use their own source evidence and must not inherit a single optimistic commercial flag.
 
 | KPI | Availability | Source / rule |
 |---|---|---|
@@ -58,6 +58,8 @@ The implementation keeps transactions authoritative and stores only case-owned c
 ## Lifecycle and clocks
 
 Projection precedence is: closed/delivered evidence, logistics evidence, issued PO, award, commercial evaluation, technical evaluation, awaiting response, sourcing, item-identity resolution, ready for sourcing, approval pending. An override does not mutate RFx/PO/request state.
+
+The outbox evidence consumer persists this projection with a monotonic database guard, so retries and late events cannot regress it. `GOODS_RECEIPT_POSTED` remains `SUPPLIER_FULFILLMENT` unless authoritative receipt totals produce `PO_DELIVERED`; only then is the case `DELIVERED`. PO closure is not case closure. `CLOSED` requires a future governed case-completion event and is not currently inferred from PO, payment, or receipt events.
 
 Durations are independent: submission→full approval; assignment/sourcing start→commercially ready; technical request→technical decision; award→PO issue; PO→dispatch; shipment→delivery; and submission→delivery. The last is explicitly end-to-end, not Supply Chain processing time. Responsibility clocks (`SUPPLY_CHAIN`, `END_USER`, `TECHNICAL`, `SUPPLIER`, `FINANCE`, `LOGISTICS`, `CUSTOMS_REGULATORY`, `APPROVAL`, `OTHER`) require paired event evidence; current coverage is insufficient for a complete attribution report.
 

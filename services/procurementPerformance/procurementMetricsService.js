@@ -9,9 +9,14 @@ function metric(value, coverage = 'FULL', reason = null) {
 function coverageSummary(row, domain) {
   return {
     coverage: row[`${domain}_status`],
-    covered_cases: Number(row[`${domain}_covered_cases`]),
+    full_cases: Number(row[`${domain}_full_cases`]),
+    partial_cases: Number(row[`${domain}_partial_cases`]),
+    missing_cases: Number(row[`${domain}_missing_cases`]),
+    legacy_incomplete_cases: Number(row[`${domain}_legacy_incomplete_cases`]),
+    usable_evidence_cases: Number(row[`${domain}_usable_evidence_cases`]),
     total_cases: Number(row.total_cases),
     coverage_percent: row[`${domain}_coverage_percent`],
+    full_coverage_percent: row[`${domain}_full_coverage_percent`],
   };
 }
 function aggregatePending(cases = [], now = new Date()) {

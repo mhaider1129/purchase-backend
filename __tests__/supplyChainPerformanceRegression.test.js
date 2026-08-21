@@ -3,6 +3,7 @@ const fs=require('fs');
 const path=require('path');
 const {createProcurementPerformanceRepository}=require('../repositories/procurementPerformanceRepository');
 const {coverageSummary}=require('../services/procurementPerformance/procurementMetricsService');
+const {projectionForEvent}=require('../services/procurementPerformance/procurementEvidenceService');
 const {createNotificationOutboxProcessor}=require('../services/notificationOutboxProcessor');
 
 test('projection repository writer carries governed fields and a precedence guard',async()=>{
@@ -12,9 +13,25 @@ test('projection repository writer carries governed fields and a precedence guar
   expect(sql).toMatch(/pending_root_cause/);expect(sql).toMatch(/array_position/);expect(sql).toMatch(/sourcing_started_at/);expect(params).toEqual([7,'AWARDED',null,'commercially_ready_at','2026-01-01',4]);
 });
 
-test('dashboard coverage preserves server decimal semantics for 99 of 100',()=>{
-  expect(coverageSummary({total_cases:100,activity_status:'PARTIAL',activity_covered_cases:99,activity_coverage_percent:'99.00'},'activity')).toEqual({coverage:'PARTIAL',covered_cases:99,total_cases:100,coverage_percent:'99.00'});
-  expect(coverageSummary({total_cases:10,complexity_status:'PARTIAL',complexity_covered_cases:8,complexity_coverage_percent:'80.00'},'complexity')).toMatchObject({coverage:'PARTIAL',covered_cases:8,total_cases:10,coverage_percent:'80.00'});
+test('dashboard coverage distinguishes usable partial evidence from full completeness',()=>{
+  expect(coverageSummary({total_cases:100,activity_status:'PARTIAL',activity_full_cases:0,activity_partial_cases:100,activity_missing_cases:0,activity_legacy_incomplete_cases:0,activity_usable_evidence_cases:100,activity_coverage_percent:'100.00',activity_full_coverage_percent:'0.00'},'activity')).toEqual({coverage:'PARTIAL',full_cases:0,partial_cases:100,missing_cases:0,legacy_incomplete_cases:0,usable_evidence_cases:100,total_cases:100,coverage_percent:'100.00',full_coverage_percent:'0.00'});
+  expect(coverageSummary({total_cases:100,activity_status:'PARTIAL',activity_full_cases:20,activity_partial_cases:70,activity_missing_cases:10,activity_legacy_incomplete_cases:0,activity_usable_evidence_cases:90,activity_coverage_percent:'90.00',activity_full_coverage_percent:'20.00'},'activity')).toMatchObject({coverage:'PARTIAL',usable_evidence_cases:90,coverage_percent:'90.00',full_coverage_percent:'20.00'});
+  expect(coverageSummary({total_cases:10,complexity_status:'PARTIAL',complexity_full_cases:8,complexity_partial_cases:0,complexity_missing_cases:2,complexity_legacy_incomplete_cases:0,complexity_usable_evidence_cases:8,complexity_coverage_percent:'80.00',complexity_full_coverage_percent:'80.00'},'complexity')).toMatchObject({coverage:'PARTIAL',usable_evidence_cases:8,total_cases:10,coverage_percent:'80.00'});
+});
+
+test('dashboard SQL governs missing and legacy-only states and uses FULL plus PARTIAL numerators',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'../routes/procurementPerformance.js'),'utf8');
+  expect(source).toMatch(/IN \('FULL','PARTIAL'\)/);
+  expect(source).toMatch(/THEN 'LEGACY_INCOMPLETE'/);
+  expect(source).toMatch(/No usable activity evidence/);
+});
+
+test('lifecycle projections do not fabricate causes or premature commercial readiness',()=>{
+  expect(projectionForEvent({type:'PO_ISSUED'})).toEqual({case_status:'SUPPLIER_FULFILLMENT',pending_root_cause:null});
+  expect(projectionForEvent({type:'GOODS_RECEIPT_POSTED',purchaseOrderStatus:'PO_PARTIAL'})).toEqual({case_status:'SUPPLIER_FULFILLMENT',pending_root_cause:null});
+  expect(projectionForEvent({type:'GOODS_RECEIPT_POSTED',purchaseOrderStatus:'PO_DELIVERED'})).toEqual({case_status:'DELIVERED',pending_root_cause:null});
+  expect(projectionForEvent({type:'RFX_RESPONSE_SUBMITTED'})).toEqual({case_status:'COMMERCIAL_EVALUATION',pending_root_cause:null});
+  expect(projectionForEvent({type:'AWARD_CREATED'})).toEqual({case_status:'AWARDED',pending_root_cause:null,timestamp:'commercially_ready_at'});
 });
 
 test('outbox projection failure is recorded and retry inserts evidence once',async()=>{

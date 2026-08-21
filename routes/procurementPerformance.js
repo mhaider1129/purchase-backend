@@ -23,7 +23,7 @@ router.get('/dashboard',asyncHandler(async(req,res)=>{
     pool.query(`SELECT complexity_class AS class,count(*)::int count,COALESCE(sum(workload_units),0)::int pwu FROM procurement_cases pc WHERE ${where} AND complexity_class IS NOT NULL GROUP BY complexity_class ORDER BY complexity_class`,params),
     pool.query(`SELECT pending_root_cause AS root_cause,count(*)::int count,avg(EXTRACT(EPOCH FROM (NOW()-opened_at)))::bigint average_age_seconds FROM procurement_cases pc WHERE ${where} AND closed_at IS NULL AND pending_root_cause IS NOT NULL GROUP BY pending_root_cause`,params),
     pool.query(`SELECT count(*)::int total_cases,${coverageColumns} FROM procurement_cases pc WHERE ${where}`,params),
-    pool.query(`SELECT count(*)::int touches,count(*) FILTER(WHERE activity_type='RFQ_CREATED')::int rfqs,count(*) FILTER(WHERE activity_type='QUOTATION_RECEIVED')::int quotations FROM procurement_case_activities a JOIN procurement_cases pc ON pc.id=a.procurement_case_id WHERE ${where}`,params),
+    pool.query(`SELECT count(*)::int touches,count(*) FILTER(WHERE activity_type='RFQ_CREATED')::int rfqs,count(*) FILTER(WHERE activity_type='QUOTATION_RECEIVED')::int quotations FROM procurement_case_activities a JOIN procurement_cases pc ON pc.id=a.procurement_case_id WHERE ${where} AND pc.activity_coverage IN ('FULL','PARTIAL')`,params),
   ]);
   const base=result.rows[0];const coverage=coverageResult.rows[0];
   const summary=domain=>coverageSummary(coverage,domain);

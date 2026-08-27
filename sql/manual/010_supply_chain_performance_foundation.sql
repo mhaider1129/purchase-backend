@@ -2,12 +2,13 @@
 -- Review and execute manually. This migration intentionally does not alter 009.
 BEGIN;
 
--- Validate dependencies before any DDL. The statements below are deliberately
--- rerunnable so an interrupted deployment, or the legacy pre-release shape of
--- these tables, can be brought forward without requiring an operator to drop data.
+-- Fail closed before any DDL or catalog data is changed. A populated SQL 010
+-- namespace must be either the complete contract below or rejected for operator review.
 DO $$
 DECLARE
   missing_prerequisites text;
+  existing_objects integer;
+  mismatches text;
 BEGIN
   SELECT string_agg(name, ', ' ORDER BY name) INTO missing_prerequisites
   FROM (VALUES ('requests'),('requested_items'),('institutes'),('users'),('departments'),('suppliers'),('audit_logs'),('permissions')) required(name)
@@ -16,9 +17,89 @@ BEGIN
     RAISE EXCEPTION '010 preflight missing: %', missing_prerequisites;
   END IF;
 
+  SELECT count(*) INTO existing_objects FROM (
+    SELECT to_regclass('public.' || name) object_id
+    FROM (VALUES ('procurement_cases'),('procurement_case_activities'),('procurement_case_complexity_factors'),('procurement_value_events'),
+                 ('procurement_cases_one_active_item_uq'),('procurement_cases_scope_idx'),('procurement_cases_pipeline_idx'),
+                 ('procurement_case_activities_idempotency_uq'),('procurement_case_activities_timeline_idx'),
+                 ('procurement_case_activities_supplier_idx'),('procurement_value_events_case_currency_idx')) objects(name)
+  ) found WHERE object_id IS NOT NULL;
+
+  IF existing_objects = 0 THEN RETURN; END IF;
+
+  WITH required_columns(table_name, column_name) AS (VALUES
+    ('procurement_cases','id'),('procurement_cases','request_id'),('procurement_cases','requested_item_id'),
+    ('procurement_cases','institute_id'),('procurement_cases','department_id'),('procurement_cases','assigned_buyer_id'),
+    ('procurement_cases','case_status'),('procurement_cases','pending_root_cause'),('procurement_cases','opened_at'),
+    ('procurement_cases','closed_at'),('procurement_cases','complexity_score'),('procurement_cases','complexity_class'),
+    ('procurement_cases','complexity_model_version'),('procurement_cases','workload_units'),('procurement_cases','workload_model_version'),
+    ('procurement_cases','activity_coverage'),('procurement_cases','complexity_coverage'),('procurement_cases','commercial_coverage'),
+    ('procurement_cases','cycle_time_coverage'),('procurement_cases','logistics_coverage'),
+    ('procurement_case_activities','id'),('procurement_case_activities','procurement_case_id'),
+    ('procurement_case_activities','activity_type'),('procurement_case_activities','activity_at'),
+    ('procurement_case_activities','actor_id'),('procurement_case_activities','supplier_id'),
+    ('procurement_case_activities','source'),('procurement_case_activities','idempotency_key'),('procurement_case_activities','metadata'),
+    ('procurement_case_complexity_factors','id'),('procurement_case_complexity_factors','procurement_case_id'),
+    ('procurement_case_complexity_factors','model_version'),('procurement_case_complexity_factors','factor_code'),
+    ('procurement_case_complexity_factors','factor_value'),('procurement_case_complexity_factors','points'),
+    ('procurement_case_complexity_factors','assessed_by'),('procurement_case_complexity_factors','assessment_reason'),
+    ('procurement_value_events','id'),('procurement_value_events','procurement_case_id'),
+    ('procurement_value_events','value_type'),('procurement_value_events','baseline_type'),
+    ('procurement_value_events','verified_value'),('procurement_value_events','currency'),
+    ('procurement_value_events','evidence_entity_type'),('procurement_value_events','evidence_entity_id'),
+    ('procurement_value_events','entered_by'),('procurement_value_events','verified_by'),('procurement_value_events','verified_at')
+  ), required_indexes(name, required_definition) AS (VALUES
+    ('procurement_cases_one_active_item_uq','UNIQUE INDEX procurement_cases_one_active_item_uq%ON public.procurement_cases USING btree (requested_item_id) WHERE (closed_at IS NULL)'),
+    ('procurement_cases_scope_idx','INDEX procurement_cases_scope_idx%ON public.procurement_cases USING btree (institute_id, department_id, assigned_buyer_id, opened_at)'),
+    ('procurement_cases_pipeline_idx','INDEX procurement_cases_pipeline_idx%ON public.procurement_cases USING btree (case_status, pending_root_cause) WHERE (closed_at IS NULL)'),
+    ('procurement_case_activities_idempotency_uq','UNIQUE INDEX procurement_case_activities_idempotency_uq%ON public.procurement_case_activities USING btree (idempotency_key) WHERE (idempotency_key IS NOT NULL)'),
+    ('procurement_case_activities_timeline_idx','INDEX procurement_case_activities_timeline_idx%ON public.procurement_case_activities USING btree (procurement_case_id, activity_at DESC)'),
+    ('procurement_case_activities_supplier_idx','INDEX procurement_case_activities_supplier_idx%ON public.procurement_case_activities USING btree (supplier_id, activity_type) WHERE (supplier_id IS NOT NULL)'),
+    ('procurement_value_events_case_currency_idx','INDEX procurement_value_events_case_currency_idx%ON public.procurement_value_events USING btree (procurement_case_id, value_type, currency)')
+  ), required_fks(table_name, column_name) AS (VALUES
+    ('procurement_cases','request_id'),('procurement_cases','requested_item_id'),('procurement_cases','institute_id'),
+    ('procurement_cases','department_id'),('procurement_cases','assigned_buyer_id'),
+    ('procurement_case_activities','procurement_case_id'),('procurement_case_activities','actor_id'),
+    ('procurement_case_activities','supplier_id'),('procurement_case_complexity_factors','procurement_case_id'),
+    ('procurement_case_complexity_factors','assessed_by'),('procurement_value_events','procurement_case_id'),
+    ('procurement_value_events','entered_by'),('procurement_value_events','verified_by')
+  ), problems AS (
+    SELECT 'missing column public.' || r.table_name || '.' || r.column_name detail
+    FROM required_columns r LEFT JOIN information_schema.columns c
+      ON c.table_schema='public' AND c.table_name=r.table_name AND c.column_name=r.column_name
+    WHERE c.column_name IS NULL
+    UNION ALL
+    SELECT 'missing/mismatched index public.' || r.name FROM required_indexes r
+    WHERE NOT EXISTS (SELECT 1 FROM pg_indexes i WHERE i.schemaname='public' AND i.indexname=r.name
+                      AND i.indexdef LIKE r.required_definition)
+    UNION ALL
+    SELECT 'missing FK on public.' || r.table_name || '.' || r.column_name
+    FROM required_fks r WHERE NOT EXISTS (
+      SELECT 1 FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid=con.conrelid JOIN pg_namespace n ON n.oid=rel.relnamespace
+      JOIN unnest(con.conkey) key(attnum) ON true JOIN pg_attribute a ON a.attrelid=rel.oid AND a.attnum=key.attnum
+      WHERE con.contype='f' AND n.nspname='public' AND rel.relname=r.table_name AND a.attname=r.column_name)
+    UNION ALL
+    SELECT 'insufficient CHECK constraints on public.' || expected.table_name
+    FROM (VALUES ('procurement_cases',7),('procurement_case_activities',2),('procurement_case_complexity_factors',1),('procurement_value_events',4)) expected(table_name, minimum_count)
+    WHERE (SELECT count(*) FROM pg_constraint con JOIN pg_class rel ON rel.oid=con.conrelid
+           JOIN pg_namespace n ON n.oid=rel.relnamespace
+           WHERE con.contype='c' AND n.nspname='public' AND rel.relname=expected.table_name) < expected.minimum_count
+    UNION ALL
+    SELECT 'missing permission ' || required.code FROM (VALUES
+      ('procurement-performance.view'),('procurement-performance.manage'),('procurement-performance.verify-savings'),
+      ('procurement-performance.view-executive'),('procurement-performance.manage-highlights')) required(code)
+    WHERE NOT EXISTS (SELECT 1 FROM public.permissions p WHERE p.code=required.code)
+  )
+  SELECT string_agg(detail, '; ' ORDER BY detail) INTO mismatches FROM problems;
+
+  IF mismatches IS NULL THEN
+    RAISE EXCEPTION 'SQL_010_ALREADY_APPLIED';
+  END IF;
+  RAISE EXCEPTION 'SQL_010_PARTIAL_OR_DRIFTED_SCHEMA: %', mismatches;
 END $$;
 
-CREATE TABLE IF NOT EXISTS public.procurement_cases (
+CREATE TABLE public.procurement_cases (
   id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
   request_id INTEGER NOT NULL REFERENCES public.requests(id),
   requested_item_id INTEGER NOT NULL REFERENCES public.requested_items(id),
@@ -53,17 +134,11 @@ CREATE TABLE IF NOT EXISTS public.procurement_cases (
          (complexity_score IS NOT NULL AND complexity_class IS NOT NULL AND complexity_model_version IS NOT NULL AND workload_units IS NOT NULL)),
   CHECK (pending_override_reason IS NULL OR pending_root_cause IS NOT NULL)
 );
-ALTER TABLE public.procurement_cases
-  ADD COLUMN IF NOT EXISTS activity_coverage TEXT NOT NULL DEFAULT 'PARTIAL' CHECK (activity_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
-  ADD COLUMN IF NOT EXISTS complexity_coverage TEXT NOT NULL DEFAULT 'MISSING' CHECK (complexity_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
-  ADD COLUMN IF NOT EXISTS commercial_coverage TEXT NOT NULL DEFAULT 'MISSING' CHECK (commercial_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
-  ADD COLUMN IF NOT EXISTS cycle_time_coverage TEXT NOT NULL DEFAULT 'PARTIAL' CHECK (cycle_time_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE')),
-  ADD COLUMN IF NOT EXISTS logistics_coverage TEXT NOT NULL DEFAULT 'MISSING' CHECK (logistics_coverage IN ('FULL','PARTIAL','MISSING','LEGACY_INCOMPLETE'));
-CREATE UNIQUE INDEX IF NOT EXISTS procurement_cases_one_active_item_uq ON public.procurement_cases(requested_item_id) WHERE closed_at IS NULL;
-CREATE INDEX IF NOT EXISTS procurement_cases_scope_idx ON public.procurement_cases(institute_id, department_id, assigned_buyer_id, opened_at);
-CREATE INDEX IF NOT EXISTS procurement_cases_pipeline_idx ON public.procurement_cases(case_status, pending_root_cause) WHERE closed_at IS NULL;
+CREATE UNIQUE INDEX procurement_cases_one_active_item_uq ON public.procurement_cases(requested_item_id) WHERE closed_at IS NULL;
+CREATE INDEX procurement_cases_scope_idx ON public.procurement_cases(institute_id, department_id, assigned_buyer_id, opened_at);
+CREATE INDEX procurement_cases_pipeline_idx ON public.procurement_cases(case_status, pending_root_cause) WHERE closed_at IS NULL;
 
-CREATE TABLE IF NOT EXISTS public.procurement_case_activities (
+CREATE TABLE public.procurement_case_activities (
   id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
   procurement_case_id BIGINT NOT NULL REFERENCES public.procurement_cases(id) ON DELETE CASCADE,
   activity_type TEXT NOT NULL,
@@ -76,11 +151,11 @@ CREATE TABLE IF NOT EXISTS public.procurement_case_activities (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (source <> 'MANUAL' OR (actor_id IS NOT NULL AND notes IS NOT NULL AND length(btrim(notes)) > 0))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS procurement_case_activities_idempotency_uq ON public.procurement_case_activities(idempotency_key) WHERE idempotency_key IS NOT NULL;
-CREATE INDEX IF NOT EXISTS procurement_case_activities_timeline_idx ON public.procurement_case_activities(procurement_case_id, activity_at DESC);
-CREATE INDEX IF NOT EXISTS procurement_case_activities_supplier_idx ON public.procurement_case_activities(supplier_id, activity_type) WHERE supplier_id IS NOT NULL;
+CREATE UNIQUE INDEX procurement_case_activities_idempotency_uq ON public.procurement_case_activities(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX procurement_case_activities_timeline_idx ON public.procurement_case_activities(procurement_case_id, activity_at DESC);
+CREATE INDEX procurement_case_activities_supplier_idx ON public.procurement_case_activities(supplier_id, activity_type) WHERE supplier_id IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS public.procurement_case_complexity_factors (
+CREATE TABLE public.procurement_case_complexity_factors (
   id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
   procurement_case_id BIGINT NOT NULL REFERENCES public.procurement_cases(id) ON DELETE CASCADE,
   model_version TEXT NOT NULL, factor_code TEXT NOT NULL, factor_value TEXT NOT NULL,
@@ -89,15 +164,8 @@ CREATE TABLE IF NOT EXISTS public.procurement_case_complexity_factors (
   assessment_reason TEXT NOT NULL,
   UNIQUE(procurement_case_id, model_version, factor_code)
 );
-ALTER TABLE public.procurement_case_complexity_factors
-  ADD COLUMN IF NOT EXISTS assessment_reason TEXT;
-UPDATE public.procurement_case_complexity_factors
-SET assessment_reason = 'Legacy assessment (reason unavailable)'
-WHERE assessment_reason IS NULL;
-ALTER TABLE public.procurement_case_complexity_factors
-  ALTER COLUMN assessment_reason SET NOT NULL;
 
-CREATE TABLE IF NOT EXISTS public.procurement_value_events (
+CREATE TABLE public.procurement_value_events (
   id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
   procurement_case_id BIGINT NOT NULL REFERENCES public.procurement_cases(id) ON DELETE RESTRICT,
   value_type TEXT NOT NULL CHECK (value_type IN ('HARD_SAVINGS','COST_AVOIDANCE')),
@@ -109,7 +177,7 @@ CREATE TABLE IF NOT EXISTS public.procurement_value_events (
   CHECK ((value_type = 'HARD_SAVINGS' AND baseline_amount IS NOT NULL AND final_amount IS NOT NULL AND baseline_amount >= final_amount AND verified_value = baseline_amount - final_amount AND verified_by IS NOT NULL AND verified_at IS NOT NULL)
       OR (value_type = 'COST_AVOIDANCE' AND verified_value >= 0 AND verified_by IS NOT NULL AND verified_at IS NOT NULL AND notes IS NOT NULL AND length(btrim(notes)) > 0))
 );
-CREATE INDEX IF NOT EXISTS procurement_value_events_case_currency_idx ON public.procurement_value_events(procurement_case_id, value_type, currency);
+CREATE INDEX procurement_value_events_case_currency_idx ON public.procurement_value_events(procurement_case_id, value_type, currency);
 
 -- Permission catalog only; no role grants are made by this migration.
 INSERT INTO public.permissions (code, name, description)

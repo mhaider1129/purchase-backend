@@ -356,6 +356,7 @@ const departmentRequestedItemsRoutes = require('./routes/departmentRequestedItem
 const procurementEvaluationsRoutes = require('./routes/procurementEvaluations');
 const printServiceRequestsRoutes = require('./routes/printServiceRequests');
 const procurementPerformanceRoutes = require('./routes/procurementPerformance');
+const procurementPriorityRoutes = require('./routes/procurementPriority');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -420,6 +421,7 @@ const protectedApiRoutes = [
   { path: '/procurement-evaluations', router: procurementEvaluationsRoutes },
   { path: '/print-service-requests', router: printServiceRequestsRoutes },
   { path: '/procurement-performance', router: procurementPerformanceRoutes },
+  { path: '/procurement-priority', router: procurementPriorityRoutes },
 ];
 
 const mountApiRoutes = router => {

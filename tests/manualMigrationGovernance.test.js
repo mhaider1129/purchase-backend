@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const read = (relativePath) => fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+const sql011 = read('sql/manual/011_central_supply_tracking.sql');
 
 describe('manual migration governance', () => {
   const sql006 = read('sql/manual/006_connected_procure_to_pay.sql');
@@ -47,5 +48,23 @@ describe('manual migration governance', () => {
     expect(policy).toContain('001 through 006 are deployed');
     expect(policy).toContain('007 is diagnostic only');
     expect(policy).toContain('008, 009, and 010 are pending manual execution');
+  });
+});
+
+describe('manual migration 011 governance', () => {
+  test('owns both Central Supply columns and authenticated-user FK', () => {
+    expect(sql011).toContain('ADD COLUMN sent_to_central_supply_at TIMESTAMPTZ');
+    expect(sql011).toContain('ADD COLUMN sent_to_central_supply_by INTEGER');
+    expect(sql011).toContain('REFERENCES public.users(id)');
+  });
+
+  test('preflight distinguishes clean, compatible, and partial/drifted states', () => {
+    const ddl = sql011.indexOf('ALTER TABLE public.requests');
+    const preflight = sql011.slice(0, ddl);
+    expect(preflight).toContain("at_type IS NULL AND by_type IS NULL");
+    expect(preflight).toContain('SQL_011_ALREADY_APPLIED_COMPATIBLE');
+    expect(preflight).toContain('CENTRAL_SUPPLY_SCHEMA_PARTIAL_OR_DRIFTED');
+    expect(preflight).toContain("to_regclass('public.requests')");
+    expect(preflight).toContain("to_regclass('public.users')");
   });
 });

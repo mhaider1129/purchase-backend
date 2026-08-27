@@ -1,69 +1,53 @@
-jest.mock('../config/db', () => ({ query: jest.fn() }));
-
+jest.mock('../config/db', () => ({ connect: jest.fn() }));
 jest.mock('../utils/ensureCentralSupplyChainTrackingColumns', () => jest.fn());
+jest.mock('../services/auditService', () => ({ writeAuditEvent: jest.fn() }));
 
 const pool = require('../config/db');
-const ensureCentralSupplyChainTrackingColumns = require('../utils/ensureCentralSupplyChainTrackingColumns');
+const validateSchema = require('../utils/ensureCentralSupplyChainTrackingColumns');
+const auditService = require('../services/auditService');
 const { updateCentralSupplyChainStatus } = require('../controllers/requests/centralSupplyChainController');
 
-const request = (overrides = {}) => ({
-  params: { id: '42' },
-  body: { sent: true },
-  user: {
-    id: 7,
-    institute_id: 3,
-    hasPermission: jest.fn(() => true),
-  },
-  ...overrides,
-});
+const request = (overrides = {}) => ({ params: { id: '42' }, body: { sent: true },
+  user: { id: 7, institute_id: 3, hasPermission: jest.fn(() => true) }, ...overrides });
+
+const harness = ({ sent = true, instituteId = 3 } = {}) => {
+  const before = { id: 42, institute_id: instituteId, sent_to_central_supply_at: null, sent_to_central_supply_by: null };
+  const after = { ...before, sent_to_central_supply_at: sent ? '2026-08-21T10:00:00.000Z' : null, sent_to_central_supply_by: sent ? 7 : null };
+  const client = { release: jest.fn(), query: jest.fn()
+    .mockResolvedValueOnce({})
+    .mockResolvedValueOnce({ rowCount: 1, rows: [before] })
+    .mockResolvedValueOnce({ rowCount: 1, rows: [after] })
+    .mockResolvedValueOnce({}) };
+  pool.connect.mockResolvedValue(client);
+  return { client, before, after };
+};
 
 describe('Central Supply Chain status', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    ensureCentralSupplyChainTrackingColumns.mockResolvedValue();
-  });
+  beforeEach(() => { jest.clearAllMocks(); validateSchema.mockResolvedValue(); auditService.writeAuditEvent.mockResolvedValue({}); });
 
-  test('records the authenticated user when marking a request as sent', async () => {
-    const row = {
-      id: 42,
-      sent_to_central_supply_at: '2026-08-21T10:00:00.000Z',
-      sent_to_central_supply_by: 7,
-    };
-    pool.query.mockResolvedValue({ rowCount: 1, rows: [row] });
-    const req = request();
-    const res = { json: jest.fn() };
-    const next = jest.fn();
-
+  test.each([[true], [false]])('sets sent=%s with authenticated actor and atomic audit', async (sent) => {
+    const h = harness({ sent });
+    const req = request({ body: { sent } });
+    const res = { json: jest.fn() }; const next = jest.fn();
     await updateCentralSupplyChainStatus(req, res, next);
-
-    expect(ensureCentralSupplyChainTrackingColumns).toHaveBeenCalledTimes(1);
-    expect(pool.query).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE public.requests'),
-      [true, 7, 42, 3],
-    );
-    expect(res.json).toHaveBeenCalledWith(row);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test('clears both tracking values when marking a request as not sent', async () => {
-    pool.query.mockResolvedValue({
-      rowCount: 1,
-      rows: [{ id: 42, sent_to_central_supply_at: null, sent_to_central_supply_by: null }],
-    });
-    const req = request({
-      params: { id: '42' },
-      body: { sent: false },
-      user: { id: 7, institute_id: null, hasPermission: jest.fn(() => true) },
-    });
-    const res = { json: jest.fn() };
-    const next = jest.fn();
-
-    await updateCentralSupplyChainStatus(req, res, next);
-
-    expect(pool.query).toHaveBeenCalledWith(expect.any(String), [false, 7, 42, null]);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      sent_to_central_supply_at: null,
-      sent_to_central_supply_by: null,
+    expect(h.client.query).toHaveBeenNthCalledWith(3, expect.stringContaining('UPDATE public.requests'), [sent, 7, 42]);
+    expect(auditService.writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      client: h.client, actorUserId: 7, requestId: 42, beforeData: expect.objectContaining({ sent: false }),
+      afterData: expect.objectContaining({ sent, sent_to_central_supply_by: sent ? 7 : null }),
     }));
+    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
+    expect(res.json).toHaveBeenCalledWith(h.after);
+  });
+
+  test('keeps institute scope in the locked lookup', async () => {
+    const h = harness(); const res = { json: jest.fn() }; const next = jest.fn();
+    await updateCentralSupplyChainStatus(request(), res, next);
+    expect(h.client.query).toHaveBeenNthCalledWith(2, expect.stringContaining('institute_id = $2'), [42, 3]);
+  });
+
+  test('never sends DDL through the controller database client', async () => {
+    const h = harness();
+    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, jest.fn());
+    expect(h.client.query.mock.calls.map(([sql]) => sql).join('\n')).not.toMatch(/\b(?:ALTER|CREATE|DROP)\b/i);
   });
 });

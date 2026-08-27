@@ -52,7 +52,7 @@ const getCompletedAssignedRequests = async (req, res, next) => {
            AND ri.assigned_to = $1
        ) assigned_scope ON TRUE
        WHERE (
-           (r.assigned_to = $1 AND LOWER(TRIM(r.status)) IN ('completed', 'received'))
+           (r.assigned_to = $1 AND LOWER(TRIM(r.status)) IN ('completed', 'received', 'available in stock'))
            OR COALESCE(assigned_scope.completed_item_count, 0) > 0
          )${searchClause}
        ORDER BY COALESCE(r.completed_at, assigned_scope.latest_completed_at, r.updated_at) DESC NULLS LAST`,

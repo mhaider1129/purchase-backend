@@ -23,23 +23,18 @@ describe('manual migration governance', () => {
     expect(preflight).not.toMatch(/goods_receipt_items[^;]*\bconversion_factor\s+IS\s+NULL/i);
   });
 
-  test('SQL 010 has a clean creation path rather than drift-masking DDL', () => {
-    expect(sql010).toContain('IF existing_objects = 0 THEN RETURN; END IF;');
-    expect(sql010).toContain('CREATE TABLE public.procurement_cases');
-    expect(sql010).toContain('CREATE INDEX procurement_cases_scope_idx');
-    expect(sql010).not.toMatch(/CREATE (?:UNIQUE )?(?:TABLE|INDEX) IF NOT EXISTS/i);
+  test('SQL 010 has a rerunnable creation and legacy reconciliation path', () => {
+    expect(sql010).toContain('CREATE TABLE IF NOT EXISTS public.procurement_cases');
+    expect(sql010).toContain('CREATE INDEX IF NOT EXISTS procurement_cases_scope_idx');
+    expect(sql010).toContain('ADD COLUMN IF NOT EXISTS activity_coverage');
+    expect(sql010).toContain('ADD COLUMN IF NOT EXISTS assessment_reason');
+    expect(sql010).toContain('Legacy assessment (reason unavailable)');
   });
 
-  test('SQL 010 identifies already-applied and partial or drifted states before DDL', () => {
-    const preflight = sql010.slice(0, sql010.indexOf('CREATE TABLE public.procurement_cases'));
-    expect(preflight).toContain('SQL_010_ALREADY_APPLIED');
-    expect(preflight).toContain('SQL_010_PARTIAL_OR_DRIFTED_SCHEMA');
-    expect(preflight).toContain("'missing column public.' || r.table_name || '.' || r.column_name");
-    expect(preflight).toContain("('procurement_cases','case_status')");
-    expect(preflight).toContain("('procurement_cases','activity_coverage')");
-    expect(preflight).toContain("('procurement_cases','complexity_score')");
-    expect(preflight).toContain("'missing FK on public.'");
-    expect(preflight).toContain("'missing/mismatched index public.'");
+  test('SQL 010 validates prerequisites without rejecting a recoverable partial deployment', () => {
+    const preflight = sql010.slice(0, sql010.indexOf('CREATE TABLE IF NOT EXISTS public.procurement_cases'));
+    expect(preflight).toContain('010 preflight missing: %');
+    expect(preflight).not.toContain('SQL_010_PARTIAL_OR_DRIFTED_SCHEMA');
   });
 
   test('architecture policy marks deployed numbered migrations immutable', () => {
@@ -53,17 +48,19 @@ describe('manual migration governance', () => {
 
 describe('manual migration 011 governance', () => {
   test('owns both Central Supply columns and authenticated-user FK', () => {
-    expect(sql011).toContain('ADD COLUMN sent_to_central_supply_at TIMESTAMPTZ');
-    expect(sql011).toContain('ADD COLUMN sent_to_central_supply_by INTEGER');
+    expect(sql011).toContain('ADD COLUMN IF NOT EXISTS sent_to_central_supply_at TIMESTAMPTZ');
+    expect(sql011).toContain('ADD COLUMN IF NOT EXISTS sent_to_central_supply_by INTEGER');
     expect(sql011).toContain('REFERENCES public.users(id)');
   });
 
-  test('preflight distinguishes clean, compatible, and partial/drifted states', () => {
+  test('preflight accepts recoverable partial states and rejects incompatible types', () => {
     const ddl = sql011.indexOf('ALTER TABLE public.requests');
     const preflight = sql011.slice(0, ddl);
     expect(preflight).toContain("at_type IS NULL AND by_type IS NULL");
     expect(preflight).toContain('SQL_011_ALREADY_APPLIED_COMPATIBLE');
+    expect(preflight).toContain("RAISE NOTICE 'SQL_011_ALREADY_APPLIED_COMPATIBLE'");
     expect(preflight).toContain('CENTRAL_SUPPLY_SCHEMA_PARTIAL_OR_DRIFTED');
+    expect(preflight).toContain("at_type IS NOT NULL AND at_type <> 'timestamp with time zone'");
     expect(preflight).toContain("to_regclass('public.requests')");
     expect(preflight).toContain("to_regclass('public.users')");
   });

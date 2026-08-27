@@ -19,9 +19,11 @@ BEGIN
     coalesce(at_type, 'absent'), coalesce(by_type, 'absent');
 
   IF at_type IS NULL AND by_type IS NULL THEN RETURN; END IF;
-  IF at_type IS NULL OR by_type IS NULL OR at_type <> 'timestamp with time zone' OR by_type <> 'integer' THEN
+  IF (at_type IS NOT NULL AND at_type <> 'timestamp with time zone')
+     OR (by_type IS NOT NULL AND by_type <> 'integer') THEN
     RAISE EXCEPTION 'CENTRAL_SUPPLY_SCHEMA_PARTIAL_OR_DRIFTED';
   END IF;
+  IF at_type IS NULL OR by_type IS NULL THEN RETURN; END IF;
   SELECT EXISTS (
     SELECT 1 FROM pg_constraint con
     JOIN pg_class rel ON rel.oid=con.conrelid JOIN pg_namespace n ON n.oid=rel.relnamespace
@@ -31,14 +33,29 @@ BEGIN
     WHERE con.contype='f' AND n.nspname='public' AND rel.relname='requests'
       AND a.attname='sent_to_central_supply_by' AND target.relname='users'
   ) INTO actor_fk;
-  IF NOT actor_fk THEN RAISE EXCEPTION 'CENTRAL_SUPPLY_SCHEMA_PARTIAL_OR_DRIFTED'; END IF;
-  RAISE EXCEPTION 'SQL_011_ALREADY_APPLIED_COMPATIBLE';
+  IF NOT actor_fk THEN RETURN; END IF;
+  RAISE NOTICE 'SQL_011_ALREADY_APPLIED_COMPATIBLE';
 END $$;
 
 ALTER TABLE public.requests
-  ADD COLUMN sent_to_central_supply_at TIMESTAMPTZ,
-  ADD COLUMN sent_to_central_supply_by INTEGER,
-  ADD CONSTRAINT requests_sent_to_central_supply_by_fkey
-    FOREIGN KEY (sent_to_central_supply_by) REFERENCES public.users(id);
+  ADD COLUMN IF NOT EXISTS sent_to_central_supply_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS sent_to_central_supply_by INTEGER;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid=con.conrelid
+    JOIN pg_namespace n ON n.oid=rel.relnamespace
+    JOIN unnest(con.conkey) key(attnum) ON true
+    JOIN pg_attribute a ON a.attrelid=rel.oid AND a.attnum=key.attnum
+    JOIN pg_class target ON target.oid=con.confrelid
+    WHERE con.contype='f' AND n.nspname='public' AND rel.relname='requests'
+      AND a.attname='sent_to_central_supply_by' AND target.relname='users'
+  ) THEN
+    ALTER TABLE public.requests
+      ADD CONSTRAINT requests_sent_to_central_supply_by_fkey
+      FOREIGN KEY (sent_to_central_supply_by) REFERENCES public.users(id);
+  END IF;
+END $$;
 
 COMMIT;

@@ -1,0 +1,26 @@
+'use strict';
+
+const MODEL_VERSION = 'IPPS-1.0';
+const SCALE = 100; // authoritative scores are integer hundredths, never binary floats
+
+const WEIGHTS = Object.freeze({
+  impact: 25, scmAssessment: 20, departmentRank: 15, aging: 10,
+  serviceRisk: 10, deadline: 8, dependency: 5, regulatory: 4, strategic: 3,
+});
+
+const FACTORS = Object.freeze({
+  impact: Object.freeze({ CONVENIENCE: 0, MINOR_OPERATIONAL: 5, DEPARTMENT_EFFICIENCY: 10,
+    IMPORTANT_SERVICE: 15, MAJOR_SERVICE_DISRUPTION: 20, PATIENT_SAFETY_OR_ESSENTIAL_SERVICE: 25 }),
+  serviceRisk: Object.freeze({ NO_EFFECT: 0, LOW_STOCK: 2, BELOW_THRESHOLD: 5, PROJECTED_STOCKOUT: 8, OUT_OF_STOCK: 10 }),
+  deadline: Object.freeze({ NONE: 0, PLANNED: 2, TIME_SENSITIVE: 4, IMMINENT_OPERATIONAL: 6, FIXED_CRITICAL: 8 }),
+  dependency: Object.freeze({ NONE: 0, SINGLE_ACTIVITY_BLOCKED: 1, DEPARTMENT_PROCESS_BLOCKED: 3,
+    MULTIPLE_PROCESSES_BLOCKED: 4, MAJOR_INSTITUTIONAL_DEPENDENCY: 5 }),
+  regulatory: Object.freeze({ NONE: 0, MINOR_COMPLIANCE: 1, CONTRACTUAL_EXPOSURE: 2,
+    REGULATORY_OR_AUTHORIZATION_RISK: 4 }),
+});
+
+const TERMINAL_STATUSES = new Set(['COMPLETED', 'RECEIVED', 'REJECTED', 'CANCELLED', 'CANCELED', 'CLOSED', 'DELIVERED', 'AVAILABLE IN STOCK']);
+const TRIGGERS = Object.freeze(['HOD_RANK_CHANGED', 'SCM_ASSESSMENT_CHANGED', 'AGING_RECALCULATION',
+  'STOCKOUT_CHANGED', 'DEADLINE_CHANGED', 'STRATEGIC_LINK_CHANGED', 'MANUAL_OVERRIDE']);
+
+module.exports = { MODEL_VERSION, SCALE, WEIGHTS, FACTORS, TERMINAL_STATUSES, TRIGGERS };

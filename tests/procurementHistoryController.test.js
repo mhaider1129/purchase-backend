@@ -16,11 +16,12 @@ describe('procurementHistoryController.getCompletedAssignedRequests', () => {
     jest.clearAllMocks();
   });
 
-  it('fetches both completed and received requests assigned to the current user', async () => {
+  it('fetches completed, received, and available-in-stock requests assigned to the current user', async () => {
     pool.query.mockResolvedValueOnce({
       rows: [
         { id: 101, status: 'completed' },
         { id: 102, status: 'Received' },
+        { id: 103, status: 'Available in Stock' },
       ],
     });
 
@@ -34,13 +35,16 @@ describe('procurementHistoryController.getCompletedAssignedRequests', () => {
     await getCompletedAssignedRequests(req, res, next);
 
     expect(pool.query).toHaveBeenCalledWith(
-      expect.stringContaining("LOWER(TRIM(r.status)) IN ('completed', 'received')"),
+      expect.stringContaining(
+        "LOWER(TRIM(r.status)) IN ('completed', 'received', 'available in stock')",
+      ),
       [7],
     );
     expect(res.json).toHaveBeenCalledWith({
       data: [
         { id: 101, status: 'completed' },
         { id: 102, status: 'Received' },
+        { id: 103, status: 'Available in Stock' },
       ],
     });
     expect(next).not.toHaveBeenCalled();

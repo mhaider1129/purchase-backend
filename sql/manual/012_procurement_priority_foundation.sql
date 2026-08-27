@@ -20,7 +20,7 @@ CREATE TABLE procurement_priority_profiles (
   system_score NUMERIC(5,2), system_tier TEXT CHECK (system_tier IN ('P0','P1','P2','P3','P4')),
   model_version TEXT NOT NULL DEFAULT 'IPPS-1.0', system_suggested_rank INTEGER,
   institutional_rank INTEGER, institutional_override_reason TEXT, p0_justification TEXT,
-  public_title TEXT, is_public BOOLEAN NOT NULL DEFAULT false, row_version BIGINT NOT NULL DEFAULT 1,
+  public_title TEXT, public_description TEXT, is_public BOOLEAN NOT NULL DEFAULT false, row_version BIGINT NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -41,7 +41,7 @@ CREATE TABLE procurement_priority_history (
 );
 
 CREATE TABLE procurement_priority_groups (
-  id BIGSERIAL PRIMARY KEY, institute_id BIGINT NOT NULL, name TEXT NOT NULL, public_description TEXT,
+  id BIGSERIAL PRIMARY KEY, institute_id BIGINT NOT NULL, name TEXT NOT NULL, public_title TEXT NOT NULL, public_description TEXT,
   tier_override TEXT CHECK (tier_override IN ('P0','P1','P2','P3','P4')), tier_override_reason TEXT,
   institutional_rank INTEGER, institutional_rank_reason TEXT, is_public BOOLEAN NOT NULL DEFAULT false,
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','CLOSED')),
@@ -67,4 +67,3 @@ ON CONFLICT (code) DO NOTHING;
 
 -- Existing cases are intentionally not backfilled with HOD ranks or SCM assessments.
 -- Deployment tooling may create NEEDS_ASSESSMENT profiles only; reliable supply-chain-owned timestamps may drive aging later.
-COMMIT;

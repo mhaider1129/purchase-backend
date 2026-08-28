@@ -13,6 +13,7 @@ const { applyAutoAssignmentForApprovedRequest } = require('../services/requestAu
 const ensureRequestEditApprovalsTable = require('../utils/ensureRequestEditApprovalsTable');
 const { buildMaintenanceApprovalNotification } = require('../utils/maintenanceNotifications');
 const { REQUEST_STATUS } = require('../constants/statusCatalog');
+const hodRankingGate = require('../services/procurementPriority/hodRankingGateService');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -567,6 +568,7 @@ const handleApprovalDecision = async (req, res, next) => {
       }
     }
 
+    let rankingGate = null;
     // 8. Activate Next Approval Step (only when approved)
     if (status === 'Approved' && !closedAsAvailableInStock) {
       const sameLevelPendingRes = await client.query(
@@ -583,6 +585,11 @@ const handleApprovalDecision = async (req, res, next) => {
       );
 
       if (pendingAtCurrentLevel === 0) {
+        if ((user_role || '').toUpperCase() === 'HOD') {
+          rankingGate = await hodRankingGate.findGate({ client, request: { ...request, id: approval.request_id }, approvalLevel: approval.approval_level });
+          if (rankingGate) await hodRankingGate.auditGate({ client, request: { ...request, id: approval.request_id }, approval, actorId: approver_id, gate: rankingGate });
+        }
+        if (!rankingGate) {
         if (
           request.request_type === 'Maintenance' &&
           request.initiated_by_technician_id &&
@@ -731,6 +738,7 @@ const handleApprovalDecision = async (req, res, next) => {
             );
           }
         }
+        }
       }
     }
 
@@ -741,7 +749,7 @@ const handleApprovalDecision = async (req, res, next) => {
     let newStatus = null;
     if (closedAsAvailableInStock) newStatus = REQUEST_STATUS.AVAILABLE_IN_STOCK;
     else if (statuses.includes('Rejected')) newStatus = 'Rejected';
-    else if (statuses.every(s => s === 'Approved')) newStatus = 'Approved';
+    else if (!rankingGate && statuses.every(s => s === 'Approved')) newStatus = 'Approved';
 
     let itemSummary = null;
     const itemSummaryTable =
@@ -889,9 +897,11 @@ const handleApprovalDecision = async (req, res, next) => {
     await client.query('COMMIT');
 
     res.json({
-      message: `✅ Approval ${status.toLowerCase()} successfully`,
+      message: rankingGate ? 'Department priority ranking is required before approval can continue' : `✅ Approval ${status.toLowerCase()} successfully`,
       updatedRequestStatus: newStatus || 'Pending',
       itemApprovalSummary: itemSummary,
+      workflowState: rankingGate?.state || null,
+      rankingGate,
     });
 
   } catch (err) {

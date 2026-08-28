@@ -51,8 +51,9 @@ function createProcurementPriorityRepository(database = pool) {
       orderedCaseIds,
       version,
       actorId,
+      client: suppliedClient = null,
     }) {
-      return transaction(async (client) => {
+      const work = async (client) => {
         const current = await client.query(
           `SELECT pc.id,p.row_version FROM procurement_cases pc JOIN procurement_priority_profiles p ON p.procurement_case_id=pc.id WHERE pc.institute_id=$1 AND pc.department_id=$2 AND ${ACTIVE} ORDER BY pc.id FOR UPDATE OF pc,p`,
           [instituteId, departmentId],
@@ -109,7 +110,8 @@ function createProcurementPriorityRepository(database = pool) {
           afterData: { orderedCaseIds },
         });
         return this.departmentQueue(instituteId, departmentId, client);
-      });
+      };
+      return suppliedClient ? work(suppliedClient) : transaction(work);
     },
     async profile(caseId, instituteId) {
       const r = await database.query(

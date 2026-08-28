@@ -67,8 +67,9 @@ CREATE TABLE public.requests (
   approval_route_snapshot jsonb,
   approval_route_snapshot_id text,
   lifecycle_version bigint NOT NULL DEFAULT 0,
+  sent_to_central_supply_at timestamp with time zone,
+  sent_to_central_supply_by integer,
   CONSTRAINT requests_pkey PRIMARY KEY (id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_requester_id_fkey FOREIGN KEY (requester_id) REFERENCES public.users(id),
   CONSTRAINT requests_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT requests_initiated_by_technician_id_fkey FOREIGN KEY (initiated_by_technician_id) REFERENCES public.users(id),
@@ -78,7 +79,9 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
+  CONSTRAINT requests_sent_to_central_supply_by_fkey FOREIGN KEY (sent_to_central_supply_by) REFERENCES public.users(id),
   CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
 );
 CREATE TABLE public.requested_items (
@@ -1155,6 +1158,8 @@ CREATE TABLE public.goods_receipts (
   discrepancy_notes text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   purchase_order_id bigint,
+  idempotency_key text,
+  payload_fingerprint character,
   CONSTRAINT goods_receipts_pkey PRIMARY KEY (id),
   CONSTRAINT goods_receipts_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT goods_receipts_received_by_fkey FOREIGN KEY (received_by) REFERENCES public.users(id),
@@ -1174,12 +1179,26 @@ CREATE TABLE public.goods_receipt_items (
   generic_item_id bigint,
   approved_product_id bigint,
   supplier_catalog_item_id bigint,
+  purchase_order_item_id bigint,
+  batch_number text,
+  lot_number text,
+  serial_number text,
+  expiry_date date,
+  warehouse_id bigint,
+  stock_status text NOT NULL DEFAULT 'AVAILABLE'::text CHECK (stock_status = ANY (ARRAY['AVAILABLE'::text, 'QUARANTINE'::text, 'DAMAGED'::text, 'EXPIRED'::text, 'RECALLED'::text, 'BLOCKED'::text])),
+  source_uom text,
+  base_uom text,
+  stock_item_id bigint,
+  conversion_factor numeric CHECK (conversion_factor IS NULL OR conversion_factor > 0::numeric) NOT VALI),
   CONSTRAINT goods_receipt_items_pkey PRIMARY KEY (id),
   CONSTRAINT goods_receipt_items_goods_receipt_id_fkey FOREIGN KEY (goods_receipt_id) REFERENCES public.goods_receipts(id),
   CONSTRAINT goods_receipt_items_requested_item_id_fkey FOREIGN KEY (requested_item_id) REFERENCES public.requested_items(id),
   CONSTRAINT goods_receipt_items_generic_item_id_fkey FOREIGN KEY (generic_item_id) REFERENCES public.generic_items(id),
   CONSTRAINT goods_receipt_items_approved_product_id_fkey FOREIGN KEY (approved_product_id) REFERENCES public.approved_products(id),
-  CONSTRAINT goods_receipt_items_supplier_catalog_item_id_fkey FOREIGN KEY (supplier_catalog_item_id) REFERENCES public.supplier_catalog_items(id)
+  CONSTRAINT goods_receipt_items_supplier_catalog_item_id_fkey FOREIGN KEY (supplier_catalog_item_id) REFERENCES public.supplier_catalog_items(id),
+  CONSTRAINT goods_receipt_items_purchase_order_item_id_fkey FOREIGN KEY (purchase_order_item_id) REFERENCES public.purchase_order_items(id),
+  CONSTRAINT goods_receipt_items_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT goods_receipt_items_stock_item_id_fkey FOREIGN KEY (stock_item_id) REFERENCES public.stock_items(id)
 );
 CREATE TABLE public.supplier_invoices (
   id bigint NOT NULL DEFAULT nextval('supplier_invoices_id_seq'::regclass),
@@ -1199,6 +1218,12 @@ CREATE TABLE public.supplier_invoices (
   submitted_at timestamp with time zone NOT NULL DEFAULT now(),
   purchase_order_id bigint,
   supplier_id integer,
+  idempotency_key text,
+  normalized_invoice_number text NOT NULL,
+  payload_fingerprint character,
+  status text NOT NULL DEFAULT 'AP_INVOICE_SUBMITTED'::text,
+  discount_amount numeric NOT NULL DEFAULT 0,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT supplier_invoices_pkey PRIMARY KEY (id),
   CONSTRAINT supplier_invoices_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT supplier_invoices_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
@@ -1214,9 +1239,13 @@ CREATE TABLE public.invoice_items (
   quantity numeric NOT NULL,
   unit_price numeric NOT NULL,
   line_total numeric NOT NULL,
+  purchase_order_item_id bigint,
+  tax_amount numeric NOT NULL DEFAULT 0,
+  discount_amount numeric NOT NULL DEFAULT 0,
   CONSTRAINT invoice_items_pkey PRIMARY KEY (id),
   CONSTRAINT invoice_items_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
-  CONSTRAINT invoice_items_requested_item_id_fkey FOREIGN KEY (requested_item_id) REFERENCES public.requested_items(id)
+  CONSTRAINT invoice_items_requested_item_id_fkey FOREIGN KEY (requested_item_id) REFERENCES public.requested_items(id),
+  CONSTRAINT invoice_items_purchase_order_item_id_fkey FOREIGN KEY (purchase_order_item_id) REFERENCES public.purchase_order_items(id)
 );
 CREATE TABLE public.invoice_match_results (
   id bigint NOT NULL DEFAULT nextval('invoice_match_results_id_seq'::regclass),
@@ -1231,6 +1260,7 @@ CREATE TABLE public.invoice_match_results (
   override_by integer,
   override_reason text,
   override_at timestamp with time zone,
+  variances jsonb NOT NULL DEFAULT '[]'::jsonb,
   CONSTRAINT invoice_match_results_pkey PRIMARY KEY (id),
   CONSTRAINT invoice_match_results_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT invoice_match_results_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
@@ -1252,6 +1282,8 @@ CREATE TABLE public.ap_vouchers (
   verified_at timestamp with time zone,
   posted_at timestamp with time zone,
   voided_at timestamp with time zone,
+  idempotency_key text,
+  payload_fingerprint character,
   CONSTRAINT ap_vouchers_pkey PRIMARY KEY (id),
   CONSTRAINT ap_vouchers_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT ap_vouchers_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
@@ -1282,10 +1314,13 @@ CREATE TABLE public.finance_postings (
   posted_by integer,
   posted_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  supplier_invoice_id bigint,
+  idempotency_key text,
   CONSTRAINT finance_postings_pkey PRIMARY KEY (id),
   CONSTRAINT finance_postings_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT finance_postings_ap_voucher_id_fkey FOREIGN KEY (ap_voucher_id) REFERENCES public.ap_vouchers(id),
-  CONSTRAINT finance_postings_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id)
+  CONSTRAINT finance_postings_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id),
+  CONSTRAINT finance_postings_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id)
 );
 CREATE TABLE public.payment_records (
   id bigint NOT NULL DEFAULT nextval('payment_records_id_seq'::regclass),
@@ -1298,10 +1333,17 @@ CREATE TABLE public.payment_records (
   paid_by integer,
   paid_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  idempotency_key text,
+  supplier_invoice_id bigint,
+  reversal_of_payment_id bigint,
+  payload_fingerprint character,
+  currency character varying,
   CONSTRAINT payment_records_pkey PRIMARY KEY (id),
   CONSTRAINT payment_records_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT payment_records_ap_voucher_id_fkey FOREIGN KEY (ap_voucher_id) REFERENCES public.ap_vouchers(id),
-  CONSTRAINT payment_records_paid_by_fkey FOREIGN KEY (paid_by) REFERENCES public.users(id)
+  CONSTRAINT payment_records_paid_by_fkey FOREIGN KEY (paid_by) REFERENCES public.users(id),
+  CONSTRAINT payment_records_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
+  CONSTRAINT payment_records_reversal_of_payment_id_fkey FOREIGN KEY (reversal_of_payment_id) REFERENCES public.payment_records(id)
 );
 CREATE TABLE public.finance_action_history (
   id bigint NOT NULL DEFAULT nextval('finance_action_history_id_seq'::regclass),
@@ -1327,12 +1369,28 @@ CREATE TABLE public.purchase_order_items (
   generic_item_id bigint,
   approved_product_id bigint,
   supplier_catalog_item_id bigint,
+  request_id integer,
+  request_item_id integer,
+  award_id bigint,
+  line_type text NOT NULL DEFAULT 'NON_INVENTORY'::text CHECK (line_type = ANY (ARRAY['INVENTORY'::text, 'NON_INVENTORY'::text, 'SERVICE'::text, 'ASSET'::text, 'MEDICAL_DEVICE'::text])),
+  price_source_type text,
+  price_source_id bigint,
+  source_uom_id integer,
+  source_uom text,
+  base_uom_id integer,
+  base_uom text,
+  conversion_factor numeric CHECK (conversion_factor IS NULL OR conversion_factor > 0::numeric) NOT VALI),
   CONSTRAINT purchase_order_items_pkey PRIMARY KEY (id),
   CONSTRAINT purchase_order_items_requested_item_id_fkey FOREIGN KEY (requested_item_id) REFERENCES public.requested_items(id),
   CONSTRAINT purchase_order_items_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
   CONSTRAINT purchase_order_items_generic_item_id_fkey FOREIGN KEY (generic_item_id) REFERENCES public.generic_items(id),
   CONSTRAINT purchase_order_items_approved_product_id_fkey FOREIGN KEY (approved_product_id) REFERENCES public.approved_products(id),
-  CONSTRAINT purchase_order_items_supplier_catalog_item_id_fkey FOREIGN KEY (supplier_catalog_item_id) REFERENCES public.supplier_catalog_items(id)
+  CONSTRAINT purchase_order_items_supplier_catalog_item_id_fkey FOREIGN KEY (supplier_catalog_item_id) REFERENCES public.supplier_catalog_items(id),
+  CONSTRAINT purchase_order_items_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
+  CONSTRAINT purchase_order_items_request_item_id_fkey FOREIGN KEY (request_item_id) REFERENCES public.requested_items(id),
+  CONSTRAINT purchase_order_items_award_id_fkey FOREIGN KEY (award_id) REFERENCES public.procurement_awards(id),
+  CONSTRAINT purchase_order_items_source_uom_id_fkey FOREIGN KEY (source_uom_id) REFERENCES public.item_uom(id),
+  CONSTRAINT purchase_order_items_base_uom_id_fkey FOREIGN KEY (base_uom_id) REFERENCES public.item_uom(id)
 );
 CREATE TABLE public.ap_payables (
   id bigint NOT NULL DEFAULT nextval('ap_payables_id_seq'::regclass),
@@ -1346,10 +1404,13 @@ CREATE TABLE public.ap_payables (
   posted_by integer,
   posted_at timestamp with time zone NOT NULL DEFAULT now(),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  currency character varying,
+  ap_voucher_id bigint,
   CONSTRAINT ap_payables_pkey PRIMARY KEY (id),
   CONSTRAINT ap_payables_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT ap_payables_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
-  CONSTRAINT ap_payables_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id)
+  CONSTRAINT ap_payables_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id),
+  CONSTRAINT ap_payables_ap_voucher_id_fkey FOREIGN KEY (ap_voucher_id) REFERENCES public.ap_vouchers(id)
 );
 CREATE TABLE public.payment_allocations (
   id bigint NOT NULL DEFAULT nextval('payment_allocations_id_seq'::regclass),
@@ -1529,10 +1590,20 @@ CREATE TABLE public.commitment_ledger (
   notes text,
   actor_id integer,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  purchase_order_id bigint,
+  idempotency_key text,
+  state text NOT NULL DEFAULT 'ACTIVE'::text CHECK (state = ANY (ARRAY['ACTIVE'::text, 'ACTUALIZED'::text, 'RELEASED'::text, 'REVERSED'::text])),
+  parent_commitment_id bigint,
+  supplier_invoice_id bigint,
+  ap_voucher_id bigint,
   CONSTRAINT commitment_ledger_pkey PRIMARY KEY (id),
+  CONSTRAINT commitment_ledger_parent_commitment_id_fkey FOREIGN KEY (parent_commitment_id) REFERENCES public.commitment_ledger(id),
+  CONSTRAINT commitment_ledger_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
+  CONSTRAINT commitment_ledger_ap_voucher_id_fkey FOREIGN KEY (ap_voucher_id) REFERENCES public.ap_vouchers(id),
   CONSTRAINT commitment_ledger_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT commitment_ledger_budget_envelope_id_fkey FOREIGN KEY (budget_envelope_id) REFERENCES public.budget_envelopes(id),
-  CONSTRAINT commitment_ledger_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.users(id)
+  CONSTRAINT commitment_ledger_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.users(id),
+  CONSTRAINT commitment_ledger_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id)
 );
 CREATE TABLE public.gl_postings (
   id bigint NOT NULL DEFAULT nextval('gl_postings_id_seq'::regclass),
@@ -1674,7 +1745,12 @@ CREATE TABLE public.item_categories (
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT item_categories_pkey PRIMARY KEY (id)
+  normalized_name text,
+  created_by integer,
+  updated_by integer,
+  CONSTRAINT item_categories_pkey PRIMARY KEY (id),
+  CONSTRAINT item_categories_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT item_categories_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.item_uom (
   id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
@@ -1685,7 +1761,12 @@ CREATE TABLE public.item_uom (
   created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   normalized_uom_code text,
-  CONSTRAINT item_uom_pkey PRIMARY KEY (id)
+  is_active boolean NOT NULL DEFAULT true,
+  created_by integer,
+  updated_by integer,
+  CONSTRAINT item_uom_pkey PRIMARY KEY (id),
+  CONSTRAINT item_uom_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT item_uom_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id)
 );
 CREATE TABLE public.item_manufacturers (
   id integer GENERATED ALWAYS AS IDENTITY NOT NULL,

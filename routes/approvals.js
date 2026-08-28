@@ -4,6 +4,9 @@ const router = express.Router();
 const pool = require('../config/db');
 const { writeAuditEvent } = require('../services/auditService');
 const { createProcurementPriorityRepository } = require('../repositories/procurementPriorityRepository');
+const { continueApprovalWorkflowAfterLevel } = require('../services/approvalContinuationService');
+const { fetchApprovalRoutes, resolveRouteDomain } = require('../controllers/utils/approvalRoutes');
+const { createNotifications } = require('../utils/notificationService');
 
 const { authenticateUser } = require('../middleware/authMiddleware');
 const {
@@ -41,12 +44,17 @@ router.post('/:id/department-ranking', authenticateUser, async (req, res, next) 
     }
     await client.query('BEGIN');
     const found = await client.query(
-      `SELECT a.*,r.institute_id,r.department_id,r.status AS request_status,u.role AS approver_role
+      `SELECT a.*,r.*,a.id AS id,a.request_id AS request_id,r.status AS request_status,
+              u.role AS approver_role,requester.email AS requester_email
          FROM approvals a JOIN requests r ON r.id=a.request_id JOIN users u ON u.id=a.approver_id
+         JOIN users requester ON requester.id=r.requester_id
         WHERE a.id=$1 FOR UPDATE OF a,r`, [req.params.id]);
     const approval = found.rows[0];
     if (!approval) throw Object.assign(new Error('Approval not found'), { statusCode: 404 });
-    if (String(approval.approver_role).toUpperCase() !== 'HOD' || Number(approval.approver_id) !== Number(req.user.id))
+    const routeDomain = await resolveRouteDomain({ client, departmentId: approval.department_id, explicitDomain: approval.request_domain, requestType: approval.request_type });
+    const routeDefinitions = await fetchApprovalRoutes({ client, requestType: approval.request_type, departmentType: routeDomain, amount: Number(approval.estimated_cost) || 0 });
+    const canonicalStep = routeDefinitions.find(step => Number(step.approval_level) === Number(approval.approval_level));
+    if (String(canonicalStep?.role || approval.approver_role).toUpperCase() !== 'HOD' || Number(approval.approver_id) !== Number(req.user.id))
       throw Object.assign(new Error('Only the deciding HOD may complete this ranking gate'), { statusCode: 403 });
     if (String(approval.institute_id) !== String(req.user.institute_id) || String(approval.department_id) !== String(req.user.department_id))
       throw Object.assign(new Error('Approval ranking scope does not match your institute and department'), { statusCode: 403 });
@@ -60,16 +68,22 @@ router.post('/:id/department-ranking', authenticateUser, async (req, res, next) 
     // The repository transaction is deliberately bypassed: ranking and continuation share this transaction.
     const queue = isCompletedRetry ? existingQueue : await repo.reorderDepartment({ instituteId: req.user.institute_id, departmentId: req.user.department_id,
       orderedCaseIds, version: req.body.version, actorId: req.user.id, client });
-    const next = await client.query(
-      `UPDATE approvals SET is_active=TRUE WHERE request_id=$1 AND status='Pending' AND is_active=FALSE
-        AND approval_level=(SELECT MIN(approval_level) FROM approvals WHERE request_id=$1 AND status='Pending' AND approval_level>$2)
-        RETURNING *`, [approval.request_id, approval.approval_level]);
-    if (!next.rowCount) await client.query(`UPDATE requests SET status='Approved',updated_at=NOW() WHERE id=$1 AND status NOT IN ('Approved','Rejected')`, [approval.request_id]);
     if (!isCompletedRetry) await writeAuditEvent({ client, entityType: 'request', entityId: approval.request_id, action: 'HOD_RANKING_COMPLETED',
       actorUserId: req.user.id, instituteId: req.user.institute_id, requestId: approval.request_id,
-      afterData: { orderedCaseIds }, metadata: { approvalId: approval.id, approvalLevel: approval.approval_level, nextApprovalIds: next.rows.map(x => x.id) } });
+      afterData: { orderedCaseIds }, metadata: { approvalId: approval.id, approvalLevel: approval.approval_level } });
+    const notifications = [];
+    let technicianEmail = null;
+    if (approval.request_type === 'Maintenance' && approval.initiated_by_technician_id) {
+      const technician = await client.query('SELECT email FROM users WHERE id=$1', [approval.initiated_by_technician_id]);
+      technicianEmail = technician.rows[0]?.email || null;
+    }
+    const continuation = await continueApprovalWorkflowAfterLevel({
+      client, request: approval, approval, actorId: req.user.id, routeDefinitions,
+      routeDomain, technicianEmail, enqueueNotification: notification => notifications.push(notification),
+    });
+    if (notifications.length) await createNotifications(notifications, client);
     await client.query('COMMIT');
-    res.json({ data: { workflowState: 'APPROVAL_CONTINUED', queue, nextApprovals: next.rows } });
+    res.json({ data: { workflowState: continuation.state, queue, nextApprovals: continuation.nextApprovals, requestStatus: continuation.requestStatus } });
   } catch (error) { await client.query('ROLLBACK'); next(error); } finally { client.release(); }
 });
 router.get('/email-action', handleEmailApprovalAction);

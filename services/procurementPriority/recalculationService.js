@@ -1,8 +1,181 @@
-'use strict';
-const { calculatePriority } = require('./procurementPriorityService');
-const { writeAuditEvent } = require('../auditService');
-const FACTOR_FIELDS = ['impact_level','impact_reason','scm_assessment','scm_reason','service_risk_level','service_risk_override_reason','deadline_at','deadline_type','deadline_consequence','dependency_level','dependency_reason','regulatory_level','regulatory_reason','approved_initiative_id','p0_justification'];
-function inputFrom(profile) { return {impact:profile.impact_level,scmAssessment:profile.scm_assessment,scmReason:profile.scm_reason,departmentRank:profile.department_rank,departmentRankTotal:profile.department_rank_total,agingDays:Math.max(0,Math.floor((Date.now()-new Date(profile.supply_chain_owned_at).getTime())/86400000)),serviceRisk:profile.service_risk_level,deadline:profile.deadline_type,dependency:profile.dependency_level,regulatory:profile.regulatory_level,strategicInitiativeApproved:Boolean(profile.approved_initiative_id),p0Justification:profile.p0_justification}; }
-async function recalculate({client,caseId,actorId=null,trigger,reason=null}) { const locked=await client.query(`SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN department_priority_rankings d ON d.procurement_case_id=p.procurement_case_id AND d.valid_until IS NULL WHERE p.procurement_case_id=$1 FOR UPDATE OF p`,[caseId]); if(!locked.rowCount) throw Object.assign(new Error('Priority profile not found'),{statusCode:404}); const result=calculatePriority(inputFrom(locked.rows[0])); await client.query(`UPDATE procurement_priority_profiles SET system_score=$2,system_tier=$3,model_version=$4,row_version=row_version+1,updated_at=now() WHERE procurement_case_id=$1`,[caseId,result.score,result.tier,result.modelVersion]); await client.query(`INSERT INTO procurement_priority_history(procurement_case_id,score,tier,factor_breakdown,model_version,trigger,trigger_reason,institutional_rank,calculated_by,calculated_by_system) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[caseId,result.score,result.tier,result.breakdown,result.modelVersion,trigger,reason,locked.rows[0].institutional_rank,actorId,!actorId]); return result; }
-async function updateFactors({client,caseId,instituteId,input,actorId}) { if(Object.hasOwn(input,'system_score')||Object.hasOwn(input,'score')) throw Object.assign(new Error('Total score is derived'),{statusCode:400}); const updates=[];const values=[]; for(const field of FACTOR_FIELDS) if(Object.hasOwn(input,field)){values.push(input[field]);updates.push(`${field}=$${values.length}`);} if(!String(input.scm_reason||'').trim()) throw Object.assign(new Error('SCM assessment reason is required'),{statusCode:400}); values.push(caseId,instituteId); const result=await client.query(`UPDATE procurement_priority_profiles SET ${updates.join(',')},scm_assessed_by=$${values.length+1},scm_assessed_at=now(),updated_at=now() WHERE procurement_case_id=$${values.length-1} AND institute_id=$${values.length} RETURNING *`,[...values,actorId]); if(!result.rowCount) throw Object.assign(new Error('Priority profile not found'),{statusCode:404}); await writeAuditEvent({client,entityType:'procurement_priority_profile',entityId:caseId,action:'PRIORITY_FACTORS_UPDATED',actorUserId:actorId,instituteId,reason:input.scm_reason,afterData:result.rows[0]}); return recalculate({client,caseId,actorId,trigger:'SCM_ASSESSMENT_CHANGED',reason:input.scm_reason}); }
-module.exports={recalculate,updateFactors,inputFrom};
+"use strict";
+const { calculatePriority } = require("./procurementPriorityService");
+const { writeAuditEvent } = require("../auditService");
+const FACTOR_FIELDS = [
+  "impact_level",
+  "impact_reason",
+  "scm_assessment",
+  "scm_reason",
+  "service_risk_level",
+  "service_risk_override_reason",
+  "deadline_at",
+  "deadline_type",
+  "deadline_consequence",
+  "dependency_level",
+  "dependency_reason",
+  "regulatory_level",
+  "regulatory_reason",
+  "approved_initiative_id",
+  "p0_justification",
+];
+const { FACTORS } = require("./constants");
+function validateFactorInput(input) {
+  const controlled = [
+    ["impact_level", FACTORS.impact],
+    ["service_risk_level", FACTORS.serviceRisk],
+    ["deadline_type", FACTORS.deadline],
+    ["dependency_level", FACTORS.dependency],
+    ["regulatory_level", FACTORS.regulatory],
+  ];
+  for (const [field, values] of controlled)
+    if (Object.hasOwn(input, field) && !Object.hasOwn(values, input[field]))
+      throw Object.assign(new Error(`Invalid ${field}`), { statusCode: 400 });
+  if (
+    Object.hasOwn(input, "scm_assessment") &&
+    (!Number.isInteger(Number(input.scm_assessment)) ||
+      Number(input.scm_assessment) < 0 ||
+      Number(input.scm_assessment) > 100)
+  )
+    throw Object.assign(
+      new Error("SCM assessment must be an integer from 0 to 100"),
+      { statusCode: 400 },
+    );
+  const unknown = Object.keys(input).filter(
+    (key) => !FACTOR_FIELDS.includes(key),
+  );
+  if (unknown.length)
+    throw Object.assign(
+      new Error(`Unsupported assessment fields: ${unknown.join(", ")}`),
+      { statusCode: 400 },
+    );
+}
+function inputFrom(profile) {
+  return {
+    impact: profile.impact_level,
+    scmAssessment: profile.scm_assessment,
+    scmReason: profile.scm_reason,
+    departmentRank: profile.department_rank,
+    departmentRankTotal: profile.department_rank_total,
+    agingDays: Math.max(
+      0,
+      Math.floor(
+        (Date.now() - new Date(profile.supply_chain_owned_at).getTime()) /
+          86400000,
+      ),
+    ),
+    serviceRisk: profile.service_risk_level,
+    deadline: profile.deadline_type,
+    dependency: profile.dependency_level,
+    regulatory: profile.regulatory_level,
+    strategicInitiativeApproved: Boolean(profile.approved_initiative_id),
+    p0Justification: profile.p0_justification,
+  };
+}
+async function recalculate({
+  client,
+  caseId,
+  actorId = null,
+  trigger,
+  reason = null,
+}) {
+  const locked = await client.query(
+    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN department_priority_rankings d ON d.procurement_case_id=p.procurement_case_id AND d.valid_until IS NULL WHERE p.procurement_case_id=$1 FOR UPDATE OF p`,
+    [caseId],
+  );
+  if (!locked.rowCount)
+    throw Object.assign(new Error("Priority profile not found"), {
+      statusCode: 404,
+    });
+  const result = calculatePriority(inputFrom(locked.rows[0]));
+  await client.query(
+    `UPDATE procurement_priority_profiles SET system_score=$2,system_tier=$3,model_version=$4,row_version=row_version+1,updated_at=now() WHERE procurement_case_id=$1`,
+    [caseId, result.score, result.tier, result.modelVersion],
+  );
+  await client.query(
+    `INSERT INTO procurement_priority_history(procurement_case_id,score,tier,factor_breakdown,model_version,trigger,trigger_reason,institutional_rank,calculated_by,calculated_by_system) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      caseId,
+      result.score,
+      result.tier,
+      result.breakdown,
+      result.modelVersion,
+      trigger,
+      reason,
+      locked.rows[0].institutional_rank,
+      actorId,
+      !actorId,
+    ],
+  );
+  return result;
+}
+async function updateFactors({ client, caseId, instituteId, input, actorId }) {
+  validateFactorInput(input);
+  const updates = [];
+  const values = [];
+  for (const field of FACTOR_FIELDS)
+    if (Object.hasOwn(input, field)) {
+      values.push(
+        field === "scm_assessment" ? Number(input[field]) : input[field],
+      );
+      updates.push(`${field}=$${values.length}`);
+    }
+  if (!updates.length)
+    throw Object.assign(new Error("Assessment fields are required"), {
+      statusCode: 400,
+    });
+  if (!String(input.scm_reason || "").trim())
+    throw Object.assign(new Error("SCM assessment reason is required"), {
+      statusCode: 400,
+    });
+  values.push(caseId, instituteId);
+  const result = await client.query(
+    `UPDATE procurement_priority_profiles SET ${updates.join(",")},scm_assessed_by=$${values.length + 1},scm_assessed_at=now(),updated_at=now() WHERE procurement_case_id=$${values.length - 1} AND institute_id=$${values.length} RETURNING *`,
+    [...values, actorId],
+  );
+  if (!result.rowCount)
+    throw Object.assign(new Error("Priority profile not found"), {
+      statusCode: 404,
+    });
+  await writeAuditEvent({
+    client,
+    entityType: "procurement_priority_profile",
+    entityId: caseId,
+    action: "PRIORITY_FACTORS_UPDATED",
+    actorUserId: actorId,
+    instituteId,
+    reason: input.scm_reason,
+    afterData: result.rows[0],
+  });
+  return recalculate({
+    client,
+    caseId,
+    actorId,
+    trigger: "SCM_ASSESSMENT_CHANGED",
+    reason: input.scm_reason,
+  });
+}
+async function previewFactors({ client, caseId, instituteId, input }) {
+  validateFactorInput(input);
+  const result = await client.query(
+    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN department_priority_rankings d ON d.procurement_case_id=p.procurement_case_id AND d.valid_until IS NULL WHERE p.procurement_case_id=$1 AND p.institute_id=$2`,
+    [caseId, instituteId],
+  );
+  if (!result.rowCount)
+    throw Object.assign(new Error("Priority profile not found"), {
+      statusCode: 404,
+    });
+  const proposed = { ...result.rows[0], ...input };
+  const calculation = calculatePriority({
+    ...inputFrom(proposed),
+    p0Justification: proposed.p0_justification || "PREVIEW_ONLY",
+  });
+  return { ...calculation, p0JustificationRequired: calculation.tier === "P0" };
+}
+module.exports = {
+  recalculate,
+  updateFactors,
+  previewFactors,
+  inputFrom,
+  validateFactorInput,
+  FACTOR_FIELDS,
+};

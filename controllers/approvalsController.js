@@ -14,6 +14,7 @@ const ensureRequestEditApprovalsTable = require('../utils/ensureRequestEditAppro
 const { buildMaintenanceApprovalNotification } = require('../utils/maintenanceNotifications');
 const { REQUEST_STATUS } = require('../constants/statusCatalog');
 const hodRankingGate = require('../services/procurementPriority/hodRankingGateService');
+const { continueApprovalWorkflowAfterLevel } = require('../services/approvalContinuationService');
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
@@ -569,6 +570,7 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     let rankingGate = null;
+    let continuationResult = null;
     // 8. Activate Next Approval Step (only when approved)
     if (status === 'Approved' && !closedAsAvailableInStock) {
       const sameLevelPendingRes = await client.query(
@@ -590,154 +592,11 @@ const handleApprovalDecision = async (req, res, next) => {
           if (rankingGate) await hodRankingGate.auditGate({ client, request: { ...request, id: approval.request_id }, approval, actorId: approver_id, gate: rankingGate });
         }
         if (!rankingGate) {
-        if (
-          request.request_type === 'Maintenance' &&
-          request.initiated_by_technician_id &&
-          approval.approval_level === 0
-        ) {
-          const { rows: higherLevels } = await client.query(
-            `SELECT 1
-               FROM approvals
-              WHERE request_id = $1 AND approval_level > 0
-              LIMIT 1`,
-            [approval.request_id],
-          );
-
-          if (higherLevels.length === 0) {
-            await client.query(
-              `UPDATE requests
-                  SET requester_id = $1,
-                      updated_at = NOW()
-                WHERE id = $2`,
-              [approver_id, approval.request_id],
-            );
-            request.requester_id = approver_id;
-
-            await client.query(
-              `INSERT INTO request_logs (request_id, action, actor_id, comments)
-               VALUES ($1, $2, $3, $4)`,
-              [
-                approval.request_id,
-                'Requester confirmation recorded',
-                approver_id,
-                'Maintenance request ownership transferred to department requester',
-              ],
-            );
-
-            const { rows: newRequesterEmailRows } = await client.query(
-              `SELECT email FROM users WHERE id = $1`,
-              [approver_id],
-            );
-            if (newRequesterEmailRows[0]?.email) {
-              request.requester_email = newRequesterEmailRows[0].email;
-            }
-
-            if (!routeDefinitions.length) {
-              const existing = await client.query(
-                `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-                [approval.request_id, approval.approval_level + 1],
-              );
-              if (existing.rowCount === 0) {
-                await assignApprover(
-                  client,
-                  'SCM',
-                  request.department_id,
-                  approval.request_id,
-                  request.request_type,
-                  approval.approval_level + 1,
-                  routeDomain,
-                );
-              }
-            } else {
-              for (const { role, approval_level, warehouse_id } of routeDefinitions) {
-                if (approval_level <= approval.approval_level) {
-                  continue;
-                }
-
-                const existing = await client.query(
-                  `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-                  [approval.request_id, approval_level],
-                );
-                if (existing.rowCount > 0) {
-                  continue;
-                }
-
-                await assignApprover(
-                  client,
-                  role,
-                  request.department_id,
-                  approval.request_id,
-                  request.request_type,
-                  approval_level,
-                  routeDomain,
-                  warehouse_id ?? null,
-                );
-              }
-            }
-          }
-        }
-
-        const nextLevelRes = await client.query(
-          `UPDATE approvals
-              SET is_active = TRUE
-            WHERE request_id = $1
-              AND status = 'Pending'
-              AND is_active = FALSE
-              AND approval_level = (
-                SELECT MIN(approval_level)
-                  FROM approvals
-                 WHERE request_id = $1
-                   AND status = 'Pending'
-                   AND approval_level > $2
-              )
-            RETURNING id, approver_id, approval_level`,
-          [approval.request_id, approval.approval_level],
-        );
-
-        if (nextLevelRes.rowCount > 0) {
-          const nextApprovalLevel = nextLevelRes.rows[0].approval_level;
-          await client.query(
-            `INSERT INTO request_logs (request_id, action, actor_id, comments)
-             VALUES ($1, $2, $3, NULL)`,
-            [approval.request_id, `Level ${nextApprovalLevel} activated`, approver_id],
-          );
-
-          const nextId = nextLevelRes.rows[0].id;
-          const nextApproverId = nextLevelRes.rows[0].approver_id || null;
-          const emailRes = await client.query(
-            `SELECT u.email FROM approvals a JOIN users u ON a.approver_id = u.id WHERE a.id = $1`,
-            [nextId],
-          );
-          const nextEmail = emailRes.rows[0]?.email;
-          const nextMessage = `The ${request.request_type} request with ID ${approval.request_id} is ready for your approval.`;
-          const actionLinks = nextApproverId ? buildApprovalActionLinks({ approvalId: nextId, approverId: nextApproverId }) : null;
-
-          if (nextApproverId) {
-            enqueueNotification({
-              userId: nextApproverId,
-              title: 'Purchase Request Needs Your Review',
-              message: nextMessage,
-              link: `/requests/${approval.request_id}`,
-              metadata: {
-                requestId: approval.request_id,
-                requestType: request.request_type,
-                action: 'approval_required',
-                level: nextApprovalLevel,
-              },
-            });
-          }
-
-          if (nextEmail) {
-            const actionMessage = actionLinks
-              ? `${nextMessage}\n\nQuick actions:\nApprove: ${actionLinks.approveUrl}\nReject: ${actionLinks.rejectUrl}\n\nIf you prefer, you can still log in to review the full details before deciding.`
-              : `${nextMessage}\nPlease log in to review the details.`;
-            await sendEmail(
-              nextEmail,
-              'Purchase Request Needs Your Review',
-              actionMessage,
-            );
-          }
-        }
+          continuationResult = await continueApprovalWorkflowAfterLevel({
+            client, request: { ...request, id: approval.request_id }, approval,
+            actorId: approver_id, routeDefinitions, routeDomain, technicianEmail,
+            enqueueNotification,
+          });
         }
       }
     }
@@ -749,7 +608,7 @@ const handleApprovalDecision = async (req, res, next) => {
     let newStatus = null;
     if (closedAsAvailableInStock) newStatus = REQUEST_STATUS.AVAILABLE_IN_STOCK;
     else if (statuses.includes('Rejected')) newStatus = 'Rejected';
-    else if (!rankingGate && statuses.every(s => s === 'Approved')) newStatus = 'Approved';
+    else if (continuationResult?.requestStatus === 'Approved') newStatus = 'Approved';
 
     let itemSummary = null;
     const itemSummaryTable =
@@ -778,7 +637,7 @@ const handleApprovalDecision = async (req, res, next) => {
       };
     }
 
-    if (newStatus) {
+    if (newStatus && continuationResult?.requestStatus !== newStatus) {
       await client.query(`
         UPDATE requests SET status = $1, updated_at = NOW()
         WHERE id = $2

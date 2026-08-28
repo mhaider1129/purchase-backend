@@ -2,12 +2,32 @@
 -- Depends on 010 procurement_cases and existing users/departments/institutes. It does not alter 008-011.
 BEGIN;
 
-DO $$ BEGIN
-  IF to_regclass('public.procurement_cases') IS NULL THEN RAISE EXCEPTION 'Preflight: procurement_cases is required'; END IF;
-  IF to_regclass('public.users') IS NULL THEN RAISE EXCEPTION 'Preflight: users is required'; END IF;
+DO $$
+DECLARE
+  existing_tables integer;
+  missing_tables text;
+BEGIN
+  IF to_regclass('public.procurement_cases') IS NULL THEN RAISE EXCEPTION '012 preflight missing: procurement_cases'; END IF;
+  IF to_regclass('public.users') IS NULL THEN RAISE EXCEPTION '012 preflight missing: users'; END IF;
+
+  SELECT count(*) INTO existing_tables
+  FROM (VALUES ('procurement_priority_profiles'),('department_priority_rankings'),
+               ('procurement_priority_history'),('procurement_priority_groups'),
+               ('procurement_priority_group_members')) expected(name)
+  WHERE to_regclass('public.' || name) IS NOT NULL;
+
+  IF existing_tables NOT IN (0, 5) THEN
+    SELECT string_agg(name, ', ' ORDER BY name) INTO missing_tables
+    FROM (VALUES ('procurement_priority_profiles'),('department_priority_rankings'),
+                 ('procurement_priority_history'),('procurement_priority_groups'),
+                 ('procurement_priority_group_members')) expected(name)
+    WHERE to_regclass('public.' || name) IS NULL;
+    RAISE EXCEPTION 'SQL_012_PARTIAL_OR_DRIFTED_SCHEMA: missing tables: %', missing_tables;
+  END IF;
+  IF existing_tables = 5 THEN RAISE NOTICE 'SQL_012_ALREADY_APPLIED_COMPATIBLE'; END IF;
 END $$;
 
-CREATE TABLE procurement_priority_profiles (
+CREATE TABLE IF NOT EXISTS procurement_priority_profiles (
   id BIGSERIAL PRIMARY KEY, procurement_case_id BIGINT NOT NULL UNIQUE REFERENCES procurement_cases(id),
   institute_id BIGINT NOT NULL, department_id BIGINT NOT NULL, coverage_status TEXT NOT NULL DEFAULT 'NEEDS_ASSESSMENT'
     CHECK (coverage_status IN ('PARTIAL','NEEDS_ASSESSMENT','COMPLETE')),
@@ -24,23 +44,23 @@ CREATE TABLE procurement_priority_profiles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE department_priority_rankings (
+CREATE TABLE IF NOT EXISTS department_priority_rankings (
   id BIGSERIAL PRIMARY KEY, procurement_case_id BIGINT NOT NULL REFERENCES procurement_cases(id),
   institute_id BIGINT NOT NULL, department_id BIGINT NOT NULL, department_rank INTEGER NOT NULL CHECK (department_rank > 0),
   department_rank_total INTEGER NOT NULL CHECK (department_rank_total >= department_rank), ranked_by BIGINT NOT NULL REFERENCES users(id),
   ranked_at TIMESTAMPTZ NOT NULL DEFAULT now(), valid_until TIMESTAMPTZ,
   UNIQUE NULLS NOT DISTINCT (institute_id, department_id, department_rank, valid_until)
 );
-CREATE UNIQUE INDEX department_priority_one_current_case ON department_priority_rankings(procurement_case_id) WHERE valid_until IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS department_priority_one_current_case ON department_priority_rankings(procurement_case_id) WHERE valid_until IS NULL;
 
-CREATE TABLE procurement_priority_history (
+CREATE TABLE IF NOT EXISTS procurement_priority_history (
   id BIGSERIAL PRIMARY KEY, procurement_case_id BIGINT NOT NULL REFERENCES procurement_cases(id), score NUMERIC(5,2) NOT NULL,
   tier TEXT NOT NULL CHECK (tier IN ('P0','P1','P2','P3','P4')), factor_breakdown JSONB NOT NULL,
   model_version TEXT NOT NULL, trigger TEXT NOT NULL, trigger_reason TEXT, institutional_rank INTEGER,
   calculated_at TIMESTAMPTZ NOT NULL DEFAULT now(), calculated_by BIGINT REFERENCES users(id), calculated_by_system BOOLEAN NOT NULL DEFAULT false
 );
 
-CREATE TABLE procurement_priority_groups (
+CREATE TABLE IF NOT EXISTS procurement_priority_groups (
   id BIGSERIAL PRIMARY KEY, institute_id BIGINT NOT NULL, name TEXT NOT NULL, public_title TEXT NOT NULL, public_description TEXT,
   tier_override TEXT CHECK (tier_override IN ('P0','P1','P2','P3','P4')), tier_override_reason TEXT,
   institutional_rank INTEGER, institutional_rank_reason TEXT, is_public BOOLEAN NOT NULL DEFAULT false,
@@ -48,14 +68,19 @@ CREATE TABLE procurement_priority_groups (
   created_by BIGINT NOT NULL REFERENCES users(id), updated_by BIGINT NOT NULL REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE TABLE procurement_priority_group_members (
+CREATE TABLE IF NOT EXISTS procurement_priority_group_members (
   group_id BIGINT NOT NULL REFERENCES procurement_priority_groups(id), procurement_case_id BIGINT NOT NULL REFERENCES procurement_cases(id),
   added_by BIGINT NOT NULL REFERENCES users(id), added_at TIMESTAMPTZ NOT NULL DEFAULT now(), removed_at TIMESTAMPTZ,
   PRIMARY KEY (group_id, procurement_case_id)
 );
 
-CREATE INDEX priority_profiles_public_queue ON procurement_priority_profiles(institute_id, institutional_rank) WHERE is_public;
-CREATE INDEX priority_history_case_time ON procurement_priority_history(procurement_case_id, calculated_at DESC);
+ALTER TABLE procurement_priority_profiles ADD COLUMN IF NOT EXISTS public_description TEXT;
+ALTER TABLE procurement_priority_groups ADD COLUMN IF NOT EXISTS public_title TEXT;
+UPDATE procurement_priority_groups SET public_title = name WHERE public_title IS NULL;
+ALTER TABLE procurement_priority_groups ALTER COLUMN public_title SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS priority_profiles_public_queue ON procurement_priority_profiles(institute_id, institutional_rank) WHERE is_public;
+CREATE INDEX IF NOT EXISTS priority_history_case_time ON procurement_priority_history(procurement_case_id, calculated_at DESC);
 
 INSERT INTO permissions(code, name, description) VALUES
  ('procurement-priority.view-public','View public procurement priority','Read the safe institutional queue'),
@@ -67,3 +92,4 @@ ON CONFLICT (code) DO NOTHING;
 
 -- Existing cases are intentionally not backfilled with HOD ranks or SCM assessments.
 -- Deployment tooling may create NEEDS_ASSESSMENT profiles only; reliable supply-chain-owned timestamps may drive aging later.
+COMMIT;

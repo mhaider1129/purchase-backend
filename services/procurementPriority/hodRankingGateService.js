@@ -3,6 +3,7 @@
 const { writeAuditEvent } = require('../auditService');
 
 const STATE = 'HOD_RANKING_REQUIRED';
+const PROFILE_REQUIRED_STATE = 'PRIORITY_PROFILE_REQUIRED';
 const INSTRUCTION = "Place this requirement relative to your department's other active procurement requirements.";
 
 async function findGate({ client, request, approvalLevel }) {
@@ -10,16 +11,20 @@ async function findGate({ client, request, approvalLevel }) {
     `SELECT pc.id AS procurement_case_id, p.public_title, p.row_version,
             d.department_rank, d.department_rank_total
        FROM procurement_cases pc
-       JOIN procurement_priority_profiles p ON p.procurement_case_id=pc.id
+       LEFT JOIN procurement_priority_profiles p ON p.procurement_case_id=pc.id
        LEFT JOIN department_priority_rankings d
          ON d.procurement_case_id=pc.id AND d.valid_until IS NULL
       WHERE pc.request_id=$1 AND pc.institute_id=$2 AND pc.department_id=$3
         AND pc.closed_at IS NULL
       ORDER BY pc.id
-      FOR UPDATE OF pc,p`,
+      FOR UPDATE OF pc`,
     [request.id, request.institute_id, request.department_id],
   );
   const cases = result.rows;
+  const missingProfiles = cases.filter(row => row.row_version == null);
+  if (missingProfiles.length) return { state: PROFILE_REQUIRED_STATE, requestId: request.id,
+    approvalLevel: Number(approvalLevel), instruction: 'A Priority Profile must be assessed before approval can continue.',
+    requiredCaseIds: missingProfiles.map(row => row.procurement_case_id), queue: [] };
   const requiringRanking = cases.filter(row => row.department_rank == null);
   if (!requiringRanking.length) return null;
   const queue = await client.query(
@@ -41,4 +46,4 @@ async function auditGate({ client, request, approval, actorId, gate }) {
     metadata: { approvalLevel: approval.approval_level, approvalId: approval.id } });
 }
 
-module.exports = { STATE, INSTRUCTION, findGate, auditGate };
+module.exports = { STATE, PROFILE_REQUIRED_STATE, INSTRUCTION, findGate, auditGate };

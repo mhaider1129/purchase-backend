@@ -28,12 +28,13 @@ const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities 
     const quantity = String(quantities[award.id] ?? award.awarded_quantity);
     if (compareDecimal(quantity, 0) <= 0 || compareDecimal(quantity, conversion.remaining_quantity) > 0) throw Object.assign(new Error('PO quantity exceeds remaining award quantity'), { code: 'AWARD_QUANTITY_EXCEEDED' });
     conversions.set(String(award.id), quantity);
-    if (!award.approved_product_id || !award.supplier_catalog_item_id) throw Object.assign(new Error('Award lacks governed Product and Supplier Catalog identity'), { code: 'AWARD_UOM_IDENTITY_REQUIRED', statusCode: 409 });
-    const snapshot = await tx.loadAwardUomSnapshot(award.id);
+    const governed = Boolean(award.approved_product_id && award.supplier_catalog_item_id);
+    const snapshot = governed ? await tx.loadAwardUomSnapshot(award.id) : await tx.loadAwardExceptionSnapshot?.(award.id);
     if (!snapshot) throw Object.assign(new Error('Award UOM identity cannot be resolved'), { code: 'AWARD_UOM_IDENTITY_REQUIRED', statusCode: 409 });
-    if (!snapshot.source_uom_id || !snapshot.base_uom_id || Number(snapshot.inventory_uom_id) !== Number(snapshot.base_uom_id)) throw Object.assign(new Error('Award UOM identity is inconsistent'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
-    if (Number(snapshot.generic_base_uom_id) !== Number(snapshot.inventory_uom_id)) throw Object.assign(new Error('A governed Generic base-to-inventory UOM conversion is required'), { code: 'GENERIC_INVENTORY_UOM_CONVERSION_REQUIRED', statusCode: 409 });
-    snapshots.set(String(award.id), { ...snapshot, conversion_factor: multiply(snapshot.supplier_conversion_factor, snapshot.package_quantity) });
+    if (!snapshot.source_uom || !snapshot.base_uom) throw Object.assign(new Error('Award requires a controlled UOM snapshot'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
+    if (governed && (!snapshot.generic_item_id || !snapshot.source_uom_id || !snapshot.base_uom_id || Number(snapshot.inventory_uom_id) !== Number(snapshot.base_uom_id))) throw Object.assign(new Error('Award UOM identity is inconsistent'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
+    if (governed && Number(snapshot.generic_base_uom_id) !== Number(snapshot.inventory_uom_id)) throw Object.assign(new Error('A governed Generic base-to-inventory UOM conversion is required'), { code: 'GENERIC_INVENTORY_UOM_CONVERSION_REQUIRED', statusCode: 409 });
+    snapshots.set(String(award.id), { ...snapshot, conversion_factor: governed ? multiply(snapshot.supplier_conversion_factor, snapshot.package_quantity) : snapshot.conversion_factor });
   }
   let poNumber = normalizePoNumber(input.po_number);
   const explicitPoNumber = Boolean(poNumber);
@@ -59,7 +60,7 @@ const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities 
   }
   if (!header) throw Object.assign(new Error('Canonical purchase order number collided repeatedly'), { code: 'PO_NUMBER_GENERATION_FAILED', statusCode: 409 });
   const lines = [];
-  for (const award of awards) { const snapshot=snapshots.get(String(award.id)); lines.push(await tx.insertLine({ purchase_order_id: header.id, request_id: award.request_id, request_item_id: award.request_item_id, requested_item_id: award.request_item_id, award_id: award.id, approved_product_id: award.approved_product_id, supplier_catalog_item_id: award.supplier_catalog_item_id, quantity: conversions.get(String(award.id)), unit_price: award.unit_price, price_source_type: award.source_type, price_source_id: award.source_id || award.id, line_type: award.line_type, source_uom_id:snapshot.source_uom_id,source_uom:snapshot.source_uom,base_uom_id:snapshot.base_uom_id,base_uom:snapshot.base_uom,conversion_factor:snapshot.conversion_factor })); }
+  for (const award of awards) { const snapshot=snapshots.get(String(award.id)); lines.push(await tx.insertLine({ purchase_order_id: header.id, request_id: award.request_id, request_item_id: award.request_item_id, requested_item_id: award.request_item_id, award_id: award.id, generic_item_id:snapshot.generic_item_id||null, approved_product_id: award.approved_product_id||null, supplier_catalog_item_id: award.supplier_catalog_item_id||null, item_name:snapshot.item_name||null, quantity: conversions.get(String(award.id)), unit_price: award.unit_price, price_source_type: award.source_type, price_source_id: award.source_id || award.id, line_type: award.line_type || (snapshot.request_mode==='service'?'SERVICE':'NON_INVENTORY'), source_uom_id:snapshot.source_uom_id||null,source_uom:snapshot.source_uom,base_uom_id:snapshot.base_uom_id||null,base_uom:snapshot.base_uom,conversion_factor:snapshot.conversion_factor })); }
   const created={...header,lines};
   // Connected repositories expose the transaction client required by the
   // canonical audit/outbox writers; lightweight calculation adapters do not.

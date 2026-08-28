@@ -16,9 +16,10 @@ const permit = (req, p) => req.user.requirePermission(p);
 const tx = (work) => repo.transaction(work);
 router.get(
   "/public",
-  wrap(async (req, res) =>
-    res.json({ data: await repo.publicQueue(req.user.institute_id) }),
-  ),
+  wrap(async (req, res) => {
+    permit(req, "procurement-priority.view-public");
+    res.json({ data: await repo.publicQueue(req.user.institute_id) });
+  }),
 );
 router.get(
   "/department",

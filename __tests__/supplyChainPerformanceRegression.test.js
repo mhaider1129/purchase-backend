@@ -57,8 +57,8 @@ test('manual SQL 010 retains foundation invariants without fabricated history',(
   expect(sql).toMatch(/procurement_case_activities_idempotency_uq/);
   expect(sql).toMatch(/NUMERIC\(20,4\)/);
   expect(sql).toMatch(/010 preflight missing/);
-  expect(sql.match(/CREATE TABLE public\.procurement_/g)).toHaveLength(4);
-  expect(sql.match(/CREATE (?:UNIQUE )?INDEX procurement_/g)).toHaveLength(7);
+  expect(sql.match(/CREATE TABLE(?: IF NOT EXISTS)? public\.procurement_/g)).toHaveLength(4);
+  expect(sql.match(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS procurement_/g)).toHaveLength(7);
   expect(sql).not.toMatch(/evidence_coverage/);
   expect(sql).not.toMatch(/INSERT INTO public\.procurement_case_complexity_factors/);
 });

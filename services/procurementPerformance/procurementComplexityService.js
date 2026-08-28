@@ -26,7 +26,7 @@ async function assessComplexity({ repository, caseId, facts, actorId, reason, ca
     const current = await tx.lockCase(caseId);
     if (!current) throw Object.assign(new Error('Procurement case not found'), { statusCode: 404 });
     if (current.closed_at) throw Object.assign(new Error('Closed case complexity is immutable'), { statusCode: 409 });
-    await tx.replaceFactorSnapshot(caseId, result.factors, modelVersion, actorId);
+    await tx.replaceFactorSnapshot(caseId, result.factors, modelVersion, actorId, String(reason).trim());
     const updated = await tx.updateComplexity(caseId, { complexity_score: result.score,
       complexity_class: result.complexityClass, workload_units: result.workloadUnits,
       complexity_model_version: modelVersion, workload_model_version: modelVersion,

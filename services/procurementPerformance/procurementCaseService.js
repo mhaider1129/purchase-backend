@@ -7,8 +7,11 @@ async function ensureCaseForRequestedItem({ repository, requestedItem, actorId }
   if (!ELIGIBLE_REQUEST_STATES.has(String(requestedItem.request_status || '').toUpperCase())) return null;
   return repository.withTransaction(async tx => {
     const existing = await tx.findActiveByRequestedItem(requestedItem.id);
-    if (existing) return existing;
-    const created = await tx.insertCase({
+    if (existing) {
+      await tx.provisionPriorityProfile({ procurement_case_id: existing.id, institute_id: existing.institute_id || requestedItem.institute_id, department_id: existing.department_id || requestedItem.department_id });
+      return existing;
+    }
+    let created = await tx.insertCase({
       request_id: requestedItem.request_id, requested_item_id: requestedItem.id,
       institute_id: requestedItem.institute_id, department_id: requestedItem.department_id,
       assigned_buyer_id: requestedItem.assigned_buyer_id || null,
@@ -17,7 +20,10 @@ async function ensureCaseForRequestedItem({ repository, requestedItem, actorId }
       commercial_coverage: 'MISSING', cycle_time_coverage: 'PARTIAL',
       logistics_coverage: 'MISSING', created_by: actorId,
     });
-    await tx.insertActivity({ procurement_case_id: created.id, activity_type: 'CASE_CREATED',
+    if (!created) created = await tx.findActiveByRequestedItem(requestedItem.id);
+    if (!created) throw new Error('Concurrent Procurement Case provisioning did not resolve an active case');
+    await tx.provisionPriorityProfile({ procurement_case_id: created.id, institute_id: created.institute_id, department_id: created.department_id });
+    await tx.insertActivityIdempotent({ procurement_case_id: created.id, activity_type: 'CASE_CREATED',
       activity_at: created.opened_at, actor_id: actorId, related_entity_type: 'requested_item',
       related_entity_id: requestedItem.id, source: 'SYSTEM', idempotency_key: `case-created:${created.id}` });
     return created;

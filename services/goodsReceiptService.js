@@ -70,7 +70,8 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
     const prepared = [];
     for (const input of lines) {
       const poLine = byId.get(Number(input.purchase_order_item_id));
-      if (!poLine.source_uom_id || !poLine.base_uom_id || !poLine.source_uom || !poLine.base_uom || !poLine.conversion_factor) throw Object.assign(createHttpError(409, 'PO line lacks a governed UOM conversion snapshot'), { code: 'PO_UOM_SNAPSHOT_REQUIRED' });
+      const governed = poLine.line_type === 'INVENTORY' || Boolean(poLine.generic_item_id || poLine.approved_product_id || poLine.supplier_catalog_item_id);
+      if (!poLine.source_uom || !poLine.base_uom || !poLine.conversion_factor || (governed && (!poLine.source_uom_id || !poLine.base_uom_id))) throw Object.assign(createHttpError(409, 'PO line lacks a governed UOM conversion snapshot'), { code: 'PO_UOM_SNAPSHOT_REQUIRED' });
       const gross = decimal(input.received_quantity, 'received_quantity');
       const damaged = decimal(input.damaged_quantity || 0, 'damaged_quantity');
       const short = decimal(input.short_quantity || 0, 'short_quantity');

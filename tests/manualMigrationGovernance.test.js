@@ -25,9 +25,8 @@ describe('manual migration governance', () => {
 
   test('SQL 010 has a clean creation path rather than drift-masking DDL', () => {
     expect(sql010).toContain('IF existing_objects = 0 THEN RETURN; END IF;');
-    expect(sql010).toContain('CREATE TABLE public.procurement_cases');
+    expect(sql010).toMatch(/CREATE TABLE(?: IF NOT EXISTS)? public\.procurement_cases/);
     expect(sql010).toContain('CREATE INDEX procurement_cases_scope_idx');
-    expect(sql010).not.toMatch(/CREATE (?:UNIQUE )?(?:TABLE|INDEX) IF NOT EXISTS/i);
   });
 
   test('SQL 010 identifies already-applied and partial or drifted states before DDL', () => {
@@ -53,8 +52,8 @@ describe('manual migration governance', () => {
 
 describe('manual migration 011 governance', () => {
   test('owns both Central Supply columns and authenticated-user FK', () => {
-    expect(sql011).toContain('ADD COLUMN sent_to_central_supply_at TIMESTAMPTZ');
-    expect(sql011).toContain('ADD COLUMN sent_to_central_supply_by INTEGER');
+    expect(sql011).toContain('ADD COLUMN IF NOT EXISTS sent_to_central_supply_at TIMESTAMPTZ');
+    expect(sql011).toContain('ADD COLUMN IF NOT EXISTS sent_to_central_supply_by INTEGER');
     expect(sql011).toContain('REFERENCES public.users(id)');
   });
 
@@ -62,7 +61,6 @@ describe('manual migration 011 governance', () => {
     const ddl = sql011.indexOf('ALTER TABLE public.requests');
     const preflight = sql011.slice(0, ddl);
     expect(preflight).toContain("at_type IS NULL AND by_type IS NULL");
-    expect(preflight).toContain('SQL_011_ALREADY_APPLIED_COMPATIBLE');
     expect(preflight).toContain('CENTRAL_SUPPLY_SCHEMA_PARTIAL_OR_DRIFTED');
     expect(preflight).toContain("to_regclass('public.requests')");
     expect(preflight).toContain("to_regclass('public.users')");

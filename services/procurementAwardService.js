@@ -21,7 +21,7 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
     if (!locked) throw Object.assign(new Error('Requested item not found'), { code: 'REQUEST_ITEM_NOT_FOUND', status: 404 });
     const governedPhysical = locked.request_mode && !['service','approved_free_text_exception'].includes(locked.request_mode);
     if (governedPhysical && (!input.approved_product_id || !input.supplier_catalog_item_id)) throw Object.assign(new Error('Governed physical awards require Product and Supplier Catalog identities'), { code: 'AWARD_CATALOG_IDENTITY_REQUIRED', status: 409 });
-    if (locked.request_mode==='approved_free_text_exception') throw Object.assign(new Error('Physical free-text exception PO conversion is not supported; use the governed direct-consumption flow'),{code:'FREE_TEXT_EXCEPTION_PO_NOT_SUPPORTED',status:409});
+    if (locked.request_mode === 'approved_free_text_exception' && locked.catalog_status !== 'approved_exception') throw Object.assign(new Error('Free-text procurement requires an approved exception identity state'), { code: 'FREE_TEXT_EXCEPTION_APPROVAL_REQUIRED', status: 409 });
     if (governedPhysical && typeof tx.loadAwardCatalogIdentity !== 'function') throw Object.assign(new Error('Award catalog authority is not configured'),{code:'AWARD_CATALOG_AUTHORITY_REQUIRED',status:500});
     if (governedPhysical) {
       const x=await tx.loadAwardCatalogIdentity(input.approved_product_id,input.supplier_catalog_item_id);

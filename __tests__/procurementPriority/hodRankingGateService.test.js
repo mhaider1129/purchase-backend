@@ -2,7 +2,7 @@
 
 jest.mock('../../services/auditService', () => ({ writeAuditEvent: jest.fn() }));
 const { writeAuditEvent } = require('../../services/auditService');
-const { findGate, auditGate, STATE, INSTRUCTION } = require('../../services/procurementPriority/hodRankingGateService');
+const { findGate, auditGate, STATE, PROFILE_REQUIRED_STATE, INSTRUCTION } = require('../../services/procurementPriority/hodRankingGateService');
 
 const request = { id: 41, institute_id: 7, department_id: 9 };
 
@@ -19,11 +19,17 @@ test('one unranked case produces the controlled ranking representation', async (
   expect(gate).toMatchObject({ state: STATE, instruction: INSTRUCTION, requestId: 41, approvalLevel: 2, requiredCaseIds: [101] });
 });
 
+test('active case with a missing profile fails closed', async () => {
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ procurement_case_id: 101, row_version: null }] }) };
+  await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toMatchObject({ state: PROFILE_REQUIRED_STATE, requiredCaseIds: [101] });
+  expect(client.query).toHaveBeenCalledTimes(1);
+});
+
 test('multi-item request keeps every applicable procurement case distinct', async () => {
   const rows = [
-    { procurement_case_id: 101, department_rank: null },
-    { procurement_case_id: 102, department_rank: null },
-    { procurement_case_id: 103, department_rank: 1 },
+    { procurement_case_id: 101, row_version: 1, department_rank: null },
+    { procurement_case_id: 102, row_version: 1, department_rank: null },
+    { procurement_case_id: 103, row_version: 1, department_rank: 1 },
   ];
   const client = { query: jest.fn().mockResolvedValueOnce({ rows }).mockResolvedValueOnce({ rows }) };
   const gate = await findGate({ client, request, approvalLevel: 4 });
@@ -32,7 +38,7 @@ test('multi-item request keeps every applicable procurement case distinct', asyn
 });
 
 test('already ranked cases make a retry gate-free and gate creation is audited', async () => {
-  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ procurement_case_id: 101, department_rank: 1 }] }) };
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ procurement_case_id: 101, row_version: 1, department_rank: 1 }] }) };
   await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toBeNull();
   const gate = { state: STATE, requiredCaseIds: [101] };
   await auditGate({ client, request, approval: { id: 8, approval_level: 2 }, actorId: 6, gate });

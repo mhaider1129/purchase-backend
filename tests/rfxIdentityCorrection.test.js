@@ -9,7 +9,7 @@ const poRepository = () => {
   let sequence = 0;
   const numbers = new Set();
   const tx = {
-    lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
+    lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ generic_item_id: 3, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
     nextPurchaseOrderNumber: async () => ({ po_number: `PO-2026-${String(++sequence).padStart(6, '0')}` }),
     findPurchaseOrderByNumber: async number => numbers.has(number) ? { id: 1 } : null,
     insertHeader: async row => { if (numbers.has(row.po_number)) throw Object.assign(new Error('duplicate'), { code: '23505' }); numbers.add(row.po_number); return { id: numbers.size, ...row }; },

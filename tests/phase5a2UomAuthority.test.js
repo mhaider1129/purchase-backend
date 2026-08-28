@@ -39,16 +39,22 @@ describe('Phase 5A.2 UOM authority', () => {
   test('governed award snapshots CASE10 times BOX100 as factor1000 and preserves identities', async () => {
     const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, approved_product_id: 20, supplier_catalog_item_id: 30, status: 'ACTIVE', awarded_quantity: '2', unit_price: '4', currency: 'USD', source_type: 'QUOTATION' };
     const inserted=[];
-    const tx={lockAwards:async()=>[award],getAwardConversion:async()=>({remaining_quantity:'2'}),loadAwardUomSnapshot:async()=>({source_uom_id:4,source_uom:'CASE',base_uom_id:1,base_uom:'EA',generic_base_uom_id:1,inventory_uom_id:1,supplier_conversion_factor:'10',package_quantity:'100'}),nextPurchaseOrderNumber:async()=>({po_number:'PO-1'}),findPurchaseOrderByNumber:async()=>null,insertHeader:async row=>({id:9,...row}),insertLine:async row=>{inserted.push({...row});return row;}};
+    const tx={lockAwards:async()=>[award],getAwardConversion:async()=>({remaining_quantity:'2'}),loadAwardUomSnapshot:async()=>({generic_item_id:3,source_uom_id:4,source_uom:'CASE',base_uom_id:1,base_uom:'EA',generic_base_uom_id:1,inventory_uom_id:1,supplier_conversion_factor:'10',package_quantity:'100'}),nextPurchaseOrderNumber:async()=>({po_number:'PO-1'}),findPurchaseOrderByNumber:async()=>null,insertHeader:async row=>({id:9,...row}),insertLine:async row=>{inserted.push({...row});return row;}};
     const po=await createPurchaseOrderFromAwards({repository:{withTransaction:work=>work(tx)},awardIds:[8],actor:{id:7}});
-    expect(po.lines[0]).toMatchObject({approved_product_id:20,supplier_catalog_item_id:30,source_uom:'CASE',base_uom:'EA',conversion_factor:'1000'});
+    expect(po.lines[0]).toMatchObject({generic_item_id:3,approved_product_id:20,supplier_catalog_item_id:30,source_uom_id:4,source_uom:'CASE',base_uom_id:1,base_uom:'EA',conversion_factor:'1000'});
     expect(inserted[0].conversion_factor).toBe('1000');
+  });
+  test('approved free-text exception creates a direct-use PO snapshot without master or stock identity', async () => {
+    const award={id:8,request_id:1,request_item_id:2,supplier_id:3,approved_product_id:null,supplier_catalog_item_id:null,status:'ACTIVE',awarded_quantity:'2',unit_price:'4',currency:'USD',source_type:'QUOTATION'};
+    const tx={lockAwards:async()=>[award],getAwardConversion:async()=>({remaining_quantity:'2'}),loadAwardExceptionSnapshot:async()=>({request_mode:'approved_free_text_exception',catalog_status:'approved_exception',item_name:'Immutable requested description',source_uom:'BOX',base_uom:'BOX',conversion_factor:'1'}),nextPurchaseOrderNumber:async()=>({po_number:'PO-2'}),findPurchaseOrderByNumber:async()=>null,insertHeader:async row=>({id:10,...row}),insertLine:async row=>row};
+    const po=await createPurchaseOrderFromAwards({repository:{withTransaction:work=>work(tx)},awardIds:[8],actor:{id:7}});
+    expect(po.lines[0]).toMatchObject({line_type:'NON_INVENTORY',item_name:'Immutable requested description',generic_item_id:null,approved_product_id:null,supplier_catalog_item_id:null,source_uom:'BOX',base_uom:'BOX',conversion_factor:'1'});
   });
   test('legacy award and base/inventory mismatch both fail closed', async () => {
     const run=(award,snapshot)=>createPurchaseOrderFromAwards({repository:{withTransaction:work=>work({lockAwards:async()=>[award],getAwardConversion:async()=>({remaining_quantity:'1'}),loadAwardUomSnapshot:async()=>snapshot})},awardIds:[1],actor:{id:7}});
     const base={id:1,request_id:1,request_item_id:2,supplier_id:3,status:'ACTIVE',awarded_quantity:'1',unit_price:'1',currency:'USD',source_type:'QUOTATION'};
     await expect(run(base)).rejects.toMatchObject({code:'AWARD_UOM_IDENTITY_REQUIRED'});
-    await expect(run({...base,approved_product_id:20,supplier_catalog_item_id:30},{source_uom_id:4,source_uom:'CASE',base_uom_id:2,base_uom:'KG',generic_base_uom_id:1,inventory_uom_id:2,supplier_conversion_factor:'10',package_quantity:'100'})).rejects.toMatchObject({code:'GENERIC_INVENTORY_UOM_CONVERSION_REQUIRED'});
+    await expect(run({...base,approved_product_id:20,supplier_catalog_item_id:30},{generic_item_id:3,source_uom_id:4,source_uom:'CASE',base_uom_id:2,base_uom:'KG',generic_base_uom_id:1,inventory_uom_id:2,supplier_conversion_factor:'10',package_quantity:'100'})).rejects.toMatchObject({code:'GENERIC_INVENTORY_UOM_CONVERSION_REQUIRED'});
   });
   test('SQL 009 separates migration blockers from historical reconciliation', () => {
     const sql=fs.readFileSync(path.join(__dirname,'../sql/manual/009_phase5a2_uom_authority.sql'),'utf8');

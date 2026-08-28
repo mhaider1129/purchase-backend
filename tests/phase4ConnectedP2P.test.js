@@ -71,7 +71,7 @@ describe('Phase 4 connection corrections', () => {
   test('PO inherits award traceability and rejects a supplied wrong supplier', async () => {
     const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
     const award = { id: 8, request_id: 1, request_item_id: 2, supplier_id: 3, status: 'ACTIVE', awarded_quantity: '10', unit_price: '4', currency: 'USD', source_type: 'QUOTATION', source_id: 6, approved_product_id: 20, supplier_catalog_item_id: 30 };
-    const tx = { lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }), nextPurchaseOrderNumber: async () => ({ po_number: 'PO-2026-000001' }), findPurchaseOrderByNumber: async () => null, insertHeader: async row => ({ id: 9, ...row }), insertLine: async row => row };
+    const tx = { lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ generic_item_id: 3, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }), nextPurchaseOrderNumber: async () => ({ po_number: 'PO-2026-000001' }), findPurchaseOrderByNumber: async () => null, insertHeader: async row => ({ id: 9, ...row }), insertLine: async row => row };
     const repository = { withTransaction: work => work(tx) };
     const po = await createPurchaseOrderFromAwards({ repository, awardIds: [8], actor: { id: 7 } });
     expect(po).toMatchObject({ supplier_id: 3, request_id: 1, lines: [{ award_id: 8, request_item_id: 2, quantity: '10', price_source_type: 'QUOTATION' }] });
@@ -84,7 +84,7 @@ describe('Phase 4 connection corrections', () => {
     let ordered = 0;
     const repository = { withTransaction: async work => work({
       lockAwards: async () => [award],
-      getAwardConversion: async () => ({ remaining_quantity: String(100 - ordered) }), loadAwardUomSnapshot: async () => ({ source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
+      getAwardConversion: async () => ({ remaining_quantity: String(100 - ordered) }), loadAwardUomSnapshot: async () => ({ generic_item_id: 3, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
       nextPurchaseOrderNumber: async () => ({ po_number: `PO-2026-${String(ordered + 1).padStart(6, '0')}` }),
       findPurchaseOrderByNumber: async () => null,
       insertHeader: async () => ({ id: ordered + 1 }),

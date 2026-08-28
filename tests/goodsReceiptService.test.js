@@ -11,7 +11,7 @@ function harness({ status = 'PO_ISSUED', quantity = 100, lineType = 'NON_INVENTO
     client: { query: jest.fn() }, lockGoodsReceiptOperation: jest.fn(), findReceiptByIdempotency: jest.fn(async (key) => receipts.get(key)?.receipt || null),
     loadReceiptWithLines: jest.fn(async (id) => [...receipts.values()].find((v) => v.receipt.id === id)?.receipt),
     lockPurchaseOrder: jest.fn(async () => ({ id: 4, request_id: 2, supplier_id: 8, status: poStatus })),
-    lockPurchaseOrderLines: jest.fn(async (ids) => ids.map((id) => ({ id, purchase_order_id: 4, requested_item_id: 7, item_name: 'Gloves', quantity, received_quantity: acceptedCumulative, unit_price: 2, line_type: lineType, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', conversion_factor: '1000' }))),
+    lockPurchaseOrderLines: jest.fn(async (ids) => ids.map((id) => ({ id, purchase_order_id: 4, requested_item_id: 7, item_name: 'Gloves', quantity, received_quantity: acceptedCumulative, unit_price: 2, line_type: lineType, generic_item_id: lineType === 'INVENTORY' ? 3 : null, approved_product_id: lineType === 'INVENTORY' ? 4 : null, supplier_catalog_item_id: lineType === 'INVENTORY' ? 5 : null, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', conversion_factor: '1000' }))),
     loadCumulativeAcceptedReceipts: jest.fn(async () => String(acceptedCumulative)),
     insertGoodsReceipt: jest.fn(async (input) => ({ id: ++receiptId, ...input, receipt_number: `GR-${receiptId}` })),
     insertGoodsReceiptLine: jest.fn(async (line) => { grossCumulative += Number(line.received_quantity); acceptedCumulative += Number(line.accepted_quantity); return { id: receiptId * 10, ...line }; }),
@@ -70,6 +70,11 @@ describe('canonical goods receipt transaction', () => {
   test.each(['NON_INVENTORY', 'SERVICE'])('%s receipt creates no stock', async (lineType) => {
     const h = harness({ lineType }); await h.receive(`key-${lineType}`, 10, { warehouse_id: 3 });
     expect(h.inventory.postAcceptedReceiptLines).not.toHaveBeenCalled();
+  });
+
+  test('receipt inherits canonical identity and UOM values from the locked PO snapshot', async () => {
+    const h=harness({lineType:'INVENTORY'}); await h.receive('identity',10,{warehouse_id:3});
+    expect(h.tx.insertGoodsReceiptLine).toHaveBeenCalledWith(expect.objectContaining({generic_item_id:3,approved_product_id:4,supplier_catalog_item_id:5,source_uom:'CASE',base_uom:'EA',conversion_factor:'1000'}));
   });
 
   test('damaged and short quantities are excluded from projection input', async () => {

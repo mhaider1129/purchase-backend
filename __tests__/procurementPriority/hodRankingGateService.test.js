@@ -2,7 +2,7 @@
 
 jest.mock('../../services/auditService', () => ({ writeAuditEvent: jest.fn() }));
 const { writeAuditEvent } = require('../../services/auditService');
-const { findGate, auditGate, STATE, PROFILE_REQUIRED_STATE, INSTRUCTION } = require('../../services/procurementPriority/hodRankingGateService');
+const { findGate, auditGate, STATE, INSTRUCTION } = require('../../services/procurementPriority/hodRankingGateService');
 
 const request = { id: 41, institute_id: 7, department_id: 9 };
 
@@ -19,10 +19,22 @@ test('one unranked case produces the controlled ranking representation', async (
   expect(gate).toMatchObject({ state: STATE, instruction: INSTRUCTION, requestId: 41, approvalLevel: 2, requiredCaseIds: [101] });
 });
 
-test('active case with a missing profile fails closed', async () => {
-  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ procurement_case_id: 101, row_version: null }] }) };
-  await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toMatchObject({ state: PROFILE_REQUIRED_STATE, requiredCaseIds: [101] });
-  expect(client.query).toHaveBeenCalledTimes(1);
+test('active case with a missing profile provisions neutral coverage then requires ranking', async () => {
+  const item = { procurement_case_id: 101, institute_id: 7, department_id: 9, row_version: null, department_rank: null };
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [item] })
+    .mockResolvedValueOnce({ rows: [{ procurement_case_id: 101, coverage_status: 'NEEDS_ASSESSMENT' }] })
+    .mockResolvedValueOnce({ rows: [{ ...item, row_version: 0 }] }) };
+  await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toMatchObject({ state: STATE, requiredCaseIds: [101] });
+  expect(client.query.mock.calls[1][0]).toContain("'NEEDS_ASSESSMENT'");
+  expect(client.query.mock.calls[1][0]).not.toMatch(/score|tier|impact|risk|deadline|dependency|regulatory|strategic|rank/i);
+});
+
+test('existing profile does not invoke neutral provisioning', async () => {
+  const item = { procurement_case_id: 101, row_version: 1, department_rank: null };
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [item] }).mockResolvedValueOnce({ rows: [item] }) };
+  await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toMatchObject({ state: STATE });
+  expect(client.query).toHaveBeenCalledTimes(2);
+  expect(client.query.mock.calls.some(([sql]) => sql.includes('INSERT INTO procurement_priority_profiles'))).toBe(false);
 });
 
 test('multi-item request keeps every applicable procurement case distinct', async () => {

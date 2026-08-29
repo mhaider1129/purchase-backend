@@ -32,10 +32,13 @@ const createConnectedP2PRepository = (client) => ({
     (a.awarded_quantity-COALESCE(SUM(CASE WHEN po.status NOT IN ('PO_CANCELLED','CANCELLED') THEN poi.quantity ELSE 0 END),0))::text remaining_quantity
     FROM procurement_awards a LEFT JOIN purchase_order_items poi ON poi.award_id=a.id
     LEFT JOIN purchase_orders po ON po.id=poi.purchase_order_id WHERE a.id=$1 GROUP BY a.id`, [awardId]),
-  loadAwardUomSnapshot: (awardId) => one(client, `SELECT g.id generic_item_id,c.purchasing_uom_id source_uom_id,su.uom_code source_uom,
+  loadAwardUomSnapshot: (awardId) => one(client, `SELECT g.id generic_item_id,
+    COALESCE(ri.canonical_description_snapshot,ri.item_name_snapshot,ri.item_name,p.product_name,p.product_description) item_name,
+    c.purchasing_uom_id source_uom_id,su.uom_code source_uom,
     g.base_uom_id generic_base_uom_id,g.inventory_uom_id,iu.id base_uom_id,iu.uom_code base_uom,
     c.conversion_factor::text supplier_conversion_factor,p.package_quantity::text package_quantity
-    FROM procurement_awards a JOIN supplier_catalog_items c ON c.id=a.supplier_catalog_item_id AND c.approved_product_id=a.approved_product_id
+    FROM procurement_awards a JOIN requested_items ri ON ri.id=a.request_item_id
+    JOIN supplier_catalog_items c ON c.id=a.supplier_catalog_item_id AND c.approved_product_id=a.approved_product_id
     JOIN approved_products p ON p.id=a.approved_product_id JOIN generic_items g ON g.id=p.generic_item_id
     JOIN item_uom su ON su.id=c.purchasing_uom_id JOIN item_uom iu ON iu.id=g.inventory_uom_id
     WHERE a.id=$1 AND a.supplier_id=c.supplier_id`, [awardId]),

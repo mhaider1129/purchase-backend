@@ -67,6 +67,16 @@ describe('connected P2P repository checked-in schema contract', () => {
     }
   });
 
+  test('governed award snapshot prefers immutable request descriptions before product fallback', async () => {
+    const client = mockClient();
+    const repository = createConnectedP2PRepository(client);
+    await repository.loadAwardUomSnapshot(8);
+    const { sql, values } = client.queries[0];
+    expect(sql).toContain('JOIN requested_items ri ON ri.id=a.request_item_id');
+    expect(sql).toContain('COALESCE(ri.canonical_description_snapshot,ri.item_name_snapshot,ri.item_name,p.product_name,p.product_description) item_name');
+    expect(values).toEqual([8]);
+  });
+
   test('receipt operations execute against goods_receipt_items and its real quantity columns', async () => {
     const client = mockClient();
     const repository = createConnectedP2PRepository(client);

@@ -27,10 +27,16 @@ describe('manual migration governance', () => {
     expect(sql010).toContain('IF existing_objects = 0 THEN RETURN; END IF;');
     expect(sql010).toMatch(/CREATE TABLE(?: IF NOT EXISTS)? public\.procurement_cases/);
     expect(sql010).toContain('CREATE INDEX procurement_cases_scope_idx');
+    // Immutable deployed SQL 010 uses IF NOT EXISTS for tables and indexes, so
+    // the old blanket prohibition was not truthful. The next test governs the
+    // exhaustive preflight that makes this syntax fail closed rather than mask drift.
+    expect(sql010).toContain('CREATE INDEX IF NOT EXISTS procurement_cases_scope_idx');
   });
 
   test('SQL 010 identifies already-applied and partial or drifted states before DDL', () => {
-    const preflight = sql010.slice(0, sql010.indexOf('CREATE TABLE public.procurement_cases'));
+    const firstDdl = sql010.search(/CREATE TABLE(?: IF NOT EXISTS)? public\.procurement_cases/);
+    expect(firstDdl).toBeGreaterThan(0);
+    const preflight = sql010.slice(0, firstDdl);
     expect(preflight).toContain('SQL_010_ALREADY_APPLIED');
     expect(preflight).toContain('SQL_010_PARTIAL_OR_DRIFTED_SCHEMA');
     expect(preflight).toContain("'missing column public.' || r.table_name || '.' || r.column_name");
@@ -64,5 +70,9 @@ describe('manual migration 011 governance', () => {
     expect(preflight).toContain('CENTRAL_SUPPLY_SCHEMA_PARTIAL_OR_DRIFTED');
     expect(preflight).toContain("to_regclass('public.requests')");
     expect(preflight).toContain("to_regclass('public.users')");
+    // SQL 011 intentionally treats a compatible installation as a successful
+    // no-op instead of raising the former SQL_011_ALREADY_APPLIED_COMPATIBLE
+    // exception; partial or type-drifted states must still fail closed.
+    expect(preflight).not.toContain('SQL_011_ALREADY_APPLIED_COMPATIBLE');
   });
 });

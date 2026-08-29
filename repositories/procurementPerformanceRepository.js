@@ -1,5 +1,6 @@
 'use strict';
 const pool = require('../config/db');
+const { provisionNeutralPriorityProfile } = require('../services/procurementPriority/priorityProfileProvisioningService');
 
 function createProcurementPerformanceRepository(database = pool) {
   const q = (text, params) => database.query(text, params);
@@ -14,9 +15,8 @@ function createProcurementPerformanceRepository(database = pool) {
     findActiveByRequestedItem: async id => (await q('SELECT * FROM procurement_cases WHERE requested_item_id=$1 AND closed_at IS NULL', [id])).rows[0],
     insertCase: async row => (await q(`INSERT INTO procurement_cases(request_id,requested_item_id,institute_id,department_id,assigned_buyer_id,case_status,activity_coverage,complexity_coverage,commercial_coverage,cycle_time_coverage,logistics_coverage,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       ON CONFLICT(requested_item_id) WHERE closed_at IS NULL DO NOTHING RETURNING *`, [row.request_id,row.requested_item_id,row.institute_id,row.department_id,row.assigned_buyer_id,row.case_status,row.activity_coverage,row.complexity_coverage,row.commercial_coverage,row.cycle_time_coverage,row.logistics_coverage,row.created_by])).rows[0] || null,
-    provisionPriorityProfile: async row => (await q(`INSERT INTO procurement_priority_profiles(procurement_case_id,institute_id,department_id,coverage_status)
-      VALUES($1,$2,$3,'NEEDS_ASSESSMENT') ON CONFLICT(procurement_case_id) DO UPDATE SET procurement_case_id=EXCLUDED.procurement_case_id RETURNING *`,
-      [row.procurement_case_id,row.institute_id,row.department_id])).rows[0],
+    provisionPriorityProfile: row => provisionNeutralPriorityProfile({ client: database,
+      procurementCaseId: row.procurement_case_id, instituteId: row.institute_id, departmentId: row.department_id }),
     insertActivity: async row => (await q(`INSERT INTO procurement_case_activities(procurement_case_id,activity_type,activity_at,actor_id,supplier_id,related_entity_type,related_entity_id,source,idempotency_key,metadata,notes) VALUES($1,$2,COALESCE($3,NOW()),$4,$5,$6,$7,$8,$9,$10::jsonb,$11) RETURNING *`, [row.procurement_case_id,row.activity_type,row.activity_at,row.actor_id,row.supplier_id,row.related_entity_type,row.related_entity_id,row.source,row.idempotency_key,JSON.stringify(row.metadata||{}),row.notes])).rows[0],
     findActiveCasesByRequestedItems: async ids => ids.length ? (await q('SELECT * FROM procurement_cases WHERE requested_item_id = ANY($1::int[]) AND closed_at IS NULL', [ids])).rows : [],
     insertActivityIdempotent: async row => (await q(`INSERT INTO procurement_case_activities(procurement_case_id,activity_type,activity_at,actor_id,supplier_id,related_entity_type,related_entity_id,source,idempotency_key,metadata) VALUES($1,$2,COALESCE($3,NOW()),$4,$5,$6,$7,$8,$9,$10::jsonb) ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING *`, [row.procurement_case_id,row.activity_type,row.activity_at,row.actor_id,row.supplier_id,row.related_entity_type,row.related_entity_id,row.source,row.idempotency_key,JSON.stringify(row.metadata||{})])).rows[0] || null,

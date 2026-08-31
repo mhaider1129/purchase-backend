@@ -588,7 +588,7 @@ const handleApprovalDecision = async (req, res, next) => {
 
       if (pendingAtCurrentLevel === 0) {
         if ((user_role || '').toUpperCase() === 'HOD') {
-          rankingGate = await hodRankingGate.findGate({ client, request: { ...request, id: approval.request_id }, approvalLevel: approval.approval_level });
+          rankingGate = await hodRankingGate.findGate({ client, request: { ...request, id: approval.request_id }, approvalLevel: approval.approval_level, actorId: approver_id });
           if (rankingGate) await hodRankingGate.auditGate({ client, request: { ...request, id: approval.request_id }, approval, actorId: approver_id, gate: rankingGate });
         }
         if (!rankingGate) {

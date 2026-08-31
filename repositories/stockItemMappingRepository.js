@@ -1,5 +1,36 @@
 class StockItemMappingRepository {
   constructor(client) { this.client = client; }
+  async queue(filters, pagination) {
+    const values = []; const where = [];
+    const add = (value, expression) => { if (value != null && value !== '') { values.push(value); where.push(expression(values.length)); } };
+    add(filters.status, n => `COALESCE(m.mapping_status, si.mapping_status, 'unmapped') = $${n}`);
+    add(filters.stockItemId, n => `si.id = $${n}`);
+    add(filters.genericItemId, n => `COALESCE(m.generic_item_id, si.generic_item_id) = $${n}`);
+    add(filters.category, n => `si.category ILIKE '%' || $${n} || '%'`);
+    add(filters.subcategory, n => `si.sub_category ILIKE '%' || $${n} || '%'`);
+    add(filters.uom, n => `si.unit ILIKE '%' || $${n} || '%'`);
+    add(filters.manufacturer, n => `si.brand ILIKE '%' || $${n} || '%'`);
+    add(filters.identitySource, n => `si.identity_source = $${n}`);
+    values.push(pagination.limit, pagination.offset);
+    const query = `SELECT m.*, si.id AS stock_item_id, si.name AS stock_item_name,
+        si.category, si.sub_category, si.unit, si.brand, si.available_quantity,
+        si.identity_source, COALESCE(m.generic_item_id, si.generic_item_id) AS generic_item_id,
+        COALESCE(m.approved_product_id, si.approved_product_id) AS approved_product_id,
+        COALESCE(m.mapping_status, si.mapping_status, 'unmapped') AS mapping_status,
+        jsonb_strip_nulls(jsonb_build_object('name',si.name,'category',si.category,
+          'subcategory',si.sub_category,'uom',si.unit,'manufacturer',si.brand)) AS source_attributes,
+        count(*) OVER()::int AS total_count
+      FROM stock_items si
+      LEFT JOIN LATERAL (
+        SELECT sm.* FROM stock_item_master_mappings sm
+        WHERE sm.stock_item_id=si.id
+        ORDER BY sm.active DESC, sm.updated_at DESC, sm.id DESC LIMIT 1
+      ) m ON true
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY COALESCE(m.updated_at, si.updated_at, si.created_at) DESC, si.id DESC
+      LIMIT $${values.length - 1} OFFSET $${values.length}`;
+    return (await this.client.query(query, values)).rows;
+  }
   async list(filters, pagination) {
     const values = []; const where = [];
     for (const [column, value] of [['mapping_status', filters.status], ['stock_item_id', filters.stockItemId], ['generic_item_id', filters.genericItemId]]) {

@@ -4,13 +4,20 @@ jest.mock('../config/db', () => ({
 
 jest.mock('../utils/ensureRequestedItemApprovalColumns', () => jest.fn().mockResolvedValue());
 
-jest.mock('pdfkit', () => jest.fn().mockImplementation(() => ({
-  pipe: jest.fn(),
-  fontSize: jest.fn().mockReturnThis(),
-  text: jest.fn().mockReturnThis(),
-  moveDown: jest.fn().mockReturnThis(),
-  end: jest.fn(),
-})));
+jest.mock('pdfkit', () => jest.fn().mockImplementation(() => {
+  const listeners = {};
+  return {
+    on: jest.fn((event, callback) => { listeners[event] = callback; }),
+    once: jest.fn((event, callback) => { listeners[event] = callback; }),
+    fontSize: jest.fn().mockReturnThis(),
+    text: jest.fn().mockReturnThis(),
+    moveDown: jest.fn().mockReturnThis(),
+    end: jest.fn(() => {
+      listeners.data?.(Buffer.from('pdf'));
+      listeners.end?.();
+    }),
+  };
+}));
 
 const pool = require('../config/db');
 const PDFDocument = require('pdfkit');
@@ -25,6 +32,7 @@ const buildRequest = (overrides = {}) => ({
 
 const buildResponse = () => ({
   setHeader: jest.fn(),
+  end: jest.fn(),
 });
 
 describe('generateRfxController.generateRfx', () => {
@@ -64,6 +72,8 @@ describe('generateRfxController.generateRfx', () => {
       'Content-Disposition',
       'inline; filename=RFQ_252.pdf'
     );
+    expect(res.setHeader).toHaveBeenCalledWith('Content-Length', 3);
+    expect(res.end).toHaveBeenCalledWith(Buffer.from('pdf'));
   });
 
   it('allows explicit attachment disposition for non-XHR downloads', async () => {

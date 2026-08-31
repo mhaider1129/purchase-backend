@@ -1,0 +1,18 @@
+const router=require('express').Router();
+const c=require('../controllers/sparePartsController');
+const permit=require('../middleware/requirePermission');
+router.get('/',permit('spare-parts.view'),c.list);
+router.post('/',permit('spare-parts.create'),c.create);
+router.get('/equipment',permit('spare-parts.view'),c.equipmentList);
+router.post('/equipment',permit('spare-parts.manage-compatibility'),c.saveEquipment);
+router.get('/equipment/:equipmentId',permit('spare-parts.view'),c.equipmentDetail);
+router.patch('/equipment/:equipmentId',permit('spare-parts.manage-compatibility'),c.saveEquipment);
+router.get('/:id',permit('spare-parts.view'),c.detail);
+router.patch('/:id',permit('spare-parts.edit'),c.update);
+router.post('/:id/archive',permit('spare-parts.archive'),c.archive);
+router.post('/:id/technical-approval',permit('spare-parts.technical-approve'),c.decision);
+router.get('/:id/compatibility',permit('spare-parts.view'),c.listCompatibility);
+router.post('/:id/compatibility',permit('spare-parts.manage-compatibility'),c.addCompatibility);
+router.patch('/:id/compatibility/:compatibilityId',permit('spare-parts.manage-compatibility'),c.updateCompatibility);
+router.post('/:id/compatibility/:compatibilityId/decision',permit('spare-parts.manage-compatibility'),c.compatibilityDecision);
+module.exports=router;

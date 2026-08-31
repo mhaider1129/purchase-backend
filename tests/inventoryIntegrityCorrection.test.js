@@ -181,12 +181,19 @@ describe('Phase 3 inventory integrity correction', () => {
   });
 
   test('goods receipt delegates once and contains no legacy balance or movement write', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../controllers/procureToPayController.js'), 'utf8');
-    const receiptFunction = source.slice(source.indexOf('const createGoodsReceipt'), source.indexOf('const estimatedReceiptValue'));
-    expect(receiptFunction.match(/postAcceptedReceiptLines\(/g)).toHaveLength(1);
-    expect(receiptFunction).not.toContain('INSERT INTO warehouse_stock_levels');
-    expect(receiptFunction).not.toContain('INSERT INTO warehouse_stock_movements');
-    expect(receiptFunction).toContain('No stock item found');
+    const controllerSource = fs.readFileSync(path.join(__dirname, '../controllers/procureToPayController.js'), 'utf8');
+    const receiptFunction = controllerSource.slice(controllerSource.indexOf('const createGoodsReceipt'), controllerSource.indexOf('const listReceiptsByRequest'));
+    const serviceSource = fs.readFileSync(path.join(__dirname, '../services/goodsReceiptService.js'), 'utf8');
+    const adapterSource = fs.readFileSync(path.join(__dirname, '../services/goodsReceiptInventoryAdapter.js'), 'utf8');
+
+    expect(receiptFunction.match(/goodsReceiptService\.createGoodsReceipt\(/g)).toHaveLength(1);
+    expect(receiptFunction).not.toContain('postAcceptedReceiptLines(');
+    expect(serviceSource.match(/inventory\.postAcceptedReceiptLines\(/g)).toHaveLength(1);
+    expect(adapterSource).toContain("require('./inventoryPostingService')");
+    for (const source of [receiptFunction, serviceSource, adapterSource]) {
+      expect(source).not.toContain('INSERT INTO warehouse_stock_levels');
+      expect(source).not.toContain('INSERT INTO warehouse_stock_movements');
+    }
   });
 
   test('manual SQL validator rejects a copied diff hunk with its exact line', () => {

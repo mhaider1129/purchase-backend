@@ -9,6 +9,9 @@ jest.mock('../config/db', () => ({
 
 jest.mock('../utils/ensureWarehouseAssignments', () => jest.fn().mockResolvedValue());
 jest.mock('../utils/ensureWarehouseInventoryTables', () => jest.fn().mockResolvedValue());
+jest.mock('../services/inventoryPostingService', () => ({
+  postMovements: jest.fn((commands, client) => client.postMovements(commands)),
+}));
 
 const db = require('../config/db');
 
@@ -25,8 +28,36 @@ describe('warehouseInventoryController', () => {
       const stockLevelIds = new Map(inventory.map(item => [item.stockItemId, item.stockLevelId]));
 
       const client = { release: jest.fn() };
+      client.postMovements = jest.fn(async (commands) => {
+        // The canonical posting boundary validates the complete command batch
+        // before making any authoritative inventory mutation.
+        for (const command of commands) {
+          const available = remainingByItem.get(command.inventoryItemId);
+          if (available === undefined || available < command.quantity) {
+            const error = new Error(`Insufficient stock for ${namesByItem.get(command.inventoryItemId) || command.inventoryItemId}`);
+            error.statusCode = 400;
+            throw error;
+          }
+        }
+        return commands.map((command) => {
+          const quantity = remainingByItem.get(command.inventoryItemId) - command.quantity;
+          remainingByItem.set(command.inventoryItemId, quantity);
+          return { balances: [{
+            id: stockLevelIds.get(command.inventoryItemId), warehouse_id: warehouseId,
+            stock_item_id: command.inventoryItemId, item_name: namesByItem.get(command.inventoryItemId),
+            quantity, updated_at: '2024-01-01T00:00:00.000Z',
+          }] };
+        });
+      });
+      client.remainingByItem = remainingByItem;
       client.query = jest.fn(async (sql, params = []) => {
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+        if (sql.includes('SELECT id, institute_id FROM warehouses')) {
+          return {
+            rowCount: params[0] === warehouseId ? 1 : 0,
+            rows: params[0] === warehouseId ? [{ id: warehouseId, institute_id: 1 }] : [],
+          };
+        }
         if (sql.includes('SELECT id FROM departments')) {
           return { rowCount: params[0] === departmentId ? 1 : 0, rows: [{ id: departmentId }] };
         }
@@ -153,6 +184,9 @@ describe('warehouseInventoryController', () => {
           balances: [expect.objectContaining({ quantity: 7 })],
         }),
       );
+      expect(client.postMovements).toHaveBeenCalledWith([
+        expect.objectContaining({ warehouseId: 1, instituteId: 1 }),
+      ]);
       expect(next).not.toHaveBeenCalled();
     });
 
@@ -194,6 +228,34 @@ describe('warehouseInventoryController', () => {
         }),
       );
       expect(next).not.toHaveBeenCalled();
+    });
+
+    it('rolls back a multi-item issue without partial authoritative mutation', async () => {
+      const client = createIssueClient({
+        departmentId: 4,
+        warehouseId: 2,
+        inventory: [
+          { stockItemId: 11, stockLevelId: 21, name: 'Gloves', quantity: 15 },
+          { stockItemId: 12, stockLevelId: 22, name: 'Masks', quantity: 2 },
+        ],
+      });
+      db.connect.mockResolvedValue(client);
+      const req = {
+        body: { department_id: 4, items: [
+          { stock_item_id: 11, quantity: 5 },
+          { stock_item_id: 12, quantity: 3 },
+        ] },
+        user: { id: 44, warehouse_id: 2, hasPermission: jest.fn().mockReturnValue(true) },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const next = jest.fn();
+
+      await issueWarehouseStock(req, res, next);
+
+      expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+      expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+      expect(client.remainingByItem).toEqual(new Map([[11, 15], [12, 2]]));
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400 }));
     });
   });
 });

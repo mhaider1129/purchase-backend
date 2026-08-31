@@ -4,6 +4,22 @@ const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 const { assertRequestItemsReadyForSourcing } = require('../../services/sourcingReadinessService');
 
+const renderPdf = (writeDocument) => new Promise((resolve, reject) => {
+  const doc = new PDFDocument();
+  const chunks = [];
+
+  doc.on('data', (chunk) => chunks.push(chunk));
+  doc.once('end', () => resolve(Buffer.concat(chunks)));
+  doc.once('error', reject);
+
+  try {
+    writeDocument(doc);
+    doc.end();
+  } catch (error) {
+    reject(error);
+  }
+});
+
 const generateRfx = async (req, res, next) => {
   const { id } = req.params;
   const type = (req.query.type || 'rfq').toLowerCase();
@@ -56,39 +72,34 @@ const generateRfx = async (req, res, next) => {
 
     const items = itemsRes.rows;
     await assertRequestItemsReadyForSourcing(pool, id, items);
-    const doc = new PDFDocument();
-
-    res.setHeader('Content-Type', 'application/pdf');
-    const dispositionType = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
-    res.setHeader(
-      'Content-Disposition',
-      `${dispositionType}; filename=${type.toUpperCase()}_${id}.pdf`
-    );
-
-    doc.pipe(res);
-
     const titleMap = { rfp: 'Request for Proposal', rfi: 'Request for Information', rfq: 'Request for Quotation' };
-    doc.fontSize(18).text(titleMap[type], { align: 'center' });
-    doc.moveDown();
+    const pdf = await renderPdf((doc) => {
+      doc.fontSize(18).text(titleMap[type], { align: 'center' });
+      doc.moveDown();
 
-    doc.fontSize(12).text(`Request ID: ${request.id}`);
-    doc.text(`Department: ${request.department_name}`);
-    doc.text(`Requester: ${request.requester_name}`);
-    doc.text(`Justification: ${request.justification}`);
-    if (request.project_name) {
-      doc.text(`Project: ${request.project_name}`);
-    }
-    doc.moveDown();
-
-    doc.fontSize(14).text('Items:', { underline: true });
-    items.forEach((item, idx) => {
-      doc.fontSize(12).text(`${idx + 1}. ${item.item_name} - ${item.quantity} ${item.unit || ''}`);
-      if (item.description) {
-        doc.text(`   Description: ${item.description}`);
+      doc.fontSize(12).text(`Request ID: ${request.id}`);
+      doc.text(`Department: ${request.department_name}`);
+      doc.text(`Requester: ${request.requester_name}`);
+      doc.text(`Justification: ${request.justification}`);
+      if (request.project_name) {
+        doc.text(`Project: ${request.project_name}`);
       }
+      doc.moveDown();
+
+      doc.fontSize(14).text('Items:', { underline: true });
+      items.forEach((item, idx) => {
+        doc.fontSize(12).text(`${idx + 1}. ${item.item_name} - ${item.quantity} ${item.unit || ''}`);
+        if (item.description) {
+          doc.text(`   Description: ${item.description}`);
+        }
+      });
     });
 
-    doc.end();
+    const dispositionType = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `${dispositionType}; filename=${type.toUpperCase()}_${id}.pdf`);
+    res.setHeader('Content-Length', pdf.length);
+    res.end(pdf);
   } catch (err) {
     console.error('Failed to generate RFX:', err);
     next(err.code==='ITEM_IDENTITY_RESOLUTION_REQUIRED'?err:createHttpError(500, 'Failed to generate document'));

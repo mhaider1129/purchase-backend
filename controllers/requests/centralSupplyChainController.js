@@ -3,6 +3,45 @@ const createHttpError = require('../../utils/httpError');
 const ensureCentralSupplyChainTrackingColumns = require('../../utils/ensureCentralSupplyChainTrackingColumns');
 const auditService = require('../../services/auditService');
 
+const AUDIT_SCHEMA_ERROR_CODES = new Set(['42P01', '42703']);
+
+/**
+ * Keep the status change auditable on installations that predate the generic
+ * audit_logs schema. A savepoint is required because PostgreSQL otherwise
+ * leaves the entire transaction aborted after a missing table/column error.
+ */
+const writeCentralSupplyAudit = async ({ client, requestId, before, after, sent, userId }) => {
+  await client.query('SAVEPOINT central_supply_audit');
+  try {
+    await auditService.writeAuditEvent({
+      client,
+      entityType: 'request',
+      entityId: requestId,
+      requestId,
+      instituteId: before.institute_id,
+      actorUserId: userId,
+      action: 'request.central_supply_status_changed',
+      beforeData: { sent: before.sent_to_central_supply_at != null, sent_to_central_supply_at: before.sent_to_central_supply_at, sent_to_central_supply_by: before.sent_to_central_supply_by },
+      afterData: { sent, sent_to_central_supply_at: after.sent_to_central_supply_at, sent_to_central_supply_by: after.sent_to_central_supply_by },
+    });
+    await client.query('RELEASE SAVEPOINT central_supply_audit');
+  } catch (error) {
+    if (!AUDIT_SCHEMA_ERROR_CODES.has(error?.code)) throw error;
+    await client.query('ROLLBACK TO SAVEPOINT central_supply_audit');
+    await client.query(
+      `INSERT INTO public.request_logs (request_id, action, actor_id, comments)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        requestId,
+        'Central Supply Chain status changed',
+        userId,
+        sent ? 'Marked as sent to Central Supply Chain' : 'Marked as not sent to Central Supply Chain',
+      ],
+    );
+    await client.query('RELEASE SAVEPOINT central_supply_audit');
+  }
+};
+
 const updateCentralSupplyChainStatus = async (req, res, next) => {
   const requestId = Number.parseInt(req.params.id, 10);
   const sent = req.body?.sent;
@@ -38,17 +77,7 @@ const updateCentralSupplyChainStatus = async (req, res, next) => {
     );
     const before = current.rows[0];
     const after = result.rows[0];
-    await auditService.writeAuditEvent({
-      client,
-      entityType: 'request',
-      entityId: requestId,
-      requestId,
-      instituteId: before.institute_id,
-      actorUserId: req.user.id,
-      action: 'request.central_supply_status_changed',
-      beforeData: { sent: before.sent_to_central_supply_at != null, sent_to_central_supply_at: before.sent_to_central_supply_at, sent_to_central_supply_by: before.sent_to_central_supply_by },
-      afterData: { sent, sent_to_central_supply_at: after.sent_to_central_supply_at, sent_to_central_supply_by: after.sent_to_central_supply_by },
-    });
+    await writeCentralSupplyAudit({ client, requestId, before, after, sent, userId: req.user.id });
     await client.query('COMMIT');
     res.json(after);
   } catch (err) {

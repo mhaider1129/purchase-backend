@@ -9,6 +9,7 @@ router.get('/equipment/:equipmentId',permit('spare-parts.view'),c.equipmentDetai
 router.patch('/equipment/:equipmentId',permit('spare-parts.manage-compatibility'),c.saveEquipment);
 router.get('/:id',permit('spare-parts.view'),c.detail);
 router.patch('/:id',permit('spare-parts.edit'),c.update);
+router.patch('/:id/stock-policy',permit('spare-parts.manage-stock-policy'),c.updateStockPolicy);
 router.post('/:id/archive',permit('spare-parts.archive'),c.archive);
 router.post('/:id/technical-approval',permit('spare-parts.technical-approve'),c.decision);
 router.get('/:id/compatibility',permit('spare-parts.view'),c.listCompatibility);

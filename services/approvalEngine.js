@@ -62,7 +62,7 @@ function createApprovalEngine(dependencies = {}) {
     }, { client: suppliedClient });
   }
 
-  async function createSteps({ requestId, routeSnapshot, actor, correlationId, inheritedDecisions = [] }, suppliedClient = null) {
+  async function createSteps({ requestId, routeSnapshot, actor, correlationId }, suppliedClient = null) {
     return withTransaction(async client => {
       const request = await repository.lockRequest(client, requestId);
       if (!request) throw new ApprovalEngineError('Request not found', 'REQUEST_NOT_FOUND', 404);
@@ -70,19 +70,14 @@ function createApprovalEngine(dependencies = {}) {
         `UPDATE requests SET approval_route_snapshot=$1::jsonb,approval_route_snapshot_id=$2,updated_at=NOW() WHERE id=$3`,
         [JSON.stringify(routeSnapshot), routeSnapshot.snapshotId, requestId]);
       const created = [];
-      const inheritedByApprover = new Map(inheritedDecisions
-        .filter(decision => decision.status === DECISIONS.APPROVE)
-        .map(decision => [Number(decision.approver_id), decision]));
       for (const step of snapshotSteps(routeSnapshot)) {
         if (!step.approverId) throw new ApprovalEngineError('Every canonical route member must resolve to a user', 'MISSING_APPROVER');
-        const inherited = inheritedByApprover.get(Number(step.approverId));
         // The request lock serializes workflow creation for this request.  Use an
         // explicit existence check so reclassification also works on installations
         // where the route-member unique index has not yet been added.
         const result = await client.query(
-          `INSERT INTO approvals (request_id,approver_id,approval_level,status,is_active,route_snapshot_id,approval_route_version,
-                                  comments,approved_at,decided_at)
-           SELECT $1,$2,$3,$6,FALSE,$4,$5,$7,$8,$9
+          `INSERT INTO approvals (request_id,approver_id,approval_level,status,is_active,route_snapshot_id,approval_route_version)
+           SELECT $1,$2,$3,'Pending',FALSE,$4,$5
            WHERE NOT EXISTS (
              SELECT 1 FROM approvals
               WHERE request_id=$1
@@ -91,9 +86,7 @@ function createApprovalEngine(dependencies = {}) {
                 AND approver_id=$2
            )
            RETURNING *`,
-          [requestId, step.approverId, step.level, routeSnapshot.snapshotId, routeSnapshot.version,
-            inherited ? DECISIONS.APPROVE : 'Pending', inherited?.comments || null,
-            inherited?.approved_at || inherited?.decided_at || null, inherited?.decided_at || inherited?.approved_at || null]);
+          [requestId, step.approverId, step.level, routeSnapshot.snapshotId, routeSnapshot.version]);
         if (result.rows[0]) created.push(result.rows[0]);
       }
       const scope = { requestId, approvalRouteVersion: routeSnapshot.version, routeSnapshotId: routeSnapshot.snapshotId };

@@ -17,6 +17,8 @@ const harness = ({ sent = true, instituteId = 3 } = {}) => {
     .mockResolvedValueOnce({})
     .mockResolvedValueOnce({ rowCount: 1, rows: [before] })
     .mockResolvedValueOnce({ rowCount: 1, rows: [after] })
+    .mockResolvedValueOnce({})
+    .mockResolvedValueOnce({})
     .mockResolvedValueOnce({}) };
   pool.connect.mockResolvedValue(client);
   return { client, before, after };
@@ -49,5 +51,19 @@ describe('Central Supply Chain status', () => {
     const h = harness();
     await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, jest.fn());
     expect(h.client.query.mock.calls.map(([sql]) => sql).join('\n')).not.toMatch(/\b(?:ALTER|CREATE|DROP)\b/i);
+  });
+
+  test.each(['42P01', '42703'])('falls back to request_logs when audit_logs has schema error %s', async (code) => {
+    const h = harness();
+    auditService.writeAuditEvent.mockRejectedValueOnce(Object.assign(new Error('legacy audit schema'), { code }));
+
+    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, jest.fn());
+
+    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK TO SAVEPOINT central_supply_audit');
+    expect(h.client.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO public.request_logs'),
+      [42, 'Central Supply Chain status changed', 7, 'Marked as sent to Central Supply Chain'],
+    );
+    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
   });
 });

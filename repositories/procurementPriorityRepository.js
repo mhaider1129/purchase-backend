@@ -36,9 +36,12 @@ function createProcurementPriorityRepository(database = pool) {
     },
     async departmentQueue(instituteId, departmentId, client = database) {
       const result = await client.query(
-        `SELECT pc.id AS procurement_case_id,pc.case_status,p.public_title,p.system_tier,p.institutional_rank,
+        `SELECT pc.id AS procurement_case_id,pc.case_status,
+        COALESCE(p.public_title,ri.item_name,'Requirement ' || pc.id::text) AS public_title,
+        COALESCE(NULLIF(r.maintenance_ref_number,''),r.id::text) AS request_reference,p.system_tier,p.institutional_rank,
         d.department_rank,d.department_rank_total,p.row_version,GREATEST(0,extract(day FROM now()-pc.opened_at))::int AS age
         FROM procurement_cases pc JOIN procurement_priority_profiles p ON p.procurement_case_id=pc.id
+        JOIN requests r ON r.id=pc.request_id JOIN requested_items ri ON ri.id=pc.requested_item_id
         LEFT JOIN department_priority_rankings d ON d.procurement_case_id=pc.id AND d.valid_until IS NULL
         WHERE pc.institute_id=$1 AND pc.department_id=$2 AND ${ACTIVE} ORDER BY d.department_rank NULLS LAST,pc.id`,
         [instituteId, departmentId],
@@ -129,7 +132,7 @@ function createProcurementPriorityRepository(database = pool) {
     },
     async managementQueue(instituteId, client = database) {
       const r = await client.query(
-        `SELECT p.procurement_case_id,COALESCE(r.request_number,r.id::text) AS request_reference,p.public_title,d.name AS department_name,dr.department_rank,p.system_score,p.system_tier,p.system_suggested_rank,p.institutional_rank,GREATEST(0,extract(day FROM now()-pc.opened_at))::int AS age,p.impact_level,p.service_risk_level,p.deadline_at,p.deadline_type,pc.case_status,g.public_title AS priority_group_name FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id JOIN requests r ON r.id=pc.request_id LEFT JOIN departments d ON d.id=pc.department_id LEFT JOIN department_priority_rankings dr ON dr.procurement_case_id=pc.id AND dr.valid_until IS NULL LEFT JOIN procurement_priority_group_members gm ON gm.procurement_case_id=pc.id AND gm.removed_at IS NULL LEFT JOIN procurement_priority_groups g ON g.id=gm.group_id AND g.status='ACTIVE' WHERE p.institute_id=$1 AND pc.closed_at IS NULL ORDER BY p.institutional_rank NULLS LAST,p.system_suggested_rank NULLS LAST,p.procurement_case_id`,
+        `SELECT p.procurement_case_id,COALESCE(NULLIF(r.maintenance_ref_number,''),r.id::text) AS request_reference,p.public_title,d.name AS department_name,dr.department_rank,p.system_score,p.system_tier,p.system_suggested_rank,p.institutional_rank,GREATEST(0,extract(day FROM now()-pc.opened_at))::int AS age,p.impact_level,p.service_risk_level,p.deadline_at,p.deadline_type,pc.case_status,g.public_title AS priority_group_name FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id JOIN requests r ON r.id=pc.request_id LEFT JOIN departments d ON d.id=pc.department_id LEFT JOIN department_priority_rankings dr ON dr.procurement_case_id=pc.id AND dr.valid_until IS NULL LEFT JOIN procurement_priority_group_members gm ON gm.procurement_case_id=pc.id AND gm.removed_at IS NULL LEFT JOIN procurement_priority_groups g ON g.id=gm.group_id AND g.status='ACTIVE' WHERE p.institute_id=$1 AND pc.closed_at IS NULL ORDER BY p.institutional_rank NULLS LAST,p.system_suggested_rank NULLS LAST,p.procurement_case_id`,
         [instituteId],
       );
       return r.rows;

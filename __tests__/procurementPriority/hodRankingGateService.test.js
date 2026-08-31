@@ -1,7 +1,11 @@
 'use strict';
 
 jest.mock('../../services/auditService', () => ({ writeAuditEvent: jest.fn() }));
+jest.mock('../../services/procurementPriority/departmentPriorityCoverageService', () => ({
+  ensureRequestPriorityCoverage: jest.fn().mockResolvedValue([]),
+}));
 const { writeAuditEvent } = require('../../services/auditService');
+const { ensureRequestPriorityCoverage } = require('../../services/procurementPriority/departmentPriorityCoverageService');
 const { findGate, auditGate, STATE, INSTRUCTION } = require('../../services/procurementPriority/hodRankingGateService');
 
 const request = { id: 41, institute_id: 7, department_id: 9 };
@@ -10,6 +14,7 @@ test('HOD approval without an active unranked priority case continues normally',
   const client = { query: jest.fn().mockResolvedValueOnce({ rows: [] }) };
   await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toBeNull();
   expect(client.query).toHaveBeenCalledTimes(1);
+  expect(ensureRequestPriorityCoverage).toHaveBeenCalledWith(expect.objectContaining({ requestId: 41, instituteId: 7, departmentId: 9 }));
 });
 
 test('one unranked case produces the controlled ranking representation', async () => {

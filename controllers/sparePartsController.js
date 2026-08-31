@@ -7,13 +7,14 @@ exports.list=wrap(async(req,res)=>res.json(await repo.list(ctx(req).instituteId,
 exports.detail=wrap(async(req,res)=>{const row=await repo.get(req.params.id,ctx(req).instituteId); if(!row)return res.status(404).json({message:'Spare part not found'}); res.json({data:row});});
 exports.create=wrap(async(req,res)=>res.status(201).json({data:await service.create(req.body||{},ctx(req))}));
 exports.update=wrap(async(req,res)=>res.json({data:await service.update(req.params.id,req.body||{},ctx(req))}));
+exports.updateStockPolicy=wrap(async(req,res)=>res.json({data:await service.updateStockPolicy(req.params.id,req.body||{},ctx(req))}));
 exports.archive=wrap(async(req,res)=>res.json({data:await service.archive(req.params.id,ctx(req))}));
 exports.decision=wrap(async(req,res)=>res.json({data:await service.decision(req.params.id,req.body?.decision,req.body?.reason,ctx(req))}));
 exports.listCompatibility=wrap(async(req,res)=>{await exports.assertPart(req);res.json({data:await repo.compatibility(req.params.id,ctx(req).instituteId)});});
 exports.assertPart=async req=>{if(!await repo.get(req.params.id,ctx(req).instituteId))throw Object.assign(new Error('Spare part not found'),{statusCode:404});};
 exports.addCompatibility=wrap(async(req,res)=>res.status(201).json({data:await service.addCompatibility(req.params.id,req.body||{},ctx(req))}));
-exports.updateCompatibility=wrap(async(req,res)=>{await exports.assertPart(req);const allowed=['compatibility_type','serial_number_from','serial_number_to','oem_confirmed','confirmation_reference','technical_notes'];const data=Object.fromEntries(allowed.filter(k=>Object.hasOwn(req.body||{},k)).map(k=>[k,req.body[k]]));const row=await repo.updateCompatibility(req.params.compatibilityId,req.params.id,data);if(!row)return res.status(404).json({message:'Compatibility not found'});res.json({data:row});});
+exports.updateCompatibility=wrap(async(req,res)=>res.json({data:await service.updateCompatibility(req.params.id,req.params.compatibilityId,req.body||{},ctx(req))}));
 exports.compatibilityDecision=wrap(async(req,res)=>res.json({data:await service.compatibilityDecision(req.params.id,req.params.compatibilityId,req.body?.status,ctx(req))}));
 exports.equipmentList=wrap(async(req,res)=>res.json(await repo.equipmentList(ctx(req).instituteId,req.query)));
 exports.equipmentDetail=wrap(async(req,res)=>{const row=await repo.equipment(req.params.equipmentId,ctx(req).instituteId);if(!row)return res.status(404).json({message:'Equipment not found'});res.json({data:row});});
-exports.saveEquipment=wrap(async(req,res)=>{const data=Object.fromEntries(['equipment_code','name','manufacturer','model','serial_number','department_id','lifecycle_status'].filter(k=>Object.hasOwn(req.body||{},k)).map(k=>[k,req.body[k]||null]));if(!req.params.equipmentId&&['equipment_code','name','manufacturer','model'].some(k=>!data[k]))return res.status(400).json({message:'Code, name, manufacturer and model are required'});const row=await repo.saveEquipment(req.params.equipmentId,ctx(req).instituteId,data);if(!row)return res.status(404).json({message:'Equipment not found'});res.status(req.params.equipmentId?200:201).json({data:row});});
+exports.saveEquipment=wrap(async(req,res)=>res.status(req.params.equipmentId?200:201).json({data:await service.saveEquipment(req.params.equipmentId,req.body||{},ctx(req))}));

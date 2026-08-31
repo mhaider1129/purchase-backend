@@ -2,11 +2,14 @@
 
 const { writeAuditEvent } = require('../auditService');
 const { provisionNeutralPriorityProfile } = require('./priorityProfileProvisioningService');
+const { ensureRequestPriorityCoverage } = require('./departmentPriorityCoverageService');
 
 const STATE = 'HOD_RANKING_REQUIRED';
 const INSTRUCTION = "Place this requirement relative to your department's other active procurement requirements.";
 
-async function findGate({ client, request, approvalLevel }) {
+async function findGate({ client, request, approvalLevel, actorId }) {
+  await ensureRequestPriorityCoverage({ client, requestId: request.id,
+    instituteId: request.institute_id, departmentId: request.department_id, actorId });
   const result = await client.query(
     `SELECT pc.id AS procurement_case_id,pc.institute_id,pc.department_id,p.public_title, p.row_version,
             d.department_rank, d.department_rank_total

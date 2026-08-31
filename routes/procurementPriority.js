@@ -8,6 +8,7 @@ const {
   previewFactors,
 } = require("../services/procurementPriority/recalculationService");
 const { writeAuditEvent } = require("../services/auditService");
+const { ensureApprovedDepartmentPriorityCoverage } = require("../services/procurementPriority/departmentPriorityCoverageService");
 const router = express.Router();
 const repo = createProcurementPriorityRepository();
 const wrap = (fn) => (req, res, next) =>
@@ -25,6 +26,10 @@ router.get(
   "/department",
   wrap(async (req, res) => {
     permit(req, "procurement-priority.rank-department");
+    await repo.transaction((client) =>
+      ensureApprovedDepartmentPriorityCoverage({ client, instituteId: req.user.institute_id,
+        departmentId: req.user.department_id, actorId: req.user.id }),
+    );
     res.json({
       data: await repo.departmentQueue(
         req.user.institute_id,

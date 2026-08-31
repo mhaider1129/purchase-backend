@@ -19,6 +19,7 @@ const harness = ({ sent = true, instituteId = 3 } = {}) => {
     .mockResolvedValueOnce({ rowCount: 1, rows: [after] })
     .mockResolvedValueOnce({})
     .mockResolvedValueOnce({})
+    .mockResolvedValueOnce({})
     .mockResolvedValueOnce({}) };
   pool.connect.mockResolvedValue(client);
   return { client, before, after };
@@ -37,6 +38,10 @@ describe('Central Supply Chain status', () => {
       client: h.client, actorUserId: 7, requestId: 42, beforeData: expect.objectContaining({ sent: false }),
       afterData: expect.objectContaining({ sent, sent_to_central_supply_by: sent ? 7 : null }),
     }));
+    expect(h.client.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO public.request_logs'),
+      [42, 'Central Supply Chain status changed', 7, sent ? 'Marked as sent to Central Supply Chain' : 'Marked as not sent to Central Supply Chain'],
+    );
     expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
     expect(res.json).toHaveBeenCalledWith(h.after);
   });
@@ -53,7 +58,7 @@ describe('Central Supply Chain status', () => {
     expect(h.client.query.mock.calls.map(([sql]) => sql).join('\n')).not.toMatch(/\b(?:ALTER|CREATE|DROP)\b/i);
   });
 
-  test.each(['42P01', '42703'])('falls back to request_logs when audit_logs has schema error %s', async (code) => {
+  test.each(['42P01', '42703', '23502', '22P02'])('keeps the request log and status when audit_logs has database error %s', async (code) => {
     const h = harness();
     auditService.writeAuditEvent.mockRejectedValueOnce(Object.assign(new Error('legacy audit schema'), { code }));
 
@@ -65,5 +70,15 @@ describe('Central Supply Chain status', () => {
       [42, 'Central Supply Chain status changed', 7, 'Marked as sent to Central Supply Chain'],
     );
     expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
+  });
+
+  test('does not hide non-database audit errors', async () => {
+    const h = harness(); const next = jest.fn();
+    auditService.writeAuditEvent.mockRejectedValueOnce(new TypeError('bad audit event'));
+
+    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, next);
+
+    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 500 }));
   });
 });

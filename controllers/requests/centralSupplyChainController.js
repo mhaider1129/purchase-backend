@@ -3,14 +3,24 @@ const createHttpError = require('../../utils/httpError');
 const ensureCentralSupplyChainTrackingColumns = require('../../utils/ensureCentralSupplyChainTrackingColumns');
 const auditService = require('../../services/auditService');
 
-const AUDIT_SCHEMA_ERROR_CODES = new Set(['42P01', '42703']);
-
 /**
- * Keep the status change auditable on installations that predate the generic
- * audit_logs schema. A savepoint is required because PostgreSQL otherwise
- * leaves the entire transaction aborted after a missing table/column error.
+ * request_logs is the established audit trail for request lifecycle changes.
+ * The generic audit log is supplementary and has multiple legacy schemas in
+ * deployed installations, so a PostgreSQL error there must not roll back the
+ * status change or its canonical request log entry.
  */
 const writeCentralSupplyAudit = async ({ client, requestId, before, after, sent, userId }) => {
+  await client.query(
+    `INSERT INTO public.request_logs (request_id, action, actor_id, comments)
+     VALUES ($1, $2, $3, $4)`,
+    [
+      requestId,
+      'Central Supply Chain status changed',
+      userId,
+      sent ? 'Marked as sent to Central Supply Chain' : 'Marked as not sent to Central Supply Chain',
+    ],
+  );
+
   await client.query('SAVEPOINT central_supply_audit');
   try {
     await auditService.writeAuditEvent({
@@ -26,18 +36,10 @@ const writeCentralSupplyAudit = async ({ client, requestId, before, after, sent,
     });
     await client.query('RELEASE SAVEPOINT central_supply_audit');
   } catch (error) {
-    if (!AUDIT_SCHEMA_ERROR_CODES.has(error?.code)) throw error;
+    // PostgreSQL SQLSTATE values are five characters. Only database/schema
+    // compatibility failures are optional; application errors still fail.
+    if (!/^[0-9A-Z]{5}$/.test(error?.code || '')) throw error;
     await client.query('ROLLBACK TO SAVEPOINT central_supply_audit');
-    await client.query(
-      `INSERT INTO public.request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, $2, $3, $4)`,
-      [
-        requestId,
-        'Central Supply Chain status changed',
-        userId,
-        sent ? 'Marked as sent to Central Supply Chain' : 'Marked as not sent to Central Supply Chain',
-      ],
-    );
     await client.query('RELEASE SAVEPOINT central_supply_audit');
   }
 };

@@ -75,10 +75,22 @@ async function reclassifyRequest(command, suppliedClient = null) {
     const snapshot = await routeResolver.resolveApprovalRoute({ client, configuredRoute: resolved, requestType: targetRequestType,
       classification: domain, departmentId: before.department_id, sectionId: before.section_id, instituteId: before.institute_id,
       cost: before.estimated_cost, requesterId: before.requester_id, approvalRouteVersion });
+    // Keep completed approvals when the corrected route resolves to the same
+    // person.  Rejected/returned decisions are deliberately not inherited: the
+    // reclassification reset gives the corrected workflow a fresh opportunity
+    // to be reviewed, while already granted approvals need not be repeated.
+    const previousDecisionResult = await client.query(
+      `SELECT DISTINCT ON (approver_id) approver_id,status,comments,approved_at,decided_at
+         FROM approvals
+        WHERE request_id=$1 AND status='Approved' AND COALESCE(is_superseded,FALSE)=FALSE
+        ORDER BY approver_id,COALESCE(decided_at,approved_at) DESC NULLS LAST,id DESC`,
+      [requestId],
+    );
     const reset = await lifecycle.resetForReclassification({ requestId, actor, expectedStatus: before.status }, client);
     await approvalEngine.supersedeWorkflow({ requestId, actor, reason, replacementSnapshotId: snapshot.snapshotId }, client);
     await client.query('UPDATE requests SET request_type=$1,request_domain=$2,updated_at=NOW() WHERE id=$3', [targetRequestType, domain, requestId]);
-    const created = await approvalEngine.createSteps({ requestId, routeSnapshot: snapshot, actor, correlationId }, client);
+    const created = await approvalEngine.createSteps({ requestId, routeSnapshot: snapshot, actor, correlationId,
+      inheritedDecisions: previousDecisionResult.rows }, client);
     await auditService.writeAuditEvent({ entityType: 'request', entityId: requestId, action: 'request.reclassified', actorUserId: actor.id,
       instituteId: before.institute_id, requestId, correlationId,
       beforeData: { requestType: before.request_type, requestDomain: before.request_domain, status: before.status, routeSnapshotId: before.approval_route_snapshot_id },

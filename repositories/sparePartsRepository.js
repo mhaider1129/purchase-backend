@@ -1,0 +1,31 @@
+const pool = require('../config/db');
+
+class SparePartsRepository {
+  constructor(client = pool) { this.db = client; }
+  transaction(work) { return pool.connect().then(async client => { try { await client.query('BEGIN'); const value = await work(new SparePartsRepository(client)); await client.query('COMMIT'); return value; } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); } }); }
+  async list(instituteId, filters) {
+    const page = Math.max(1, Number(filters.page) || 1); const limit = Math.min(100, Math.max(1, Number(filters.limit) || 25));
+    const values = [instituteId]; const where = ['s.institute_id=$1'];
+    const add = (column, value) => { if (value) { values.push(value); where.push(`${column}=$${values.length}`); } };
+    add('s.criticality', filters.criticality); add('s.technical_approval_status', filters.technical_approval_status);
+    add('s.lifecycle_status', filters.lifecycle_status); add('s.recommended_stocking_policy', filters.stocking_policy);
+    if (filters.manufacturer) { values.push(`%${filters.manufacturer}%`); where.push(`s.manufacturer_name ILIKE $${values.length}`); }
+    if (filters.equipment_id) { values.push(filters.equipment_id); where.push(`EXISTS(SELECT 1 FROM spare_part_equipment_compatibility c WHERE c.spare_part_id=s.id AND c.equipment_id=$${values.length} AND c.compatibility_status<>'INACTIVE')`); }
+    if (filters.search) { values.push(`%${filters.search}%`); const n=values.length; where.push(`(s.spare_part_code ILIKE $${n} OR s.name ILIKE $${n} OR s.oem_part_number ILIKE $${n} OR s.manufacturer_part_number ILIKE $${n} OR s.manufacturer_name ILIKE $${n} OR EXISTS(SELECT 1 FROM spare_part_equipment_compatibility c JOIN maintainable_equipment e ON e.id=c.equipment_id WHERE c.spare_part_id=s.id AND (e.name ILIKE $${n} OR e.model ILIKE $${n})))`); }
+    values.push(limit, (page - 1) * limit);
+    const result = await this.db.query(`SELECT s.*,count(*) OVER()::int AS total_count,(SELECT count(*)::int FROM spare_part_equipment_compatibility c WHERE c.spare_part_id=s.id AND c.compatibility_status<>'INACTIVE') compatible_equipment_count FROM approved_spare_parts s WHERE ${where.join(' AND ')} ORDER BY s.updated_at DESC,s.id DESC LIMIT $${values.length-1} OFFSET $${values.length}`, values);
+    return { data: result.rows, pagination: { page, limit, total: result.rows[0]?.total_count || 0 } };
+  }
+  async get(id, instituteId, lock=false) { const r=await this.db.query(`SELECT s.* FROM approved_spare_parts s WHERE s.id=$1 AND s.institute_id=$2${lock?' FOR UPDATE':''}`,[id,instituteId]); return r.rows[0]||null; }
+  async create(data, instituteId, actorId) { const keys=Object.keys(data); const vals=keys.map(k=>data[k]); const r=await this.db.query(`INSERT INTO approved_spare_parts(institute_id,${keys.join(',')},created_by,updated_by) VALUES($1,${keys.map((_,i)=>`$${i+2}`).join(',')},$${keys.length+2},$${keys.length+2}) RETURNING *`,[instituteId,...vals,actorId]); return r.rows[0]; }
+  async update(id,instituteId,data,actorId,rowVersion) { const keys=Object.keys(data); const vals=keys.map(k=>data[k]); const r=await this.db.query(`UPDATE approved_spare_parts SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},updated_by=$${keys.length+1},updated_at=now(),row_version=row_version+1 WHERE id=$${keys.length+2} AND institute_id=$${keys.length+3} AND row_version=$${keys.length+4} RETURNING *`,[...vals,actorId,id,instituteId,rowVersion]); return r.rows[0]||null; }
+  async generic(id) { const r=await this.db.query('SELECT * FROM generic_items WHERE id=$1 FOR SHARE',[id]); return r.rows[0]||null; }
+  async product(id) { const r=await this.db.query('SELECT * FROM approved_products WHERE id=$1 FOR SHARE',[id]); return r.rows[0]||null; }
+  async equipment(id,instituteId) { const r=await this.db.query('SELECT * FROM maintainable_equipment WHERE id=$1 AND institute_id=$2',[id,instituteId]); return r.rows[0]||null; }
+  async equipmentList(instituteId,{page=1,limit=25,search=''}) { limit=Math.min(100,Math.max(1,Number(limit)||25)); page=Math.max(1,Number(page)||1); const r=await this.db.query(`SELECT *,count(*) OVER()::int total_count FROM maintainable_equipment WHERE institute_id=$1 AND ($2='' OR equipment_code ILIKE '%'||$2||'%' OR name ILIKE '%'||$2||'%' OR manufacturer ILIKE '%'||$2||'%' OR model ILIKE '%'||$2||'%') ORDER BY name LIMIT $3 OFFSET $4`,[instituteId,search,limit,(page-1)*limit]); return {data:r.rows,pagination:{page,limit,total:r.rows[0]?.total_count||0}}; }
+  async saveEquipment(id,instituteId,data) { const keys=Object.keys(data); if(id){ const r=await this.db.query(`UPDATE maintainable_equipment SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},updated_at=now() WHERE id=$${keys.length+1} AND institute_id=$${keys.length+2} RETURNING *`,[...keys.map(k=>data[k]),id,instituteId]); return r.rows[0]||null; } const r=await this.db.query(`INSERT INTO maintainable_equipment(institute_id,${keys.join(',')}) VALUES($1,${keys.map((_,i)=>`$${i+2}`).join(',')}) RETURNING *`,[instituteId,...keys.map(k=>data[k])]); return r.rows[0]; }
+  async compatibility(spareId,instituteId) { const r=await this.db.query(`SELECT c.*,e.equipment_code,e.name equipment_name,e.manufacturer,e.model,e.serial_number FROM spare_part_equipment_compatibility c JOIN approved_spare_parts s ON s.id=c.spare_part_id JOIN maintainable_equipment e ON e.id=c.equipment_id WHERE c.spare_part_id=$1 AND s.institute_id=$2 ORDER BY c.created_at DESC`,[spareId,instituteId]); return r.rows; }
+  async addCompatibility(spareId,data,actorId) { const keys=Object.keys(data); const vals=keys.map(k=>data[k]); const r=await this.db.query(`INSERT INTO spare_part_equipment_compatibility(spare_part_id,${keys.join(',')},created_by) VALUES($1,${keys.map((_,i)=>`$${i+2}`).join(',')},$${keys.length+2}) RETURNING *`,[spareId,...vals,actorId]); return r.rows[0]; }
+  async updateCompatibility(id,spareId,data) { const keys=Object.keys(data); const r=await this.db.query(`UPDATE spare_part_equipment_compatibility SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},updated_at=now() WHERE id=$${keys.length+1} AND spare_part_id=$${keys.length+2} RETURNING *`,[...keys.map(k=>data[k]),id,spareId]); return r.rows[0]||null; }
+}
+module.exports = SparePartsRepository;

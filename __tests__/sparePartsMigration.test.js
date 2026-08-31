@@ -1,0 +1,4 @@
+const fs=require('fs');const path=require('path');
+const sql=fs.readFileSync(path.join(__dirname,'../sql/manual/013_approved_spare_parts_foundation.sql'),'utf8');
+test('migration is manual, fail-closed, numeric, scoped, and contains no runtime DDL hook',()=>{expect(sql).toMatch(/PENDING MANUAL MIGRATION 013/);expect(sql).toMatch(/SQL_013_ALREADY_OR_PARTIALLY_INSTALLED/);expect(sql).toMatch(/recommended_min_quantity NUMERIC/);expect(sql).toMatch(/lower\(btrim\(spare_part_code\)\)/);expect(sql).toMatch(/spare_part_equipment_active_uq/);expect(sql).not.toMatch(/supplier_(price|ranking)|spare_part_sourcing_options/i);});
+test.each(['approved_spare_parts','maintainable_equipment','spare_part_equipment_compatibility','spare-parts.technical-approve','spare-parts.manage-stock-policy'])(`contains governed foundation %s`,value=>expect(sql).toContain(value));

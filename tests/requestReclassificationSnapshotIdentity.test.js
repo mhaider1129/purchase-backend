@@ -26,6 +26,7 @@ describe('request reclassification snapshot identity', () => {
     query: jest.fn(async sql => {
       if (sql.includes('SELECT * FROM requests')) return { rows: [{ ...request }] };
       if (sql.includes('COALESCE(MAX(approval_route_version)')) return { rows: [{ version }] };
+      if (sql.includes('SELECT DISTINCT ON (approver_id)')) return { rows: [{ approver_id: 42, status: 'Approved', comments: 'Approved before correction' }] };
       return { rows: [], rowCount: 1 };
     }),
   });
@@ -41,6 +42,9 @@ describe('request reclassification snapshot identity', () => {
     expect(second.version).toBe(2);
     expect(first.snapshotId).not.toBe(second.snapshotId);
     expect(outbox.enqueueNotification.mock.calls[0][1].idempotencyKey).not.toBe(outbox.enqueueNotification.mock.calls[1][1].idempotencyKey);
+    expect(approvalEngine.createSteps.mock.calls[0][0].inheritedDecisions).toEqual([
+      expect.objectContaining({ approver_id: 42, status: 'Approved' }),
+    ]);
 
     for (const snapshot of [first, second]) {
       const { snapshotId, ...hashedSnapshot } = snapshot;

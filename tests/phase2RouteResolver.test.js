@@ -51,4 +51,30 @@ describe('approvalRouteResolver', () => {
     expect(JSON.parse(storageCall[1][0])).toEqual(snapshot);
     expect(storageCall[1][1]).toBe(snapshot.snapshotId);
   });
+  test('createSteps carries an approval to a matching approver in the replacement route', async () => {
+    const snapshot = validateAndSnapshotRoute([
+      { approval_level: 1, approver_id: 42 },
+      { approval_level: 2, approver_id: 51 },
+    ], { approvalRouteVersion: 3 });
+    const query = jest.fn().mockResolvedValue({ rows: [{ id: 70 }], rowCount: 1 });
+    const repository = {
+      lockRequest: jest.fn().mockResolvedValue({ id: 17 }),
+      getCurrentLevel: jest.fn().mockResolvedValue(2),
+      activateLevel: jest.fn().mockResolvedValue([{ id: 71, approver_id: 51 }]),
+    };
+    const notify = jest.fn();
+    await createApprovalEngine({ repository, audit: jest.fn(), notify }).createSteps({
+      requestId: 17,
+      routeSnapshot: snapshot,
+      actor: { id: 8 },
+      correlationId: 'route-v3',
+      inheritedDecisions: [{ approver_id: 42, status: 'Approved', comments: 'Previously approved', approved_at: '2026-08-29T10:00:00Z' }],
+    }, { query });
+
+    const inserts = query.mock.calls.filter(([sql]) => sql.includes('INSERT INTO approvals'));
+    expect(inserts[0][1].slice(5)).toEqual(['Approved', 'Previously approved', '2026-08-29T10:00:00Z', '2026-08-29T10:00:00Z']);
+    expect(inserts[1][1][5]).toBe('Pending');
+    expect(repository.activateLevel).toHaveBeenCalledWith(expect.anything(), expect.anything(), 2);
+    expect(notify).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ userId: 51 }));
+  });
 });

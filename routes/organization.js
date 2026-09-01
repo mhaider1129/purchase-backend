@@ -1,7 +1,7 @@
 const router=require('express').Router();
 const c=require('../controllers/organizationController');
 const permit=require('../middleware/requirePermission');
-router.get('/tree',c.tree); router.get('/units',c.list); router.get('/resolve/:departmentId',c.resolve);
+router.get('/tree',c.tree); router.get('/units',c.list); router.get('/options',c.options); router.get('/resolve/:departmentId',c.resolve);
 router.get('/units/:id',c.detail); router.get('/units/:id/positions',c.positions);
 router.post('/units',permit('organization.manage'),c.create);
 router.patch('/units/:id',permit('organization.manage'),c.update);

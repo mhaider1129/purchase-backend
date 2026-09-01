@@ -122,6 +122,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
 
 const CORE_PERMISSION_DEFINITIONS = [
 
+  { code: 'approval-policy.view', name: 'View approval policies', description: 'View approval policy definitions and versions.' },
+  { code: 'approval-policy.manage', name: 'Manage approval policies', description: 'Create policies and edit draft versions.' },
+  { code: 'approval-policy.publish-shadow', name: 'Publish approval policy to shadow', description: 'Move validated policy versions into shadow mode.' },
+  { code: 'approval-policy.run-shadow', name: 'Run approval policy shadow analysis', description: 'Evaluate requests without affecting live approvals.' },
+  { code: 'approval-policy.view-shadow', name: 'View approval policy shadow results', description: 'View shadow route comparisons and metrics.' },
+
   {
     code: 'organization.manage',
     name: 'Manage organization hierarchy',

@@ -3,27 +3,37 @@ const createHttpError = require('../../utils/httpError');
 const ensureCentralSupplyChainTrackingColumns = require('../../utils/ensureCentralSupplyChainTrackingColumns');
 const auditService = require('../../services/auditService');
 
+const isDatabaseError = (error) => /^[0-9A-Z]{5}$/.test(error?.code || '');
+
+const runOptionalDatabaseWrite = async (client, savepoint, write) => {
+  await client.query(`SAVEPOINT ${savepoint}`);
+  try {
+    await write();
+    await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+    return true;
+  } catch (error) {
+    if (!isDatabaseError(error)) throw error;
+    await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+    await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+    return false;
+  }
+};
+
 /**
- * request_logs is the established audit trail for request lifecycle changes.
- * The generic audit log is supplementary and has multiple legacy schemas in
- * deployed installations, so a PostgreSQL error there must not roll back the
- * status change or its canonical request log entry.
+ * Deployed installations can have incompatible legacy request_logs and generic
+ * audit schemas. Isolate each audit sink so either one can preserve the event,
+ * while a schema mismatch in both does not roll back the requested status.
  */
 const writeCentralSupplyAudit = async ({ client, requestId, before, after, sent, userId }) => {
-  await client.query(
+  const requestLogWritten = await runOptionalDatabaseWrite(client, 'central_supply_request_log', () => client.query(
     `INSERT INTO public.request_logs (request_id, action, actor_id, comments)
      VALUES ($1, $2, $3, $4)`,
-    [
-      requestId,
-      'Central Supply Chain status changed',
-      userId,
-      sent ? 'Marked as sent to Central Supply Chain' : 'Marked as not sent to Central Supply Chain',
-    ],
-  );
+    [requestId, 'Central Supply Chain status changed', userId,
+      sent ? 'Marked as sent to Central Supply Chain' : 'Marked as not sent to Central Supply Chain'],
+  ));
 
-  await client.query('SAVEPOINT central_supply_audit');
-  try {
-    await auditService.writeAuditEvent({
+  const auditEventWritten = await runOptionalDatabaseWrite(client, 'central_supply_audit', () =>
+    auditService.writeAuditEvent({
       client,
       entityType: 'request',
       entityId: requestId,
@@ -33,14 +43,11 @@ const writeCentralSupplyAudit = async ({ client, requestId, before, after, sent,
       action: 'request.central_supply_status_changed',
       beforeData: { sent: before.sent_to_central_supply_at != null, sent_to_central_supply_at: before.sent_to_central_supply_at, sent_to_central_supply_by: before.sent_to_central_supply_by },
       afterData: { sent, sent_to_central_supply_at: after.sent_to_central_supply_at, sent_to_central_supply_by: after.sent_to_central_supply_by },
-    });
-    await client.query('RELEASE SAVEPOINT central_supply_audit');
-  } catch (error) {
-    // PostgreSQL SQLSTATE values are five characters. Only database/schema
-    // compatibility failures are optional; application errors still fail.
-    if (!/^[0-9A-Z]{5}$/.test(error?.code || '')) throw error;
-    await client.query('ROLLBACK TO SAVEPOINT central_supply_audit');
-    await client.query('RELEASE SAVEPOINT central_supply_audit');
+    }),
+  );
+
+  if (!requestLogWritten && !auditEventWritten) {
+    console.warn('Central Supply Chain status updated without an audit record because both audit schemas rejected the write');
   }
 };
 

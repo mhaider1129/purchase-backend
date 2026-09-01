@@ -74,4 +74,29 @@ describe('fetchRequestsController.getAllRequests filters', () => {
     expect(pool.query.mock.calls[0][0]).not.toContain('step_user.role =');
     expect(pool.query.mock.calls[0][1]).toEqual([10, 0]);
   });
+
+  it('falls back to the initiating technician for maintenance requests without a requester', async () => {
+    const req = {
+      query: { search: 'Technician Name' },
+      user: { institute_id: null },
+    };
+    const res = buildRes();
+
+    await getAllRequests(req, res);
+
+    const requestsQuery = pool.query.mock.calls[0][0];
+    const countQuery = pool.query.mock.calls[1][0];
+
+    expect(requestsQuery).toContain(
+      "CASE WHEN r.request_type = 'Maintenance' THEN initiating_technician.name END",
+    );
+    expect(requestsQuery).toContain(
+      'LEFT JOIN users initiating_technician ON r.initiated_by_technician_id = initiating_technician.id',
+    );
+    expect(countQuery).toContain(
+      'LEFT JOIN users initiating_technician ON r.initiated_by_technician_id = initiating_technician.id',
+    );
+    expect(pool.query.mock.calls[0][1]).toEqual(['%technician name%', 10, 0]);
+    expect(res.json).toHaveBeenCalledWith({ data: [], total: 0, page: 1, limit: 10 });
+  });
 });

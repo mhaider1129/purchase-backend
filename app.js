@@ -358,6 +358,7 @@ const printServiceRequestsRoutes = require('./routes/printServiceRequests');
 const procurementPerformanceRoutes = require('./routes/procurementPerformance');
 const procurementPriorityRoutes = require('./routes/procurementPriority');
 const sparePartsRoutes = require('./routes/spareParts');
+const organizationRoutes = require('./routes/organization');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -424,6 +425,7 @@ const protectedApiRoutes = [
   { path: '/procurement-performance', router: procurementPerformanceRoutes },
   { path: '/procurement-priority', router: procurementPriorityRoutes },
   { path: '/spare-parts', router: sparePartsRoutes },
+  { path: '/organization', router: organizationRoutes },
 ];
 
 const mountApiRoutes = router => {

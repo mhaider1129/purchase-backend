@@ -24,6 +24,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
   ],
   warehousekeeper: ['warehouse.manage-supply', 'warehouse.view-supply', 'technical-inspections.manage', 'procure-to-pay.receipts.manage'],
   scm: [
+    'organization.manage',
     'approvals.reassign',
     'contracts.manage',
     'departments.manage',
@@ -120,6 +121,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+
+  {
+    code: 'organization.manage',
+    name: 'Manage organization hierarchy',
+    description: 'Create, move, archive, and assign positions to organizational units.',
+  },
 
   {
     code: 'maintenance-requests.view-all',

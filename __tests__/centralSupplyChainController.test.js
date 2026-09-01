@@ -13,14 +13,10 @@ const request = (overrides = {}) => ({ params: { id: '42' }, body: { sent: true 
 const harness = ({ sent = true, instituteId = 3 } = {}) => {
   const before = { id: 42, institute_id: instituteId, sent_to_central_supply_at: null, sent_to_central_supply_by: null };
   const after = { ...before, sent_to_central_supply_at: sent ? '2026-08-21T10:00:00.000Z' : null, sent_to_central_supply_by: sent ? 7 : null };
-  const client = { release: jest.fn(), query: jest.fn()
+  const client = { release: jest.fn(), query: jest.fn().mockResolvedValue({})
     .mockResolvedValueOnce({})
     .mockResolvedValueOnce({ rowCount: 1, rows: [before] })
-    .mockResolvedValueOnce({ rowCount: 1, rows: [after] })
-    .mockResolvedValueOnce({})
-    .mockResolvedValueOnce({})
-    .mockResolvedValueOnce({})
-    .mockResolvedValueOnce({}) };
+    .mockResolvedValueOnce({ rowCount: 1, rows: [after] }) };
   pool.connect.mockResolvedValue(client);
   return { client, before, after };
 };
@@ -69,6 +65,22 @@ describe('Central Supply Chain status', () => {
       expect.stringContaining('INSERT INTO public.request_logs'),
       [42, 'Central Supply Chain status changed', 7, 'Marked as sent to Central Supply Chain'],
     );
+    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
+  });
+
+  test('keeps the status when a legacy request_logs schema rejects its audit write', async () => {
+    const h = harness();
+    h.client.query.mockImplementation(async (sql) => {
+      if (String(sql).includes('INSERT INTO public.request_logs')) {
+        throw Object.assign(new Error('legacy request log schema'), { code: '42703' });
+      }
+      return {};
+    });
+
+    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, jest.fn());
+
+    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK TO SAVEPOINT central_supply_request_log');
+    expect(auditService.writeAuditEvent).toHaveBeenCalled();
     expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
   });
 

@@ -1,0 +1,13 @@
+const router=require('express').Router();
+const c=require('../controllers/organizationController');
+const permit=require('../middleware/requirePermission');
+router.get('/tree',c.tree); router.get('/units',c.list); router.get('/resolve/:departmentId',c.resolve);
+router.get('/units/:id',c.detail); router.get('/units/:id/positions',c.positions);
+router.post('/units',permit('organization.manage'),c.create);
+router.patch('/units/:id',permit('organization.manage'),c.update);
+router.delete('/units/:id',permit('organization.manage'),c.archive);
+router.post('/units/:id/move',permit('organization.manage'),c.move);
+router.post('/units/:id/positions',permit('organization.manage'),c.createPosition);
+router.patch('/positions/:positionId',permit('organization.manage'),c.updatePosition);
+router.delete('/positions/:positionId',permit('organization.manage'),c.archivePosition);
+module.exports=router;

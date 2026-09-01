@@ -32,6 +32,10 @@ CREATE TABLE maintainable_equipment (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX maintainable_equipment_institute_code_uq ON maintainable_equipment(institute_id, lower(btrim(equipment_code)));
+-- Supports the institute-scoped equipment register's ORDER BY name.
+CREATE INDEX maintainable_equipment_institute_name_idx ON maintainable_equipment(institute_id, name);
+-- Supports institute-scoped department and lifecycle filtering/reporting.
+CREATE INDEX maintainable_equipment_institute_department_lifecycle_idx ON maintainable_equipment(institute_id, department_id, lifecycle_status);
 
 CREATE TABLE approved_spare_parts (
   id BIGSERIAL PRIMARY KEY,
@@ -76,6 +80,12 @@ CREATE TABLE approved_spare_parts (
 );
 CREATE UNIQUE INDEX approved_spare_parts_institute_code_uq ON approved_spare_parts(institute_id, lower(btrim(spare_part_code)));
 CREATE INDEX approved_spare_parts_filters_idx ON approved_spare_parts(institute_id,lifecycle_status,technical_approval_status,criticality);
+-- Supports the default institute-scoped register ordering and stable id tie-break.
+CREATE INDEX approved_spare_parts_institute_updated_idx ON approved_spare_parts(institute_id, updated_at DESC, id DESC);
+-- Supports the dedicated stocking-policy filter within an institute.
+CREATE INDEX approved_spare_parts_institute_stocking_idx ON approved_spare_parts(institute_id, recommended_stocking_policy);
+-- Leading-wildcard ILIKE search intentionally has no B-tree index; a governed
+-- search/trigram strategy is deferred until production query volume warrants it.
 
 CREATE TABLE spare_part_equipment_compatibility (
   id BIGSERIAL PRIMARY KEY,
@@ -91,6 +101,9 @@ CREATE TABLE spare_part_equipment_compatibility (
   CONSTRAINT compatibility_approval_evidence CHECK (compatibility_status <> 'APPROVED' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
 );
 CREATE UNIQUE INDEX spare_part_equipment_active_uq ON spare_part_equipment_compatibility(spare_part_id,equipment_id) WHERE compatibility_status IN ('PENDING','APPROVED');
+-- Supports reverse equipment filtering from the Spare Parts register while
+-- excluding inactive relationships, matching the authoritative EXISTS query.
+CREATE INDEX spare_part_equipment_equipment_active_idx ON spare_part_equipment_compatibility(equipment_id, spare_part_id) WHERE compatibility_status <> 'INACTIVE';
 
 INSERT INTO permissions(code,name,description) VALUES
  ('spare-parts.view','View approved spare parts','View institute-scoped spare parts and compatibility'),

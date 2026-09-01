@@ -812,7 +812,11 @@ const getAllRequests = async (req, res, next) => {
     whereClauses.push(`(
       LOWER(r.justification) LIKE $${params.length}
       OR LOWER(r.request_type) LIKE $${params.length}
-      OR LOWER(COALESCE(r.temporary_requester_name, requester.name)) LIKE $${params.length}
+      OR LOWER(COALESCE(
+        NULLIF(TRIM(r.temporary_requester_name), ''),
+        requester.name,
+        CASE WHEN r.request_type = 'Maintenance' THEN initiating_technician.name END
+      )) LIKE $${params.length}
       OR CAST(r.id AS TEXT) LIKE $${params.length}
       OR EXISTS (
         SELECT 1 FROM public.requested_items ri
@@ -918,8 +922,16 @@ const getAllRequests = async (req, res, next) => {
           JOIN users split_user ON split_user.id = split_ri.assigned_to
           WHERE split_ri.request_id = r.id
         ), '[]'::json) AS split_assignees,
-        COALESCE(r.temporary_requester_name, requester.name) AS requester_name,
-        CASE WHEN r.temporary_requester_name IS NOT NULL THEN 'Temporary Requester' ELSE requester.role END AS requester_role,
+        COALESCE(
+          NULLIF(TRIM(r.temporary_requester_name), ''),
+          requester.name,
+          CASE WHEN r.request_type = 'Maintenance' THEN initiating_technician.name END
+        ) AS requester_name,
+        CASE
+          WHEN NULLIF(TRIM(r.temporary_requester_name), '') IS NOT NULL THEN 'Temporary Requester'
+          WHEN requester.name IS NOT NULL THEN requester.role
+          WHEN r.request_type = 'Maintenance' THEN initiating_technician.role
+        END AS requester_role,
         ap.approval_level AS current_approval_level,
         au.role AS current_approver_role
       FROM requests r
@@ -928,6 +940,7 @@ const getAllRequests = async (req, res, next) => {
       LEFT JOIN projects p ON r.project_id = p.id
       LEFT JOIN users u ON r.assigned_to = u.id
       LEFT JOIN users requester ON r.requester_id = requester.id
+      LEFT JOIN users initiating_technician ON r.initiated_by_technician_id = initiating_technician.id
       LEFT JOIN LATERAL (
         SELECT active_ap.*
         FROM approvals active_ap
@@ -951,6 +964,7 @@ const getAllRequests = async (req, res, next) => {
       SELECT COUNT(*)
       FROM requests r
       LEFT JOIN users requester ON r.requester_id = requester.id
+      LEFT JOIN users initiating_technician ON r.initiated_by_technician_id = initiating_technician.id
       ${whereSQL}
       `,
       params,

@@ -1,24 +1,25 @@
 # Organization hierarchy
 
-## Decision and current model
-Departments (`id`, name, medical/operational `type`, institute) and sections (`id`, name, department) are stable identities referenced by users, requests, and approval routes. Approval routing is versioned and historical approvals are snapshots. Extending departments alone cannot represent institutes, executive offices, directorates, or arbitrary units, so this module adds a normalized hierarchy layer and leaves every existing table and identifier intact.
+## Boundary and governed schema
 
-**Organizational hierarchy is not itself the approval workflow.** Classification is metadata and never selects a parent: a Medical Nursing department may report to the CEO. The future workflow engine will combine hierarchy with request-type rules, financial thresholds, procurement policy, executive authority, and special approval requirements.
+**Organizational hierarchy is not an approval workflow.** Hierarchy answers who reports to whom; a later policy engine will answer what approvals are required. Migration `sql/manual/014_organization_hierarchy.sql` is additive and independent from the Spare Parts migration 013. It creates only `organization_units` and `organization_positions`; departments, sections, users, and institutes remain canonical.
 
-## Tables and migration
-`organization_units` is a self-referencing adjacency list with optional unique links to an existing department or section. It stores institute scope, type, classification, ordering, active state, timestamps, and actors. `organization_positions` separates authority/people from units, supports unit/executive/department/section heads and custom positions, effective dates, and soft archive. Foreign keys, indexes, checks, an application guard, and a recursive database trigger reject self-parenting and cycles.
+A department or section identity link is optional, immutable through the current service, unique, and legal only on the matching unit type. Database guards prove that parents and legacy identities belong to the unit's institute. The existing users table has a direct `institute_id`, so assigned holders are also checked against the unit institute. Vacant positions remain legal.
 
-Migration `purchase-backend/sql/migrations/20260901_organization_hierarchy.sql` is additive, transactional, and idempotent. It upserts every department as an initially unparented `DEPARTMENT` node and every section below its department node. It neither changes department classification nor touches users, requests, routes, route versions, approvals, or snapshots. Administrators can subsequently add institute/executive nodes and move the bootstrapped nodes.
+Bootstrap creates unparented department nodes and sections beneath their linked departments. Classification is copied as metadata only. It never infers an executive parent, so a medical Nursing department may report to CEO and later move to CMO without changing classification.
 
-## Resolution and positions
-Recursive queries provide ancestors, descendants, and paths. Executive ownership walks from a unit toward the root and uses the nearest `EXECUTIVE_OFFICE` node's active `EXECUTIVE_HEAD` (or active unit head). Department and section resolvers locate the linked legacy record, then resolve the corresponding active typed position. Reusable service methods are `getAncestorUnits`, `getOrganizationalPath`, `resolvePositionHolder`, `resolveDepartmentHead`, `resolveSectionHead`, and `resolveExecutiveOwner`. No approval resolver calls them in this phase.
+## Mutation, concurrency, and authority policy
 
-## API, authorization, and audit
-Authenticated reads: `GET /api/organization/tree`, `/units`, `/units/:id`, `/units/:id/positions`, and `/resolve/:departmentId`. Unit filters include type, parent, institute, active, classification, and search. Permission `organization.manage` protects unit create/update/archive/move and position create/update/archive. It is initially granted to SCM by the existing permission synchronization convention; administrators can assign it to other roles.
+All writes use the canonical organization service and share a transaction with their audit event. A failed audit rolls back the mutation. Moves have a distinct operation and event, lock the moved row and target parent, and perform same-institute and recursive cycle validation in that transaction. Generic edits cannot change parent, unit type, or legacy identity.
 
-All writes share their database transaction with an audit entry. Events are `ORGANIZATION_UNIT_CREATED`, `ORGANIZATION_UNIT_UPDATED`, `ORGANIZATION_UNIT_MOVED`, `ORGANIZATION_UNIT_ARCHIVED`, `ORGANIZATION_POSITION_ASSIGNED`, `ORGANIZATION_POSITION_CHANGED`, and `ORGANIZATION_POSITION_REMOVED`; before/after data includes parent and holder changes.
+Unique authority uses **Policy A**: each unit can have at most one active `UNIT_HEAD`, `EXECUTIVE_HEAD`, `DEPARTMENT_HEAD`, or `SECTION_HEAD`, regardless of effective range. This deliberately trades scheduled overlapping successors for deterministic resolution; archive the prior authority before activating its successor. `CUSTOM` positions may repeat. A separately marked active unit head is also unique. Resolution additionally requires `effective_from <= current_date <= effective_to` where bounds exist. Future, expired, archived, and vacant holders do not become principals. Runtime ambiguity (including legacy corrupt data) returns a controlled conflict rather than selecting the first row.
 
-## Frontend and future work
-`/admin/organization` provides a responsive visual tree with connectors, search, expansion, zoom, fit reset, node detail panel, and a secondary table. The editor uses linked department/section IDs rather than creating duplicates. Deliberate moves require the explicit move endpoint; drag/drop is deferred until a reliable confirmation interaction is available.
+Executive ownership walks upward and selects the nearest `EXECUTIVE_OFFICE`, then its current `EXECUTIVE_HEAD`; an explicitly unique current `UNIT_HEAD` is the documented fallback. Missing authority returns unresolved (`null`).
 
-The next phase should add dynamic approval-step resolvers behind new, versioned route-rule types, snapshot every resolved user/unit into the request's approval generation, and retain the existing resolver as the default. Roll out with shadow comparison before any route uses `DEPARTMENT_HEAD`, `SECTION_HEAD`, or `EXECUTIVE_OWNER`.
+## Future Approval Policy Engine 2.0 (design only)
+
+No live approval code consumes this module. Future resolver vocabulary may include `REQUESTER`, `DEPARTMENT_HEAD`, `SECTION_HEAD`, `EXECUTIVE_OWNER`, `POSITION`, `CAPABILITY_HOLDER`, and `FIXED_AUTHORITY`. Conditions may use request type, department, ancestry, classification, amount, warehouse, item category, payment requirement, stock status, maintenance, and medical-device rules.
+
+Dynamic routing must first run in **shadow mode**: the existing engine remains authoritative while the new engine proposes a route. Compare resolved steps, users, order, conditions, and duplicates for every PR; do not switch authority until parity and policy validation pass.
+
+Duplicate principals require semantic treatment. For example, CEO may appear once as `EXECUTIVE_OWNER` and again for a policy attestation. The future engine must distinguish the same principal with the same approval meaning from the same principal performing distinct statutory or policy meanings. It must not apply simplistic user-id deduplication.

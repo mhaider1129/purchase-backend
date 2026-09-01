@@ -1,0 +1,5 @@
+const fs=require('fs');const path=require('path');
+const sql=fs.readFileSync(path.join(__dirname,'../sql/manual/014_organization_hierarchy.sql'),'utf8');
+test('bootstrap leaves every department unparented regardless of classification',()=>{const departmentInsert=sql.match(/INSERT INTO organization_units\(institute_id,name,unit_type,department_id,classification\)[\s\S]*?;/)?.[0];expect(departmentInsert).toBeTruthy();expect(departmentInsert).not.toMatch(/parent_unit_id|EXECUTIVE|medical|CMO/i)});
+test('migration enforces institute and unique authority boundaries',()=>{expect(sql).toMatch(/cannot cross institute boundaries/);expect(sql).toMatch(/organization_positions_unique_authority_uq/);expect(sql).toMatch(/position holder must belong/)});
+test('canonical approval engine is isolated from organization hierarchy',()=>{for(const file of ['approvalEngine.js','approvalRouteResolver.js']){const source=fs.readFileSync(path.join(__dirname,'../services',file),'utf8');expect(source).not.toMatch(/resolveExecutiveOwner|resolveDepartmentHead|resolveSectionHead|organization_units|organization_positions/)}});

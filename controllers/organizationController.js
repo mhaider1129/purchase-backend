@@ -7,7 +7,7 @@ exports.detail=wrap(async(req,res)=>res.json(await service.detail(req.params.id)
 exports.create=wrap(async(req,res)=>res.status(201).json(await service.create(actor(req,req.body))));
 exports.update=wrap(async(req,res)=>res.json(await service.update(req.params.id,actor(req,req.body))));
 exports.archive=wrap(async(req,res)=>res.json(await service.archive(req.params.id,req.user.id)));
-exports.move=wrap(async(req,res)=>res.json(await service.update(req.params.id,actor(req,{parentUnitId:req.body.parentUnitId??null}))));
+exports.move=wrap(async(req,res)=>res.json(await service.moveUnit(req.params.id,req.body.parentUnitId??null,req.user.id)));
 exports.positions=wrap(async(req,res)=>res.json(await service.repo.positions(req.params.id)));
 exports.createPosition=wrap(async(req,res)=>res.status(201).json(await service.savePosition(req.params.id,actor(req,req.body))));
 exports.updatePosition=wrap(async(req,res)=>res.json(await service.savePosition(null,actor(req,req.body),req.params.positionId)));

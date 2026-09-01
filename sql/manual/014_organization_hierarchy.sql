@@ -1,8 +1,8 @@
 -- 014: Organization hierarchy foundation (additive; not an approval workflow).
 BEGIN;
 
--- Fail-closed preflight.  A compatible installation is intentionally reported as
--- a deterministic exception so this manual script can never bootstrap twice.
+-- Fail-closed preflight. A compatible installation is a successful no-op; the
+-- convergent statements below can safely run again without duplicating data.
 DO $$
 DECLARE
   units_exists boolean := to_regclass('public.organization_units') IS NOT NULL;
@@ -44,7 +44,10 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='organization_positions_institute_guard' AND NOT tgisinternal) THEN
     RAISE EXCEPTION 'SQL_014_PARTIAL_OR_DRIFTED_SCHEMA';
   END IF;
-  RAISE EXCEPTION 'SQL_014_ALREADY_APPLIED_COMPATIBLE';
+  -- Do not raise for this state. Supabase reports user-raised P0001 exceptions
+  -- as failed queries even though there is no migration work left to perform.
+  RAISE NOTICE 'SQL_014_ALREADY_APPLIED_COMPATIBLE';
+  RETURN;
 END $$;
 
 -- This migration may be applied after the superseded dated draft was tested in a

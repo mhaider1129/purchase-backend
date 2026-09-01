@@ -1,8 +1,18 @@
 const service=require('../services/organizationService').createOrganizationService();
 const wrap=fn=>async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}};
-const actor=(req,p={})=>({...p,actorId:req.user.id});
-exports.tree=wrap(async(req,res)=>res.json(await service.tree(req.query)));
-exports.list=wrap(async(req,res)=>res.json(await service.repo.list(req.query)));
+const actor=(req,p={})=>({...p,instituteId:req.user.institute_id,actorId:req.user.id});
+const scope=(req,p={})=>({...p,instituteId:req.user.institute_id});
+exports.tree=wrap(async(req,res)=>res.json(await service.tree(scope(req,req.query))));
+exports.list=wrap(async(req,res)=>res.json(await service.repo.list(scope(req,req.query))));
+exports.options=wrap(async(req,res)=>{
+  const instituteId=req.user.institute_id;
+  const [departments,sections,users]=await Promise.all([
+    service.repo.db().query('SELECT id,name FROM departments WHERE institute_id=$1 ORDER BY name',[instituteId]),
+    service.repo.db().query('SELECT s.id,s.name,d.name AS department_name FROM sections s JOIN departments d ON d.id=s.department_id WHERE d.institute_id=$1 ORDER BY d.name,s.name',[instituteId]),
+    service.repo.db().query('SELECT id,name,email FROM users WHERE institute_id=$1 AND is_active=TRUE ORDER BY name',[instituteId])
+  ]);
+  res.json({departments:departments.rows,sections:sections.rows,users:users.rows});
+});
 exports.detail=wrap(async(req,res)=>res.json(await service.detail(req.params.id)));
 exports.create=wrap(async(req,res)=>res.status(201).json(await service.create(actor(req,req.body))));
 exports.update=wrap(async(req,res)=>res.json(await service.update(req.params.id,actor(req,req.body))));

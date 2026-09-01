@@ -1,8 +1,20 @@
-const pool=require('../config/db');
-const query=(text,params=[],client=pool)=>client.query(text,params);
-module.exports={pool,query,
-  listPolicies:(instituteId)=>query(`SELECT p.*,v.id shadow_version_id,v.version_number shadow_version_number,v.status shadow_status FROM approval_policies p LEFT JOIN LATERAL (SELECT * FROM approval_policy_versions WHERE approval_policy_id=p.id AND status='SHADOW' ORDER BY version_number DESC LIMIT 1)v ON true WHERE ($1::int IS NULL OR p.institute_id=$1) ORDER BY p.updated_at DESC`,[instituteId]),
-  getPolicy:id=>query('SELECT * FROM approval_policies WHERE id=$1',[id]),
-  getVersions:id=>query('SELECT * FROM approval_policy_versions WHERE approval_policy_id=$1 ORDER BY version_number DESC',[id]),
-  getVersion:id=>query(`SELECT v.*,p.institute_id,p.code policy_code,p.name policy_name,COALESCE(json_agg(DISTINCT jsonb_build_object('id',r.id,'code',r.rule_code,'name',r.name,'priority',r.priority,'isActive',r.is_active,'stopProcessing',r.stop_processing)) FILTER(WHERE r.id IS NOT NULL),'[]') rules_summary FROM approval_policy_versions v JOIN approval_policies p ON p.id=v.approval_policy_id LEFT JOIN approval_policy_rules r ON r.policy_version_id=v.id WHERE v.id=$1 GROUP BY v.id,p.id`,[id]),
+const pool = require('../config/db');
+
+const query = (text, params = [], client = pool) => client.query(text, params);
+const policyScope = `JOIN approval_policies p ON p.id=v.approval_policy_id WHERE v.id=$1 AND p.institute_id=$2`;
+
+module.exports = {
+  pool,
+  query,
+  listPolicies: (instituteId, client = pool) => query(`SELECT p.*,v.id shadow_version_id,v.version_number shadow_version_number,v.status shadow_status FROM approval_policies p LEFT JOIN LATERAL (SELECT * FROM approval_policy_versions WHERE approval_policy_id=p.id AND status='SHADOW' ORDER BY version_number DESC LIMIT 1)v ON true WHERE p.institute_id=$1 ORDER BY p.updated_at DESC`, [instituteId], client),
+  getPolicy: (id, instituteId, client = pool) => query('SELECT * FROM approval_policies WHERE id=$1 AND institute_id=$2', [id, instituteId], client),
+  getVersions: (id, instituteId, client = pool) => query('SELECT v.* FROM approval_policy_versions v JOIN approval_policies p ON p.id=v.approval_policy_id WHERE v.approval_policy_id=$1 AND p.institute_id=$2 ORDER BY version_number DESC', [id, instituteId], client),
+  getVersion: (id, instituteId, client = pool, lock = false) => query(`SELECT v.*,jsonb_build_object('id',p.id,'instituteId',p.institute_id) policy FROM approval_policy_versions v ${policyScope}${lock ? ' FOR UPDATE' : ''}`, [id, instituteId], client),
+  listRules: (versionId, instituteId, client = pool) => query(`SELECT r.* FROM approval_policy_rules r JOIN approval_policy_versions v ON v.id=r.policy_version_id JOIN approval_policies p ON p.id=v.approval_policy_id WHERE r.policy_version_id=$1 AND p.institute_id=$2 ORDER BY r.priority`, [versionId, instituteId], client),
+  listConditions: (ruleId, instituteId, client = pool) => query(`SELECT c.condition_type type,c.condition_value value FROM approval_policy_rule_conditions c JOIN approval_policy_rules r ON r.id=c.policy_rule_id JOIN approval_policy_versions v ON v.id=r.policy_version_id JOIN approval_policies p ON p.id=v.approval_policy_id WHERE c.policy_rule_id=$1 AND p.institute_id=$2 ORDER BY c.condition_group,c.id`, [ruleId, instituteId], client),
+  listSteps: (ruleId, instituteId, client = pool) => query(`SELECT s.approval_level "approvalLevel",s.step_order "stepOrder",s.parallel_group "parallelGroup",s.semantic_key "semanticKey",s.display_name "displayName",s.resolver_type "resolverType",s.resolver_reference "resolverReference",s.required FROM approval_policy_rule_steps s JOIN approval_policy_rules r ON r.id=s.policy_rule_id JOIN approval_policy_versions v ON v.id=r.policy_version_id JOIN approval_policies p ON p.id=v.approval_policy_id WHERE s.policy_rule_id=$1 AND p.institute_id=$2 ORDER BY s.approval_level,s.step_order,s.id`, [ruleId, instituteId], client),
+  listShadowRuns: (instituteId, versionId, limit, client = pool) => query(`SELECT sr.* FROM approval_policy_shadow_runs sr JOIN approval_policy_versions v ON v.id=sr.policy_version_id JOIN approval_policies p ON p.id=v.approval_policy_id WHERE p.institute_id=$1 AND ($2::bigint IS NULL OR sr.policy_version_id=$2) ORDER BY sr.generated_at DESC LIMIT $3`, [instituteId, versionId || null, limit], client),
+  getShadowRun: (id, instituteId, client = pool) => query(`SELECT sr.* FROM approval_policy_shadow_runs sr JOIN approval_policy_versions v ON v.id=sr.policy_version_id JOIN approval_policies p ON p.id=v.approval_policy_id WHERE sr.id=$1 AND p.institute_id=$2`, [id, instituteId], client),
+  getShadowSteps: (id, instituteId, client = pool) => query(`SELECT ss.* FROM approval_policy_shadow_steps ss JOIN approval_policy_shadow_runs sr ON sr.id=ss.shadow_run_id JOIN approval_policy_versions v ON v.id=sr.policy_version_id JOIN approval_policies p ON p.id=v.approval_policy_id WHERE ss.shadow_run_id=$1 AND p.institute_id=$2 ORDER BY ss.sequence`, [id, instituteId], client),
+  getShadowDifferences: (id, instituteId, client = pool) => query(`SELECT d.* FROM approval_policy_shadow_differences d JOIN approval_policy_shadow_runs sr ON sr.id=d.shadow_run_id JOIN approval_policy_versions v ON v.id=sr.policy_version_id JOIN approval_policies p ON p.id=v.approval_policy_id WHERE d.shadow_run_id=$1 AND p.institute_id=$2 ORDER BY d.id`, [id, instituteId], client),
 };

@@ -359,6 +359,7 @@ const procurementPerformanceRoutes = require('./routes/procurementPerformance');
 const procurementPriorityRoutes = require('./routes/procurementPriority');
 const sparePartsRoutes = require('./routes/spareParts');
 const organizationRoutes = require('./routes/organization');
+const approvalPoliciesRoutes = require('./routes/approvalPolicies');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -435,6 +436,8 @@ const mountApiRoutes = router => {
 };
 
 mountApiRoutes(apiRouter);
+apiRouter.use(/^\/approval-polic(?:ies|y-versions|y-shadow-runs)(?:\/|$)/, authenticateUser, writeAuditTrail);
+apiRouter.use(approvalPoliciesRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);

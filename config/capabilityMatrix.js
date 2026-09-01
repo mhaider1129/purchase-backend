@@ -1,6 +1,7 @@
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const CAPABILITY_MATRIX = [
+  { routePrefix: '/approval-polic', module: 'procurement-governance', resource: 'approval-policy', permissions: ['approval-policy.view','approval-policy.manage','approval-policy.publish-shadow','approval-policy.run-shadow','approval-policy.view-shadow'] },
   {
     routePrefix: '/admin-tools',
     module: 'platform-governance',

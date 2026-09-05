@@ -146,10 +146,13 @@ const updateApprovalStatus = async (req, res, next) => {
     }
   }
 
-  const client = await pool.connect();
+  let client;
+  let transactionOpen = false;
 
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
+    transactionOpen = true;
 
     const approvalRes = await client.query(
       `SELECT id, request_id, approval_level FROM approvals
@@ -159,6 +162,8 @@ const updateApprovalStatus = async (req, res, next) => {
     );
 
     if (approvalRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
       return next(createHttpError(403, 'You are not the active approver for this request'));
     }
 
@@ -175,6 +180,7 @@ const updateApprovalStatus = async (req, res, next) => {
 
     if (requestInfoRes.rowCount === 0) {
       await client.query('ROLLBACK');
+      transactionOpen = false;
       return next(createHttpError(404, 'Request not found'));
     }
 
@@ -424,6 +430,7 @@ const updateApprovalStatus = async (req, res, next) => {
     }
 
     await client.query('COMMIT');
+    transactionOpen = false;
 
     if (decision === 'Approved' && activeApproversToNotify.length > 0) {
       const message = `The ${request_type} request with ID ${request_id} is ready for your approval.`;
@@ -466,11 +473,17 @@ Please log in to the system to take action.`,
 
     res.json({ message: `✅ Request ${decision.toLowerCase()} successfully` });
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (client && transactionOpen) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('❌ Failed to roll back approval transaction:', rollbackErr);
+      }
+    }
     console.error('❌ Error in approval workflow:', err);
-    next(createHttpError(500, 'Failed to update approval status'));
+    next(err);
   } finally {
-    client.release();
+    client?.release();
   }
 };
 

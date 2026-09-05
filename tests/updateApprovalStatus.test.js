@@ -91,4 +91,72 @@ describe('updateApprovalStatus', () => {
     expect(client.query).toHaveBeenLastCalledWith('COMMIT');
     expect(client.release).toHaveBeenCalled();
   });
+
+  it('rolls back before returning an inactive-approver error', async () => {
+    client.query
+      .mockResolvedValueOnce({}) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // active approval
+      .mockResolvedValueOnce({}); // ROLLBACK
+
+    const req = {
+      params: { id: '3452' },
+      body: { status: 'Approved' },
+      user: { id: 7, hasPermission: jest.fn(() => true) },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    await updateApprovalStatus(req, res, next);
+
+    expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 403,
+      message: 'You are not the active approver for this request',
+    }));
+    expect(res.json).not.toHaveBeenCalled();
+    expect(client.release).toHaveBeenCalled();
+  });
+
+  it('preserves database errors so the global handler can classify them', async () => {
+    const databaseError = Object.assign(new Error('approval log constraint failed'), {
+      code: '23514',
+    });
+    client.query
+      .mockResolvedValueOnce({}) // BEGIN
+      .mockRejectedValueOnce(databaseError) // active approval query
+      .mockResolvedValueOnce({}); // ROLLBACK
+
+    const req = {
+      params: { id: '3452' },
+      body: { status: 'Approved' },
+      user: { id: 7, hasPermission: jest.fn(() => true) },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    await updateApprovalStatus(req, res, next);
+
+    expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(next).toHaveBeenCalledWith(databaseError);
+    expect(client.release).toHaveBeenCalled();
+  });
+
+  it('forwards connection failures without trying to release a missing client', async () => {
+    const connectionError = new Error('database unavailable');
+    pool.connect.mockRejectedValueOnce(connectionError);
+
+    const req = {
+      params: { id: '3452' },
+      body: { status: 'Approved' },
+      user: { id: 7, hasPermission: jest.fn(() => true) },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    await updateApprovalStatus(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(connectionError);
+    expect(client.query).not.toHaveBeenCalled();
+    expect(client.release).not.toHaveBeenCalled();
+  });
 });

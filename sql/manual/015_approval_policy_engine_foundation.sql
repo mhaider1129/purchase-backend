@@ -10,8 +10,7 @@ DO $$ DECLARE present_count integer; BEGIN
        OR to_regclass('public.approval_policy_versions_number_uq') IS NULL
        OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policy_rules' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(policy_version_id,priority)%')
        THEN RAISE EXCEPTION 'SQL_015_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
-    PERFORM set_config('purchase_tracker.sql_015_upgrade','true',true);
-    RAISE NOTICE 'SQL_015_EXISTING_COMPATIBLE_SCHEMA_WILL_BE_STABILIZED';
+    RAISE EXCEPTION 'SQL_015_ALREADY_APPLIED_COMPATIBLE';
   ELSE PERFORM set_config('purchase_tracker.sql_015_install','true',true); END IF;
 END $$;
 DO $install$ BEGIN IF current_setting('purchase_tracker.sql_015_install',true) IS DISTINCT FROM 'true' THEN RETURN; END IF;
@@ -29,20 +28,12 @@ CREATE INDEX approval_policy_shadow_runs_request_idx ON approval_policy_shadow_r
 CREATE TABLE approval_policy_shadow_steps(id BIGSERIAL PRIMARY KEY,shadow_run_id BIGINT NOT NULL REFERENCES approval_policy_shadow_runs(id) ON DELETE CASCADE,sequence INTEGER NOT NULL,approval_level INTEGER NOT NULL,parallel_group VARCHAR(100),semantic_key VARCHAR(100) NOT NULL,resolver_type VARCHAR(60) NOT NULL,resolver_reference TEXT,resolved_user_id INTEGER REFERENCES users(id),resolved_user_name VARCHAR(255),resolved_unit_id BIGINT REFERENCES organization_units(id),resolution_status VARCHAR(20) NOT NULL CHECK(resolution_status IN('RESOLVED','UNRESOLVED','AMBIGUOUS','SKIPPED','DEDUPLICATED')),resolution_reason TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(shadow_run_id,sequence));
 CREATE TABLE approval_policy_shadow_differences(id BIGSERIAL PRIMARY KEY,shadow_run_id BIGINT NOT NULL REFERENCES approval_policy_shadow_runs(id) ON DELETE CASCADE,difference_type VARCHAR(40) NOT NULL CHECK(difference_type IN('MISSING_IN_SHADOW','ADDED_BY_SHADOW','DIFFERENT_USER','DIFFERENT_LEVEL','DIFFERENT_ORDER','AMBIGUOUS_RESOLUTION','UNRESOLVED_RESOLUTION','DUPLICATE_PRINCIPAL','MATCH')),current_step_sequence INTEGER,shadow_step_sequence INTEGER,details JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX approval_policy_shadow_differences_type_idx ON approval_policy_shadow_differences(shadow_run_id,difference_type);
+INSERT INTO permissions(code,name,description) VALUES
+('approval-policy.view','View approval policies','View institute-scoped approval policy configuration'),
+('approval-policy.manage','Manage approval policies','Create and edit institute-scoped draft approval policies'),
+('approval-policy.publish-shadow','Publish approval policy to shadow','Enable a validated policy version for non-authoritative shadow analysis'),
+('approval-policy.run-shadow','Run approval policy shadow','Evaluate requests without changing their approval route'),
+('approval-policy.view-shadow','View approval policy shadow results','View institute-scoped shadow comparisons')
+ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description;
 END $install$;
--- Stabilize a compatible schema created by the earlier pending 015 draft.  These
--- additions are deliberately gated by the strict eight-table preflight above;
--- an incomplete or structurally drifted schema still fails closed.
-DO $upgrade$ BEGIN
-  IF current_setting('purchase_tracker.sql_015_upgrade',true) IS DISTINCT FROM 'true' THEN RETURN; END IF;
-  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rules'::regclass AND contype='c' AND regexp_replace(pg_get_constraintdef(oid),'[[:space:]()]','','g')='CHECKpriority>0') THEN
-    ALTER TABLE approval_policy_rules ADD CONSTRAINT approval_policy_rules_priority_positive_ck CHECK(priority>0);
-  END IF;
-  IF to_regclass('public.approval_policy_shadow_runs_request_idx') IS NULL THEN
-    CREATE INDEX approval_policy_shadow_runs_request_idx ON approval_policy_shadow_runs(request_id,generated_at DESC);
-  END IF;
-  IF to_regclass('public.approval_policy_shadow_differences_type_idx') IS NULL THEN
-    CREATE INDEX approval_policy_shadow_differences_type_idx ON approval_policy_shadow_differences(shadow_run_id,difference_type);
-  END IF;
-END $upgrade$;
 COMMIT;

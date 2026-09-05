@@ -1,9 +1,9 @@
 const mockQuery=jest.fn(),mockRelease=jest.fn(),mockConnect=jest.fn();
 jest.mock('../config/db',()=>({query:(...a)=>mockQuery(...a),connect:(...a)=>mockConnect(...a)}));
-const mockRepo={getVersion:jest.fn(),listRules:jest.fn(),listConditions:jest.fn(),listSteps:jest.fn(),getPolicy:jest.fn(),getVersions:jest.fn(),listPolicies:jest.fn(),getShadowRun:jest.fn(),getShadowSteps:jest.fn(),getShadowDifferences:jest.fn(),listShadowRuns:jest.fn()};jest.mock('../repositories/approvalPolicyRepository',()=>mockRepo);
+const mockRepo={getVersion:jest.fn(),listRules:jest.fn(),listConditions:jest.fn(),listSteps:jest.fn(),getPolicy:jest.fn(),getVersions:jest.fn(),listPolicies:jest.fn(),getShadowRun:jest.fn(),getShadowSteps:jest.fn(),getShadowDifferences:jest.fn(),getCurrentRouteForRun:jest.fn(),listShadowRuns:jest.fn()};jest.mock('../repositories/approvalPolicyRepository',()=>mockRepo);
 jest.mock('../services/auditService',()=>({writeAuditEvent:jest.fn()}));jest.mock('../services/approvalPolicyShadowService',()=>({generateShadowApprovalRoute:jest.fn()}));
 const service=require('../services/approvalPolicyService'),shadow=require('../services/approvalPolicyShadowService');const actor={id:1,instituteId:10};
-beforeEach(()=>{jest.clearAllMocks();mockConnect.mockResolvedValue({query:mockQuery,release:mockRelease});mockQuery.mockResolvedValue({rows:[],rowCount:0});mockRepo.listRules.mockResolvedValue({rows:[]});mockRepo.listConditions.mockResolvedValue({rows:[]});mockRepo.listSteps.mockResolvedValue({rows:[]})});
+beforeEach(()=>{jest.clearAllMocks();mockConnect.mockResolvedValue({query:mockQuery,release:mockRelease});mockQuery.mockResolvedValue({rows:[],rowCount:0});mockRepo.listRules.mockResolvedValue({rows:[]});mockRepo.listConditions.mockResolvedValue({rows:[]});mockRepo.listSteps.mockResolvedValue({rows:[]});mockRepo.getCurrentRouteForRun.mockResolvedValue({rows:[]})});
 test.each([
  ['GET policy',()=>{mockRepo.getPolicy.mockResolvedValue({rows:[]});return service.getPolicy(99,actor)}],
  ['list versions',()=>{mockRepo.getVersions.mockResolvedValue({rows:[]});return service.getVersions(99,actor)}],

@@ -55,6 +55,44 @@ async function composeShadowRoute(version, facts, dependencies) {
 }
 
 function normalizeCurrentRoute(rows) { return rows.map((r,index)=>({sequence:r.sequence??index+1,approvalLevel:r.approval_level??r.approvalLevel,userId:r.approver_id??r.userId,userName:r.approver_name??r.userName,status:r.status,semanticKey:'LEGACY_SEMANTIC_UNKNOWN',routeVersion:r.route_version??null})); }
-function compareApprovalRoutes(current, shadow) { const differences=[], used=new Set(); shadow.forEach((s,i)=>{ if(s.resolutionStatus==='AMBIGUOUS') differences.push({type:'AMBIGUOUS_RESOLUTION',shadowIndex:i}); if(s.resolutionStatus==='UNRESOLVED') differences.push({type:'UNRESOLVED_RESOLUTION',shadowIndex:i}); const matches=current.map((c,j)=>({c,j})).filter(x=>!used.has(x.j)&&String(x.c.userId)===String(s.userId)); if(!matches.length&&s.resolutionStatus==='RESOLVED') differences.push({type:'ADDED_BY_SHADOW',shadowIndex:i}); else if(matches.length){const m=matches[0];used.add(m.j); differences.push({type:m.c.approvalLevel!==s.approvalLevel?'DIFFERENT_LEVEL':m.j!==i?'DIFFERENT_ORDER':'MATCH',currentIndex:m.j,shadowIndex:i});}}); current.forEach((_,i)=>{if(!used.has(i)) differences.push({type:'MISSING_IN_SHADOW',currentIndex:i});}); const principals=new Map(); shadow.filter(s=>s.resolutionStatus==='RESOLVED').forEach((s,i)=>{const prior=principals.get(String(s.userId));if(prior&&prior.semanticKey!==s.semanticKey)differences.push({type:'DUPLICATE_PRINCIPAL',shadowIndex:i,otherShadowIndex:prior.i});else principals.set(String(s.userId),{semanticKey:s.semanticKey,i});}); const metrics={currentStepCount:current.length,shadowStepCount:shadow.filter(s=>s.resolutionStatus!=='DEDUPLICATED').length,matchedCount:count('MATCH'),addedCount:count('ADDED_BY_SHADOW'),missingCount:count('MISSING_IN_SHADOW'),differentUserCount:count('DIFFERENT_USER'),unresolvedCount:count('UNRESOLVED_RESOLUTION'),ambiguousCount:count('AMBIGUOUS_RESOLUTION')}; function count(type){return differences.filter(d=>d.type===type).length;} const result=metrics.unresolvedCount||metrics.ambiguousCount?'UNRESOLVED':differences.every(d=>['MATCH','DUPLICATE_PRINCIPAL'].includes(d.type))?'MATCH':metrics.matchedCount?'PARTIAL_MATCH':'DIFFERENT'; return {result,differences,metrics}; }
+function compareApprovalRoutes(current, shadow) {
+  const differences=[], usedCurrent=new Set(), usedShadow=new Set();
+  const comparable=shadow.map((step,index)=>({step,index})).filter(({step})=>step.resolutionStatus==='RESOLVED');
+  for(const {step,index} of shadow.map((step,index)=>({step,index}))){
+    if(step.resolutionStatus==='AMBIGUOUS') differences.push({type:'AMBIGUOUS_RESOLUTION',shadowIndex:index});
+    if(step.resolutionStatus==='UNRESOLVED') differences.push({type:'UNRESOLVED_RESOLUTION',shadowIndex:index});
+  }
+
+  // Legacy routes do not carry reliable semantics. Pair steps by the strongest
+  // structural evidence first, then use principal identity as supporting evidence.
+  // This deliberately allows a structurally equivalent step to report a changed
+  // principal instead of degrading into an added/missing pair.
+  const candidates=[];
+  for(const {step:s,index:i} of comparable) for(let j=0;j<current.length;j++){
+    const c=current[j];
+    const reliableSemantic=c.semanticKey&&s.semanticKey&&c.semanticKey!=='LEGACY_SEMANTIC_UNKNOWN'&&s.semanticKey!=='LEGACY_SEMANTIC_UNKNOWN';
+    const semanticMatch=reliableSemantic&&c.semanticKey===s.semanticKey;
+    const sameLevel=Number(c.approvalLevel)===Number(s.approvalLevel);
+    const sameOrder=j===i;
+    const samePrincipal=c.userId!=null&&s.userId!=null&&String(c.userId)===String(s.userId);
+    const score=(semanticMatch?1000:0)+(samePrincipal?200:0)+(sameLevel?100:0)+(sameOrder?60:0)-Math.abs(j-i);
+    candidates.push({i,j,score});
+  }
+  candidates.sort((a,b)=>b.score-a.score||Math.abs(a.j-a.i)-Math.abs(b.j-b.i)||a.i-b.i||a.j-b.j);
+  for(const candidate of candidates){
+    if(usedShadow.has(candidate.i)||usedCurrent.has(candidate.j))continue;
+    usedShadow.add(candidate.i);usedCurrent.add(candidate.j);
+    const c=current[candidate.j],s=shadow[candidate.i];
+    const type=String(c.userId)!==String(s.userId)?'DIFFERENT_USER':Number(c.approvalLevel)!==Number(s.approvalLevel)?'DIFFERENT_LEVEL':candidate.j!==candidate.i?'DIFFERENT_ORDER':'MATCH';
+    differences.push({type,currentIndex:candidate.j,shadowIndex:candidate.i});
+  }
+  comparable.forEach(({index})=>{if(!usedShadow.has(index))differences.push({type:'ADDED_BY_SHADOW',shadowIndex:index});});
+  current.forEach((_,index)=>{if(!usedCurrent.has(index))differences.push({type:'MISSING_IN_SHADOW',currentIndex:index});});
+  const principals=new Map(); shadow.filter(s=>s.resolutionStatus==='RESOLVED').forEach((s,i)=>{const prior=principals.get(String(s.userId));if(prior&&prior.semanticKey!==s.semanticKey)differences.push({type:'DUPLICATE_PRINCIPAL',shadowIndex:i,otherShadowIndex:prior.i});else principals.set(String(s.userId),{semanticKey:s.semanticKey,i});});
+  const count=type=>differences.filter(d=>d.type===type).length;
+  const metrics={currentStepCount:current.length,shadowStepCount:shadow.filter(s=>s.resolutionStatus!=='DEDUPLICATED').length,matchedCount:count('MATCH'),addedCount:count('ADDED_BY_SHADOW'),missingCount:count('MISSING_IN_SHADOW'),differentUserCount:count('DIFFERENT_USER'),unresolvedCount:count('UNRESOLVED_RESOLUTION'),ambiguousCount:count('AMBIGUOUS_RESOLUTION')};
+  const result=metrics.unresolvedCount||metrics.ambiguousCount?'UNRESOLVED':differences.every(d=>['MATCH','DUPLICATE_PRINCIPAL'].includes(d.type))?'MATCH':metrics.matchedCount?'PARTIAL_MATCH':'DIFFERENT';
+  return {result,differences,metrics};
+}
 
 module.exports={LIVE_ROUTING_ENABLED,CONDITION_TYPES,RESOLVER_TYPES,CAPABILITY_ALIASES:capabilityAliases,decimalCompare,evaluateCondition,validateVersion,composeShadowRoute,normalizeCurrentRoute,compareApprovalRoutes};

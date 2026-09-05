@@ -6,12 +6,17 @@ exports.tree=wrap(async(req,res)=>res.json(await service.tree(scope(req,req.quer
 exports.list=wrap(async(req,res)=>res.json(await service.repo.list(scope(req,req.query))));
 exports.options=wrap(async(req,res)=>{
   const instituteId=req.user.institute_id;
-  const [departments,sections,users]=await Promise.all([
+  const [departments,sections,users,positions]=await Promise.all([
     service.repo.db().query('SELECT id,name FROM departments WHERE institute_id=$1 ORDER BY name',[instituteId]),
     service.repo.db().query('SELECT s.id,s.name,d.name AS department_name FROM sections s JOIN departments d ON d.id=s.department_id WHERE d.institute_id=$1 ORDER BY d.name,s.name',[instituteId]),
-    service.repo.db().query('SELECT id,name,email FROM users WHERE institute_id=$1 AND is_active=TRUE ORDER BY name',[instituteId])
+    service.repo.db().query('SELECT id,name,email FROM users WHERE institute_id=$1 AND is_active=TRUE ORDER BY name',[instituteId]),
+    service.repo.db().query(`SELECT op.id,ou.id AS unit_id,ou.name AS unit_name,op.position_name,op.position_type,
+      ou.id::text||':'||op.position_type AS reference
+      FROM organization_positions op JOIN organization_units ou ON ou.id=op.organization_unit_id
+      WHERE ou.institute_id=$1 AND ou.is_active=TRUE AND op.is_active=TRUE
+      ORDER BY ou.name,op.position_name`,[instituteId])
   ]);
-  res.json({departments:departments.rows,sections:sections.rows,users:users.rows});
+  res.json({departments:departments.rows,sections:sections.rows,users:users.rows,positions:positions.rows});
 });
 exports.detail=wrap(async(req,res)=>res.json(await service.detail(req.params.id)));
 exports.create=wrap(async(req,res)=>res.status(201).json(await service.create(actor(req,req.body))));

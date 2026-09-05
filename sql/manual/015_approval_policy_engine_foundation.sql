@@ -5,10 +5,38 @@ DO $$ DECLARE present_count integer; BEGIN
   SELECT count(*) INTO present_count FROM (VALUES ('approval_policies'),('approval_policy_versions'),('approval_policy_rules'),('approval_policy_rule_conditions'),('approval_policy_rule_steps'),('approval_policy_shadow_runs'),('approval_policy_shadow_steps'),('approval_policy_shadow_differences')) t(name) WHERE to_regclass('public.'||name) IS NOT NULL;
   IF present_count NOT IN (0,8) THEN RAISE EXCEPTION 'SQL_015_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
   IF present_count=8 THEN
-    IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rule_steps' AND column_name='semantic_key' AND is_nullable='NO')
-       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_runs' AND column_name='facts_snapshot' AND data_type='jsonb')
+    IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='institute_id' AND data_type='integer' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='code' AND data_type='character varying' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policies' AND indexname='approval_policies_institute_code_uq' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(institute_id,lower((code)::text))%')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='version_number' AND data_type='integer' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='status' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rules' AND column_name='priority' AND data_type='integer' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rules'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%priority > 0%')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rule_conditions' AND column_name='condition_type' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rule_steps' AND column_name='approval_level' AND data_type='integer' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rule_steps' AND column_name='step_order' AND data_type='integer' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rule_steps' AND column_name='semantic_key' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rule_steps' AND column_name='resolver_type' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_runs' AND column_name='facts_snapshot' AND data_type='jsonb' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_runs' AND column_name='run_status' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_differences' AND column_name='difference_type' AND is_nullable='NO')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_versions'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (approval_policy_id) REFERENCES approval_policies(id)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rules'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (policy_version_id) REFERENCES approval_policy_versions(id)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rule_conditions'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (policy_rule_id) REFERENCES approval_policy_rules(id)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rule_steps'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (policy_rule_id) REFERENCES approval_policy_rules(id)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_shadow_runs'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (request_id) REFERENCES requests(id)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_shadow_runs'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (policy_version_id) REFERENCES approval_policy_versions(id)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_shadow_steps'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (shadow_run_id) REFERENCES approval_policy_shadow_runs(id)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_shadow_differences'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (shadow_run_id) REFERENCES approval_policy_shadow_runs(id)%')
        OR to_regclass('public.approval_policy_versions_number_uq') IS NULL
+       OR to_regclass('public.approval_policy_rules_priority_uq') IS NULL
+       OR to_regclass('public.approval_policy_shadow_runs_lookup_idx') IS NULL
+       OR to_regclass('public.approval_policy_shadow_runs_request_idx') IS NULL
+       OR to_regclass('public.approval_policy_shadow_differences_type_idx') IS NULL
        OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policy_rules' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(policy_version_id,priority)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policy_versions' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(approval_policy_id,version_number)%')
+       OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policy_shadow_steps' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(shadow_run_id,sequence)%')
+       OR (SELECT count(*) FROM permissions WHERE code IN ('approval-policy.view','approval-policy.manage','approval-policy.publish-shadow','approval-policy.run-shadow','approval-policy.view-shadow')) <> 5
        THEN RAISE EXCEPTION 'SQL_015_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
     RAISE EXCEPTION 'SQL_015_ALREADY_APPLIED_COMPATIBLE';
   ELSE PERFORM set_config('purchase_tracker.sql_015_install','true',true); END IF;

@@ -78,4 +78,22 @@ describe('updateItemProcurementStatus', () => {
       ['not_procured', 'No supplier can fulfill the balance.', 7, '42'],
     );
   });
+
+  it('does not allow a rejected item procurement status to be changed', async () => {
+    pool.query
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ approval_status: 'Rejected' }] });
+
+    const req = buildRequest({ status: 'pending', comment: '' });
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await updateItemProcurementStatus(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 400,
+      message: 'Cannot change procurement status for a rejected item',
+    }));
+    expect(res.json).not.toHaveBeenCalled();
+  });
 });

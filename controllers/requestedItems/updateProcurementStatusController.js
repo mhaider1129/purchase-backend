@@ -31,11 +31,19 @@ const updateItemProcurementStatus = async (req, res, next) => {
            procurement_updated_by = $3,
            procurement_updated_at = CURRENT_TIMESTAMP
        WHERE id = $4
+         AND LOWER(COALESCE(approval_status, 'Approved')) <> 'rejected'
        RETURNING *`,
       [status, comment, updater_id, item_id]
     );
 
     if (result.rowCount === 0) {
+      const itemResult = await pool.query(
+        `SELECT approval_status FROM public.requested_items WHERE id = $1`,
+        [item_id],
+      );
+      if (String(itemResult.rows[0]?.approval_status || '').trim().toLowerCase() === 'rejected') {
+        return next(createHttpError(400, 'Cannot change procurement status for a rejected item'));
+      }
       return next(createHttpError(404, 'Requested item not found'));
     }
 
@@ -54,4 +62,3 @@ const updateItemProcurementStatus = async (req, res, next) => {
 };
 
 module.exports = updateItemProcurementStatus;
-

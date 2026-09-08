@@ -9,6 +9,8 @@ const present = value => value !== undefined;
 const effective = (position, today = new Date().toISOString().slice(0, 10)) =>
   position.is_active && (!position.effective_from || position.effective_from <= today) &&
   (!position.effective_to || position.effective_to >= today);
+const HEAD_TYPE={DEPARTMENT:'DEPARTMENT_HEAD',SECTION:'SECTION_HEAD',EXECUTIVE_OFFICE:'EXECUTIVE_HEAD',DIRECTORATE:'UNIT_HEAD',UNIT:'UNIT_HEAD',INSTITUTE:'UNIT_HEAD'};
+const VALID_PARENT_TYPES={INSTITUTE:[],EXECUTIVE_OFFICE:['INSTITUTE','EXECUTIVE_OFFICE'],DIRECTORATE:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE'],DEPARTMENT:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE'],SECTION:['DEPARTMENT'],UNIT:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE','DEPARTMENT','SECTION','UNIT']};
 
 function createOrganizationService(repo = defaultRepository, audit = defaultAudit) {
   const transaction = async work => {
@@ -35,12 +37,14 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     if (unit && String(unit.id) === String(parentId)) throw httpError(400, 'A unit cannot be its own parent');
     const parent = await repo.get(parentId, client, { lock: true });
     if (!parent) throw httpError(400, 'Parent unit not found');
+    if (parent.is_active === false) throw httpError(400, 'An archived unit cannot be a reporting parent');
     if (unit?.institute_id != null && String(parent.institute_id) !== String(unit.institute_id))
       throw httpError(400, 'Parent unit must belong to the same institute');
     if (unit) {
       const descendants = await repo.descendants(unit.id, client);
       if (descendants.some(item => String(item.id) === String(parentId))) throw httpError(400, 'Move would create a circular hierarchy');
     }
+    if(unit?.unit_type&&!(VALID_PARENT_TYPES[unit.unit_type]||[]).includes(parent.unit_type))throw httpError(400,`${unit.unit_type} cannot report to ${parent.unit_type}`);
   };
 
   const getAncestorUnits = (id, client) => repo.ancestors(id, client);
@@ -65,6 +69,14 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
 
   const getTree = async filters => {
     const rows = await repo.list(filters);
+    await Promise.all(rows.map(async row=>{
+      const type=HEAD_TYPE[row.unit_type];
+      if(!type)return;
+      row.positions=await repo.positions(row.id);
+      const matches=row.positions.filter(position=>position.position_type===type&&effective(position));
+      if(matches.length>1)row.authorityError=`Ambiguous active ${type} authority for organization unit ${row.id}`;
+      else row.unitHead=matches[0]||null;
+    }));
     const nodes = new Map(rows.map(row => [String(row.id), { ...row, children: [] }]));
     const roots = [];
     for (const node of nodes.values()) (nodes.get(String(node.parent_unit_id))?.children || roots).push(node);
@@ -77,7 +89,8 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     const [children, positions, path, executiveOwner] = await Promise.all([
       repo.list({ parent: id }, client), repo.positions(id, client), getOrganizationalPath(id, client), resolveExecutiveForUnit(id, client)
     ]);
-    const heads = positions.filter(position => position.is_unit_head && effective(position));
+    const headType=HEAD_TYPE[unit.unit_type];
+    const heads = positions.filter(position => position.position_type===headType && effective(position));
     if (heads.length > 1) throw httpError(409, `Ambiguous active UNIT_HEAD authority for organization unit ${id}`);
     return { ...unit, children, positions, path: path.map(item => item.name), ancestors: path.slice(0, -1),
       executiveOwner, unitHead: heads[0] || null };
@@ -117,6 +130,21 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     return result.rows[0];
   });
 
+  const assignHead = (unitId,payload) => transaction(async client=>{
+    const unit=await repo.get(unitId,client,{lock:true});
+    if(!unit)throw httpError(404,'Organization unit not found');
+    const type=HEAD_TYPE[unit.unit_type];
+    if(!type)throw httpError(400,'This unit type has no canonical head position');
+    const user=(await client.query('SELECT id,name,is_active,institute_id FROM users WHERE id=$1',[payload.userId])).rows[0];
+    if(!user||!user.is_active||String(user.institute_id)!==String(unit.institute_id))throw httpError(400,'Head must be an active user in the same institute');
+    const current=(await repo.positions(unitId,client)).filter(p=>p.position_type===type&&effective(p));
+    if(current.length>1)throw httpError(409,`Ambiguous active ${type} authority for organization unit ${unitId}`);
+    if(current[0])await client.query('UPDATE organization_positions SET is_active=FALSE,effective_to=COALESCE(effective_to,CURRENT_DATE),updated_by=$2,updated_at=now() WHERE id=$1',[current[0].id,payload.actorId]);
+    const result=await client.query(`INSERT INTO organization_positions(organization_unit_id,position_type,position_name,user_id,is_unit_head,is_active,effective_from,effective_to,created_by,updated_by) VALUES($1,$2,$3,$4,TRUE,TRUE,$5,$6,$7,$7) RETURNING *`,[unitId,type,payload.positionName||type.replaceAll('_',' '),payload.userId,payload.effectiveFrom||null,payload.effectiveTo||null,payload.actorId]);
+    await audit({client,entityType:'organization_position',entityId:result.rows[0].id,action:payload.auditAction||'ORGANIZATION_HEAD_MANUALLY_ASSIGNED',actorUserId:payload.actorId,beforeData:current[0]||null,afterData:result.rows[0],metadata:{reason:payload.reason||null}});
+    return result.rows[0];
+  });
+
   const archiveUnit = (id, actorId) => updateUnit(id, { isActive: false, actorId });
 
   const savePosition = (unitId, payload, id) => transaction(async client => {
@@ -129,16 +157,19 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     const type = payload.positionType || before?.position_type;
     if (!POSITION_TYPES.includes(type)) throw httpError(400, 'Invalid positionType');
     const active = payload.isActive ?? before?.is_active ?? true;
-    const isHead = payload.isUnitHead ?? before?.is_unit_head ?? false;
+    const semanticHead = type === HEAD_TYPE[(await repo.get(unitId, client))?.unit_type];
+    const requestedHead = payload.isUnitHead ?? before?.is_unit_head ?? false;
+    if (requestedHead && !semanticHead) throw httpError(400, 'isUnitHead must match the canonical head position type');
+    const isHead = semanticHead;
     if (active && (UNIQUE_AUTHORITIES.has(type) || isHead)) {
       const conflicts = (await repo.positions(unitId, client)).filter(p => p.id != id && p.is_active && (p.position_type === type || (isHead && p.is_unit_head)));
       if (conflicts.length) throw httpError(409, 'This unit already has an active unique authority; archive it before assigning another');
     }
     let result;
     if (id) result = await client.query(`UPDATE organization_positions SET position_type=COALESCE($2,position_type),position_name=COALESCE($3,position_name),user_id=CASE WHEN $4 THEN $5 ELSE user_id END,is_unit_head=COALESCE($6,is_unit_head),is_active=COALESCE($7,is_active),effective_from=CASE WHEN $8 THEN $9 ELSE effective_from END,effective_to=CASE WHEN $10 THEN $11 ELSE effective_to END,updated_by=$12,updated_at=now() WHERE id=$1 RETURNING *`,
-      [id, payload.positionType, payload.positionName, present(payload.userId), payload.userId || null, payload.isUnitHead, payload.isActive, present(payload.effectiveFrom), payload.effectiveFrom || null, present(payload.effectiveTo), payload.effectiveTo || null, payload.actorId]);
+      [id, payload.positionType, payload.positionName, present(payload.userId), payload.userId || null, isHead, payload.isActive, present(payload.effectiveFrom), payload.effectiveFrom || null, present(payload.effectiveTo), payload.effectiveTo || null, payload.actorId]);
     else result = await client.query(`INSERT INTO organization_positions(organization_unit_id,position_type,position_name,user_id,is_unit_head,is_active,effective_from,effective_to,created_by,updated_by) VALUES($1,$2,$3,$4,COALESCE($5,false),COALESCE($6,true),$7,$8,$9,$9) RETURNING *`,
-      [unitId, type, payload.positionName, payload.userId || null, payload.isUnitHead, payload.isActive, payload.effectiveFrom || null, payload.effectiveTo || null, payload.actorId]);
+      [unitId, type, payload.positionName, payload.userId || null, isHead, payload.isActive, payload.effectiveFrom || null, payload.effectiveTo || null, payload.actorId]);
     const action = !id ? 'ORGANIZATION_POSITION_ASSIGNED' : payload.isActive === false ? 'ORGANIZATION_POSITION_REMOVED' : 'ORGANIZATION_POSITION_CHANGED';
     await audit({ client, entityType: 'organization_position', entityId: result.rows[0].id, action, actorUserId: payload.actorId, beforeData: before, afterData: result.rows[0] });
     return result.rows[0];
@@ -150,11 +181,11 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     createUnit, create: createUnit, updateUnit, update: updateUnit, moveUnit, archiveUnit, archive: archiveUnit,
     createPosition: (unitId, payload) => savePosition(unitId, payload), updatePosition: (id, payload) => savePosition(null, payload, id),
     archivePosition: (id, actorId) => savePosition(null, { isActive: false, actorId }, id), savePosition,
-    resolvePositionHolder,
+    resolvePositionHolder, assignHead,
     resolveDepartmentHead: async id => { const unit = await linkedUnit('department_id', id); return unit ? resolvePositionHolder(unit.id, 'DEPARTMENT_HEAD') : null; },
     resolveSectionHead: async id => { const unit = await linkedUnit('section_id', id); return unit ? resolvePositionHolder(unit.id, 'SECTION_HEAD') : null; },
     resolveExecutiveOwner: async id => { const unit = await linkedUnit('department_id', id); return unit ? resolveExecutiveForUnit(unit.id) : null; },
     repo
   };
 }
-module.exports = { createOrganizationService, TYPES, POSITION_TYPES, effective };
+module.exports = { createOrganizationService, TYPES, POSITION_TYPES, HEAD_TYPE, VALID_PARENT_TYPES, effective };

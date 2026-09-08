@@ -780,7 +780,10 @@ const markRequestAsCompleted = async (req, res, next) => {
            CASE
              WHEN procurement_status IS NULL
                OR TRIM(procurement_status) = ''
-               OR purchased_quantity IS NULL
+               OR (
+                 LOWER(TRIM(procurement_status)) IN ('purchased', 'completed')
+                 AND purchased_quantity IS NULL
+               )
              THEN 1
              ELSE 0
            END
@@ -812,7 +815,7 @@ const markRequestAsCompleted = async (req, res, next) => {
       return next(
         createHttpError(
           400,
-          'Not all items have a procurement status and purchased quantity.'
+          'Purchased or completed items must have a procurement status and purchased quantity.'
         )
       );
     }

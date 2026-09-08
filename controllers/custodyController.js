@@ -16,7 +16,8 @@ const normalizeCustodyType = (value = '') => {
   const normalized = value.toLowerCase();
   if (normalized === 'personal') return 'Personal';
   if (normalized === 'departmental') return 'Departmental';
-  throw createHttpError(400, 'Custody type must be personal or departmental');
+  if (normalized === 'location') return 'Location';
+  throw createHttpError(400, 'Custody type must be personal, departmental, or location');
 };
 
 const hasRejectedStatus = (userStatus, hodStatus) => [userStatus, hodStatus].includes('Rejected');
@@ -82,6 +83,19 @@ const createCustodyRecord = async (req, res, next) => {
     custody_code,
     custodian_user_id,
     custodian_department_id,
+    asset_category,
+    asset_tag,
+    manufacturer,
+    model,
+    serial_number,
+    condition_at_issue,
+    building,
+    floor,
+    room,
+    section_unit,
+    cost_center,
+    pre_existing_condition,
+    acknowledgment_accepted,
   } = req.body || {};
 
   if (!item_name || typeof item_name !== 'string') {
@@ -91,6 +105,14 @@ const createCustodyRecord = async (req, res, next) => {
   const parsedQty = parseInt(quantity, 10);
   if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
     return next(createHttpError(400, 'Quantity must be a positive number'));
+  }
+
+  const allowedConditions = new Set(['New', 'Excellent', 'Good', 'Fair', 'Damaged / Defective']);
+  if (!allowedConditions.has(condition_at_issue)) {
+    return next(createHttpError(400, 'A valid condition at issue is required'));
+  }
+  if (acknowledgment_accepted !== true) {
+    return next(createHttpError(400, 'The custodian acknowledgment must be accepted'));
   }
 
   let custodyType;
@@ -144,6 +166,10 @@ const createCustodyRecord = async (req, res, next) => {
       }
 
       targetDepartmentId = departmentRows[0].id;
+
+      if (custodyType === 'Location' && !String(room || '').trim()) {
+        throw createHttpError(400, 'Room is required for location custody');
+      }
     }
 
     const hodUserId = await findHodForDepartment(
@@ -168,6 +194,20 @@ const createCustodyRecord = async (req, res, next) => {
       userApprovalStatus,
       hodApprovalStatus,
       overallStatus,
+      asset_category ?? null,
+      asset_tag ?? null,
+      manufacturer ?? null,
+      model ?? null,
+      serial_number ?? null,
+      condition_at_issue,
+      building ?? null,
+      floor ?? null,
+      room ?? null,
+      section_unit ?? null,
+      cost_center ?? null,
+      pre_existing_condition ?? null,
+      true,
+      new Date(),
     ];
 
     const { rows } = await client.query(
@@ -183,9 +223,23 @@ const createCustodyRecord = async (req, res, next) => {
          hod_user_id,
          user_approval_status,
          hod_approval_status,
-         status
+         status,
+         asset_category,
+         asset_tag,
+         manufacturer,
+         model,
+         serial_number,
+         condition_at_issue,
+         building,
+         floor,
+         room,
+         section_unit,
+         cost_center,
+         pre_existing_condition,
+         acknowledgment_accepted,
+         acknowledgment_accepted_at
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
        RETURNING id`,
       insertValues,
     );
@@ -408,12 +462,13 @@ const searchCustodyRecipients = async (req, res, next) => {
       `SELECT u.id,
               u.name,
               u.email,
+              u.employee_id,
               u.department_id,
               d.name AS department_name
          FROM users u
          LEFT JOIN departments d ON d.id = u.department_id
         WHERE u.is_active = TRUE
-          AND (LOWER(u.name) LIKE $1 OR LOWER(u.email) LIKE $1)
+          AND (LOWER(u.name) LIKE $1 OR LOWER(u.email) LIKE $1 OR LOWER(COALESCE(u.employee_id, '')) LIKE $1)
         ORDER BY u.name ASC
         LIMIT 20`,
       [searchTerm],

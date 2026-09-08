@@ -22,7 +22,7 @@ async function legacyHeadCandidates(departmentId,instituteId,client){const r=awa
   SELECT DISTINCT u.id,u.name,u.email,u.department_id,u.is_active,
     ARRAY_REMOVE(ARRAY[
       CASE WHEN UPPER(COALESCE(u.role,''))='HOD' THEN 'users.role=HOD' END,
-      CASE WHEN ur.user_id IS NOT NULL THEN 'user_roles→roles.name=HOD' END,
+      CASE WHEN bool_or(r.id IS NOT NULL) THEN 'user_roles→roles.name=HOD' END,
       CASE WHEN u.department_id=$1 THEN 'users.department_id' END
     ],NULL) evidence
   FROM users u
@@ -30,5 +30,8 @@ async function legacyHeadCandidates(departmentId,instituteId,client){const r=awa
   LEFT JOIN roles r ON r.id=ur.role_id AND UPPER(r.name)='HOD'
   WHERE u.institute_id=$2 AND u.department_id=$1
     AND (UPPER(COALESCE(u.role,''))='HOD' OR r.id IS NOT NULL)
+  GROUP BY u.id,u.name,u.email,u.department_id,u.is_active,u.role
   ORDER BY u.name`,[departmentId,instituteId]);return r.rows;}
-module.exports={pool,list,get,ancestors,descendants,positions,getPosition,legacyHeadCandidates,db};
+async function reconciliationDecision(unitId,client){const r=await db(client).query(`SELECT * FROM organization_head_reconciliation_decisions WHERE organization_unit_id=$1 AND superseded_at IS NULL ORDER BY decided_at DESC,id DESC LIMIT 1`,[unitId]);return r.rows[0]||null;}
+async function saveReconciliationDecision(data,client){await db(client).query('UPDATE organization_head_reconciliation_decisions SET superseded_at=now() WHERE organization_unit_id=$1 AND superseded_at IS NULL',[data.unitId]);const r=await db(client).query(`INSERT INTO organization_head_reconciliation_decisions(institute_id,organization_unit_id,legacy_user_id,decision,reason,decided_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[data.instituteId,data.unitId,data.legacyUserId||null,data.decision,data.reason,data.actorId]);return r.rows[0];}
+module.exports={pool,list,get,ancestors,descendants,positions,getPosition,legacyHeadCandidates,reconciliationDecision,saveReconciliationDecision,db};

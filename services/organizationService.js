@@ -11,6 +11,9 @@ const effective = (position, today = new Date().toISOString().slice(0, 10)) =>
   (!position.effective_to || position.effective_to >= today);
 const HEAD_TYPE={DEPARTMENT:'DEPARTMENT_HEAD',SECTION:'SECTION_HEAD',EXECUTIVE_OFFICE:'EXECUTIVE_HEAD',DIRECTORATE:'UNIT_HEAD',UNIT:'UNIT_HEAD',INSTITUTE:'UNIT_HEAD'};
 const VALID_PARENT_TYPES={INSTITUTE:[],EXECUTIVE_OFFICE:['INSTITUTE','EXECUTIVE_OFFICE'],DIRECTORATE:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE'],DEPARTMENT:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE'],SECTION:['DEPARTMENT'],UNIT:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE','DEPARTMENT','SECTION','UNIT']};
+const dateOnly=value=>value ? String(value).slice(0,10) : null;
+const previousDay=value=>{const date=new Date(`${dateOnly(value)}T00:00:00Z`);date.setUTCDate(date.getUTCDate()-1);return date.toISOString().slice(0,10);};
+const periodsOverlap=(aFrom,aTo,bFrom,bTo)=>(!aTo||!bFrom||dateOnly(aTo)>=dateOnly(bFrom))&&(!bTo||!aFrom||dateOnly(bTo)>=dateOnly(aFrom));
 
 function createOrganizationService(repo = defaultRepository, audit = defaultAudit) {
   const transaction = async work => {
@@ -86,21 +89,32 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
   const getUnit = async (id, client) => {
     const unit = await repo.get(id, client);
     if (!unit) throw httpError(404, 'Organization unit not found');
-    const [children, positions, path, executiveOwner] = await Promise.all([
-      repo.list({ parent: id }, client), repo.positions(id, client), getOrganizationalPath(id, client), resolveExecutiveForUnit(id, client)
+    const [children, positions, path] = await Promise.all([
+      repo.list({ parent: id }, client), repo.positions(id, client), getOrganizationalPath(id, client)
     ]);
     const headType=HEAD_TYPE[unit.unit_type];
     const heads = positions.filter(position => position.position_type===headType && effective(position));
-    if (heads.length > 1) throw httpError(409, `Ambiguous active UNIT_HEAD authority for organization unit ${id}`);
+    let executiveOwner=null,executiveAmbiguous=false;
+    try{executiveOwner=await resolveExecutiveForUnit(id,client);}catch(error){if(error.statusCode!==409)throw error;executiveAmbiguous=true;}
+    const reasons=[];
+    if(unit.is_active===false)reasons.push('INACTIVE_UNIT');
+    if(unit.unit_type==='DEPARTMENT'){
+      if(!unit.parent_unit_id)reasons.push('MISSING_PARENT');
+      if(heads.length===0)reasons.push('MISSING_DEPARTMENT_HEAD');
+      if(heads.length>1)reasons.push('AMBIGUOUS_HEAD');
+      if(!executiveOwner&&!executiveAmbiguous)reasons.push('MISSING_EXECUTIVE_OWNER');
+      if(executiveAmbiguous)reasons.push('AMBIGUOUS_EXECUTIVE_OWNER');
+    }
     return { ...unit, children, positions, path: path.map(item => item.name), ancestors: path.slice(0, -1),
-      executiveOwner, unitHead: heads[0] || null };
+      executiveOwner, unitHead: heads.length===1?heads[0]:null,authorityError:heads.length>1?`Ambiguous active ${headType} authority for organization unit ${id}`:null,
+      approvalRoutingReadiness:{status:reasons.length?'INCOMPLETE':'READY',reasons} };
   };
 
   const createUnit = payload => transaction(async client => {
     if (!payload.name || !TYPES.includes(payload.unitType)) throw httpError(400, 'name and valid unitType are required');
     if (!payload.instituteId) throw httpError(400, 'instituteId is required');
     validateLegacyLink(payload);
-    await validateParent({ institute_id: payload.instituteId }, payload.parentUnitId, client);
+    await validateParent({ institute_id: payload.instituteId, unit_type: payload.unitType }, payload.parentUnitId, client);
     const result = await client.query(`INSERT INTO organization_units(institute_id,name,code,unit_type,parent_unit_id,department_id,section_id,classification,is_active,sort_order,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,true),COALESCE($10,0),$11,$11) RETURNING *`,
       [payload.instituteId, payload.name, payload.code || null, payload.unitType, payload.parentUnitId || null,
         payload.departmentId || null, payload.sectionId || null, payload.classification || null, payload.isActive, payload.sortOrder, payload.actorId]);
@@ -130,20 +144,31 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     return result.rows[0];
   });
 
-  const assignHead = (unitId,payload) => transaction(async client=>{
+  const assignHeadWithClient = async (unitId,payload,client)=>{
     const unit=await repo.get(unitId,client,{lock:true});
     if(!unit)throw httpError(404,'Organization unit not found');
     const type=HEAD_TYPE[unit.unit_type];
     if(!type)throw httpError(400,'This unit type has no canonical head position');
     const user=(await client.query('SELECT id,name,is_active,institute_id FROM users WHERE id=$1',[payload.userId])).rows[0];
     if(!user||!user.is_active||String(user.institute_id)!==String(unit.institute_id))throw httpError(400,'Head must be an active user in the same institute');
-    const current=(await repo.positions(unitId,client)).filter(p=>p.position_type===type&&effective(p));
+    const positions=(await repo.positions(unitId,client)).filter(p=>p.position_type===type&&p.is_active);
+    const current=positions.filter(p=>effective(p));
     if(current.length>1)throw httpError(409,`Ambiguous active ${type} authority for organization unit ${unitId}`);
-    if(current[0])await client.query('UPDATE organization_positions SET is_active=FALSE,effective_to=COALESCE(effective_to,CURRENT_DATE),updated_by=$2,updated_at=now() WHERE id=$1',[current[0].id,payload.actorId]);
-    const result=await client.query(`INSERT INTO organization_positions(organization_unit_id,position_type,position_name,user_id,is_unit_head,is_active,effective_from,effective_to,created_by,updated_by) VALUES($1,$2,$3,$4,TRUE,TRUE,$5,$6,$7,$7) RETURNING *`,[unitId,type,payload.positionName||type.replaceAll('_',' '),payload.userId,payload.effectiveFrom||null,payload.effectiveTo||null,payload.actorId]);
+    const starts=dateOnly(payload.effectiveFrom)||new Date().toISOString().slice(0,10);
+    const ends=dateOnly(payload.effectiveTo);
+    if(ends&&ends<starts)throw httpError(400,'effectiveTo must be on or after effectiveFrom');
+    const overlapping=positions.filter(p=>p.id!==current[0]?.id&&periodsOverlap(p.effective_from,p.effective_to,starts,ends));
+    if(overlapping.length)throw httpError(409,`Overlapping active ${type} authority period for organization unit ${unitId}`);
+    if(current[0]&&periodsOverlap(current[0].effective_from,current[0].effective_to,starts,ends)){
+      const end=previousDay(starts);
+      const deactivate=current[0].effective_from&&dateOnly(current[0].effective_from)>end;
+      await client.query('UPDATE organization_positions SET is_active=$2,effective_to=$3,updated_by=$4,updated_at=now() WHERE id=$1',[current[0].id,!deactivate,end,payload.actorId]);
+    }
+    const result=await client.query(`INSERT INTO organization_positions(organization_unit_id,position_type,position_name,user_id,is_unit_head,is_active,effective_from,effective_to,created_by,updated_by) VALUES($1,$2,$3,$4,TRUE,TRUE,$5,$6,$7,$7) RETURNING *`,[unitId,type,payload.positionName||type.replaceAll('_',' '),payload.userId,starts,ends,payload.actorId]);
     await audit({client,entityType:'organization_position',entityId:result.rows[0].id,action:payload.auditAction||'ORGANIZATION_HEAD_MANUALLY_ASSIGNED',actorUserId:payload.actorId,beforeData:current[0]||null,afterData:result.rows[0],metadata:{reason:payload.reason||null}});
     return result.rows[0];
-  });
+  };
+  const assignHead = (unitId,payload) => transaction(client=>assignHeadWithClient(unitId,payload,client));
 
   const archiveUnit = (id, actorId) => updateUnit(id, { isActive: false, actorId });
 
@@ -162,8 +187,10 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     if (requestedHead && !semanticHead) throw httpError(400, 'isUnitHead must match the canonical head position type');
     const isHead = semanticHead;
     if (active && (UNIQUE_AUTHORITIES.has(type) || isHead)) {
-      const conflicts = (await repo.positions(unitId, client)).filter(p => p.id != id && p.is_active && (p.position_type === type || (isHead && p.is_unit_head)));
-      if (conflicts.length) throw httpError(409, 'This unit already has an active unique authority; archive it before assigning another');
+      const from=present(payload.effectiveFrom)?payload.effectiveFrom:before?.effective_from;
+      const to=present(payload.effectiveTo)?payload.effectiveTo:before?.effective_to;
+      const conflicts = (await repo.positions(unitId, client)).filter(p => p.id != id && p.is_active && (p.position_type === type || (isHead && p.is_unit_head))&&periodsOverlap(p.effective_from,p.effective_to,from,to));
+      if (conflicts.length) throw httpError(409, 'This authority period overlaps an existing active authority');
     }
     let result;
     if (id) result = await client.query(`UPDATE organization_positions SET position_type=COALESCE($2,position_type),position_name=COALESCE($3,position_name),user_id=CASE WHEN $4 THEN $5 ELSE user_id END,is_unit_head=COALESCE($6,is_unit_head),is_active=COALESCE($7,is_active),effective_from=CASE WHEN $8 THEN $9 ELSE effective_from END,effective_to=CASE WHEN $10 THEN $11 ELSE effective_to END,updated_by=$12,updated_at=now() WHERE id=$1 RETURNING *`,
@@ -181,11 +208,11 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     createUnit, create: createUnit, updateUnit, update: updateUnit, moveUnit, archiveUnit, archive: archiveUnit,
     createPosition: (unitId, payload) => savePosition(unitId, payload), updatePosition: (id, payload) => savePosition(null, payload, id),
     archivePosition: (id, actorId) => savePosition(null, { isActive: false, actorId }, id), savePosition,
-    resolvePositionHolder, assignHead,
+    resolvePositionHolder, assignHead, assignHeadWithClient, transaction,
     resolveDepartmentHead: async id => { const unit = await linkedUnit('department_id', id); return unit ? resolvePositionHolder(unit.id, 'DEPARTMENT_HEAD') : null; },
     resolveSectionHead: async id => { const unit = await linkedUnit('section_id', id); return unit ? resolvePositionHolder(unit.id, 'SECTION_HEAD') : null; },
     resolveExecutiveOwner: async id => { const unit = await linkedUnit('department_id', id); return unit ? resolveExecutiveForUnit(unit.id) : null; },
     repo
   };
 }
-module.exports = { createOrganizationService, TYPES, POSITION_TYPES, HEAD_TYPE, VALID_PARENT_TYPES, effective };
+module.exports = { createOrganizationService, TYPES, POSITION_TYPES, HEAD_TYPE, VALID_PARENT_TYPES, effective, periodsOverlap };

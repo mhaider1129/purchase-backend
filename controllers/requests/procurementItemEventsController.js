@@ -235,6 +235,11 @@ const addProcurementItemEvent = async (req, res, next) => {
       return next(createHttpError(403, 'You must be assigned to this request or have SCM/Admin/Procurement Supervisor access'));
     }
 
+    if (String(item.approval_status || 'Approved').trim().toLowerCase() === 'rejected') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(400, 'Cannot register procurement for a rejected item'));
+    }
+
     const requestedQuantity = Number(item.quantity || 0);
     const previousPurchasedQuantity = Number(item.purchased_quantity || 0);
     const remainingQuantityBeforeEvent = Math.max(requestedQuantity - previousPurchasedQuantity, 0);

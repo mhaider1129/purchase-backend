@@ -174,6 +174,8 @@ const getItems = async (requestId) => {
             ri.total_cost,
             ri.available_quantity,
             ri.procurement_status,
+            ri.approval_status,
+            ri.approval_comments,
             ri.specs,
             ri.intended_use,
             COALESCE(ri.procurement_updated_at, pie.latest_procurement_update) AS last_procurement_update,

@@ -202,6 +202,23 @@ describe('procurement item events', () => {
     }));
   });
 
+  it('blocks procurement for an item rejected during approval even when its procurement status is pending', async () => {
+    const client = buildClient({ itemOverrides: { approval_status: 'Rejected', procurement_status: 'pending' } });
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ event_quantity: 1 });
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await addProcurementItemEvent(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 400,
+      message: 'Cannot register procurement for a rejected item',
+    }));
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
   it('creates a linked requested item when adding a procurement event to a warehouse supply item', async () => {
     const client = buildClient({ requestOverrides: { request_type: 'Warehouse Supply' } });
     const state = {

@@ -128,6 +128,21 @@ const normalizeIdArray = rawValue => {
   return normalized;
 };
 
+const normalizeSecondaryTechnicalReviews = rawValue => {
+  const parsed = typeof rawValue === 'string' ? parseJson(rawValue) : rawValue;
+  if (!Array.isArray(parsed)) return [];
+  const seen = new Set();
+  return parsed.reduce((reviews, entry) => {
+    const departmentId = Number(entry?.department_id);
+    if (!Number.isInteger(departmentId) || departmentId <= 0 || seen.has(departmentId)) return reviews;
+    seen.add(departmentId);
+    const sections = Array.from(new Set((Array.isArray(entry?.sections) ? entry.sections : [])
+      .map(normalizeText).filter(Boolean)));
+    reviews.push({ department_id: departmentId, sections });
+    return reviews;
+  }, []);
+};
+
 const toJsonbParameter = value => {
   if (value === null || value === undefined) {
     return null;
@@ -600,6 +615,9 @@ const ensureContractsTable = (() => {
         end_user_department_id INTEGER,
         contract_manager_id INTEGER,
         technical_department_ids JSONB,
+        main_technical_department_id INTEGER,
+        secondary_technical_reviews JSONB NOT NULL DEFAULT '[]'::jsonb,
+        is_historical_contract BOOLEAN NOT NULL DEFAULT FALSE,
         clm_additional_payload JSONB,
         created_by INTEGER,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -619,7 +637,10 @@ const ensureContractsTable = (() => {
       ALTER TABLE contracts
         ADD COLUMN IF NOT EXISTS end_user_department_id INTEGER,
         ADD COLUMN IF NOT EXISTS contract_manager_id INTEGER,
-        ADD COLUMN IF NOT EXISTS technical_department_ids JSONB
+        ADD COLUMN IF NOT EXISTS technical_department_ids JSONB,
+        ADD COLUMN IF NOT EXISTS main_technical_department_id INTEGER,
+        ADD COLUMN IF NOT EXISTS secondary_technical_reviews JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS is_historical_contract BOOLEAN NOT NULL DEFAULT FALSE
     `);
 
     assignmentColumnsEnsured = true;
@@ -1008,6 +1029,7 @@ const ensureContractsPhaseTwoTables = (() => {
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
         await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS reviewer_department_id INTEGER`);
+        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS review_sections JSONB NOT NULL DEFAULT '[]'::jsonb`);
         await pool.query(`
           CREATE TABLE IF NOT EXISTS contract_items (
             id SERIAL PRIMARY KEY,
@@ -1433,6 +1455,9 @@ const serializeContract = (row, compliance = null) => {
     end_user_department_id: endUserDepartmentId,
     contract_manager_id: contractManagerId,
     technical_department_ids: technicalDepartmentIds,
+    main_technical_department_id: Number(row.main_technical_department_id) || null,
+    secondary_technical_reviews: normalizeSecondaryTechnicalReviews(row.secondary_technical_reviews),
+    is_historical_contract: Boolean(row.is_historical_contract),
     created_by: row.created_by,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -1485,7 +1510,7 @@ const listContracts = async (req, res, next) => {
               c.scope_summary, c.deliverables, c.technical_specifications, c.service_coverage, c.exclusions, c.sla_requirements,
               c.payment_terms_details, c.delivery_logistics_details, c.sla_details, c.penalties_incentives,
               c.change_management_terms, c.termination_exit_terms, c.alert_rules, c.clm_additional_payload,
-              c.end_user_department_id, c.contract_manager_id, c.technical_department_ids,
+              c.end_user_department_id, c.contract_manager_id, c.technical_department_ids, c.main_technical_department_id, c.secondary_technical_reviews, c.is_historical_contract,
               c.created_by, c.created_at, c.updated_at
          FROM contracts c
          LEFT JOIN (
@@ -1539,7 +1564,7 @@ const getContractById = async (req, res, next) => {
               c.scope_summary, c.deliverables, c.technical_specifications, c.service_coverage, c.exclusions, c.sla_requirements,
               c.payment_terms_details, c.delivery_logistics_details, c.sla_details, c.penalties_incentives,
               c.change_management_terms, c.termination_exit_terms, c.alert_rules, c.clm_additional_payload,
-              c.end_user_department_id, c.contract_manager_id, c.technical_department_ids,
+              c.end_user_department_id, c.contract_manager_id, c.technical_department_ids, c.main_technical_department_id, c.secondary_technical_reviews, c.is_historical_contract,
               c.created_by, c.created_at, c.updated_at
          FROM contracts c
          LEFT JOIN (
@@ -1613,7 +1638,8 @@ const createContract = async (req, res, next) => {
   const terminationExitTerms = normalizeText(req.body?.termination_exit_terms) || null;
   const alertRules = normalizeText(req.body?.alert_rules) || null;
   const clmAdditionalPayload = extractAdditionalClmPayload(req.body || {});
-  const rawStatus = req.body?.status || 'draft';
+  const isHistoricalContract = req.body?.is_historical_contract === true || req.body?.is_historical_contract === 'true';
+  const rawStatus = isHistoricalContract ? (req.body?.status || 'active') : 'draft';
 
   if (!title) {
     return next(createHttpError(400, 'title is required'));
@@ -1635,6 +1661,8 @@ const createContract = async (req, res, next) => {
   let endUserDepartmentId = null;
   let contractManagerId = null;
   let technicalDepartmentIds = [];
+  let mainTechnicalDepartmentId = null;
+  let secondaryTechnicalReviews = [];
   let supplierId = null;
   let sourceRequestId = null;
   let renewalNoticeDays = null;
@@ -1649,6 +1677,8 @@ const createContract = async (req, res, next) => {
     endUserDepartmentId = parseOptionalInteger(req.body?.end_user_department_id, 'end_user_department_id');
     contractManagerId = parseOptionalInteger(req.body?.contract_manager_id, 'contract_manager_id');
     technicalDepartmentIds = normalizeIdArray(req.body?.technical_department_ids);
+    mainTechnicalDepartmentId = parseOptionalInteger(req.body?.main_technical_department_id, 'main_technical_department_id');
+    secondaryTechnicalReviews = normalizeSecondaryTechnicalReviews(req.body?.secondary_technical_reviews);
     supplierId = parseOptionalInteger(req.body?.supplier_id, 'supplier_id');
     sourceRequestId = parseOptionalInteger(req.body?.source_request_id, 'source_request_id');
     renewalNoticeDays = parseOptionalInteger(req.body?.renewal_notice_days, 'renewal_notice_days');
@@ -1667,6 +1697,15 @@ const createContract = async (req, res, next) => {
   } catch (err) {
     return next(err);
   }
+
+  if (!isHistoricalContract && !mainTechnicalDepartmentId) {
+    return next(createHttpError(400, 'main_technical_department_id is required for a draft contract'));
+  }
+  secondaryTechnicalReviews = secondaryTechnicalReviews.filter(review => review.department_id !== mainTechnicalDepartmentId);
+  technicalDepartmentIds = Array.from(new Set([
+    ...(mainTechnicalDepartmentId ? [mainTechnicalDepartmentId] : []),
+    ...secondaryTechnicalReviews.map(review => review.department_id),
+  ]));
 
   if (startDate && endDate && startDate > endDate) {
     return next(createHttpError(400, 'end_date must be after start_date'));
@@ -1699,8 +1738,9 @@ const createContract = async (req, res, next) => {
          scope_summary, deliverables, technical_specifications, service_coverage, exclusions, sla_requirements,
          payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
          change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
-         created_by, end_user_department_id, contract_manager_id, technical_department_ids
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54)
+         created_by, end_user_department_id, contract_manager_id, technical_department_ids,
+         main_technical_department_id, secondary_technical_reviews, is_historical_contract
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57)
        RETURNING id, title, vendor, reference_number, start_date, signing_date, end_date, contract_value, amount_paid, status, description,
                  delivery_terms, warranty_terms, performance_management, commercial_terms, compliance_legal_terms,
                  financial_payment_control, risk_dispute_management, digital_attachments_tracking,
@@ -1711,7 +1751,7 @@ const createContract = async (req, res, next) => {
                  payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
                  change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
                  supplier_id, source_request_id,
-                 end_user_department_id, contract_manager_id, technical_department_ids,
+                 end_user_department_id, contract_manager_id, technical_department_ids, main_technical_department_id, secondary_technical_reviews, is_historical_contract,
                  created_by, created_at, updated_at`,
       [
         title,
@@ -1768,6 +1808,9 @@ const createContract = async (req, res, next) => {
         endUserDepartmentId,
         contractManagerId,
         toJsonbParameter(technicalDepartmentIds),
+        mainTechnicalDepartmentId,
+        toJsonbParameter(secondaryTechnicalReviews),
+        isHistoricalContract,
       ]
     );
 
@@ -2145,6 +2188,14 @@ const updateContract = async (req, res, next) => {
       pushAssignment('technical_department_ids', toJsonbParameter(parsedDepartments));
     }
 
+    if (req.body?.main_technical_department_id !== undefined) {
+      pushAssignment('main_technical_department_id', parseOptionalInteger(req.body.main_technical_department_id, 'main_technical_department_id'));
+    }
+    if (req.body?.secondary_technical_reviews !== undefined) {
+      const reviews = normalizeSecondaryTechnicalReviews(req.body.secondary_technical_reviews);
+      pushAssignment('secondary_technical_reviews', toJsonbParameter(reviews));
+    }
+
     if (req.body?.status !== undefined) {
       const requestedStatus = normalizeStatus(req.body.status);
       if (!requestedStatus) {
@@ -2298,6 +2349,7 @@ if (
               payment_terms_details, delivery_logistics_details, sla_details, penalties_incentives,
               change_management_terms, termination_exit_terms, alert_rules, clm_additional_payload,
                   end_user_department_id, contract_manager_id, technical_department_ids,
+                  main_technical_department_id, secondary_technical_reviews, is_historical_contract,
                   created_by, created_at, updated_at`,
       [...values, contractId]
     );
@@ -2869,31 +2921,42 @@ const fetchDepartmentsByIds = async (client, departmentIds = []) => {
 };
 
 const getTechnicalApprovalSteps = async (client, contract = {}) => {
-  const departmentIds = normalizeIdArray(contract?.technical_department_ids);
-  if (!departmentIds.length) {
-    return [{ stage: 'Technical Review', reviewer_role: 'technical', status: 'technical_review' }];
-  }
+  const mainDepartmentId = Number(contract?.main_technical_department_id);
+  const secondaryReviews = normalizeSecondaryTechnicalReviews(contract?.secondary_technical_reviews);
+  const departmentIds = [
+    ...(Number.isInteger(mainDepartmentId) && mainDepartmentId > 0 ? [mainDepartmentId] : []),
+    ...secondaryReviews.map(review => review.department_id),
+  ];
+  // Existing contracts retain their previous technical routing until they are edited.
+  const routedDepartmentIds = departmentIds.length ? departmentIds : normalizeIdArray(contract?.technical_department_ids);
+  if (!routedDepartmentIds.length) return [];
 
-  const departmentsById = await fetchDepartmentsByIds(client, departmentIds);
-  return departmentIds.map(departmentId => {
+  const departmentsById = await fetchDepartmentsByIds(client, routedDepartmentIds);
+  return routedDepartmentIds.map((departmentId, index) => {
     const department = departmentsById.get(departmentId);
+    const isMain = departmentId === mainDepartmentId || (!mainDepartmentId && index === 0);
+    const secondaryReview = secondaryReviews.find(review => review.department_id === departmentId);
     return {
-      stage: `Technical Review${department?.name ? ` - ${department.name}` : ''}`,
+      stage: `${isMain ? 'Main Technical HOD Review' : 'Secondary Technical Review'}${department?.name ? ` - ${department.name}` : ''}`,
       reviewer_role: 'technical',
       reviewer_department_id: departmentId,
+      review_sections: secondaryReview?.sections || [],
       status: 'technical_review',
+      phase: isMain ? 'main' : 'secondary',
     };
   });
 };
 
 const buildContractApprovalChain = async (client, contract = {}) => {
-  const steps = [
-    ...BASE_APPROVAL_CHAIN,
-    ...(await getTechnicalApprovalSteps(client, contract)),
-    ...FINAL_APPROVAL_CHAIN,
-  ];
-
-  return steps.map((step, index) => ({ ...step, level: index + 1 }));
+  const technicalSteps = await getTechnicalApprovalSteps(client, contract);
+  const mainSteps = technicalSteps.filter(step => step.phase === 'main');
+  const secondarySteps = technicalSteps.filter(step => step.phase === 'secondary');
+  return [
+    ...mainSteps.map(step => ({ ...step, level: 1 })),
+    ...BASE_APPROVAL_CHAIN.map(step => ({ ...step, level: 2 })),
+    ...secondarySteps.map(step => ({ ...step, level: 3 })),
+    ...FINAL_APPROVAL_CHAIN.map((step, index) => ({ ...step, level: 4 + index })),
+  ].map(({ phase, ...step }) => step);
 };
 
 const findDepartmentReviewerCandidate = async (client, departmentId, { activeOnly = false } = {}) => {
@@ -3046,10 +3109,16 @@ const activateNextResolvableContractApproval = async (client, contractId, afterL
     [contractId, afterLevel]
   );
 
-  for (const step of steps) {
-    await assignContractApprovalReviewer(client, step);
-    const activeReviewer = await getApprovalStepActiveReviewer(client, step);
-    if (activeReviewer) {
+  const levels = Array.from(new Set(steps.map(step => Number(step.approval_level))));
+  for (const level of levels) {
+    const levelSteps = steps.filter(step => Number(step.approval_level) === level);
+    const resolvable = [];
+    for (const step of levelSteps) {
+      await assignContractApprovalReviewer(client, step);
+      const activeReviewer = await getApprovalStepActiveReviewer(client, step);
+      if (activeReviewer) resolvable.push({ step, activeReviewer });
+    }
+    if (resolvable.length) {
       await client.query(
         `UPDATE contract_approvals
             SET is_active = FALSE, updated_at = NOW()
@@ -3057,13 +3126,15 @@ const activateNextResolvableContractApproval = async (client, contractId, afterL
             AND is_active = TRUE`,
         [contractId]
       );
-      await client.query(
-        `UPDATE contract_approvals
-            SET reviewer_id = $1, is_active = TRUE, updated_at = NOW()
-          WHERE id = $2`,
-        [activeReviewer.id, step.id]
-      );
-      return { activated: true, approvalId: step.id, approvalLevel: step.approval_level };
+      for (const { step, activeReviewer } of resolvable) {
+        await client.query(
+          `UPDATE contract_approvals
+              SET reviewer_id = $1, is_active = TRUE, updated_at = NOW()
+            WHERE id = $2`,
+          [activeReviewer.id, step.id]
+        );
+      }
+      return { activated: true, approvalId: resolvable[0].step.id, approvalLevel: level };
     }
   }
 
@@ -3130,8 +3201,8 @@ const submitContractReview = async (req, res, next) => {
     const approvalChain = await buildContractApprovalChain(client, contracts[0]);
     for (const step of approvalChain) {
       const reviewer = await getApprovalStepReviewerCandidate(client, step);
-      await client.query(`INSERT INTO contract_approvals (contract_id, approval_level, stage, reviewer_role, reviewer_department_id, reviewer_id, status, is_active, created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,FALSE,NOW())`, [contractId, step.level, step.stage, step.reviewer_role, step.reviewer_department_id || null, reviewer?.id || null, 'Pending']);
+      await client.query(`INSERT INTO contract_approvals (contract_id, approval_level, stage, reviewer_role, reviewer_department_id, reviewer_id, review_sections, status, is_active, created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,FALSE,NOW())`, [contractId, step.level, step.stage, step.reviewer_role, step.reviewer_department_id || null, reviewer?.id || null, JSON.stringify(step.review_sections || []), 'Pending']);
     }
     await client.query(`UPDATE contracts SET status='under_review', updated_at=NOW() WHERE id=$1`, [contractId]);
     await activateNextResolvableContractApproval(client, contractId, 0);
@@ -3178,7 +3249,7 @@ const listContractApprovals = async (req, res, next) => {
   try {
     await ensureContractsPhaseTwoTables();
     await reconcileContractApprovalWorkflow(pool, contractId);
-    const { rows } = await pool.query(`SELECT id, contract_id, approval_level, stage, reviewer_role, reviewer_department_id, reviewer_id, status, comments, is_active, decided_at, created_at
+    const { rows } = await pool.query(`SELECT id, contract_id, approval_level, stage, reviewer_role, reviewer_department_id, reviewer_id, review_sections, status, comments, is_active, decided_at, created_at
       FROM contract_approvals WHERE contract_id=$1 ORDER BY approval_level`, [contractId]);
     res.json(rows);
   } catch {
@@ -3292,7 +3363,13 @@ const decideContractApproval = async (req, res, next) => {
     if (!canUserDecideContractStep(req.user, current)) return next(createHttpError(403, 'This approval step is not assigned to your account or role'));
     await client.query(`UPDATE contract_approvals SET status=$1, comments=$2, reviewer_id = COALESCE(reviewer_id, $3), decided_at=NOW(), is_active=FALSE, updated_at=NOW() WHERE id=$4`, [decision, normalizeText(req.body?.comments) || null, req.user?.id || null, approvalId]);
     if (decision === 'Approved') {
-      const activation = await activateNextResolvableContractApproval(client, contractId, current.approval_level);
+      const { rows: remainingAtLevel } = await client.query(
+        `SELECT id FROM contract_approvals WHERE contract_id=$1 AND approval_level=$2 AND status='Pending' FOR UPDATE`,
+        [contractId, current.approval_level]
+      );
+      const activation = remainingAtLevel.length
+        ? { activated: true, pendingCount: remainingAtLevel.length }
+        : await activateNextResolvableContractApproval(client, contractId, current.approval_level);
       if (!activation.activated && activation.pendingCount === 0) {
         await client.query(`UPDATE contracts SET status='sent_for_signature', updated_at=NOW() WHERE id=$1`, [contractId]);
       } else {

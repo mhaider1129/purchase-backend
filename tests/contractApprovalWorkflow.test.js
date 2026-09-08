@@ -37,19 +37,23 @@ describe('contract approval workflow assignment', () => {
 
     const chain = await buildContractApprovalChain(
       { query },
-      { technical_department_ids: [11, 12] }
+      {
+        main_technical_department_id: 11,
+        secondary_technical_reviews: [{ department_id: 12, sections: ['Safety'] }],
+      }
     );
 
     expect(chain.map((step) => step.stage)).toEqual([
+      'Main Technical HOD Review - Pharmacy',
       'Legal Review',
       'Finance Review',
-      'Technical Review - Pharmacy',
-      'Technical Review - Radiology',
+      'Secondary Technical Review - Radiology',
       'SCM Review',
       'COO/CEO Approval',
     ]);
-    expect(chain.map((step) => step.level)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(chain.map((step) => step.level)).toEqual([1, 2, 2, 3, 4, 5]);
     expect(chain.filter((step) => step.reviewer_role === 'technical').map((step) => step.reviewer_department_id)).toEqual([11, 12]);
+    expect(chain.find((step) => step.reviewer_department_id === 12).review_sections).toEqual(['Safety']);
   });
 
   it('skips pending levels without active reviewers and activates the next level that has one', async () => {

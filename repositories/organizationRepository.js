@@ -17,4 +17,18 @@ async function get(id,client,options={}){const lock=options.lock?' FOR UPDATE OF
 async function ancestors(id,client){const r=await db(client).query(`WITH RECURSIVE a AS (SELECT *,0 depth FROM organization_units WHERE id=$1 UNION ALL SELECT p.*,a.depth+1 FROM organization_units p JOIN a ON a.parent_unit_id=p.id) SELECT * FROM a WHERE id<>$1 ORDER BY depth DESC`,[id]);return r.rows;}
 async function descendants(id,client){const r=await db(client).query(`WITH RECURSIVE d AS (SELECT *,0 depth FROM organization_units WHERE id=$1 UNION ALL SELECT c.*,d.depth+1 FROM organization_units c JOIN d ON c.parent_unit_id=d.id) SELECT * FROM d WHERE id<>$1 ORDER BY depth,sort_order,name`,[id]);return r.rows;}
 async function positions(id,client){const r=await db(client).query(`SELECT p.*,u.name user_name,u.email user_email FROM organization_positions p LEFT JOIN users u ON u.id=p.user_id WHERE organization_unit_id=$1 ORDER BY is_active DESC,is_unit_head DESC,id`,[id]);return r.rows;}
-module.exports={pool,list,get,ancestors,descendants,positions,db};
+async function getPosition(id,client){const r=await db(client).query('SELECT p.*,ou.institute_id FROM organization_positions p JOIN organization_units ou ON ou.id=p.organization_unit_id WHERE p.id=$1',[id]);return r.rows[0];}
+async function legacyHeadCandidates(departmentId,instituteId,client){const r=await db(client).query(`
+  SELECT DISTINCT u.id,u.name,u.email,u.department_id,u.is_active,
+    ARRAY_REMOVE(ARRAY[
+      CASE WHEN UPPER(COALESCE(u.role,''))='HOD' THEN 'users.role=HOD' END,
+      CASE WHEN ur.user_id IS NOT NULL THEN 'user_roles→roles.name=HOD' END,
+      CASE WHEN u.department_id=$1 THEN 'users.department_id' END
+    ],NULL) evidence
+  FROM users u
+  LEFT JOIN user_roles ur ON ur.user_id=u.id
+  LEFT JOIN roles r ON r.id=ur.role_id AND UPPER(r.name)='HOD'
+  WHERE u.institute_id=$2 AND u.department_id=$1
+    AND (UPPER(COALESCE(u.role,''))='HOD' OR r.id IS NOT NULL)
+  ORDER BY u.name`,[departmentId,instituteId]);return r.rows;}
+module.exports={pool,list,get,ancestors,descendants,positions,getPosition,legacyHeadCandidates,db};

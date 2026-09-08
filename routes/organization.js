@@ -2,6 +2,7 @@ const router=require('express').Router();
 const c=require('../controllers/organizationController');
 const permit=require('../middleware/requirePermission');
 router.get('/tree',c.tree); router.get('/units',c.list); router.get('/options',c.options); router.get('/resolve/:departmentId',c.resolve);
+router.get('/health',c.health);
 router.get('/head-reconciliation',permit('organization.manage'),c.reconciliation);
 router.get('/head-reconciliation/preview',permit('organization.manage'),c.reconciliationPreview);
 router.post('/head-reconciliation/bulk',permit('organization.manage'),c.bulkReconcile);

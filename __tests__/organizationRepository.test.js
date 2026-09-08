@@ -1,0 +1,2 @@
+const repository=require('../repositories/organizationRepository');
+test('legacy HOD discovery uses matched HOD role evidence and groups each user once',async()=>{const query=jest.fn(async()=>({rows:[]}));await repository.legacyHeadCandidates(10,1,{query});const sql=query.mock.calls[0][0];expect(sql).toContain('bool_or(r.id IS NOT NULL)');expect(sql).not.toContain('CASE WHEN ur.user_id IS NOT NULL');expect(sql).toContain("UPPER(r.name)='HOD'");expect(sql).toContain('GROUP BY u.id');expect(query.mock.calls[0][1]).toEqual([10,1])});

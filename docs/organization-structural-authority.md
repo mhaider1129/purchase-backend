@@ -25,3 +25,14 @@ For a future approval-engine cutover, structural resolution will first identify 
 position holder and then separately require the relevant approval capability (for
 example, `approval.department-head`). A missing capability must eventually fail closed.
 This phase does not activate that routing behavior and does not alter approval snapshots.
+## Position and capability boundary
+
+An organization position records **where structural authority applies**. A role,
+permission, or capability records **what system action is permitted**. A future
+live Approval Policy cutover may require both checks; this hierarchy readiness
+work does not enable that enforcement, remove the legacy HOD role, or change
+historical approval snapshots.
+
+Medical and Operational classifications remain descriptive metadata. Reporting
+parents and executive ownership are resolved only from the organization tree;
+classification never forces CMO or COO routing.

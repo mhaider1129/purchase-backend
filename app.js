@@ -360,6 +360,9 @@ const procurementPriorityRoutes = require('./routes/procurementPriority');
 const sparePartsRoutes = require('./routes/spareParts');
 const organizationRoutes = require('./routes/organization');
 const approvalPoliciesRoutes = require('./routes/approvalPolicies');
+const fixedAssetsRoutes = require('./routes/fixedAssets');
+const rfidRoutes = require('./routes/rfid');
+const rfidIngestionRoutes = require('./routes/rfidIngestion');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -369,6 +372,8 @@ const errorHandler = require('./middleware/errorHandler');
 // =========================
 app.use('/api/auth', authLimiter);
 app.use('/api/auth', authRoutes);
+// Service credentials are deliberately isolated from the human-JWT route stack.
+app.use('/api/rfid', rfidIngestionRoutes);
 
 // =========================
 // 🔒 Protected Routes
@@ -427,6 +432,8 @@ const protectedApiRoutes = [
   { path: '/procurement-priority', router: procurementPriorityRoutes },
   { path: '/spare-parts', router: sparePartsRoutes },
   { path: '/organization', router: organizationRoutes },
+  { path: '/assets', router: fixedAssetsRoutes },
+  { path: '/rfid', router: rfidRoutes },
 ];
 
 const mountApiRoutes = router => {

@@ -1,0 +1,1 @@
+const router=require('express').Router();const c=require('../controllers/rfidController');router.use(c.authenticateService);router.post('/read-events',c.ingest);router.post('/read-events/batch',c.ingest);module.exports=router;

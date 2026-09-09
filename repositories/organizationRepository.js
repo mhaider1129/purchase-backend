@@ -33,5 +33,10 @@ async function legacyHeadCandidates(departmentId,instituteId,client){const r=awa
   GROUP BY u.id,u.name,u.email,u.department_id,u.is_active,u.role
   ORDER BY u.name`,[departmentId,instituteId]);return r.rows;}
 async function reconciliationDecision(unitId,client){const r=await db(client).query(`SELECT * FROM organization_head_reconciliation_decisions WHERE organization_unit_id=$1 AND superseded_at IS NULL ORDER BY decided_at DESC,id DESC LIMIT 1`,[unitId]);return r.rows[0]||null;}
-async function saveReconciliationDecision(data,client){await db(client).query('UPDATE organization_head_reconciliation_decisions SET superseded_at=now() WHERE organization_unit_id=$1 AND superseded_at IS NULL',[data.unitId]);const r=await db(client).query(`INSERT INTO organization_head_reconciliation_decisions(institute_id,organization_unit_id,legacy_user_id,decision,reason,decided_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[data.instituteId,data.unitId,data.legacyUserId||null,data.decision,data.reason,data.actorId]);return r.rows[0];}
-module.exports={pool,list,get,ancestors,descendants,positions,getPosition,legacyHeadCandidates,reconciliationDecision,saveReconciliationDecision,db};
+async function saveReconciliationDecision(data,client){
+  if(!client)throw new TypeError('saveReconciliationDecision requires a transaction client');
+  await client.query('UPDATE organization_head_reconciliation_decisions SET superseded_at=now() WHERE organization_unit_id=$1 AND superseded_at IS NULL',[data.unitId]);
+  const r=await client.query(`INSERT INTO organization_head_reconciliation_decisions(institute_id,organization_unit_id,legacy_user_id,organization_head_position_id,organization_head_user_id,decision,reason,decided_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[data.instituteId,data.unitId,data.legacyUserId,data.organizationHeadPositionId,data.organizationHeadUserId,data.decision,data.reason,data.actorId]);return r.rows[0];
+}
+async function transaction(work){const client=await pool.connect();try{await client.query('BEGIN');const result=await work(client);await client.query('COMMIT');return result;}catch(error){try{await client.query('ROLLBACK');}catch(rollbackError){error.rollbackError=rollbackError;}throw error;}finally{client.release();}}
+module.exports={pool,list,get,ancestors,descendants,positions,getPosition,legacyHeadCandidates,reconciliationDecision,saveReconciliationDecision,transaction,db};

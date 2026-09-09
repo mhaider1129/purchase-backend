@@ -1,0 +1,11 @@
+const router=require('express').Router();
+const c=require('../controllers/rfidController');
+const permit=require('../middleware/requirePermission');
+router.get('/tags/lookup/:epc',permit('rfid.view'),c.lookup);
+router.patch('/tags/:tagId/status',permit('rfid.manage-tags'),c.tagStatus);
+router.post('/tags/:tagId/replace',permit('rfid.manage-tags'),c.replace);
+router.patch('/exceptions/:id',permit('rfid.manage-exceptions'),c.exceptionAction);
+router.post('/process',permit('rfid.manage-infrastructure'),c.process);
+router.post('/:resource',permit('rfid.manage-infrastructure'),c.createInfrastructure);
+router.get('/:resource',(req,res,next)=>permit(req.params.resource==='reads'?'rfid.view-raw-events':'rfid.view')(req,res,next),c.list);
+module.exports=router;

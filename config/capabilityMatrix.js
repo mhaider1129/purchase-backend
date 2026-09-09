@@ -3,6 +3,12 @@ const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const CAPABILITY_MATRIX = [
   { routePrefix: '/approval-polic', module: 'procurement-governance', resource: 'approval-policy', permissions: ['approval-policy.view','approval-policy.manage','approval-policy.publish-shadow','approval-policy.run-shadow','approval-policy.view-shadow'] },
   {
+    routePrefix: '/assets', module: 'fixed-assets', resource: 'assets', permissions: ['fixed-assets.view','fixed-assets.create','fixed-assets.edit','fixed-assets.manage','fixed-assets.move','fixed-assets.verify','fixed-assets.manage-locations','fixed-assets.manage-categories','fixed-assets.view-financial'],
+  },
+  {
+    routePrefix: '/rfid', module: 'fixed-assets', resource: 'rfid', permissions: ['rfid.view','rfid.manage-tags','rfid.manage-infrastructure','rfid.view-raw-events','rfid.manage-exceptions','rfid.manage-integrations'],
+  },
+  {
     routePrefix: '/admin-tools',
     module: 'platform-governance',
     resource: 'admin-tools',

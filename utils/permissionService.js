@@ -72,6 +72,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'finance.post-ledger',
     'finance.payment.manage',
     'finance.override-mismatch',
+    'fixed-assets.view','fixed-assets.create','fixed-assets.edit','fixed-assets.manage','fixed-assets.move','fixed-assets.verify','fixed-assets.manage-locations','fixed-assets.manage-categories','fixed-assets.view-financial',
+    'rfid.view','rfid.manage-tags','rfid.manage-infrastructure','rfid.view-raw-events','rfid.manage-exceptions','rfid.manage-integrations',
   ],
   procurementspecialist: [
     'contracts.manage',
@@ -247,6 +249,8 @@ const CORE_PERMISSION_DEFINITIONS = [
   { code: 'item-master.suppliers', name: 'Manage supplier catalog', description: 'Maintain supplier commercial records' },
   { code: 'item-master.legacy-maintain', name: 'Maintain legacy mappings', description: 'Map compatibility items to normalized generic items' },
   { code: 'item-master.free-text-exception', name: 'Approve free-text exceptions', description: 'Authorize exceptional non-catalog purchase lines' },
+  ...['view','create','edit','manage','move','verify','manage-locations','manage-categories','view-financial'].map(action => ({ code:`fixed-assets.${action}`, name:`Fixed assets: ${action}`, description:`${action} fixed asset records within institute scope.` })),
+  ...['view','manage-tags','manage-infrastructure','view-raw-events','manage-exceptions','manage-integrations'].map(action => ({ code:`rfid.${action}`, name:`RFID: ${action}`, description:`${action} RFID resources within institute scope.` })),
 ];
 
 const getDefaultPermissionsForRole = (role) => {

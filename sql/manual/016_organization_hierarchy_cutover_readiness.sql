@@ -14,6 +14,7 @@ DECLARE
   unexpected text;
   overlap_record record;
   complete_compatible boolean := false;
+  legacy_compatible boolean := false;
 BEGIN
   SELECT oid INTO new_authority FROM pg_constraint WHERE connamespace='public'::regnamespace AND conname='organization_positions_unique_authority_period';
   SELECT oid INTO new_unit_head FROM pg_constraint WHERE connamespace='public'::regnamespace AND conname='organization_positions_unit_head_period';
@@ -31,7 +32,7 @@ BEGIN
       AND NOT EXISTS (
         SELECT 1 FROM (VALUES
           ('id','bigint','NO'),('institute_id','integer','NO'),('organization_unit_id','bigint','NO'),
-          ('legacy_user_id','integer','NO'),('organization_head_position_id','bigint','NO'),
+          ('legacy_user_id','integer','YES'),('organization_head_position_id','bigint','NO'),
           ('organization_head_user_id','integer','NO'),('decision','character varying','NO'),
           ('reason','text','NO'),('decided_by','integer','NO'),('decided_at','timestamp with time zone','NO'),
           ('superseded_at','timestamp with time zone','YES')
@@ -39,6 +40,14 @@ BEGIN
         WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema='public'
           AND c.table_name='organization_head_reconciliation_decisions' AND c.column_name=e.column_name
           AND c.data_type=e.data_type AND c.is_nullable=e.is_nullable))
+      AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public'
+        AND table_name='organization_head_reconciliation_decisions')=11
+      AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+        AND table_name='organization_head_reconciliation_decisions' AND column_name='id'
+        AND column_default LIKE 'nextval(%organization_head_reconciliation_decisions_id_seq%')
+      AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+        AND table_name='organization_head_reconciliation_decisions' AND column_name='decided_at'
+        AND column_default='now()')
       AND (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='p')=1
       AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
         AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(institute_id\) REFERENCES institutes\(id\) ON DELETE RESTRICT')=1
@@ -53,9 +62,9 @@ BEGIN
       AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
         AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(decided_by\) REFERENCES users\(id\) ON DELETE RESTRICT')=1
       AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='c'
-        AND pg_get_constraintdef(c.oid) LIKE '%decision%KEEP_EXISTING%MARK_LEGACY_OBSOLETE%')
+        AND lower(pg_get_constraintdef(c.oid)) LIKE '%decision%keep_existing%mark_legacy_obsolete%')
       AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='c'
-        AND pg_get_constraintdef(c.oid) LIKE '%length%trim%reason%> 0%')
+        AND lower(pg_get_constraintdef(c.oid)) LIKE '%length%trim%reason%> 0%')
       AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
         AND i.indrelid=reconciliation AND i.indisunique AND i.indnkeyatts=1
         AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
@@ -68,6 +77,61 @@ BEGIN
     IF complete_compatible THEN
       PERFORM set_config('purchase_tracker.sql_016_install','false',true);
       RAISE NOTICE 'SQL_016_ALREADY_APPLIED_COMPATIBLE';
+      RETURN;
+    END IF;
+
+    -- LEGACY 016: the original published version created the period constraints and
+    -- reconciliation table without the two organization-head snapshot columns.  An
+    -- empty instance can be upgraded losslessly; populated instances remain a
+    -- deliberate manual-reconciliation case because their missing snapshot values
+    -- cannot be reconstructed reliably.
+    legacy_compatible :=
+      EXISTS (SELECT 1 FROM pg_constraint c WHERE c.oid=new_authority AND c.contype='x'
+        AND c.conrelid='public.organization_positions'::regclass)
+      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.oid=new_unit_head AND c.contype='x'
+        AND c.conrelid='public.organization_positions'::regclass)
+      AND NOT EXISTS (
+        SELECT 1 FROM (VALUES
+          ('id','bigint','NO'),('institute_id','integer','NO'),('organization_unit_id','bigint','NO'),
+          ('legacy_user_id','integer','YES'),('decision','character varying','NO'),
+          ('reason','text','NO'),('decided_by','integer','NO'),('decided_at','timestamp with time zone','NO'),
+          ('superseded_at','timestamp with time zone','YES')
+        ) e(column_name,data_type,is_nullable)
+        WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema='public'
+          AND c.table_name='organization_head_reconciliation_decisions' AND c.column_name=e.column_name
+          AND c.data_type=e.data_type AND c.is_nullable=e.is_nullable))
+      AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+        AND table_name='organization_head_reconciliation_decisions'
+        AND column_name IN ('organization_head_position_id','organization_head_user_id'))
+      AND (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='p')=1
+      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
+        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(institute_id\) REFERENCES institutes\(id\) ON DELETE RESTRICT')=1
+      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
+        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(organization_unit_id\) REFERENCES organization_units\(id\) ON DELETE RESTRICT')=1
+      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
+        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(legacy_user_id\) REFERENCES users\(id\) ON DELETE RESTRICT')=1
+      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
+        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(decided_by\) REFERENCES users\(id\) ON DELETE RESTRICT')=1
+      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='c'
+        AND lower(pg_get_constraintdef(c.oid)) LIKE '%decision%keep_existing%mark_legacy_obsolete%')
+      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='c'
+        AND lower(pg_get_constraintdef(c.oid)) LIKE '%length%trim%reason%> 0%')
+      AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
+        AND i.indrelid=reconciliation AND i.indisunique AND i.indnkeyatts=1
+        AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
+        AND regexp_replace(pg_get_expr(i.indpred,i.indrelid),'[()]','','g')='superseded_at IS NULL')
+      AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_decisions_scope_idx')
+        AND i.indrelid=reconciliation AND NOT i.indisunique AND i.indnkeyatts=3
+        AND pg_get_indexdef(i.indexrelid,1,true)='institute_id'
+        AND pg_get_indexdef(i.indexrelid,2,true)='organization_unit_id'
+        AND pg_get_indexdef(i.indexrelid,3,true)='decided_at DESC' AND i.indpred IS NULL);
+    IF legacy_compatible THEN
+      IF EXISTS (SELECT 1 FROM organization_head_reconciliation_decisions) THEN
+        RAISE EXCEPTION 'SQL_016_LEGACY_RECONCILIATION_DATA_REQUIRES_MANUAL_BACKFILL'
+          USING HINT = 'Backfill the organization-head position/user snapshots before rerunning 016; no data was changed.';
+      END IF;
+      PERFORM set_config('purchase_tracker.sql_016_install','upgrade_legacy',true);
+      RAISE NOTICE 'SQL_016_UPGRADING_EMPTY_LEGACY_SCHEMA';
       RETURN;
     END IF;
     RAISE EXCEPTION 'SQL_016_PARTIAL_OR_DRIFTED_SCHEMA';
@@ -85,8 +149,8 @@ BEGIN
       AND i.indrelid='public.organization_positions'::regclass AND i.indisunique AND i.indnkeyatts=2
       AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
       AND pg_get_indexdef(i.indexrelid,2,true)='position_type'
-      AND pg_get_expr(i.indpred,i.indrelid) LIKE '%is_active%'
-      AND pg_get_expr(i.indpred,i.indrelid) LIKE ALL (ARRAY['%UNIT_HEAD%','%EXECUTIVE_HEAD%','%DEPARTMENT_HEAD%','%SECTION_HEAD%']))
+      AND regexp_replace(lower(pg_get_expr(i.indpred,i.indrelid)),'[[:space:]()]','','g')
+        ~ '^is_activeandposition_type::text=anyarray\[''unit_head''::(charactervarying|text),''executive_head''::(charactervarying|text),''department_head''::(charactervarying|text),''section_head''::(charactervarying|text)\]::text\[\]$'
     OR NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=old_unit_head
       AND i.indrelid='public.organization_positions'::regclass AND i.indisunique AND i.indnkeyatts=1
       AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
@@ -102,13 +166,25 @@ BEGIN
    AND daterange(COALESCE(a.effective_from,'-infinity'),COALESCE(a.effective_to+1,'infinity'),'[)') &&
        daterange(COALESCE(b.effective_from,'-infinity'),COALESCE(b.effective_to+1,'infinity'),'[)')
   WHERE a.is_active AND a.position_type IN ('UNIT_HEAD','EXECUTIVE_HEAD','DEPARTMENT_HEAD','SECTION_HEAD') LIMIT 1;
-  IF FOUND THEN RAISE EXCEPTION 'SQL_016_AUTHORITY_PERIOD_OVERLAP unit=%, type=%, position_ids=%,%',overlap_record.organization_unit_id,overlap_record.position_type,overlap_record.first_id,overlap_record.second_id; END IF;
+  IF FOUND THEN RAISE EXCEPTION 'SQL_016_EXISTING_AUTHORITY_PERIOD_OVERLAP'
+    USING DETAIL=format('organization_unit_id=%s, position_type=%s, position_ids=%s,%s, effective_periods=%s..%s and %s..%s',
+      overlap_record.organization_unit_id,overlap_record.position_type,overlap_record.first_id,overlap_record.second_id,
+      (SELECT effective_from FROM organization_positions WHERE id=overlap_record.first_id),
+      (SELECT effective_to FROM organization_positions WHERE id=overlap_record.first_id),
+      (SELECT effective_from FROM organization_positions WHERE id=overlap_record.second_id),
+      (SELECT effective_to FROM organization_positions WHERE id=overlap_record.second_id)); END IF;
   SELECT a.id first_id,b.id second_id,a.organization_unit_id INTO overlap_record
   FROM organization_positions a JOIN organization_positions b ON b.id>a.id AND b.organization_unit_id=a.organization_unit_id
    AND b.is_active AND b.is_unit_head
    AND daterange(COALESCE(a.effective_from,'-infinity'),COALESCE(a.effective_to+1,'infinity'),'[)') && daterange(COALESCE(b.effective_from,'-infinity'),COALESCE(b.effective_to+1,'infinity'),'[)')
   WHERE a.is_active AND a.is_unit_head LIMIT 1;
-  IF FOUND THEN RAISE EXCEPTION 'SQL_016_UNIT_HEAD_PERIOD_OVERLAP unit=%, position_ids=%,%',overlap_record.organization_unit_id,overlap_record.first_id,overlap_record.second_id; END IF;
+  IF FOUND THEN RAISE EXCEPTION 'SQL_016_EXISTING_AUTHORITY_PERIOD_OVERLAP'
+    USING DETAIL=format('organization_unit_id=%s, is_unit_head=true, position_ids=%s,%s, effective_periods=%s..%s and %s..%s',
+      overlap_record.organization_unit_id,overlap_record.first_id,overlap_record.second_id,
+      (SELECT effective_from FROM organization_positions WHERE id=overlap_record.first_id),
+      (SELECT effective_to FROM organization_positions WHERE id=overlap_record.first_id),
+      (SELECT effective_from FROM organization_positions WHERE id=overlap_record.second_id),
+      (SELECT effective_to FROM organization_positions WHERE id=overlap_record.second_id)); END IF;
   PERFORM set_config('purchase_tracker.sql_016_install','true',true);
 END $preflight$;
 
@@ -137,14 +213,24 @@ BEGIN
     id BIGSERIAL PRIMARY KEY,
     institute_id INTEGER NOT NULL REFERENCES institutes(id) ON DELETE RESTRICT,
     organization_unit_id BIGINT NOT NULL REFERENCES organization_units(id) ON DELETE RESTRICT,
-    legacy_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    legacy_user_id INTEGER REFERENCES users(id) ON DELETE RESTRICT,
     organization_head_position_id BIGINT NOT NULL REFERENCES organization_positions(id) ON DELETE RESTRICT,
     organization_head_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    decision VARCHAR(40) NOT NULL CHECK (decision IN ('KEEP_EXISTING','MARK_LEGACY_OBSOLETE')),
-    reason TEXT NOT NULL CHECK (length(trim(reason)) > 0), decided_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    decision VARCHAR(40) NOT NULL CONSTRAINT organization_head_reconciliation_decision_check CHECK (decision IN ('KEEP_EXISTING','MARK_LEGACY_OBSOLETE')),
+    reason TEXT NOT NULL CONSTRAINT organization_head_reconciliation_reason_check CHECK (length(trim(reason)) > 0), decided_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     decided_at TIMESTAMPTZ NOT NULL DEFAULT now(), superseded_at TIMESTAMPTZ)$ddl$;
   EXECUTE 'CREATE UNIQUE INDEX organization_head_reconciliation_current_uq ON organization_head_reconciliation_decisions(organization_unit_id) WHERE superseded_at IS NULL';
   EXECUTE 'CREATE INDEX organization_head_reconciliation_decisions_scope_idx ON organization_head_reconciliation_decisions(institute_id,organization_unit_id,decided_at DESC)';
  END IF;
 END $install$;
+
+DO $upgrade_legacy$
+BEGIN
+ IF current_setting('purchase_tracker.sql_016_install')='upgrade_legacy' THEN
+  ALTER TABLE organization_head_reconciliation_decisions
+    ALTER COLUMN legacy_user_id SET NOT NULL,
+    ADD COLUMN organization_head_position_id BIGINT NOT NULL REFERENCES organization_positions(id) ON DELETE RESTRICT,
+    ADD COLUMN organization_head_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT;
+ END IF;
+END $upgrade_legacy$;
 COMMIT;

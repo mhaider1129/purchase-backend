@@ -4,8 +4,15 @@ BEGIN;
 DO $migration$
 DECLARE expected text[] := ARRAY['asset_number_allocators','asset_categories','asset_locations','assets','asset_movements','asset_tags','rfid_readers','rfid_antennas','rfid_portals','rfid_portal_antennas','rfid_integration_clients','rfid_read_events','rfid_business_events','asset_exceptions']; present int;
 BEGIN
+ IF EXISTS (SELECT 1 FROM unnest(ARRAY['institutes','users','departments','sections','stock_items','requests','requested_items','purchase_orders','purchase_order_items','goods_receipts','goods_receipt_items','suppliers','custody_records']) d(name) WHERE to_regclass('public.'||name) IS NULL) THEN
+   RAISE EXCEPTION 'SQL_017_DEPENDENCY_MISSING_OR_INCOMPATIBLE';
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='institutes' AND column_name='id' AND data_type='integer')
+ OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='custody_records' AND column_name='id') THEN
+   RAISE EXCEPTION 'SQL_017_DEPENDENCY_MISSING_OR_INCOMPATIBLE';
+ END IF;
  SELECT count(*) INTO present FROM unnest(expected) n WHERE to_regclass('public.'||n) IS NOT NULL;
- IF present NOT IN (0,array_length(expected,1)) THEN RAISE EXCEPTION '017 drift: only %/% core tables exist',present,array_length(expected,1); END IF;
+ IF present NOT IN (0,array_length(expected,1)) THEN RAISE EXCEPTION 'SQL_017_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
  IF present=0 THEN
   EXECUTE $ddl$
 CREATE TABLE asset_number_allocators(institute_id integer PRIMARY KEY REFERENCES institutes(id) ON DELETE RESTRICT,next_value bigint NOT NULL DEFAULT 1 CHECK(next_value>0),prefix varchar(20) NOT NULL DEFAULT 'WICI-A');
@@ -27,9 +34,25 @@ CREATE TABLE rfid_business_events(id bigserial PRIMARY KEY,institute_id integer 
 ALTER TABLE rfid_read_events ADD CONSTRAINT rfid_read_business_event_fk FOREIGN KEY(business_event_id) REFERENCES rfid_business_events(id);
 CREATE TABLE asset_exceptions(id bigserial PRIMARY KEY,institute_id integer NOT NULL REFERENCES institutes(id),asset_id bigint REFERENCES assets(id),asset_tag_id bigint REFERENCES asset_tags(id),rfid_business_event_id bigint REFERENCES rfid_business_events(id),exception_type varchar(40) NOT NULL CHECK(exception_type IN('UNAUTHORIZED_MOVEMENT','UNKNOWN_TAG','LOCATION_MISMATCH','MISSING_ASSET','DUPLICATE_SERIAL_REVIEW','RFID_CONFIGURATION')),severity varchar(20) NOT NULL CHECK(severity IN('LOW','MEDIUM','HIGH','CRITICAL')),status varchar(20) NOT NULL CHECK(status IN('OPEN','ACKNOWLEDGED','RESOLVED')),detected_at timestamptz NOT NULL,acknowledged_by integer REFERENCES users(id),acknowledged_at timestamptz,resolved_by integer REFERENCES users(id),resolved_at timestamptz,resolution_notes text,created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(rfid_business_event_id,exception_type));
 ALTER TABLE custody_records ADD COLUMN asset_id bigint REFERENCES assets(id) ON DELETE RESTRICT;CREATE INDEX custody_records_asset_idx ON custody_records(asset_id,created_at DESC) WHERE asset_id IS NOT NULL;
+CREATE INDEX assets_register_idx ON assets(institute_id,is_active,asset_number);
+CREATE INDEX asset_locations_tree_idx ON asset_locations(institute_id,parent_location_id,is_active);
+CREATE INDEX asset_movements_history_idx ON asset_movements(institute_id,asset_id,requested_at DESC);
+CREATE INDEX rfid_business_events_institute_time_idx ON rfid_business_events(institute_id,first_seen_at DESC);
+CREATE INDEX asset_exceptions_institute_status_idx ON asset_exceptions(institute_id,status,detected_at DESC);
+CREATE FUNCTION enforce_rfid_portal_antenna_scope() RETURNS trigger LANGUAGE plpgsql AS $fn$ DECLARE ai integer; pi integer; conflicts integer; BEGIN SELECT institute_id INTO ai FROM rfid_antennas WHERE id=NEW.antenna_id; SELECT institute_id INTO pi FROM rfid_portals WHERE id=NEW.portal_id; IF ai IS DISTINCT FROM pi THEN RAISE EXCEPTION 'RFID portal/antenna institute mismatch'; END IF; SELECT count(*) INTO conflicts FROM rfid_portal_antennas pa JOIN rfid_portals p ON p.id=pa.portal_id WHERE pa.antenna_id=NEW.antenna_id AND pa.portal_id<>NEW.portal_id AND p.enabled; IF conflicts>0 AND (SELECT enabled FROM rfid_portals WHERE id=NEW.portal_id) THEN RAISE EXCEPTION 'RFID antenna already belongs to an enabled portal'; END IF; RETURN NEW; END $fn$;
+CREATE TRIGGER rfid_portal_antenna_scope BEFORE INSERT OR UPDATE ON rfid_portal_antennas FOR EACH ROW EXECUTE FUNCTION enforce_rfid_portal_antenna_scope();
 $ddl$;
  END IF;
- -- Complete-path contract checks: representative columns/types/nullability plus critical indexes/FKs.
- IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='assets' AND column_name='acquisition_cost' AND data_type='numeric' AND is_nullable='YES') OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='asset_tags_active_epc_uq') OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='rfid_read_events' AND column_name='read_timestamp' AND data_type='timestamp with time zone') THEN RAISE EXCEPTION '017 drift: critical schema contract mismatch'; END IF;
+ -- Complete-path contract: catalog definitions, not table count, decide compatibility.
+ IF EXISTS (SELECT 1 FROM (VALUES
+  ('asset_number_allocators','institute_id','integer','NO'),('asset_categories','institute_id','integer','NO'),('asset_locations','parent_location_id','bigint','YES'),('assets','asset_number','character varying','NO'),('assets','row_version','integer','NO'),('asset_movements','status','character varying','NO'),('asset_tags','epc','character varying','YES'),('rfid_readers','device_identifier','text','NO'),('rfid_antennas','reader_id','bigint','NO'),('rfid_portals','from_location_id','bigint','YES'),('rfid_portal_antennas','direction_role','character varying','NO'),('rfid_integration_clients','credential_hash','character','NO'),('rfid_read_events','read_timestamp','timestamp with time zone','NO'),('rfid_business_events','confidence_score','numeric','YES'),('asset_exceptions','status','character varying','NO'),('custody_records','asset_id','bigint','YES')) e(t,c,typ,nul)
+  WHERE NOT EXISTS(SELECT 1 FROM information_schema.columns x WHERE x.table_schema='public' AND x.table_name=e.t AND x.column_name=e.c AND x.data_type=e.typ AND x.is_nullable=e.nul))
+ OR EXISTS (SELECT 1 FROM unnest(ARRAY['asset_tags_active_epc_uq','asset_tags_primary_uhf_uq','rfid_read_external_event_uq','rfid_read_epc_time_idx','rfid_read_reader_time_idx','rfid_read_portal_time_idx','rfid_read_processing_idx','custody_records_asset_idx','assets_register_idx','asset_locations_tree_idx','asset_movements_history_idx','rfid_business_events_institute_time_idx','asset_exceptions_institute_status_idx']) n WHERE to_regclass('public.'||n) IS NULL)
+ OR NOT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='next_asset_number' AND pg_get_function_identity_arguments(p.oid)='p_institute_id integer' AND pg_get_function_result(p.oid)='text')
+ OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='assets'::regclass AND contype='c')
+ OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='asset_tags'::regclass AND contype='f')
+ OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='custody_records'::regclass AND contype='f' AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (asset_id)%')
+ THEN RAISE EXCEPTION 'SQL_017_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
+ IF present=array_length(expected,1) THEN RAISE NOTICE 'SQL_017_ALREADY_APPLIED_COMPATIBLE'; END IF;
 END $migration$;
 COMMIT;

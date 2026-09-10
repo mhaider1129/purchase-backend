@@ -28,6 +28,13 @@ function createOrganizationReconciliationService(repo=organizationRepository,aud
     return{department:{id:unit.department_id,name:unit.department_name||unit.name},unitId:unit.id,legacyCandidates:legacy,currentOrganizationHead:heads[0]||null,status,suggestedAction,safeToAssign:activeLegacy.length===1&&!heads.length,decision:decisionApplies?decision:null};
   };
   const list=async(instituteId,client)=>Promise.all((await repo.list({institute:instituteId,type:'DEPARTMENT',active:true},client)).map(u=>rowFor(u,instituteId,client)));
+  const lockedRow=async(unitId,instituteId,client)=>{
+    if(!client)throw new TypeError('lockedRow requires a transaction client');
+    const unit=await repo.get(unitId,client,{lock:true});
+    if(!unit||String(unit.institute_id)!==String(instituteId)||unit.unit_type!=='DEPARTMENT'||unit.is_active===false)
+      throw httpError(409,'Selected department is no longer an active organization unit in this institute');
+    return rowFor(unit,instituteId,client);
+  };
   const assign=async({instituteId,unitId,userId,actorId,reason,fromLegacy=false})=>{
     const unit=await repo.get(unitId);if(!unit||String(unit.institute_id)!==String(instituteId)||unit.unit_type!=='DEPARTMENT')throw httpError(404,'Department organization unit not found');
     const rows=await list(instituteId),row=rows.find(x=>String(x.unitId)===String(unitId));
@@ -50,6 +57,6 @@ function createOrganizationReconciliationService(repo=organizationRepository,aud
       return saved;
     });
   };
-  return{getLegacyDepartmentHeadCandidates:discover,list,rowFor,assign,bulkPreview,decide,repo,audit};
+  return{getLegacyDepartmentHeadCandidates:discover,list,rowFor,lockedRow,assign,bulkPreview,decide,repo,audit};
 }
 module.exports={createOrganizationReconciliationService};

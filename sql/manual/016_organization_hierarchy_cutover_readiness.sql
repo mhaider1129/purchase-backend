@@ -111,7 +111,7 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
         AND (c.confdeltype <> 'r' OR c.confrelid NOT IN ('public.institutes'::regclass,
           'public.organization_units'::regclass,'public.users'::regclass)))
-      AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')CT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
+      AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
         AND i.indrelid=reconciliation AND i.indisunique AND i.indnkeyatts=1
         AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
         AND regexp_replace(pg_get_expr(i.indpred,i.indrelid),'[()]','','g')='superseded_at IS NULL')

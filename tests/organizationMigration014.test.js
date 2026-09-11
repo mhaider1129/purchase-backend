@@ -15,6 +15,11 @@ describe('manual migration 014 fail-closed contract',()=>{
  test('checks critical column, constraint, and unique-index compatibility',()=>{
   for(const contract of ['information_schema.columns','data_type','is_nullable','organization_units_legacy_identity','organization_positions_dates','pg_get_constraintdef','pg_get_indexdef','indisunique']) expect(sql).toContain(contract);
  });
+ test('recognizes the governed period constraints that migration 016 substitutes for its indexes',()=>{
+  expect(sql).toContain('organization_positions_unique_authority_period');
+  expect(sql).toContain('organization_positions_unit_head_period');
+  expect(sql).toContain('period_authority_exists AND period_unit_head_exists');
+ });
  test('validates canonical users.institute_id relationship',()=>{expect(sql).toMatch(/SELECT institute_id INTO user_institute FROM users WHERE id=NEW\.user_id/);expect(sql).toMatch(/position holder must belong to organization unit institute/)});
  test('repository schema declares users.institute_id as the institute foreign key',()=>{
   const schema=fs.readFileSync(path.join(__dirname,'../sql/View_Supabase_SQL.sql'),'utf8');

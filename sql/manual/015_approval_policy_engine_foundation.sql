@@ -1,10 +1,27 @@
 -- 015: Approval Policy Engine 2.0 foundation. MANUAL/PENDING; depends on governed migration 014.
 BEGIN;
-DO $$ DECLARE present_count integer; BEGIN
+DO $$ DECLARE present_count integer; legacy_compatible boolean := false; BEGIN
   IF to_regclass('public.organization_units') IS NULL OR to_regclass('public.organization_positions') IS NULL THEN RAISE EXCEPTION 'SQL_015_REQUIRES_MANUALLY_APPLIED_SQL_014'; END IF;
   SELECT count(*) INTO present_count FROM (VALUES ('approval_policies'),('approval_policy_versions'),('approval_policy_rules'),('approval_policy_rule_conditions'),('approval_policy_rule_steps'),('approval_policy_shadow_runs'),('approval_policy_shadow_steps'),('approval_policy_shadow_differences')) t(name) WHERE to_regclass('public.'||name) IS NOT NULL;
   IF present_count NOT IN (0,8) THEN RAISE EXCEPTION 'SQL_015_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
   IF present_count=8 THEN
+    legacy_compatible :=
+      to_regclass('public.approval_policy_versions_number_uq') IS NOT NULL
+      AND to_regclass('public.approval_policy_rules_priority_uq') IS NULL
+      AND to_regclass('public.approval_policy_shadow_runs_lookup_idx') IS NOT NULL
+      AND to_regclass('public.approval_policy_shadow_runs_request_idx') IS NULL
+      AND to_regclass('public.approval_policy_shadow_differences_type_idx') IS NULL
+      AND EXISTS(SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.approval_policy_rules_policy_version_id_priority_key')
+        AND i.indrelid='public.approval_policy_rules'::regclass AND i.indisunique
+        AND pg_get_indexdef(i.indexrelid,1,true)='policy_version_id' AND pg_get_indexdef(i.indexrelid,2,true)='priority')
+      AND NOT EXISTS(SELECT 1 FROM approval_policy_rules WHERE priority <= 0)
+      AND NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rules'::regclass
+        AND contype='c' AND pg_get_constraintdef(oid) LIKE '%priority > 0%');
+    IF legacy_compatible THEN
+      PERFORM set_config('purchase_tracker.sql_015_install','upgrade_legacy',true);
+      RAISE NOTICE 'SQL_015_UPGRADING_LEGACY_SCHEMA';
+      RETURN;
+    END IF;
     IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='institute_id' AND data_type='integer' AND is_nullable='NO')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='code' AND data_type='character varying' AND is_nullable='NO')
        OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policies' AND indexname='approval_policies_institute_code_uq' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(institute_id,lower((code)::text))%')
@@ -64,4 +81,18 @@ INSERT INTO permissions(code,name,description) VALUES
 ('approval-policy.view-shadow','View approval policy shadow results','View institute-scoped shadow comparisons')
 ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description;
 END $install$;
+DO $upgrade_legacy$ BEGIN
+  IF current_setting('purchase_tracker.sql_015_install',true) IS DISTINCT FROM 'upgrade_legacy' THEN RETURN; END IF;
+  ALTER TABLE approval_policy_rules ADD CONSTRAINT approval_policy_rules_priority_positive_check CHECK(priority>0);
+  CREATE UNIQUE INDEX approval_policy_rules_priority_uq ON approval_policy_rules(policy_version_id,priority);
+  CREATE INDEX approval_policy_shadow_runs_request_idx ON approval_policy_shadow_runs(request_id,generated_at DESC);
+  CREATE INDEX approval_policy_shadow_differences_type_idx ON approval_policy_shadow_differences(shadow_run_id,difference_type);
+  INSERT INTO permissions(code,name,description) VALUES
+    ('approval-policy.view','View approval policies','View institute-scoped approval policy configuration'),
+    ('approval-policy.manage','Manage approval policies','Create and edit institute-scoped draft approval policies'),
+    ('approval-policy.publish-shadow','Publish approval policy to shadow','Enable a validated policy version for non-authoritative shadow analysis'),
+    ('approval-policy.run-shadow','Run approval policy shadow','Evaluate requests without changing their approval route'),
+    ('approval-policy.view-shadow','View approval policy shadow results','View institute-scoped shadow comparisons')
+  ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description;
+END $upgrade_legacy$;
 COMMIT;

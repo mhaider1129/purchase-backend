@@ -103,20 +103,15 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public'
         AND table_name='organization_head_reconciliation_decisions'
         AND column_name IN ('organization_head_position_id','organization_head_user_id'))
+      AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public'
+        AND table_name='organization_head_reconciliation_decisions')=9
       AND (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='p')=1
-      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
-        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(institute_id\) REFERENCES institutes\(id\) ON DELETE RESTRICT')=1
-      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
-        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(organization_unit_id\) REFERENCES organization_units\(id\) ON DELETE RESTRICT')=1
-      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
-        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(legacy_user_id\) REFERENCES users\(id\) ON DELETE RESTRICT')=1
-      AND (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
-        AND pg_get_constraintdef(c.oid) ~ 'FOREIGN KEY \(decided_by\) REFERENCES users\(id\) ON DELETE RESTRICT')=1
-      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='c'
-        AND lower(pg_get_constraintdef(c.oid)) LIKE '%decision%keep_existing%mark_legacy_obsolete%')
-      AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='c'
-        AND lower(pg_get_constraintdef(c.oid)) LIKE '%length%trim%reason%> 0%')
-      AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
+      AND (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='f')=4
+      AND (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='c')=2
+      AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=reconciliation AND c.contype='f'
+        AND (c.confdeltype <> 'r' OR c.confrelid NOT IN ('public.institutes'::regclass,
+          'public.organization_units'::regclass,'public.users'::regclass)))
+      AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')CT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
         AND i.indrelid=reconciliation AND i.indisunique AND i.indnkeyatts=1
         AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
         AND regexp_replace(pg_get_expr(i.indpred,i.indrelid),'[()]','','g')='superseded_at IS NULL')
@@ -229,7 +224,6 @@ DO $upgrade_legacy$
 BEGIN
  IF current_setting('purchase_tracker.sql_016_install')='upgrade_legacy' THEN
   ALTER TABLE organization_head_reconciliation_decisions
-    ALTER COLUMN legacy_user_id SET NOT NULL,
     ADD COLUMN organization_head_position_id BIGINT NOT NULL REFERENCES organization_positions(id) ON DELETE RESTRICT,
     ADD COLUMN organization_head_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT;
  END IF;

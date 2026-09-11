@@ -11,8 +11,9 @@ DO $$ DECLARE present_count integer; legacy_compatible boolean := false; BEGIN
       AND to_regclass('public.approval_policy_shadow_runs_lookup_idx') IS NOT NULL
       AND to_regclass('public.approval_policy_shadow_runs_request_idx') IS NULL
       AND to_regclass('public.approval_policy_shadow_differences_type_idx') IS NULL
-      AND EXISTS(SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.approval_policy_rules_policy_version_id_priority_key')
-        AND i.indrelid='public.approval_policy_rules'::regclass AND i.indisunique
+      -- Constraint-backed index names are generated and are not a stable schema contract.
+      AND EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid='public.approval_policy_rules'::regclass AND i.indisunique
+        AND i.indnkeyatts=2
         AND pg_get_indexdef(i.indexrelid,1,true)='policy_version_id' AND pg_get_indexdef(i.indexrelid,2,true)='priority')
       AND NOT EXISTS(SELECT 1 FROM approval_policy_rules WHERE priority <= 0)
       AND NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rules'::regclass
@@ -24,7 +25,10 @@ DO $$ DECLARE present_count integer; legacy_compatible boolean := false; BEGIN
     END IF;
     IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='institute_id' AND data_type='integer' AND is_nullable='NO')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='code' AND data_type='character varying' AND is_nullable='NO')
-       OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policies' AND indexname='approval_policies_institute_code_uq' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(institute_id,lower((code)::text))%')
+       OR NOT EXISTS(SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.approval_policies_institute_code_uq')
+         AND i.indrelid='public.approval_policies'::regclass AND i.indisunique AND i.indnkeyatts=2
+         AND pg_get_indexdef(i.indexrelid,1,true)='institute_id'
+         AND regexp_replace(pg_get_indexdef(i.indexrelid,2,true),'[[:space:]()]','','g')='lower(code::text)')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='version_number' AND data_type='integer' AND is_nullable='NO')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='status' AND is_nullable='NO')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rules' AND column_name='priority' AND data_type='integer' AND is_nullable='NO')

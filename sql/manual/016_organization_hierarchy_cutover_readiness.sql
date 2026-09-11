@@ -25,10 +25,13 @@ BEGIN
     complete_compatible :=
       EXISTS (SELECT 1 FROM pg_constraint c WHERE c.oid=new_authority AND c.contype='x'
         AND c.conrelid='public.organization_positions'::regclass
-        AND regexp_replace(pg_get_constraintdef(c.oid), '\\s+', ' ', 'g') ~ 'EXCLUDE USING gist \(organization_unit_id WITH =, position_type WITH =, daterange\(COALESCE\(effective_from, .-infinity.::date\), COALESCE\(\(effective_to \+ 1\), .infinity.::date\), .\[\).::text\) WITH &&\) WHERE \(\(is_active AND \(\(position_type\)::text = ANY \(\(ARRAY\[.UNIT_HEAD.::character varying, .EXECUTIVE_HEAD.::character varying, .DEPARTMENT_HEAD.::character varying, .SECTION_HEAD.::character varying\]\)::text\[\]\)\)\)\)')
+        -- POSIX character classes work with standard_conforming_strings.  Using
+        -- '\\s+' here searches for a literal backslash and made every completed
+        -- installation look drifted when this migration was rerun.
+        AND regexp_replace(pg_get_constraintdef(c.oid), '[[:space:]]+', ' ', 'g') ~ 'EXCLUDE USING gist \(organization_unit_id WITH =, position_type WITH =, daterange\(COALESCE\(effective_from, .-infinity.::date\), COALESCE\(\(effective_to \+ 1\), .infinity.::date\), .\[\).::text\) WITH &&\) WHERE \(\(is_active AND \(\(position_type\)::text = ANY \(\(ARRAY\[.UNIT_HEAD.::character varying, .EXECUTIVE_HEAD.::character varying, .DEPARTMENT_HEAD.::character varying, .SECTION_HEAD.::character varying\]\)::text\[\]\)\)\)\)')
       AND EXISTS (SELECT 1 FROM pg_constraint c WHERE c.oid=new_unit_head AND c.contype='x'
         AND c.conrelid='public.organization_positions'::regclass
-        AND regexp_replace(pg_get_constraintdef(c.oid), '\\s+', ' ', 'g') ~ 'EXCLUDE USING gist \(organization_unit_id WITH =, daterange\(COALESCE\(effective_from, .-infinity.::date\), COALESCE\(\(effective_to \+ 1\), .infinity.::date\), .\[\).::text\) WITH &&\) WHERE \(\(is_active AND is_unit_head\)\)')
+        AND regexp_replace(pg_get_constraintdef(c.oid), '[[:space:]]+', ' ', 'g') ~ 'EXCLUDE USING gist \(organization_unit_id WITH =, daterange\(COALESCE\(effective_from, .-infinity.::date\), COALESCE\(\(effective_to \+ 1\), .infinity.::date\), .\[\).::text\) WITH &&\) WHERE \(\(is_active AND is_unit_head\)\)')
       AND NOT EXISTS (
         SELECT 1 FROM (VALUES
           ('id','bigint','NO'),('institute_id','integer','NO'),('organization_unit_id','bigint','NO'),

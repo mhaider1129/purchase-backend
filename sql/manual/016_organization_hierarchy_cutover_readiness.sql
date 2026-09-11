@@ -132,7 +132,26 @@ BEGIN
       RAISE NOTICE 'SQL_016_UPGRADING_EMPTY_LEGACY_SCHEMA';
       RETURN;
     END IF;
-    RAISE EXCEPTION 'SQL_016_PARTIAL_OR_DRIFTED_SCHEMA';
+    -- Do not collapse a catalog mismatch into an opaque error.  In particular,
+    -- pg_get_constraintdef output can differ between PostgreSQL releases, and the
+    -- actual definitions make it possible to distinguish harmless deparser drift
+    -- from a genuinely incomplete installation without changing any objects.
+    SELECT format(
+      'authority_constraint=%s; unit_head_constraint=%s; reconciliation_columns=%s; constraints[p=%s,f=%s,c=%s]; current_index=%s; scope_index=%s',
+      COALESCE(pg_get_constraintdef(new_authority), '<missing>'),
+      COALESCE(pg_get_constraintdef(new_unit_head), '<missing>'),
+      COALESCE((SELECT string_agg(format('%I:%s:%s', column_name, data_type, is_nullable), ', ' ORDER BY ordinal_position)
+        FROM information_schema.columns WHERE table_schema='public'
+          AND table_name='organization_head_reconciliation_decisions'), '<missing>'),
+      (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='p'),
+      (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='f'),
+      (SELECT count(*) FROM pg_constraint WHERE conrelid=reconciliation AND contype='c'),
+      COALESCE(pg_get_indexdef(to_regclass('public.organization_head_reconciliation_current_uq')), '<missing>'),
+      COALESCE(pg_get_indexdef(to_regclass('public.organization_head_reconciliation_decisions_scope_idx')), '<missing>')
+    ) INTO unexpected;
+    RAISE EXCEPTION 'SQL_016_PARTIAL_OR_DRIFTED_SCHEMA'
+      USING DETAIL = unexpected,
+            HINT = 'Compare DETAIL with the COMPLETE/LEGACY 016 definitions; no schema or data was changed.';
   END IF;
 
   -- CLEAN ABSENT: no 016 artifact may exist and both 014 indexes must match exactly.
@@ -141,7 +160,16 @@ BEGIN
      OR to_regclass('public.organization_head_reconciliation_decisions_scope_idx') IS NOT NULL
      OR old_authority IS NULL OR old_unit_head IS NULL
      OR to_regclass('public.organization_positions') IS NULL THEN
-    RAISE EXCEPTION 'SQL_016_PARTIAL_OR_DRIFTED_SCHEMA';
+    RAISE EXCEPTION 'SQL_016_PARTIAL_OR_DRIFTED_SCHEMA'
+      USING DETAIL = format(
+        'old_authority=%s; old_unit_head=%s; new_authority=%s; new_unit_head=%s; reconciliation=%s; current_index=%s; scope_index=%s; organization_positions=%s',
+        COALESCE(old_authority::text, '<missing>'), COALESCE(old_unit_head::text, '<missing>'),
+        COALESCE(new_authority::text, '<missing>'), COALESCE(new_unit_head::text, '<missing>'),
+        COALESCE(reconciliation::text, '<missing>'),
+        COALESCE(to_regclass('public.organization_head_reconciliation_current_uq')::text, '<missing>'),
+        COALESCE(to_regclass('public.organization_head_reconciliation_decisions_scope_idx')::text, '<missing>'),
+        COALESCE(to_regclass('public.organization_positions')::text, '<missing>')),
+        HINT = 'The database must be either clean 014 or a complete compatible 016; no schema or data was changed.';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=old_authority
       AND i.indrelid='public.organization_positions'::regclass AND i.indisunique AND i.indnkeyatts=2

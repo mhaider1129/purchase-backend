@@ -28,7 +28,7 @@ DO $$ DECLARE present_count integer; legacy_compatible boolean := false; BEGIN
        OR NOT EXISTS(SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.approval_policies_institute_code_uq')
          AND i.indrelid='public.approval_policies'::regclass AND i.indisunique AND i.indnkeyatts=2
          AND pg_get_indexdef(i.indexrelid,1,true)='institute_id'
-         AND regexp_replace(pg_get_indexdef(i.indexrelid,2,true),'[[:space:]()]','','g')='lower(code::text)')
+         AND regexp_replace(pg_get_indexdef(i.indexrelid,2,true),'[[:space:]()]','','g')='lowercode::text')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='version_number' AND data_type='integer' AND is_nullable='NO')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='status' AND is_nullable='NO')
        OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rules' AND column_name='priority' AND data_type='integer' AND is_nullable='NO')

@@ -2,8 +2,9 @@
 BEGIN;
 
 DO $preflight$
-DECLARE required_table text; present_count integer;
+DECLARE required_table text; present_count integer; missing_contract text;
 BEGIN
+  PERFORM set_config('purchase_tracker.sql_013_install', 'false', true);
   FOREACH required_table IN ARRAY ARRAY['institutes','departments','users','permissions','generic_items','approved_products','audit_logs'] LOOP
     IF to_regclass('public.' || required_table) IS NULL THEN
       RAISE EXCEPTION 'SQL_013_REQUIRED_TABLE_MISSING: public.%', required_table;
@@ -12,11 +13,41 @@ BEGIN
   SELECT count(*) INTO present_count FROM (VALUES
     ('approved_spare_parts'),('maintainable_equipment'),('spare_part_equipment_compatibility')
   ) AS expected(name) WHERE to_regclass('public.' || name) IS NOT NULL;
-  IF present_count <> 0 THEN
+  IF present_count NOT IN (0, 3) THEN
     RAISE EXCEPTION 'SQL_013_ALREADY_OR_PARTIALLY_INSTALLED: expected zero foundation tables, found %; reconcile before applying', present_count;
   END IF;
+  IF present_count = 3 THEN
+    SELECT string_agg(expected.table_name || '.' || expected.column_name, ', ')
+      INTO missing_contract
+      FROM (VALUES
+        ('maintainable_equipment','institute_id','integer','NO'),
+        ('maintainable_equipment','equipment_code','text','NO'),
+        ('approved_spare_parts','spare_part_code','text','NO'),
+        ('approved_spare_parts','technical_approval_status','text','NO'),
+        ('spare_part_equipment_compatibility','spare_part_id','bigint','NO'),
+        ('spare_part_equipment_compatibility','equipment_id','bigint','NO')
+      ) expected(table_name,column_name,data_type,is_nullable)
+      WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns c
+        WHERE c.table_schema='public' AND c.table_name=expected.table_name
+          AND c.column_name=expected.column_name AND c.data_type=expected.data_type
+          AND c.is_nullable=expected.is_nullable);
+    IF missing_contract IS NOT NULL
+       OR to_regclass('public.maintainable_equipment_institute_code_uq') IS NULL
+       OR to_regclass('public.approved_spare_parts_institute_code_uq') IS NULL
+       OR to_regclass('public.spare_part_equipment_active_uq') IS NULL THEN
+      RAISE EXCEPTION 'SQL_013_ALREADY_OR_PARTIALLY_INSTALLED: incompatible foundation contract: %',
+        coalesce(missing_contract, 'required index missing');
+    END IF;
+    RAISE NOTICE 'SQL_013_ALREADY_APPLIED_COMPATIBLE';
+    RETURN;
+  END IF;
+  PERFORM set_config('purchase_tracker.sql_013_install', 'true', true);
 END $preflight$;
 
+DO $install$
+BEGIN
+IF current_setting('purchase_tracker.sql_013_install', true) = 'true' THEN
+EXECUTE $ddl$
 -- No canonical equipment/asset register exists at HEAD; this is deliberately identity-only.
 CREATE TABLE maintainable_equipment (
   id BIGSERIAL PRIMARY KEY,
@@ -114,4 +145,7 @@ INSERT INTO permissions(code,name,description) VALUES
  ('spare-parts.manage-stock-policy','Manage spare-part stock policy','Change recommended stocking policy and quantities'),
  ('spare-parts.archive','Archive approved spare parts','Inactivate spare-part identities')
 ON CONFLICT (code) DO NOTHING;
+$ddl$;
+END IF;
+END $install$;
 COMMIT;

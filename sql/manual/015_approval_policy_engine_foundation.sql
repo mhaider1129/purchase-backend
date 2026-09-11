@@ -38,7 +38,7 @@ DO $$ DECLARE present_count integer; BEGIN
        OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='approval_policy_shadow_steps' AND indexdef LIKE 'CREATE UNIQUE INDEX %' AND regexp_replace(indexdef,'[[:space:]]','','g') LIKE '%(shadow_run_id,sequence)%')
        OR (SELECT count(*) FROM permissions WHERE code IN ('approval-policy.view','approval-policy.manage','approval-policy.publish-shadow','approval-policy.run-shadow','approval-policy.view-shadow')) <> 5
        THEN RAISE EXCEPTION 'SQL_015_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
-    RAISE EXCEPTION 'SQL_015_ALREADY_APPLIED_COMPATIBLE';
+    RAISE NOTICE 'SQL_015_ALREADY_APPLIED_COMPATIBLE';
   ELSE PERFORM set_config('purchase_tracker.sql_015_install','true',true); END IF;
 END $$;
 DO $install$ BEGIN IF current_setting('purchase_tracker.sql_015_install',true) IS DISTINCT FROM 'true' THEN RETURN; END IF;

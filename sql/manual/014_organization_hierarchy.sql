@@ -7,6 +7,12 @@ DO $$
 DECLARE
   units_exists boolean := to_regclass('public.organization_units') IS NOT NULL;
   positions_exists boolean := to_regclass('public.organization_positions') IS NOT NULL;
+  period_authority_exists boolean := EXISTS (SELECT 1 FROM pg_constraint
+    WHERE connamespace='public'::regnamespace
+      AND conname='organization_positions_unique_authority_period' AND contype='x');
+  period_unit_head_exists boolean := EXISTS (SELECT 1 FROM pg_constraint
+    WHERE connamespace='public'::regnamespace
+      AND conname='organization_positions_unit_head_period' AND contype='x');
   missing_contract text;
 BEGIN
   PERFORM set_config('purchase_tracker.sql_014_install', 'false', true);
@@ -50,8 +56,12 @@ BEGIN
   IF missing_contract IS NOT NULL
      OR to_regclass('public.organization_units_parent_idx') IS NULL
      OR to_regclass('public.organization_units_institute_code_uq') IS NULL
-     OR to_regclass('public.organization_positions_unique_authority_uq') IS NULL
-     OR to_regclass('public.organization_positions_unit_head_uq') IS NULL
+     -- Migration 016 deliberately replaces both 014 uniqueness indexes with
+     -- period-aware exclusion constraints. Accept that governed successor pair,
+     -- while still rejecting a mixed/partial replacement.
+     OR NOT ((to_regclass('public.organization_positions_unique_authority_uq') IS NOT NULL
+              AND to_regclass('public.organization_positions_unit_head_uq') IS NOT NULL)
+             OR (period_authority_exists AND period_unit_head_exists))
      OR to_regprocedure('public.validate_organization_unit()') IS NULL
      OR to_regprocedure('public.validate_organization_position_user()') IS NULL
      OR NOT EXISTS (SELECT 1 FROM pg_constraint
@@ -67,7 +77,7 @@ BEGIN
             AND indnkeyatts=2 AND pg_get_indexdef(indexrelid,1,true)='institute_id'
             AND pg_get_indexdef(indexrelid,2,true) LIKE 'lower(%code%'
             AND pg_get_expr(indpred,indrelid) LIKE '%code IS NOT NULL%')
-     OR NOT EXISTS (SELECT 1 FROM pg_index
+     OR (NOT period_authority_exists AND NOT EXISTS (SELECT 1 FROM pg_index
           WHERE indexrelid=to_regclass('public.organization_positions_unique_authority_uq') AND indisunique
             AND indnkeyatts=2 AND pg_get_indexdef(indexrelid,1,true)='organization_unit_id'
             AND pg_get_indexdef(indexrelid,2,true)='position_type'
@@ -75,12 +85,12 @@ BEGIN
             AND pg_get_expr(indpred,indrelid) LIKE '%UNIT_HEAD%'
             AND pg_get_expr(indpred,indrelid) LIKE '%EXECUTIVE_HEAD%'
             AND pg_get_expr(indpred,indrelid) LIKE '%DEPARTMENT_HEAD%'
-            AND pg_get_expr(indpred,indrelid) LIKE '%SECTION_HEAD%')
-     OR NOT EXISTS (SELECT 1 FROM pg_index
+            AND pg_get_expr(indpred,indrelid) LIKE '%SECTION_HEAD%'))
+     OR (NOT period_unit_head_exists AND NOT EXISTS (SELECT 1 FROM pg_index
           WHERE indexrelid=to_regclass('public.organization_positions_unit_head_uq') AND indisunique
             AND indnkeyatts=1 AND pg_get_indexdef(indexrelid,1,true)='organization_unit_id'
             AND pg_get_expr(indpred,indrelid) LIKE '%is_active%'
-            AND pg_get_expr(indpred,indrelid) LIKE '%is_unit_head%')
+            AND pg_get_expr(indpred,indrelid) LIKE '%is_unit_head%'))
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='organization_units_guard' AND NOT tgisinternal)
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='organization_positions_institute_guard' AND NOT tgisinternal) THEN
     RAISE EXCEPTION 'SQL_014_PARTIAL_OR_DRIFTED_SCHEMA';

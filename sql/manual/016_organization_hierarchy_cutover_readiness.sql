@@ -151,6 +151,7 @@ BEGIN
       AND pg_get_indexdef(i.indexrelid,2,true)='position_type'
       AND regexp_replace(lower(pg_get_expr(i.indpred,i.indrelid)),'[[:space:]()]','','g')
         ~ '^is_activeandposition_type::text=anyarray\[''unit_head''::(charactervarying|text),''executive_head''::(charactervarying|text),''department_head''::(charactervarying|text),''section_head''::(charactervarying|text)\]::text\[\]$'
+    )
     OR NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=old_unit_head
       AND i.indrelid='public.organization_positions'::regclass AND i.indisunique AND i.indnkeyatts=1
       AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'

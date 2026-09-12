@@ -8,21 +8,31 @@ DO $$ DECLARE present_count integer; legacy_compatible boolean := false; BEGIN
   IF present_count NOT IN (0,8) THEN RAISE EXCEPTION 'SQL_015_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
   IF present_count=8 THEN
     legacy_compatible :=
-      to_regclass('public.approval_policy_versions_number_uq') IS NOT NULL
-      AND to_regclass('public.approval_policy_rules_priority_uq') IS NULL
-      AND to_regclass('public.approval_policy_shadow_runs_lookup_idx') IS NOT NULL
-      AND to_regclass('public.approval_policy_shadow_runs_request_idx') IS NULL
-      AND to_regclass('public.approval_policy_shadow_differences_type_idx') IS NULL
-      -- Constraint-backed index names are generated and are not a stable schema contract.
-      AND EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid='public.approval_policy_rules'::regclass AND i.indisunique
-        AND i.indnkeyatts=2
-        AND pg_get_indexdef(i.indexrelid,1,true)='policy_version_id' AND pg_get_indexdef(i.indexrelid,2,true)='priority')
+      -- Only classify states that the repair block can make complete without
+      -- changing table data. Named indexes are additive and may all be absent.
+      EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='institute_id' AND data_type='integer' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='code' AND data_type='character varying' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='approval_policy_id' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_versions' AND column_name='version_number' AND data_type='integer' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rules' AND column_name='policy_version_id' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_rules' AND column_name='priority' AND data_type='integer' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_runs' AND column_name='request_id' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_runs' AND column_name='policy_version_id' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_runs' AND column_name='generated_at' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_differences' AND column_name='shadow_run_id' AND is_nullable='NO')
+      AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policy_shadow_differences' AND column_name='difference_type' AND is_nullable='NO')
+      -- Additive objects are deliberately excluded here. Catalog renderings from
+      -- pg_get_indexdef/pg_get_constraintdef vary across supported PostgreSQL
+      -- versions and previously sent valid installations to the drift error.
+      -- The guarded repair below creates absent objects without replacing any
+      -- existing database object.
       AND NOT EXISTS(SELECT 1 FROM approval_policy_rules WHERE priority <= 0)
-      AND NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rules'::regclass
-        AND contype='c' AND pg_get_constraintdef(oid) LIKE '%priority > 0%');
+      AND NOT EXISTS(SELECT 1 FROM approval_policy_rules GROUP BY policy_version_id,priority HAVING count(*)>1)
+      AND NOT EXISTS(SELECT 1 FROM approval_policy_versions GROUP BY approval_policy_id,version_number HAVING count(*)>1)
+      AND NOT EXISTS(SELECT 1 FROM approval_policies GROUP BY institute_id,lower(code) HAVING count(*)>1);
     IF legacy_compatible THEN
       PERFORM set_config('purchase_tracker.sql_015_install','upgrade_legacy',true);
-      RAISE NOTICE 'SQL_015_UPGRADING_LEGACY_SCHEMA';
+      RAISE NOTICE 'SQL_015_REPAIRING_COMPATIBLE_SCHEMA';
       RETURN;
     END IF;
     IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_policies' AND column_name='institute_id' AND data_type='integer' AND is_nullable='NO')
@@ -89,10 +99,28 @@ ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.descript
 END $install$;
 DO $upgrade_legacy$ BEGIN
   IF current_setting('purchase_tracker.sql_015_install',true) IS DISTINCT FROM 'upgrade_legacy' THEN RETURN; END IF;
-  ALTER TABLE approval_policy_rules ADD CONSTRAINT approval_policy_rules_priority_positive_check CHECK(priority>0);
-  CREATE UNIQUE INDEX approval_policy_rules_priority_uq ON approval_policy_rules(policy_version_id,priority);
-  CREATE INDEX approval_policy_shadow_runs_request_idx ON approval_policy_shadow_runs(request_id,generated_at DESC);
-  CREATE INDEX approval_policy_shadow_differences_type_idx ON approval_policy_shadow_differences(shadow_run_id,difference_type);
+  IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.approval_policy_rules'::regclass
+      AND contype='c' AND pg_get_constraintdef(oid) LIKE '%priority > 0%') THEN
+    ALTER TABLE approval_policy_rules ADD CONSTRAINT approval_policy_rules_priority_positive_check CHECK(priority>0);
+  END IF;
+  IF to_regclass('public.approval_policies_institute_code_uq') IS NULL THEN
+    CREATE UNIQUE INDEX approval_policies_institute_code_uq ON approval_policies(institute_id,lower(code));
+  END IF;
+  IF to_regclass('public.approval_policy_versions_number_uq') IS NULL THEN
+    CREATE UNIQUE INDEX approval_policy_versions_number_uq ON approval_policy_versions(approval_policy_id,version_number);
+  END IF;
+  IF to_regclass('public.approval_policy_rules_priority_uq') IS NULL THEN
+    CREATE UNIQUE INDEX approval_policy_rules_priority_uq ON approval_policy_rules(policy_version_id,priority);
+  END IF;
+  IF to_regclass('public.approval_policy_shadow_runs_request_idx') IS NULL THEN
+    CREATE INDEX approval_policy_shadow_runs_request_idx ON approval_policy_shadow_runs(request_id,generated_at DESC);
+  END IF;
+  IF to_regclass('public.approval_policy_shadow_runs_lookup_idx') IS NULL THEN
+    CREATE INDEX approval_policy_shadow_runs_lookup_idx ON approval_policy_shadow_runs(policy_version_id,generated_at DESC);
+  END IF;
+  IF to_regclass('public.approval_policy_shadow_differences_type_idx') IS NULL THEN
+    CREATE INDEX approval_policy_shadow_differences_type_idx ON approval_policy_shadow_differences(shadow_run_id,difference_type);
+  END IF;
   INSERT INTO permissions(code,name,description) VALUES
     ('approval-policy.view','View approval policies','View institute-scoped approval policy configuration'),
     ('approval-policy.manage','Manage approval policies','Create and edit institute-scoped draft approval policies'),

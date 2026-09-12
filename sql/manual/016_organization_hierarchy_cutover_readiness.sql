@@ -70,13 +70,20 @@ BEGIN
         AND lower(pg_get_constraintdef(c.oid)) LIKE '%length%trim%reason%> 0%')
       AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
         AND i.indrelid=reconciliation AND i.indisunique AND i.indnkeyatts=1
-        AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
+        -- Some supported PostgreSQL releases decorate the column form of
+        -- pg_get_indexdef with ordering/null-placement details.  indkey is the
+        -- stable catalog representation of the indexed table column.
+        AND i.indkey[0] = (SELECT attnum FROM pg_attribute
+          WHERE attrelid=reconciliation AND attname='organization_unit_id' AND NOT attisdropped)
         AND regexp_replace(pg_get_expr(i.indpred,i.indrelid),'[()]','','g')='superseded_at IS NULL')
       AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_decisions_scope_idx')
         AND i.indrelid=reconciliation AND NOT i.indisunique AND i.indnkeyatts=3
-        AND pg_get_indexdef(i.indexrelid,1,true)='institute_id'
-        AND pg_get_indexdef(i.indexrelid,2,true)='organization_unit_id'
-        AND pg_get_indexdef(i.indexrelid,3,true)='decided_at DESC' AND i.indpred IS NULL);
+        AND i.indkey[0] = (SELECT attnum FROM pg_attribute WHERE attrelid=reconciliation AND attname='institute_id' AND NOT attisdropped)
+        AND i.indkey[1] = (SELECT attnum FROM pg_attribute WHERE attrelid=reconciliation AND attname='organization_unit_id' AND NOT attisdropped)
+        AND i.indkey[2] = (SELECT attnum FROM pg_attribute WHERE attrelid=reconciliation AND attname='decided_at' AND NOT attisdropped)
+        -- DESC is bit 0 in indoption.  The first two columns use their defaults;
+        -- the final column is descending (with the PostgreSQL default null order).
+        AND i.indoption[0]=0 AND i.indoption[1]=0 AND i.indoption[2]=3 AND i.indpred IS NULL);
     IF complete_compatible THEN
       PERFORM set_config('purchase_tracker.sql_016_install','false',true);
       RAISE NOTICE 'SQL_016_ALREADY_APPLIED_COMPATIBLE';
@@ -116,13 +123,15 @@ BEGIN
           'public.organization_units'::regclass,'public.users'::regclass)))
       AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_current_uq')
         AND i.indrelid=reconciliation AND i.indisunique AND i.indnkeyatts=1
-        AND pg_get_indexdef(i.indexrelid,1,true)='organization_unit_id'
+        AND i.indkey[0] = (SELECT attnum FROM pg_attribute
+          WHERE attrelid=reconciliation AND attname='organization_unit_id' AND NOT attisdropped)
         AND regexp_replace(pg_get_expr(i.indpred,i.indrelid),'[()]','','g')='superseded_at IS NULL')
       AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('public.organization_head_reconciliation_decisions_scope_idx')
         AND i.indrelid=reconciliation AND NOT i.indisunique AND i.indnkeyatts=3
-        AND pg_get_indexdef(i.indexrelid,1,true)='institute_id'
-        AND pg_get_indexdef(i.indexrelid,2,true)='organization_unit_id'
-        AND pg_get_indexdef(i.indexrelid,3,true)='decided_at DESC' AND i.indpred IS NULL);
+        AND i.indkey[0] = (SELECT attnum FROM pg_attribute WHERE attrelid=reconciliation AND attname='institute_id' AND NOT attisdropped)
+        AND i.indkey[1] = (SELECT attnum FROM pg_attribute WHERE attrelid=reconciliation AND attname='organization_unit_id' AND NOT attisdropped)
+        AND i.indkey[2] = (SELECT attnum FROM pg_attribute WHERE attrelid=reconciliation AND attname='decided_at' AND NOT attisdropped)
+        AND i.indoption[0]=0 AND i.indoption[1]=0 AND i.indoption[2]=3 AND i.indpred IS NULL);
     IF legacy_compatible THEN
       IF EXISTS (SELECT 1 FROM organization_head_reconciliation_decisions) THEN
         RAISE EXCEPTION 'SQL_016_LEGACY_RECONCILIATION_DATA_REQUIRES_MANUAL_BACKFILL'
@@ -162,13 +171,15 @@ BEGIN
      OR to_regclass('public.organization_positions') IS NULL THEN
     RAISE EXCEPTION 'SQL_016_PARTIAL_OR_DRIFTED_SCHEMA'
       USING DETAIL = format(
-        'old_authority=%s; old_unit_head=%s; new_authority=%s; new_unit_head=%s; reconciliation=%s; current_index=%s; scope_index=%s; organization_positions=%s',
+        'old_authority=%s; old_unit_head=%s; new_authority=%s; new_unit_head=%s; reconciliation=%s; current_index=%s; scope_index=%s; organization_positions=%s; authority_index=%s; unit_head_index=%s',
         COALESCE(old_authority::text, '<missing>'), COALESCE(old_unit_head::text, '<missing>'),
         COALESCE(new_authority::text, '<missing>'), COALESCE(new_unit_head::text, '<missing>'),
         COALESCE(reconciliation::text, '<missing>'),
         COALESCE(to_regclass('public.organization_head_reconciliation_current_uq')::text, '<missing>'),
         COALESCE(to_regclass('public.organization_head_reconciliation_decisions_scope_idx')::text, '<missing>'),
-        COALESCE(to_regclass('public.organization_positions')::text, '<missing>')),
+        COALESCE(to_regclass('public.organization_positions')::text, '<missing>'),
+        COALESCE(pg_get_indexdef(old_authority), '<missing>'),
+        COALESCE(pg_get_indexdef(old_unit_head), '<missing>')),
         HINT = 'The database must be either clean 014 or a complete compatible 016; no schema or data was changed.';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=old_authority

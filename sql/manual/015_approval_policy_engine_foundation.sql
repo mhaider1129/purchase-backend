@@ -1,7 +1,9 @@
 -- 015: Approval Policy Engine 2.0 foundation. MANUAL/PENDING; depends on governed migration 014.
 BEGIN;
 DO $$ DECLARE present_count integer; legacy_compatible boolean := false; BEGIN
-  IF to_regclass('public.organization_units') IS NULL OR to_regclass('public.organization_positions') IS NULL THEN RAISE EXCEPTION 'SQL_015_REQUIRES_MANUALLY_APPLIED_SQL_014'; END IF;
+  IF to_regclass('public.organization_units') IS NULL OR to_regclass('public.organization_positions') IS NULL THEN
+    RAISE EXCEPTION 'SQL_015_REQUIRES_MANUALLY_APPLIED_SQL_014: run sql/manual/014_organization_hierarchy.sql, then rerun 015';
+  END IF;
   SELECT count(*) INTO present_count FROM (VALUES ('approval_policies'),('approval_policy_versions'),('approval_policy_rules'),('approval_policy_rule_conditions'),('approval_policy_rule_steps'),('approval_policy_shadow_runs'),('approval_policy_shadow_steps'),('approval_policy_shadow_differences')) t(name) WHERE to_regclass('public.'||name) IS NOT NULL;
   IF present_count NOT IN (0,8) THEN RAISE EXCEPTION 'SQL_015_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
   IF present_count=8 THEN

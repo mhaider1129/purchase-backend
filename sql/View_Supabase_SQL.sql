@@ -79,10 +79,10 @@ CREATE TABLE public.requests (
   CONSTRAINT requests_awarded_rfx_id_fkey FOREIGN KEY (awarded_rfx_id) REFERENCES public.rfx_events(id),
   CONSTRAINT requests_awarded_rfx_response_id_fkey FOREIGN KEY (awarded_rfx_response_id) REFERENCES public.rfx_responses(id),
   CONSTRAINT requests_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
-  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id),
   CONSTRAINT requests_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
   CONSTRAINT requests_sent_to_central_supply_by_fkey FOREIGN KEY (sent_to_central_supply_by) REFERENCES public.users(id),
-  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id)
+  CONSTRAINT requests_supply_warehouse_id_fkey FOREIGN KEY (supply_warehouse_id) REFERENCES public.warehouses(id),
+  CONSTRAINT requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id)
 );
 CREATE TABLE public.requested_items (
   id integer NOT NULL DEFAULT nextval('requested_items_id_seq'::regclass),
@@ -343,7 +343,7 @@ CREATE TABLE public.custody_records (
   item_name text NOT NULL,
   quantity integer NOT NULL CHECK (quantity > 0),
   description text,
-  custody_type text NOT NULL CHECK (custody_type = ANY (ARRAY['Personal'::text, 'Departmental'::text])),
+  custody_type text NOT NULL CHECK (custody_type = ANY (ARRAY['Personal'::text, 'Departmental'::text, 'Location'::text])),
   custody_code text,
   issued_by integer NOT NULL,
   custodian_user_id integer,
@@ -356,11 +356,27 @@ CREATE TABLE public.custody_records (
   status text NOT NULL DEFAULT 'Pending'::text,
   created_at timestamp without time zone DEFAULT now(),
   updated_at timestamp without time zone DEFAULT now(),
+  asset_category text,
+  asset_tag text,
+  manufacturer text,
+  model text,
+  serial_number text,
+  condition_at_issue text CHECK (condition_at_issue IS NULL OR (condition_at_issue = ANY (ARRAY['New'::text, 'Excellent'::text, 'Good'::text, 'Fair'::text, 'Damaged / Defective'::text]))),
+  building text,
+  floor text,
+  room text,
+  section_unit text,
+  cost_center text,
+  pre_existing_condition text,
+  acknowledgment_accepted boolean NOT NULL DEFAULT false,
+  acknowledgment_accepted_at timestamp without time zone,
+  asset_id bigint,
   CONSTRAINT custody_records_pkey PRIMARY KEY (id),
   CONSTRAINT custody_records_issued_by_fkey FOREIGN KEY (issued_by) REFERENCES public.users(id),
   CONSTRAINT custody_records_custodian_user_id_fkey FOREIGN KEY (custodian_user_id) REFERENCES public.users(id),
   CONSTRAINT custody_records_custodian_department_id_fkey FOREIGN KEY (custodian_department_id) REFERENCES public.departments(id),
-  CONSTRAINT custody_records_hod_user_id_fkey FOREIGN KEY (hod_user_id) REFERENCES public.users(id)
+  CONSTRAINT custody_records_hod_user_id_fkey FOREIGN KEY (hod_user_id) REFERENCES public.users(id),
+  CONSTRAINT custody_records_asset_id_fkey FOREIGN KEY (asset_id) REFERENCES public.assets(id)
 );
 CREATE TABLE public.contracts (
   id integer NOT NULL DEFAULT nextval('contracts_id_seq'::regclass),

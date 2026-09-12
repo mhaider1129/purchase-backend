@@ -6,12 +6,12 @@ const POSITION_TYPES = ['UNIT_HEAD', 'EXECUTIVE_HEAD', 'DEPARTMENT_HEAD', 'SECTI
 const UNIQUE_AUTHORITIES = new Set(POSITION_TYPES.filter(type => type !== 'CUSTOM'));
 const httpError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 const present = value => value !== undefined;
+const dateOnly=value=>value instanceof Date ? value.toISOString().slice(0,10) : value ? String(value).slice(0,10) : null;
 const effective = (position, today = new Date().toISOString().slice(0, 10)) =>
-  position.is_active && (!position.effective_from || position.effective_from <= today) &&
-  (!position.effective_to || position.effective_to >= today);
+  position.is_active && (!position.effective_from || dateOnly(position.effective_from) <= dateOnly(today)) &&
+  (!position.effective_to || dateOnly(position.effective_to) >= dateOnly(today));
 const HEAD_TYPE={DEPARTMENT:'DEPARTMENT_HEAD',SECTION:'SECTION_HEAD',EXECUTIVE_OFFICE:'EXECUTIVE_HEAD',DIRECTORATE:'UNIT_HEAD',UNIT:'UNIT_HEAD',INSTITUTE:'UNIT_HEAD'};
 const VALID_PARENT_TYPES={INSTITUTE:[],EXECUTIVE_OFFICE:['INSTITUTE','EXECUTIVE_OFFICE'],DIRECTORATE:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE'],DEPARTMENT:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE'],SECTION:['DEPARTMENT'],UNIT:['INSTITUTE','EXECUTIVE_OFFICE','DIRECTORATE','DEPARTMENT','SECTION','UNIT']};
-const dateOnly=value=>value ? String(value).slice(0,10) : null;
 const previousDay=value=>{const date=new Date(`${dateOnly(value)}T00:00:00Z`);date.setUTCDate(date.getUTCDate()-1);return date.toISOString().slice(0,10);};
 const periodsOverlap=(aFrom,aTo,bFrom,bTo)=>(!aTo||!bFrom||dateOnly(aTo)>=dateOnly(bFrom))&&(!bTo||!aFrom||dateOnly(bTo)>=dateOnly(aFrom));
 

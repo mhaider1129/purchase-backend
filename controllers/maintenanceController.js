@@ -1,0 +1,12 @@
+const{MaintenanceService}=require('../services/maintenanceService');
+const service=new MaintenanceService();
+const context=req=>{if(!req.user?.institute_id)throw Object.assign(new Error('Institute scope is required'),{statusCode:403});return{instituteId:req.user.institute_id,userId:req.user.id,actor:req.user};};
+const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+exports.list=wrap(async(req,res)=>res.json({data:await service.list(req.query,context(req))}));
+exports.get=wrap(async(req,res)=>res.json({data:await service.get(req.params.id,context(req))}));
+exports.create=wrap(async(req,res)=>res.status(201).json({data:await service.create(req.body||{},context(req))}));
+exports.transition=wrap(async(req,res)=>res.json({data:await service.transition(req.params.id,req.body?.status,req.body||{},context(req))}));
+exports.addPart=wrap(async(req,res)=>res.status(201).json({data:await service.addPart(req.params.id,req.body||{},context(req))}));
+exports.reservePart=wrap(async(req,res)=>res.json({data:await service.reservePart(req.params.id,req.params.partId,req.body||{},context(req))}));
+exports.issuePart=wrap(async(req,res)=>res.json({data:await service.issuePart(req.params.id,req.params.partId,req.body||{},context(req))}));
+exports.releasePart=wrap(async(req,res)=>res.json({data:await service.releasePart(req.params.id,req.params.partId,req.body||{},context(req))}));

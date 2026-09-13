@@ -3,6 +3,7 @@ const c=require('../controllers/sparePartsController');
 const permit=require('../middleware/requirePermission');
 router.get('/',permit('spare-parts.view'),c.list);
 router.post('/',permit('spare-parts.create'),c.create);
+router.get('/stock-items',permit('spare-parts.view'),c.availableStockItems);
 router.get('/equipment',permit('spare-parts.view'),c.equipmentList);
 router.post('/equipment',permit('spare-parts.manage-compatibility'),c.saveEquipment);
 router.get('/equipment/:equipmentId',permit('spare-parts.view'),c.equipmentDetail);

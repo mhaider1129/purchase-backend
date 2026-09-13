@@ -1,0 +1,12 @@
+const router=require('express').Router();
+const controller=require('../controllers/maintenanceController');
+const permit=require('../middleware/requirePermission');
+router.get('/',permit('maintenance.view'),controller.list);
+router.post('/',permit('maintenance.manage'),controller.create);
+router.get('/:id',permit('maintenance.view'),controller.get);
+router.patch('/:id/status',permit('maintenance.manage'),controller.transition);
+router.post('/:id/parts',permit('maintenance.manage'),controller.addPart);
+router.post('/:id/parts/:partId/reserve',permit('maintenance.manage'),permit('inventory.reserve'),controller.reservePart);
+router.post('/:id/parts/:partId/issue',permit('maintenance.manage'),permit('inventory.reserve'),permit('inventory.issue'),controller.issuePart);
+router.post('/:id/parts/:partId/release',permit('maintenance.manage'),permit('inventory.reserve'),controller.releasePart);
+module.exports=router;

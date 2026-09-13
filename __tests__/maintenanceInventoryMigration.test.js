@@ -1,0 +1,3 @@
+const fs=require('fs'),path=require('path');
+const sql=fs.readFileSync(path.join(__dirname,'../sql/manual/025_maintenance_inventory_execution.sql'),'utf8');
+test('025 links work-order parts to tenant-safe reservations, movements and idempotent operations',()=>{for(const marker of ['reservation_id','issued_inventory_movement_id','maintenance_part_inventory_operations','idempotency_key','inventory_reservations','inventory_transactions','SQL_025_ALREADY_APPLIED_COMPATIBLE','SQL_025_PARTIAL_OR_DRIFTED_SCHEMA','FOREIGN KEY(institute_id,work_order_part_id)'])expect(sql).toContain(marker);expect(sql).toContain("operation_type IN('RESERVE','ISSUE','RELEASE','RETURN')");});

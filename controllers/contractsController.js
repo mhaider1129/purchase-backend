@@ -11,6 +11,7 @@ const {
 const { getComplianceStatusBySupplierIds } = require('./supplierSrmController');
 const { resolveStoredLocalPath, isStoredLocally } = require('../utils/attachmentPaths');
 const { removeObject } = require('../utils/storage');
+const { validateContractItemIdentity } = require('../services/contractItemIdentityService');
 
 const CONTRACT_STATUSES = [
   'draft',
@@ -1035,6 +1036,9 @@ const ensureContractsPhaseTwoTables = (() => {
             id SERIAL PRIMARY KEY,
             contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
             item_id INTEGER,
+            generic_item_id BIGINT REFERENCES generic_items(id) ON DELETE RESTRICT,
+            approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT,
+            supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items(id) ON DELETE RESTRICT,
             item_name TEXT NOT NULL,
             generic_name TEXT,
             brand_name TEXT,
@@ -3469,11 +3473,13 @@ const createContractItem = async (req, res, next) => {
   if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
   const client = await pool.connect();
   try {
-    await ensureContractsPhaseTwoTables(); upsertContractItemValidation(req.body || {}); await client.query('BEGIN'); await assertContractExists(client, contractId);
+    await ensureContractsPhaseTwoTables(); await client.query('BEGIN'); const contract = await assertContractExists(client, contractId);
     const b = req.body || {};
-    const { rows } = await client.query(`INSERT INTO contract_items (contract_id,item_id,item_name,generic_name,brand_name,unit,contracted_price,currency,minimum_order_quantity,lead_time_days,warranty_terms,price_valid_from,price_valid_to,is_active,notes,requested_quantity,delivered_quantity,updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()) RETURNING *`,
-      [contractId, b.item_id || null, normalizeText(b.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null, b.requested_quantity === '' ? null : b.requested_quantity ?? null, b.delivered_quantity === '' ? 0 : b.delivered_quantity ?? 0]);
+    const identity = await validateContractItemIdentity(client, b, contract, { required: true });
+    const governed = { ...b, item_name: identity.item_name || b.item_name }; upsertContractItemValidation(governed);
+    const { rows } = await client.query(`INSERT INTO contract_items (contract_id,item_id,generic_item_id,approved_product_id,supplier_catalog_item_id,item_name,generic_name,brand_name,unit,contracted_price,currency,minimum_order_quantity,lead_time_days,warranty_terms,price_valid_from,price_valid_to,is_active,notes,requested_quantity,delivered_quantity,updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW()) RETURNING *`,
+      [contractId, b.item_id || null, identity.generic_item_id, identity.approved_product_id, identity.supplier_catalog_item_id, normalizeText(governed.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null, b.requested_quantity === '' ? null : b.requested_quantity ?? null, b.delivered_quantity === '' ? 0 : b.delivered_quantity ?? 0]);
     await recordContractLog(client, { contractId, action: 'contract_item_created', actorId: req.user?.id || null, details: { item_id: rows[0].id } });
     await client.query('COMMIT'); res.status(201).json(rows[0]);
   } catch (err) { await client.query('ROLLBACK').catch(() => {}); next(err.statusCode ? err : createHttpError(500, 'Failed to create contract item')); } finally { client.release(); }
@@ -3484,10 +3490,12 @@ const updateContractItem = async (req, res, next) => {
   if (!Number.isInteger(contractId) || !Number.isInteger(itemId)) return next(createHttpError(400, 'Invalid id'));
   const client = await pool.connect();
   try {
-    await ensureContractsPhaseTwoTables(); upsertContractItemValidation(req.body || {}); await client.query('BEGIN'); await assertContractExists(client, contractId);
+    await ensureContractsPhaseTwoTables(); await client.query('BEGIN'); const contract = await assertContractExists(client, contractId);
     const b = req.body || {};
-    const { rows } = await client.query(`UPDATE contract_items SET item_id=$1,item_name=$2,generic_name=$3,brand_name=$4,unit=$5,contracted_price=$6,currency=$7,minimum_order_quantity=$8,lead_time_days=$9,warranty_terms=$10,price_valid_from=$11,price_valid_to=$12,is_active=$13,notes=$14,requested_quantity=$15,delivered_quantity=$16,updated_at=NOW() WHERE id=$17 AND contract_id=$18 RETURNING *`,
-      [b.item_id || null, normalizeText(b.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null, b.requested_quantity === '' ? null : b.requested_quantity ?? null, b.delivered_quantity === '' ? 0 : b.delivered_quantity ?? 0, itemId, contractId]);
+    const identity = await validateContractItemIdentity(client, b, contract, { required: true });
+    const governed = { ...b, item_name: identity.item_name || b.item_name }; upsertContractItemValidation(governed);
+    const { rows } = await client.query(`UPDATE contract_items SET item_id=$1,generic_item_id=$2,approved_product_id=$3,supplier_catalog_item_id=$4,item_name=$5,generic_name=$6,brand_name=$7,unit=$8,contracted_price=$9,currency=$10,minimum_order_quantity=$11,lead_time_days=$12,warranty_terms=$13,price_valid_from=$14,price_valid_to=$15,is_active=$16,notes=$17,requested_quantity=$18,delivered_quantity=$19,updated_at=NOW() WHERE id=$20 AND contract_id=$21 RETURNING *`,
+      [b.item_id || null, identity.generic_item_id, identity.approved_product_id, identity.supplier_catalog_item_id, normalizeText(governed.item_name), normalizeText(b.generic_name) || null, normalizeText(b.brand_name) || null, normalizeText(b.unit) || null, b.contracted_price === '' ? null : b.contracted_price ?? null, normalizeText(b.currency) || null, b.minimum_order_quantity === '' ? null : b.minimum_order_quantity ?? null, b.lead_time_days === '' ? null : b.lead_time_days ?? null, normalizeText(b.warranty_terms) || null, b.price_valid_from || null, b.price_valid_to || null, b.is_active !== false, normalizeText(b.notes) || null, b.requested_quantity === '' ? null : b.requested_quantity ?? null, b.delivered_quantity === '' ? 0 : b.delivered_quantity ?? 0, itemId, contractId]);
     if (!rows.length) return next(createHttpError(404, 'Contract item not found'));
     await recordContractLog(client, { contractId, action: 'contract_item_updated', actorId: req.user?.id || null, details: { item_id: itemId } });
     await client.query('COMMIT'); res.json(rows[0]);

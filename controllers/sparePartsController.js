@@ -1,9 +1,12 @@
 const SparePartsRepository=require('../repositories/sparePartsRepository');
 const {SparePartsService}=require('../services/sparePartsService');
+const {EquipmentService}=require('../services/equipmentService');
 const repo=new SparePartsRepository(); const service=new SparePartsService(repo);
+const equipmentService=new EquipmentService();
 const ctx=req=>{ if(!req.user?.institute_id) throw Object.assign(new Error('Institute scope is required'),{statusCode:403}); return {instituteId:req.user.institute_id,userId:req.user.id}; };
 const wrap=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
 exports.list=wrap(async(req,res)=>res.json(await repo.list(ctx(req).instituteId,req.query)));
+exports.availableStockItems=wrap(async(req,res)=>res.json({data:await repo.availableStockItems(ctx(req).instituteId,req.query)}));
 exports.detail=wrap(async(req,res)=>{const row=await repo.get(req.params.id,ctx(req).instituteId); if(!row)return res.status(404).json({message:'Spare part not found'}); res.json({data:row});});
 exports.create=wrap(async(req,res)=>res.status(201).json({data:await service.create(req.body||{},ctx(req))}));
 exports.update=wrap(async(req,res)=>res.json({data:await service.update(req.params.id,req.body||{},ctx(req))}));
@@ -15,6 +18,7 @@ exports.assertPart=async req=>{if(!await repo.get(req.params.id,ctx(req).institu
 exports.addCompatibility=wrap(async(req,res)=>res.status(201).json({data:await service.addCompatibility(req.params.id,req.body||{},ctx(req))}));
 exports.updateCompatibility=wrap(async(req,res)=>res.json({data:await service.updateCompatibility(req.params.id,req.params.compatibilityId,req.body||{},ctx(req))}));
 exports.compatibilityDecision=wrap(async(req,res)=>res.json({data:await service.compatibilityDecision(req.params.id,req.params.compatibilityId,req.body?.status,ctx(req))}));
-exports.equipmentList=wrap(async(req,res)=>res.json(await repo.equipmentList(ctx(req).instituteId,req.query)));
-exports.equipmentDetail=wrap(async(req,res)=>{const row=await repo.equipment(req.params.equipmentId,ctx(req).instituteId);if(!row)return res.status(404).json({message:'Equipment not found'});res.json({data:row});});
-exports.saveEquipment=wrap(async(req,res)=>res.status(req.params.equipmentId?200:201).json({data:await service.saveEquipment(req.params.equipmentId,req.body||{},ctx(req))}));
+// Compatibility aliases for existing clients. New consumers use /api/equipment.
+exports.equipmentList=wrap(async(req,res)=>res.json(await equipmentService.list(req.query,ctx(req))));
+exports.equipmentDetail=wrap(async(req,res)=>res.json({data:await equipmentService.get(req.params.equipmentId,ctx(req))}));
+exports.saveEquipment=wrap(async(req,res)=>res.status(req.params.equipmentId?200:201).json({data:await equipmentService.save(req.params.equipmentId,req.body||{},ctx(req))}));

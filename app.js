@@ -358,6 +358,8 @@ const printServiceRequestsRoutes = require('./routes/printServiceRequests');
 const procurementPerformanceRoutes = require('./routes/procurementPerformance');
 const procurementPriorityRoutes = require('./routes/procurementPriority');
 const sparePartsRoutes = require('./routes/spareParts');
+const equipmentRoutes = require('./routes/equipment');
+const maintenanceRoutes = require('./routes/maintenance');
 const organizationRoutes = require('./routes/organization');
 const approvalPoliciesRoutes = require('./routes/approvalPolicies');
 const fixedAssetsRoutes = require('./routes/fixedAssets');
@@ -431,6 +433,8 @@ const protectedApiRoutes = [
   { path: '/procurement-performance', router: procurementPerformanceRoutes },
   { path: '/procurement-priority', router: procurementPriorityRoutes },
   { path: '/spare-parts', router: sparePartsRoutes },
+  { path: '/equipment', router: equipmentRoutes },
+  { path: '/maintenance', router: maintenanceRoutes },
   { path: '/organization', router: organizationRoutes },
   { path: '/assets', router: fixedAssetsRoutes },
   { path: '/rfid', router: rfidRoutes },

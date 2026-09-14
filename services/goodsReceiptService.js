@@ -112,6 +112,10 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
     const delivered = decimal(totals.received_quantity, 'received total') >= decimal(totals.ordered_quantity, 'ordered total');
     const updatedPo = delivered ? await tx.markPurchaseOrderDelivered(po.id) : await tx.markPurchaseOrderPartiallyReceived(po.id);
     const movementIds = inventoryMovements.map((entry) => entry.movement?.id).filter(Boolean);
+    if (tx.linkDocuments) {
+      await tx.linkDocuments(po.request_id, 'PURCHASE_ORDER', po.id, 'GOODS_RECEIPT', receipt.id, actor?.id || null);
+      for (const movementId of movementIds) await tx.linkDocuments(po.request_id, 'GOODS_RECEIPT', receipt.id, 'INVENTORY_MOVEMENT', movementId, actor?.id || null);
+    }
     await auditService.writeAuditEvent({ entityType: 'goods_receipt', entityId: receipt.id, action: 'GOODS_RECEIPT_POSTED',
       actorUserId: actor?.id, instituteId: actor?.institute_id, requestId: po.request_id, correlationId,
       metadata: { receiptId: receipt.id, purchaseOrderId: po.id, supplierId: po.supplier_id, lineCount: receipt.items.length,

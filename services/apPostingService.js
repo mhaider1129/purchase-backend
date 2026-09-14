@@ -34,6 +34,10 @@ const postApVoucher = ({ repository, voucherId, actor, idempotencyKey, auditServ
     if (!reduced) throw fail('PO commitment changed or cannot cover invoice', 'PO_COMMITMENT_EXCEEDED', 409);
     await tx.synchronizeBudgetConsumedProjection(encumbrance.budget_envelope_id);
     const payable = await tx.insertApPayable({ request_id: invoice.request_id, supplier_invoice_id: invoice.id, ap_voucher_id: voucher.id, supplier_name: invoice.supplier || invoice.supplier_name || String(invoice.supplier_id), invoice_total: invoice.total_amount, open_balance: invoice.total_amount, currency: invoice.currency, posted_by: actor.id });
+    if (tx.linkDocuments) {
+      await tx.linkDocuments(invoice.request_id, 'AP_VOUCHER', voucher.id, 'FINANCE_POSTING', posting.id, actor.id);
+      await tx.linkDocuments(invoice.request_id, 'FINANCE_POSTING', posting.id, 'ACCOUNTS_PAYABLE', payable.id, actor.id);
+    }
     await tx.markVoucherPosted(voucher.id, actor.id);
     await tx.updateInvoiceLifecycle(invoice.id, 'AP_POSTED');
     await auditService.writeAuditEvent({ client: tx.client, entityType: 'ap_voucher', entityId: voucher.id, requestId: invoice.request_id, action: 'AP_VOUCHER_POSTED', actorUserId: actor.id, metadata: { posting_id: posting.id, actualization_id: actualization.id } });

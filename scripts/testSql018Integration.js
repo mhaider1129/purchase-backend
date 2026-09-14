@@ -6,6 +6,7 @@ const net = require('net');
 const { Client } = require('pg');
 
 const migration = fs.readFileSync(path.join(__dirname, '../sql/manual/018_fixed_assets_rfid_post_deployment_hardening.sql'), 'utf8');
+const mutationGuards = fs.readFileSync(path.join(__dirname, '../sql/manual/027_rfid_configuration_mutation_guards.sql'), 'utf8');
 const url = process.env.SQL018_LOCAL_DATABASE_URL;
 
 function localDisposableUrl(value) {
@@ -50,6 +51,10 @@ async function rejects(sql, marker) {
   }
   throw new Error(`Expected failure containing: ${marker}`);
 }
+async function installHardenedGuards() {
+  await client.query(migration);
+  await client.query(mutationGuards);
+}
 async function seed() {
   await client.query(`INSERT INTO institutes VALUES(1),(2);
     INSERT INTO rfid_readers VALUES(10,1),(11,1),(20,2);
@@ -58,7 +63,7 @@ async function seed() {
 }
 
 async function concurrency(enabledAtStart) {
-  await reset(); await seed(); await client.query(migration);
+  await reset(); await seed(); await installHardenedGuards();
   if (!enabledAtStart) {
     await client.query('UPDATE rfid_portals SET enabled=false WHERE id IN (1000,1001)');
     await client.query('INSERT INTO rfid_portal_antennas VALUES(1000,100),(1001,100)');
@@ -79,7 +84,7 @@ async function concurrency(enabledAtStart) {
 }
 
 async function configurationMutationConcurrency() {
-  await reset(); await seed(); await client.query(migration);
+  await reset(); await seed(); await installHardenedGuards();
   const a = new Client({ connectionString: url }); const b = new Client({ connectionString: url });
   await Promise.all([a.connect(), b.connect()]);
   try {
@@ -116,7 +121,16 @@ async function configurationMutationConcurrency() {
     await reset(); await client.query(migration); await client.query('ALTER TABLE rfid_portal_antennas DISABLE TRIGGER rfid_portal_antenna_scope_guard');
     await rejects(migration, 'SQL_018_PARTIAL_OR_DRIFTED_SCHEMA');
 
-    await reset(); await seed(); await client.query(migration);
+    // SQL 027 upgrades the immutable, deployed SQL 018 shape and is idempotent.
+    await reset(); await client.query(migration); await client.query(mutationGuards);
+    let upgradeNoticed = false;
+    client.on('notice', n => { if (n.message === 'SQL_027_ALREADY_APPLIED_COMPATIBLE') upgradeNoticed = true; });
+    await client.query(mutationGuards);
+    if (!upgradeNoticed) throw new Error('Compatible SQL 027 re-run did not emit required notice');
+    await reset();
+    await rejects(mutationGuards, 'SQL_027_REQUIRES_COMPATIBLE_SQL_018');
+
+    await reset(); await seed(); await installHardenedGuards();
     await client.query('INSERT INTO rfid_portal_antennas VALUES(1000,100)');
     await rejects('INSERT INTO rfid_portal_antennas VALUES(2000,100)', 'same institute');
     await rejects('UPDATE rfid_antennas SET institute_id=2,reader_id=20 WHERE id=100', 'portal and antenna');

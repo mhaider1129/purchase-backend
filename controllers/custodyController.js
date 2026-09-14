@@ -96,6 +96,7 @@ const createCustodyRecord = async (req, res, next) => {
     cost_center,
     pre_existing_condition,
     acknowledgment_accepted,
+    asset_id,
   } = req.body || {};
 
   if (!item_name || typeof item_name !== 'string') {
@@ -122,12 +123,28 @@ const createCustodyRecord = async (req, res, next) => {
     return next(err);
   }
 
-  const client = await pool.connect();
+    const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     let targetCustodianUserId = null;
     let targetDepartmentId = null;
+
+    let canonicalAssetId = null;
+    if (asset_id != null && asset_id !== '') {
+      const parsedAssetId = parseInt(asset_id, 10);
+      const { rows: assetRows } = await client.query(
+        'SELECT id FROM assets WHERE id = $1 AND institute_id = $2 AND is_active = TRUE',
+        [parsedAssetId, req.user.institute_id],
+      );
+      if (!assetRows.length) throw createHttpError(400, 'Selected asset is not active in your institute');
+      canonicalAssetId = assetRows[0].id;
+      const { rows: activeCustody } = await client.query(
+        "SELECT id FROM custody_records WHERE asset_id = $1 AND status IN ('Pending','Approved','Active','Issued') FOR UPDATE",
+        [canonicalAssetId],
+      );
+      if (activeCustody.length) throw createHttpError(409, 'Asset already has an active or pending custody record');
+    }
 
     if (custodyType === 'Personal') {
       const userId = parseInt(custodian_user_id, 10);
@@ -208,6 +225,7 @@ const createCustodyRecord = async (req, res, next) => {
       pre_existing_condition ?? null,
       true,
       new Date(),
+      canonicalAssetId,
     ];
 
     const { rows } = await client.query(
@@ -237,9 +255,10 @@ const createCustodyRecord = async (req, res, next) => {
          cost_center,
          pre_existing_condition,
          acknowledgment_accepted,
-         acknowledgment_accepted_at
+         acknowledgment_accepted_at,
+         asset_id
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
        RETURNING id`,
       insertValues,
     );

@@ -6,6 +6,7 @@ module.exports={
  list:send(req=>service.list(req.query,context(req.user))), get:send(req=>service.get(req.params.id,context(req.user))),
  create:async(req,res,next)=>{try{res.status(201).json(await service.create(req.body,context(req.user)));}catch(e){next(e);}},
  update:send(req=>service.update(req.params.id,req.body,context(req.user))), categories:send(req=>service.categories(context(req.user))), locations:send(req=>service.locations(context(req.user),req.query)),
+ currencies:send(req=>service.currencies(context(req.user))), sections:send(req=>service.sections(context(req.user),req.query.departmentId)),
   saveLocation:async(req,res,next)=>{try{res.status(req.params.id?200:201).json(await service.saveLocation(req.params.id,req.body,context(req.user)));}catch(e){next(e);}},
  reparentLocation:send(req=>service.reparentLocation(req.params.id,req.body.parentLocationId,context(req.user))), setLocationActive:send(req=>service.setLocationActive(req.params.id,req.body.isActive,context(req.user))),
  listMovements:send(req=>service.listMovements(req.query,context(req.user))),

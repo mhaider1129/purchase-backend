@@ -155,7 +155,7 @@ const updateApprovalStatus = async (req, res, next) => {
     transactionOpen = true;
 
     const approvalRes = await client.query(
-      `SELECT id, request_id, approval_level FROM approvals
+      `SELECT id, request_id, approval_level, approval_route_version, route_snapshot_id FROM approvals
        WHERE id = $1 AND approver_id = $2 AND is_active = true
          AND COALESCE(is_superseded, FALSE) = FALSE`,
       [approval_id, approver_id],
@@ -169,6 +169,14 @@ const updateApprovalStatus = async (req, res, next) => {
 
     const currentApproval = approvalRes.rows[0];
     const request_id = currentApproval.request_id;
+    // Reclassification deliberately preserves the old route as superseded history.
+    // Every lookup that advances this decision must therefore stay within the
+    // selected approval's route; otherwise a pending row from the old route can
+    // be selected and reactivated alongside the replacement route.
+    const workflowIdentity = [
+      currentApproval.approval_route_version ?? null,
+      currentApproval.route_snapshot_id ?? null,
+    ];
 
     const requestInfoRes = await client.query(
       `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent, requester_id, status
@@ -270,8 +278,13 @@ const updateApprovalStatus = async (req, res, next) => {
       if (!routeDefinitions.length) {
         const fallbackLevel = currentApproval.approval_level + 1;
         const existing = await client.query(
-          `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-          [request_id, fallbackLevel],
+          `SELECT 1 FROM approvals
+            WHERE request_id = $1 AND approval_level = $2
+              AND COALESCE(is_superseded, FALSE) = FALSE
+              AND approval_route_version IS NOT DISTINCT FROM $3::integer
+              AND route_snapshot_id IS NOT DISTINCT FROM $4::text
+            LIMIT 1`,
+          [request_id, fallbackLevel, ...workflowIdentity],
         );
         if (existing.rowCount === 0) {
           await assignApprover(
@@ -300,8 +313,13 @@ const updateApprovalStatus = async (req, res, next) => {
           }
 
           const existing = await client.query(
-            `SELECT 1 FROM approvals WHERE request_id = $1 AND approval_level = $2 LIMIT 1`,
-            [request_id, route.approval_level],
+            `SELECT 1 FROM approvals
+              WHERE request_id = $1 AND approval_level = $2
+                AND COALESCE(is_superseded, FALSE) = FALSE
+                AND approval_route_version IS NOT DISTINCT FROM $3::integer
+                AND route_snapshot_id IS NOT DISTINCT FROM $4::text
+              LIMIT 1`,
+            [request_id, route.approval_level, ...workflowIdentity],
           );
           if (existing.rowCount > 0) {
             continue;
@@ -349,9 +367,12 @@ const updateApprovalStatus = async (req, res, next) => {
            FROM approvals
           WHERE request_id = $1
             AND status = 'Pending'
+            AND COALESCE(is_superseded, FALSE) = FALSE
+            AND approval_route_version IS NOT DISTINCT FROM $2::integer
+            AND route_snapshot_id IS NOT DISTINCT FROM $3::text
           ORDER BY approval_level ASC
           LIMIT 1`,
-        [request_id],
+        [request_id, ...workflowIdentity],
       );
 
       let autoApprovedItems = 0;
@@ -361,12 +382,15 @@ const updateApprovalStatus = async (req, res, next) => {
           `UPDATE approvals SET is_active = true
             WHERE request_id = $1
               AND status = 'Pending'
+              AND COALESCE(is_superseded, FALSE) = FALSE
+              AND approval_route_version IS NOT DISTINCT FROM $3::integer
+              AND route_snapshot_id IS NOT DISTINCT FROM $4::text
               AND approval_level = (
                 SELECT approval_level
                   FROM approvals
                  WHERE id = $2
               )`,
-          [request_id, nextPendingApprovals[0].id],
+          [request_id, nextPendingApprovals[0].id, ...workflowIdentity],
         );
 
         const { rows: activePendingApprovals } = await client.query(
@@ -378,8 +402,10 @@ const updateApprovalStatus = async (req, res, next) => {
               AND a.status = 'Pending'
               AND a.is_active = true
               AND COALESCE(a.is_superseded, FALSE) = FALSE
+              AND a.approval_route_version IS NOT DISTINCT FROM $2::integer
+              AND a.route_snapshot_id IS NOT DISTINCT FROM $3::text
             ORDER BY a.approval_level ASC, a.id ASC`,
-          [request_id],
+          [request_id, ...workflowIdentity],
         );
 
         activeApproversToNotify = activePendingApprovals.filter((approval) => approval?.approver_id);

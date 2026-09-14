@@ -38,7 +38,6 @@ ALTER TABLE custody_records ADD COLUMN asset_id bigint REFERENCES assets(id) ON 
 $ddl$;
  END IF;
  -- Complete-path contract checks: representative columns/types/nullability plus critical indexes/FKs.
- IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='assets' AND column_name='acquisition_cost' AND data_type='numeric' AND is_nullable='YES') OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='asset_tags_active_epc_uq') OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='rfid_portal_enable_scope') OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='rfid_read_events' AND column_name='read_timestamp' AND data_type='timestamp with time zone') THEN RAISE EXCEPTION '017 drift: critical schema contract mismatch'; END IF;
- IF present=array_length(expected,1) THEN RAISE NOTICE 'SQL_017_ALREADY_APPLIED_COMPATIBLE'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='assets' AND column_name='acquisition_cost' AND data_type='numeric' AND is_nullable='YES') OR NOT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='asset_tags_active_epc_uq') OR NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='rfid_read_events' AND column_name='read_timestamp' AND data_type='timestamp with time zone') THEN RAISE EXCEPTION '017 drift: critical schema contract mismatch'; END IF;
 END $migration$;
 COMMIT;

@@ -3,8 +3,6 @@ const createHttpError = require('../../utils/httpError');
 const ensureCentralSupplyChainTrackingColumns = require('../../utils/ensureCentralSupplyChainTrackingColumns');
 const auditService = require('../../services/auditService');
 
-const isDatabaseError = (error) => /^[0-9A-Z]{5}$/.test(error?.code || '');
-
 const runOptionalDatabaseWrite = async (client, savepoint, write) => {
   await client.query(`SAVEPOINT ${savepoint}`);
   try {
@@ -12,9 +10,14 @@ const runOptionalDatabaseWrite = async (client, savepoint, write) => {
     await client.query(`RELEASE SAVEPOINT ${savepoint}`);
     return true;
   } catch (error) {
-    if (!isDatabaseError(error)) throw error;
+    // Audit persistence is ancillary to the requested state change. PostgreSQL
+    // errors abort the transaction, while serializers and legacy audit service
+    // implementations can throw ordinary JavaScript errors. In either case the
+    // savepoint lets us recover without turning a successful status update into
+    // an HTTP 500. A failure to recover the transaction still propagates.
     await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
     await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+    console.warn(`Skipped optional Central Supply Chain audit write (${savepoint}):`, error);
     return false;
   }
 };

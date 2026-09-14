@@ -84,9 +84,24 @@ describe('Central Supply Chain status', () => {
     expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
   });
 
-  test('does not hide non-database audit errors', async () => {
+  test('keeps the status when the audit service throws a non-database error', async () => {
     const h = harness(); const next = jest.fn();
     auditService.writeAuditEvent.mockRejectedValueOnce(new TypeError('bad audit event'));
+
+    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, next);
+
+    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK TO SAVEPOINT central_supply_audit');
+    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('fails the status update when an optional write cannot restore its savepoint', async () => {
+    const h = harness(); const next = jest.fn();
+    auditService.writeAuditEvent.mockRejectedValueOnce(new TypeError('bad audit event'));
+    h.client.query.mockImplementation(async (sql) => {
+      if (sql === 'ROLLBACK TO SAVEPOINT central_supply_audit') throw new Error('connection lost');
+      return {};
+    });
 
     await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, next);
 

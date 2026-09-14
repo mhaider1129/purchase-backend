@@ -13,7 +13,7 @@ const values = Object.freeze({
 
 const transitions = Object.freeze({
   DRAFT: ['PENDING_APPROVAL', 'CANCELLED'], PENDING_APPROVAL: ['APPROVED', 'REJECTED', 'CANCELLED'],
-  APPROVED: ['IN_TRANSIT', 'CANCELLED'], IN_TRANSIT: ['RECEIVED'], RECEIVED: ['RETURNED'], RETURNED: [], CANCELLED: [], REJECTED: [],
+  APPROVED: ['IN_TRANSIT', 'CANCELLED'], IN_TRANSIT: ['RECEIVED'], RECEIVED: [], RETURNED: [], CANCELLED: [], REJECTED: [],
 });
 
 const assertOption = (group, value, required = true) => {

@@ -62,6 +62,9 @@ const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities 
   const lines = [];
   for (const award of awards) { const snapshot=snapshots.get(String(award.id)); lines.push(await tx.insertLine({ purchase_order_id: header.id, request_id: award.request_id, request_item_id: award.request_item_id, requested_item_id: award.request_item_id, award_id: award.id, generic_item_id:snapshot.generic_item_id||null, approved_product_id: award.approved_product_id||null, supplier_catalog_item_id: award.supplier_catalog_item_id||null, item_name:snapshot.item_name||null, quantity: conversions.get(String(award.id)), unit_price: award.unit_price, price_source_type: award.source_type, price_source_id: award.source_id || award.id, line_type: award.line_type || (snapshot.request_mode==='service'?'SERVICE':'NON_INVENTORY'), source_uom_id:snapshot.source_uom_id||null,source_uom:snapshot.source_uom,base_uom_id:snapshot.base_uom_id||null,base_uom:snapshot.base_uom,conversion_factor:snapshot.conversion_factor })); }
   const created={...header,lines};
+  if (tx.linkDocuments) {
+    for (const award of awards) await tx.linkDocuments(header.request_id, 'PROCUREMENT_AWARD', award.id, 'PURCHASE_ORDER', header.id, actor.id);
+  }
   // Connected repositories expose the transaction client required by the
   // canonical audit/outbox writers; lightweight calculation adapters do not.
   if(typeof tx.client?.query==='function') await event(tx,auditService,outbox,'PO_CREATED',created,actor,{requestedItemIds:[...new Set(lines.map(line=>line.requested_item_id))],supplierId:header.supplier_id,actorId:actor.id});
@@ -85,6 +88,7 @@ const releasePurchaseOrder = async ({ repository, purchaseOrderId, actor, auditS
   const totals = calculatePurchaseOrderTotals({ lines, freight: po.freight, charges: po.charges });
   const commitment = await commitPurchaseOrder({ repository: tx, purchaseOrder: { ...po, grand_total: totals.grand_total }, idempotencyKey: key, actor });
   const issued = await tx.markPurchaseOrderIssued(po.id, totals, actor.id);
+  if (tx.linkDocuments) await tx.linkDocuments(po.request_id, 'PURCHASE_ORDER', po.id, 'BUDGET_COMMITMENT', commitment.id, actor.id);
   await event(tx, auditService, outbox, 'BUDGET_COMMITTED', issued, actor, { commitment_id: commitment.id });
   await event(tx, auditService, outbox, 'PO_ISSUED', issued, actor, { commitment_id: commitment.id });
   return { purchaseOrder: { ...issued, lines }, commitment };

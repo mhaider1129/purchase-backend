@@ -49,6 +49,7 @@ const submitSupplierInvoice = async ({ repository, purchaseOrderId, supplierId, 
     });
     const invoice = await tx.insertSupplierInvoice({ request_id: po.request_id, supplier_id: supplierId, purchase_order_id: po.id, invoice_number: String(invoiceNumber).trim(), normalized_invoice_number: normalized, invoice_date: invoiceDate, currency: String(currency).toUpperCase(), idempotency_key: idempotencyKey.trim(), payload_fingerprint: payloadFingerprint, subtotal_amount: calculated.subtotal, tax_amount: calculated.tax, discount_amount: calculated.discount, total_amount: calculated.grand_total, attachment_metadata: attachmentMetadata, submitted_by: actor.id });
     for (const line of persistedLines) await tx.insertSupplierInvoiceLine({ ...line, supplier_invoice_id: invoice.id });
+    if (tx.linkDocuments) await tx.linkDocuments(po.request_id, 'PURCHASE_ORDER', po.id, 'AP_INVOICE', invoice.id, actor.id);
     await emit(tx, auditService, outbox, 'SUPPLIER_INVOICE_SUBMITTED', invoice, actor, { supplier_id: supplierId, totals: calculated });
     return { invoice: await tx.loadInvoiceWithLines(invoice.id), idempotent: false };
   });
@@ -65,6 +66,7 @@ const runInvoiceMatch = ({ repository, invoiceId, actor, auditService = defaultA
   const priorValues = await tx.loadPriorValidInvoicedValuesByPoLine(po.id, invoice.id);
   const result = matchInvoice({ invoice: fullInvoice, purchaseOrder: po, acceptedReceipts: accepted, priorQuantities, priorValues });
   const saved = await tx.insertMatchResult({ request_id: invoice.request_id, supplier_invoice_id: invoice.id, policy: result.policy, match_status: result.status, variances: result.variances, actor_id: actor.id });
+  if (tx.linkDocuments) await tx.linkDocuments(invoice.request_id, 'AP_INVOICE', invoice.id, 'THREE_WAY_MATCH', saved.id, actor.id);
   const updated = await tx.updateInvoiceLifecycle(invoice.id, result.status);
   await emit(tx, auditService, outbox, result.matched ? 'INVOICE_MATCH_VERIFIED' : 'INVOICE_MATCH_EXCEPTION', updated, actor, { match_result_id: saved.id, policy: result.policy, variances: result.variances });
   return { ...result, match_result: saved, invoice: updated };

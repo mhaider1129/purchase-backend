@@ -106,7 +106,11 @@ function createProcurementPriorityRepository(database = pool) {
         await writeAuditEvent({
           client,
           entityType: "department_priority_queue",
-          entityId: `${instituteId}:${departmentId}`,
+          // audit_logs.target_id is an integer in the deployed schema. The
+          // institute is already captured separately in the audit details, so
+          // use the department as the queue's concrete audit target rather
+          // than a composite string that PostgreSQL cannot cast to integer.
+          entityId: departmentId,
           action: "DEPARTMENT_PRIORITY_REORDERED",
           actorUserId: actorId,
           instituteId,

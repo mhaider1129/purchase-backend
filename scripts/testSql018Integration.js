@@ -52,7 +52,7 @@ async function rejects(sql, marker) {
 }
 async function seed() {
   await client.query(`INSERT INTO institutes VALUES(1),(2);
-    INSERT INTO rfid_readers VALUES(10,1),(20,2);
+    INSERT INTO rfid_readers VALUES(10,1),(11,1),(20,2);
     INSERT INTO rfid_antennas VALUES(100,1,10),(200,2,20);
     INSERT INTO rfid_portals VALUES(1000,1,true),(1001,1,true),(1002,1,false),(2000,2,true);`);
 }
@@ -78,6 +78,28 @@ async function concurrency(enabledAtStart) {
   if (result.rows[0].n !== 1) throw new Error('Concurrency invariant violated');
 }
 
+async function configurationMutationConcurrency() {
+  await reset(); await seed(); await client.query(migration);
+  const a = new Client({ connectionString: url }); const b = new Client({ connectionString: url });
+  await Promise.all([a.connect(), b.connect()]);
+  try {
+    await Promise.all([a.query('BEGIN'), b.query('BEGIN')]);
+    const settled = await Promise.allSettled([
+      a.query('INSERT INTO rfid_portal_antennas VALUES(1000,100)').then(() => a.query('COMMIT')),
+      b.query('UPDATE rfid_readers SET institute_id=2 WHERE id=10').then(() => b.query('COMMIT')),
+    ]);
+    await Promise.allSettled([a.query('ROLLBACK'), b.query('ROLLBACK')]);
+    if (settled.filter(x => x.status === 'fulfilled').length !== 1) {
+      throw new Error('Concurrent mapping/reader mutation did not serialize to exactly one winner');
+    }
+  } finally { await Promise.all([a.end(), b.end()]); }
+  const invalid = await client.query(`SELECT count(*)::int AS n
+    FROM rfid_portal_antennas pa JOIN rfid_antennas a ON a.id=pa.antenna_id
+    JOIN rfid_readers r ON r.id=a.reader_id JOIN rfid_portals p ON p.id=pa.portal_id
+    WHERE a.institute_id<>r.institute_id OR a.institute_id<>p.institute_id`);
+  if (invalid.rows[0].n !== 0) throw new Error('Concurrent configuration mutation violated institute scope');
+}
+
 (async () => {
   await client.connect();
   try {
@@ -97,19 +119,27 @@ async function concurrency(enabledAtStart) {
     await reset(); await seed(); await client.query(migration);
     await client.query('INSERT INTO rfid_portal_antennas VALUES(1000,100)');
     await rejects('INSERT INTO rfid_portal_antennas VALUES(2000,100)', 'same institute');
-    await client.query('UPDATE rfid_readers SET institute_id=2 WHERE id=10');
-    await rejects('INSERT INTO rfid_portal_antennas VALUES(1002,100)', 'reader must belong');
-    await client.query('UPDATE rfid_readers SET institute_id=1 WHERE id=10');
+    await rejects('UPDATE rfid_antennas SET institute_id=2,reader_id=20 WHERE id=100', 'portal and antenna');
+    await client.query('DELETE FROM rfid_portal_antennas WHERE portal_id=1000 AND antenna_id=100');
+    await rejects('UPDATE rfid_antennas SET institute_id=2 WHERE id=100', 'antenna and reader');
+    await client.query('INSERT INTO rfid_portal_antennas VALUES(1000,100)');
+    await rejects('UPDATE rfid_antennas SET reader_id=20 WHERE id=100', 'antenna and reader');
+    await rejects('UPDATE rfid_readers SET institute_id=2 WHERE id=10', 'mapped antennas');
+    await client.query('UPDATE rfid_antennas SET institute_id=1,reader_id=11 WHERE id=100');
+    await client.query('UPDATE rfid_readers SET institute_id=1 WHERE id=11');
     await rejects('INSERT INTO rfid_portal_antennas VALUES(1001,100)', 'another enabled portal');
     await client.query('INSERT INTO rfid_portal_antennas VALUES(1002,100)'); // Disabled sharing is intentional.
     await rejects('UPDATE rfid_portals SET enabled=true WHERE id=1002', 'another enabled portal');
-    await client.query('INSERT INTO assets VALUES(1,77,88); INSERT INTO custody_records VALUES(1,1); INSERT INTO asset_movements VALUES(1)');
+    await client.query(`INSERT INTO assets VALUES(1,77,88); INSERT INTO custody_records VALUES(1,1);
+      INSERT INTO asset_movements VALUES(1); INSERT INTO rfid_business_events VALUES(1); INSERT INTO asset_exceptions VALUES(1);`);
     await client.query('UPDATE rfid_portals SET enabled=false WHERE id=1000');
     const untouched = await client.query(`SELECT a.current_location_id,a.responsible_department_id,
-      (SELECT count(*)::int FROM custody_records) custody,(SELECT count(*)::int FROM asset_movements) movements FROM assets a WHERE id=1`);
-    if (JSON.stringify(untouched.rows[0]) !== JSON.stringify({current_location_id:'77',responsible_department_id:88,custody:1,movements:1})) throw new Error('Integrity trigger mutated asset state');
+      (SELECT count(*)::int FROM custody_records) custody,(SELECT count(*)::int FROM asset_movements) movements,
+      (SELECT count(*)::int FROM rfid_business_events) business_events,
+      (SELECT count(*)::int FROM asset_exceptions) exceptions FROM assets a WHERE id=1`);
+    if (JSON.stringify(untouched.rows[0]) !== JSON.stringify({current_location_id:'77',responsible_department_id:88,custody:1,movements:1,business_events:1,exceptions:1})) throw new Error('Integrity trigger mutated asset state');
 
-    await concurrency(true); await concurrency(false);
+    await concurrency(true); await concurrency(false); await configurationMutationConcurrency();
     console.log('SQL_018_LOCAL_INTEGRATION_OK');
     console.log('SQL_018_CONCURRENCY_OK');
   } finally { await client.end(); }

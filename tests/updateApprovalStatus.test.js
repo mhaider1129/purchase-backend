@@ -92,6 +92,54 @@ describe('updateApprovalStatus', () => {
     expect(client.release).toHaveBeenCalled();
   });
 
+  it('only advances pending approvals from the active reclassified route', async () => {
+    client.query.mockImplementation(async (sql) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT') return {};
+      if (String(sql).includes('SELECT id, request_id, approval_level')) {
+        return { rowCount: 1, rows: [{
+          id: 3452, request_id: 124, approval_level: 3,
+          approval_route_version: 2, route_snapshot_id: 'it-route-v2',
+        }] };
+      }
+      if (String(sql).includes('FROM requests') && String(sql).includes('FOR UPDATE')) {
+        return { rowCount: 1, rows: [{
+          request_type: 'IT Item', department_id: 3, request_domain: 'it',
+          estimated_cost: 150, is_urgent: false, requester_id: 11,
+          status: 'Pending Approval',
+        }] };
+      }
+      if (String(sql).includes('SELECT 1 FROM approvals')) return { rowCount: 1, rows: [{}] };
+      if (String(sql).includes('SELECT id') && String(sql).includes("status = 'Pending'")) {
+        return { rows: [{ id: 3453 }] };
+      }
+      if (String(sql).includes('activePendingApprovals')) return { rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    const req = {
+      params: { id: '3452' }, body: { status: 'Approved' },
+      user: { id: 7, hasPermission: jest.fn(() => true) },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+    await updateApprovalStatus(req, res, next);
+
+    const nextLookup = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('SELECT id') && String(sql).includes("status = 'Pending'"),
+    );
+    expect(nextLookup[0]).toContain('COALESCE(is_superseded, FALSE) = FALSE');
+    expect(nextLookup[0]).toContain('approval_route_version IS NOT DISTINCT FROM $2::integer');
+    expect(nextLookup[0]).toContain('route_snapshot_id IS NOT DISTINCT FROM $3::text');
+    expect(nextLookup[1]).toEqual([124, 2, 'it-route-v2']);
+
+    const activation = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('UPDATE approvals SET is_active = true'),
+    );
+    expect(activation[0]).toContain('COALESCE(is_superseded, FALSE) = FALSE');
+    expect(activation[1]).toEqual([124, 3453, 2, 'it-route-v2']);
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it('rolls back before returning an inactive-approver error', async () => {
     client.query
       .mockResolvedValueOnce({}) // BEGIN

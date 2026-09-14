@@ -10,5 +10,6 @@ module.exports={
  reparentLocation:send(req=>service.reparentLocation(req.params.id,req.body.parentLocationId,context(req.user))), setLocationActive:send(req=>service.setLocationActive(req.params.id,req.body.isActive,context(req.user))),
  listMovements:send(req=>service.listMovements(req.query,context(req.user))),
  movements:send(req=>service.movements(req.params.id,context(req.user))), requestMovement:async(req,res,next)=>{try{res.status(201).json(await service.requestMovement(req.params.id,req.body,context(req.user)));}catch(e){next(e);}},
+ initiateReturn:async(req,res,next)=>{try{res.status(201).json(await service.initiateReturn(req.params.id,req.body,context(req.user)));}catch(e){next(e);}},
  transitionMovement:status=>send(req=>service.transitionMovement(req.params.id,status,context(req.user))),
 };

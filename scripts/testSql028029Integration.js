@@ -95,7 +95,17 @@ async function installed029() { await installed028(); await client.query(sql029)
     if (backfill.rows[0].acquisition_currency !== 'USD' || backfill.rows[1].acquisition_currency !== null) throw new Error('SQL 029 currency backfill was not lossless');
     await client.query("INSERT INTO asset_movements(institute_id,asset_id,movement_type,status) VALUES(1,1,'INITIAL_DEPLOYMENT','RECEIVED')");
 
-    await reset(); await installed028(); await client.query('ALTER TABLE assets ADD COLUMN deployment_date date');
+    // PostgreSQL can deparse the same varchar IN check with text array casts.
+    // That catalog representation is compatible and must not be reported as drift.
+    await reset(); await installed028();
+    await client.query(`ALTER TABLE asset_movements DROP CONSTRAINT asset_movements_movement_type_check;
+      ALTER TABLE asset_movements ADD CONSTRAINT asset_movements_movement_type_check CHECK(movement_type::text = ANY(ARRAY[
+        'PERMANENT_TRANSFER'::text,'TEMPORARY_LOAN'::text,'MAINTENANCE_TRANSFER'::text,
+        'EXTERNAL_MAINTENANCE'::text,'RETURN'::text,'STORAGE_TRANSFER'::text,
+        'DISPOSAL_TRANSFER'::text,'LOCATION_CORRECTION'::text]))`);
+    await client.query(sql029);
+
+    awa
     await rejects(sql029, 'SQL_029_PARTIAL_OR_DRIFTED_SCHEMA');
 
     await reset(); await installed028(); await client.query('ALTER TABLE assets ADD COLUMN responsible_section_id bigint');

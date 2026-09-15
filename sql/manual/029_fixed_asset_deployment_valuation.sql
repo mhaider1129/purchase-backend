@@ -7,8 +7,11 @@ DECLARE
   extension_count integer;
   movement_definition text;
   compatible boolean;
-  pre029_movement_definition constant text := 'CHECKmovement_type::text=ANYARRAY[''PERMANENT_TRANSFER''::character varying,''TEMPORARY_LOAN''::character varying,''MAINTENANCE_TRANSFER''::character varying,''EXTERNAL_MAINTENANCE''::character varying,''RETURN''::character varying,''STORAGE_TRANSFER''::character varying,''DISPOSAL_TRANSFER''::character varying,''LOCATION_CORRECTION''::character varying]::text[]';
-  post029_movement_definition constant text := 'CHECKmovement_type::text=ANYARRAY[''INITIAL_DEPLOYMENT''::character varying,''PERMANENT_TRANSFER''::character varying,''TEMPORARY_LOAN''::character varying,''MAINTENANCE_TRANSFER''::character varying,''EXTERNAL_MAINTENANCE''::character varying,''RETURN''::character varying,''STORAGE_TRANSFER''::character varying,''DISPOSAL_TRANSFER''::character varying,''LOCATION_CORRECTION''::character varying]::text[]';
+  -- pg_get_constraintdef renders varchar array literals as either varchar or text
+  -- across supported PostgreSQL versions. Compare a canonical text-cast form so
+  -- an equivalent SQL 017 constraint is not mistaken for schema drift.
+  pre029_movement_definition constant text := 'CHECKmovement_type::text=ANYARRAY[''PERMANENT_TRANSFER''::text,''TEMPORARY_LOAN''::text,''MAINTENANCE_TRANSFER''::text,''EXTERNAL_MAINTENANCE''::text,''RETURN''::text,''STORAGE_TRANSFER''::text,''DISPOSAL_TRANSFER''::text,''LOCATION_CORRECTION''::text]::text[]';
+  post029_movement_definition constant text := 'CHECKmovement_type::text=ANYARRAY[''INITIAL_DEPLOYMENT''::text,''PERMANENT_TRANSFER''::text,''TEMPORARY_LOAN''::text,''MAINTENANCE_TRANSFER''::text,''EXTERNAL_MAINTENANCE''::text,''RETURN''::text,''STORAGE_TRANSFER''::text,''DISPOSAL_TRANSFER''::text,''LOCATION_CORRECTION''::text]::text[]';
 BEGIN
   IF to_regclass('public.assets') IS NULL OR to_regclass('public.asset_movements') IS NULL OR to_regclass('public.sections') IS NULL
     OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='assets' AND column_name='institute_id' AND data_type='integer' AND is_nullable='NO')
@@ -19,7 +22,10 @@ BEGIN
     RAISE EXCEPTION 'SQL_029_DEPENDENCY_MISSING_OR_INCOMPATIBLE';
   END IF;
 
-  SELECT regexp_replace(pg_get_constraintdef(c.oid),'[ ()]','','g') INTO movement_definition
+  SELECT replace(
+           replace(regexp_replace(pg_get_constraintdef(c.oid),'[ ()]','','g'), '::charactervarying', '::text'),
+           'pg_catalog.', '')
+    INTO movement_definition
   FROM pg_constraint c WHERE c.conrelid='public.asset_movements'::regclass
     AND c.conname='asset_movements_movement_type_check' AND c.contype='c' AND c.convalidated;
   IF movement_definition IS NULL THEN RAISE EXCEPTION 'SQL_029_DEPENDENCY_MISSING_OR_INCOMPATIBLE'; END IF;
@@ -33,9 +39,14 @@ BEGIN
   ) objects;
 
   IF extension_count=0 THEN
-    IF movement_definition<>pre029_movement_definition THEN RAISE EXCEPTION 'SQL_029_PARTIAL_OR_DRIFTED_SCHEMA'; END IF;
+    IF movement_definition<>pre029_movement_definition THEN
+      RAISE EXCEPTION 'SQL_029_PARTIAL_OR_DRIFTED_SCHEMA'
+        USING DETAIL='asset_movements_movement_type_check does not match the SQL 017 definition';
+    END IF;
   ELSIF extension_count<>12 OR movement_definition<>post029_movement_definition THEN
-    RAISE EXCEPTION 'SQL_029_PARTIAL_OR_DRIFTED_SCHEMA';
+    RAISE EXCEPTION 'SQL_029_PARTIAL_OR_DRIFTED_SCHEMA'
+      USING DETAIL=format('found %s of 12 SQL 029 objects; movement constraint matches: %s',
+        extension_count, movement_definition=post029_movement_definition);
   ELSE
     SELECT
       EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='assets' AND column_name='responsible_section_id' AND data_type='integer' AND is_nullable='YES')

@@ -35,6 +35,8 @@ test.each([
  ['029_fixed_asset_deployment_valuation.sql',['SQL_029_ALREADY_APPLIED_COMPATIBLE','SQL_029_PARTIAL_OR_DRIFTED_SCHEMA','SQL_029_DEPENDENCY_MISSING_OR_INCOMPATIBLE']],
 ])('pending migration %s exposes fail-closed deployment states',(file,markers)=>{const sql=require('fs').readFileSync(require('path').join(__dirname,'../sql/manual',file),'utf8');for(const marker of markers)expect(sql).toContain(marker);expect(sql).not.toMatch(/(?:ADD COLUMN|CREATE INDEX) IF NOT EXISTS/);});
 
+test('SQL 028 normalizes scalar and array casts without a bracket-sensitive regular expression',()=>{const sql=require('fs').readFileSync(require('path').join(__dirname,'../sql/manual/028_asset_movement_operational_hardening.sql'),'utf8');for(const cast of ["'::character varying[]',''","'::text[]',''","'::character varying',''","'::text',''"])expect(sql).toContain(cast);expect(sql).not.toContain('[[]][]]');});
+
 describe('fixed asset deployment completion',()=>{
  test('section must belong to selected same-institute department',async()=>{const tx={query:jest.fn().mockResolvedValue({rowCount:0,rows:[]})};await expect(new FixedAssetService().validateLinks({responsibleDepartmentId:3,responsibleSectionId:9},{instituteId:7},tx)).rejects.toThrow(/foreign departments|Section/);});
  test('foreign or inactive physical locations are rejected',async()=>{const tx={query:jest.fn().mockResolvedValue({rowCount:0,rows:[]})};await expect(new FixedAssetService().validateLinks({currentLocationId:4},{instituteId:7},tx)).rejects.toThrow(/asset_locations/);expect(tx.query.mock.calls[0][0]).toContain('is_active=true');});

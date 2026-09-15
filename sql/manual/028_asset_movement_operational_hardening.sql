@@ -45,9 +45,16 @@ BEGIN
           AND i.indrelid='public.asset_movements'::regclass AND i.indisunique AND i.indisvalid AND i.indisready
           AND am.amname='btree' AND i.indnkeyatts=2 AND i.indnatts=2
           AND pg_get_indexdef(i.indexrelid,1,true)='institute_id' AND pg_get_indexdef(i.indexrelid,2,true)='asset_id'
-          AND regexp_replace(pg_get_expr(i.indpred,i.indrelid),'[ ()]' ,'','g') IN
-            ('status::text=ANY(ARRAY[''PENDING_APPROVAL''::character varying,''APPROVED''::character varying,''IN_TRANSIT''::character varying]::text[])',
-             'status::text=ANY(ARRAY[''PENDING_APPROVAL''::text,''APPROVED''::text,''IN_TRANSIT''::text])')
+          -- PostgreSQL versions legitimately render varchar predicates with different
+          -- combinations of ::varchar/::text casts. Strip only those no-op casts before
+          -- comparing the expression; the columns, operator, values, and order remain exact.
+          AND regexp_replace(
+                replace(replace(replace(replace(
+                  pg_get_expr(i.indpred,i.indrelid),
+                  '::character varying[]',''),'::text[]',''),
+                  '::character varying',''),'::text',''),
+                '[ ()]','','g'
+              )='status=ANYARRAY[''PENDING_APPROVAL'',''APPROVED'',''IN_TRANSIT'']'
       )
       AND EXISTS (
         SELECT 1 FROM pg_index i JOIN pg_class x ON x.oid=i.indexrelid JOIN pg_am am ON am.oid=x.relam
@@ -55,13 +62,25 @@ BEGIN
           AND i.indrelid='public.asset_movements'::regclass AND i.indisunique AND i.indisvalid AND i.indisready
           AND am.amname='btree' AND i.indnkeyatts=1 AND i.indnatts=1
           AND pg_get_indexdef(i.indexrelid,1,true)='origin_movement_id'
-          AND regexp_replace(pg_get_expr(i.indpred,i.indrelid),'[ ()]','','g')='movement_type::text=''RETURN''::text'
+          AND regexp_replace(
+                replace(replace(replace(replace(
+                  pg_get_expr(i.indpred,i.indrelid),
+                  '::character varying[]',''),'::text[]',''),
+                  '::character varying',''),'::text',''),
+                '[ ()]','','g'
+              )='movement_type=''RETURN'''
       )
       AND EXISTS (
         SELECT 1 FROM pg_constraint c WHERE c.conrelid='public.asset_movements'::regclass
           AND c.conname='asset_movements_return_origin_ck' AND c.contype='c' AND c.convalidated
-          AND regexp_replace(pg_get_constraintdef(c.oid),'[ ()]','','g') =
-            'CHECKmovement_type::text=''RETURN''::textANDorigin_movement_idISNOTNULLORmovement_type::text<>''RETURN''::textANDorigin_movement_idISNULL'
+          AND regexp_replace(
+                replace(replace(replace(replace(
+                  pg_get_constraintdef(c.oid),
+                  '::character varying[]',''),'::text[]',''),
+                  '::character varying',''),'::text',''),
+                '[ ()]','','g'
+              ) =
+            'CHECKmovement_type=''RETURN''ANDorigin_movement_idISNOTNULLORmovement_type<>''RETURN''ANDorigin_movement_idISNULL'
       )
     INTO compatible;
     IF compatible THEN

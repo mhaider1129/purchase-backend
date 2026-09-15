@@ -16,7 +16,8 @@
     "migrate:create": "node-pg-migrate create",
     "validate:sql004": "node scripts/validateManualSql.js",
     "test:sql018": "node scripts/testSql018Integration.js",
-    "priority:recalculate-aging": "node jobs/recalculateProcurementPriorityAging.js"
+    "priority:recalculate-aging": "node jobs/recalculateProcurementPriorityAging.js",
+    "test:sql028-029": "node scripts/testSql028029Integration.js"
   },
   "keywords": [
     "purchase",

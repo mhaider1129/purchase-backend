@@ -109,7 +109,7 @@ class FixedAssetService {
       ON CONFLICT (institute_id,code) DO NOTHING`, [ctx.instituteId, ctx.userId, JSON.stringify(baselineAssetCategories)]);
     return (await this.repo.query('SELECT * FROM asset_categories WHERE institute_id=$1 ORDER BY name',[ctx.instituteId])).rows;
   }
-  async governedCurrencies(ctx){const result=await this.repo.query(`SELECT DISTINCT upper(currency) code FROM (SELECT a.currency FROM assets a WHERE a.institute_id=$1 UNION ALL SELECT po.currency FROM purchase_orders po JOIN requests r ON r.id=po.request_id WHERE r.institute_id=$1 UNION ALL SELECT unnest(ARRAY['IQD','USD'])) c WHERE currency ~ '^[A-Za-z]{3}$' ORDER BY code`,[ctx.instituteId]);return result.rows.map(x=>x.code);}
+  async governedCurrencies(ctx, db=this.repo){const result=await db.query(`SELECT DISTINCT upper(currency) code FROM (SELECT a.currency FROM assets a WHERE a.institute_id=$1 UNION ALL SELECT po.currency FROM purchase_orders po JOIN requests r ON r.id=po.request_id WHERE r.institute_id=$1 UNION ALL SELECT unnest(ARRAY['IQD','USD'])) c WHERE currency ~ '^[A-Za-z]{3}$' ORDER BY code`,[ctx.instituteId]);return result.rows.map(x=>x.code);}
   async currencies(ctx){return this.governedCurrencies(ctx);} 
   async sections(ctx,departmentId){if(!integer(departmentId))return[];return(await this.repo.query('SELECT s.id,s.name FROM sections s JOIN departments d ON d.id=s.department_id WHERE s.department_id=$1 AND d.institute_id=$2 ORDER BY s.name',[integer(departmentId),ctx.instituteId])).rows;}
   async locations(ctx, query={}) { const params=[ctx.instituteId], where=['l.institute_id=$1'];

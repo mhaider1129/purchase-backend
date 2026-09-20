@@ -40,7 +40,25 @@ BEGIN
       WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=('public.'||required.table_name)::regclass AND c.conname=required.constraint_name AND c.contype='u')
     ) OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.asset_inventory_findings'::regclass AND conname='asset_inventory_findings_type_ck' AND contype='c')
        OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.asset_inventory_sessions'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%scope_type%')
-       OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='asset_inventory_one_open_finding_uq' AND indexdef ILIKE 'CREATE UNIQUE INDEX%' AND indexdef LIKE '%COALESCE(asset_id, 0%' AND indexdef LIKE '%status%OPEN%ACKNOWLEDGED%')
+       -- Do not compare pg_indexes.indexdef text here. PostgreSQL decorates the
+       -- bigint zero literals with version-dependent casts (for example,
+       -- "(0)::bigint"), so a migration-created index could be rejected on the
+       -- very next run. Validate stable catalog properties and normalized
+       -- expression/predicate trees instead.
+       OR NOT EXISTS (
+         SELECT 1
+         FROM pg_index i
+         JOIN pg_class idx ON idx.oid=i.indexrelid
+         JOIN pg_class tbl ON tbl.oid=i.indrelid
+         JOIN pg_namespace ns ON ns.oid=tbl.relnamespace
+         WHERE ns.nspname='public'
+           AND tbl.relname='asset_inventory_findings'
+           AND idx.relname='asset_inventory_one_open_finding_uq'
+           AND i.indisunique
+           AND lower(pg_get_expr(i.indexprs,i.indrelid)) LIKE '%coalesce(asset_id, %'
+           AND lower(pg_get_expr(i.indexprs,i.indrelid)) LIKE '%coalesce(discovery_id, %'
+           AND lower(pg_get_expr(i.indpred,i.indrelid)) LIKE '%status%open%acknowledged%'
+       )
        OR to_regprocedure('public.next_asset_inventory_number(integer)') IS NULL
        OR (SELECT prorettype::regtype::text FROM pg_proc WHERE oid=to_regprocedure('public.next_asset_inventory_number(integer)')) <> 'text'
        OR to_regprocedure('public.prevent_inventory_snapshot_mutation()') IS NULL

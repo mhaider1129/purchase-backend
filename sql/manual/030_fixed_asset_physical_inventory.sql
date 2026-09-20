@@ -15,10 +15,37 @@ BEGIN
     RAISE EXCEPTION 'SQL_030_PARTIAL_OR_DRIFTED_SCHEMA' USING DETAIL=format('found %s of %s owned tables',present,array_length(expected,1));
   END IF;
   IF present=array_length(expected,1) THEN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='asset_inventory_sessions' AND column_name='row_version' AND data_type='integer' AND is_nullable='NO')
-       OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.asset_inventory_findings'::regclass AND conname='asset_inventory_findings_type_ck')
+    -- A rerun is accepted only when the complete owned contract is compatible.
+    -- Column checks deliberately include type and material nullability rather
+    -- than treating table-name presence as proof of a successful deployment.
+    IF EXISTS (
+      SELECT 1 FROM (VALUES
+        ('asset_inventory_sessions','id','bigint','NO'),('asset_inventory_sessions','institute_id','integer','NO'),('asset_inventory_sessions','session_number','character varying','NO'),('asset_inventory_sessions','scope_type','character varying','NO'),('asset_inventory_sessions','status','character varying','NO'),('asset_inventory_sessions','row_version','integer','NO'),
+        ('asset_inventory_expected_assets','session_id','bigint','NO'),('asset_inventory_expected_assets','asset_id','bigint','NO'),('asset_inventory_expected_assets','snapshot_at','timestamp with time zone','NO'),
+        ('asset_inventory_observations','session_id','bigint','NO'),('asset_inventory_observations','asset_id','bigint','YES'),('asset_inventory_observations','observation_method','character varying','NO'),('asset_inventory_observations','raw_evidence','jsonb','NO'),('asset_inventory_observations','dedupe_key','text','NO'),
+        ('asset_inventory_discoveries','session_id','bigint','NO'),('asset_inventory_discoveries','registered_asset_id','bigint','YES'),
+        ('asset_inventory_findings','session_id','bigint','NO'),('asset_inventory_findings','finding_type','character varying','NO'),('asset_inventory_findings','context','jsonb','NO'),('asset_inventory_findings','status','character varying','NO'),
+        ('asset_inventory_resolutions','finding_id','bigint','NO'),('asset_inventory_resolutions','resolution_notes','text','NO')
+      ) required(table_name,column_name,data_type,is_nullable)
+      WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema='public' AND c.table_name=required.table_name AND c.column_name=required.column_name AND c.data_type=required.data_type AND c.is_nullable=required.is_nullable)
+    ) OR EXISTS (
+      SELECT 1 FROM (VALUES
+        ('asset_inventory_sessions','asset_inventory_sessions_institute_id_fkey'),('asset_inventory_expected_assets','asset_inventory_expected_assets_session_id_fkey'),('asset_inventory_expected_assets','asset_inventory_expected_assets_asset_id_fkey'),('asset_inventory_observations','asset_inventory_observations_session_id_fkey'),('asset_inventory_observations','asset_inventory_observations_asset_id_fkey'),('asset_inventory_findings','asset_inventory_findings_session_id_fkey'),('asset_inventory_resolutions','asset_inventory_resolutions_finding_id_fkey')
+      ) required(table_name,constraint_name)
+      WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=('public.'||required.table_name)::regclass AND c.conname=required.constraint_name AND c.contype='f')
+    ) OR EXISTS (
+      SELECT 1 FROM (VALUES
+        ('asset_inventory_sessions','asset_inventory_sessions_institute_id_session_number_key'),('asset_inventory_expected_assets','asset_inventory_expected_assets_session_id_asset_id_key'),('asset_inventory_observations','asset_inventory_observations_session_id_dedupe_key_key')
+      ) required(table_name,constraint_name)
+      WHERE NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid=('public.'||required.table_name)::regclass AND c.conname=required.constraint_name AND c.contype='u')
+    ) OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.asset_inventory_findings'::regclass AND conname='asset_inventory_findings_type_ck' AND contype='c')
+       OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.asset_inventory_sessions'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%scope_type%')
+       OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='asset_inventory_one_open_finding_uq' AND indexdef ILIKE 'CREATE UNIQUE INDEX%' AND indexdef LIKE '%COALESCE(asset_id, 0%' AND indexdef LIKE '%status%OPEN%ACKNOWLEDGED%')
        OR to_regprocedure('public.next_asset_inventory_number(integer)') IS NULL
-       OR to_regprocedure('public.prevent_inventory_snapshot_mutation()') IS NULL THEN
+       OR (SELECT prorettype::regtype::text FROM pg_proc WHERE oid=to_regprocedure('public.next_asset_inventory_number(integer)')) <> 'text'
+       OR to_regprocedure('public.prevent_inventory_snapshot_mutation()') IS NULL
+       OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.asset_inventory_expected_assets'::regclass AND tgname='asset_inventory_expected_immutable' AND NOT tgisinternal AND (tgtype & 16)=16 AND (tgtype & 8)=8)
+       OR EXISTS (SELECT 1 FROM (VALUES ('fixed-assets.inventory.view'),('fixed-assets.inventory.create'),('fixed-assets.inventory.count'),('fixed-assets.inventory.review'),('fixed-assets.inventory.resolve')) required(code) WHERE NOT EXISTS (SELECT 1 FROM permissions p WHERE p.code=required.code)) THEN
       RAISE EXCEPTION 'SQL_030_PARTIAL_OR_DRIFTED_SCHEMA';
     END IF;
     RAISE NOTICE 'SQL_030_ALREADY_APPLIED_COMPATIBLE'; RETURN;

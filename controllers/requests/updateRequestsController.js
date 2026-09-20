@@ -13,6 +13,7 @@ const recalculateAvailableQuantity = require('../../utils/recalculateAvailableQu
 const { getInspectionSummaryForRequest } = require('../../utils/technicalInspectionStatus');
 const ensureRequestEditApprovalsTable = require('../../utils/ensureRequestEditApprovalsTable');
 const requestReclassificationService = require('../../services/requestReclassificationService');
+const { applyAutoAssignmentForApprovedRequest } = require('../../services/requestAutoAssignmentService');
 
 const rewireRequestType = async (req, res, next) => {
   const requestId = Number(req.params.id);
@@ -179,7 +180,8 @@ const updateApprovalStatus = async (req, res, next) => {
     ];
 
     const requestInfoRes = await client.query(
-      `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent, requester_id, status
+      `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent, requester_id,
+              status, supply_warehouse_id, assigned_to
          FROM requests
         WHERE id = $1
         FOR UPDATE`,
@@ -450,6 +452,18 @@ const updateApprovalStatus = async (req, res, next) => {
               approver_id,
               `${autoApprovedItems} pending item(s) auto-approved upon final request approval`,
             ],
+          );
+        }
+
+        // This legacy approval endpoint is still used by the approvals UI. Keep
+        // its final-approval side effects in parity with the main approval
+        // controller so management auto-assignment rules are not bypassed.
+        const normalizedRequestStatus = String(requestRow.status || '').trim().toLowerCase();
+        if (!['completed', 'received', 'rejected'].includes(normalizedRequestStatus)) {
+          await applyAutoAssignmentForApprovedRequest(
+            client,
+            { ...requestRow, id: request_id },
+            approver_id,
           );
         }
       }

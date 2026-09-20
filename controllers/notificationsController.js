@@ -2,6 +2,7 @@ const createHttpError = require('../utils/httpError');
 const {
   getUserNotifications,
   markNotificationRead,
+  markNotificationsRead,
   markAllNotificationsRead,
 } = require('../utils/notificationService');
 
@@ -105,8 +106,30 @@ const markAllAsRead = async (req, res, next) => {
   }
 };
 
+const markManyAsRead = async (req, res, next) => {
+  const userId = req.user?.id;
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+
+  if (!Number.isInteger(userId)) {
+    return next(createHttpError(401, 'User context not found'));
+  }
+
+  if (ids.length === 0 || ids.length > 100 || ids.some(id => !Number.isInteger(Number(id)) || Number(id) <= 0)) {
+    return next(createHttpError(400, 'A list of valid notification IDs is required'));
+  }
+
+  try {
+    const affected = await markNotificationsRead(ids, userId);
+    res.json({ success: true, data: { updated: affected } });
+  } catch (error) {
+    console.error('❌ Failed to mark related notifications as read:', error);
+    next(createHttpError(500, 'Failed to mark notifications as read'));
+  }
+};
+
 module.exports = {
   listNotifications,
   markAsRead,
+  markManyAsRead,
   markAllAsRead,
 };

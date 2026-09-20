@@ -19,7 +19,12 @@ jest.mock('../controllers/utils/approvalRoutes', () => ({
   resolveRouteDomain: jest.fn().mockResolvedValue('clinical'),
 }));
 
+jest.mock('../services/requestAutoAssignmentService', () => ({
+  applyAutoAssignmentForApprovedRequest: jest.fn().mockResolvedValue(null),
+}));
+
 const pool = require('../config/db');
+const { applyAutoAssignmentForApprovedRequest } = require('../services/requestAutoAssignmentService');
 const { updateApprovalStatus } = require('../controllers/requests/updateRequestsController');
 
 describe('updateApprovalStatus', () => {
@@ -88,8 +93,55 @@ describe('updateApprovalStatus', () => {
     expect(finalStatusUpdate[1]).toEqual([124]);
     expect(next).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith({ message: '✅ Request approved successfully' });
+    expect(applyAutoAssignmentForApprovedRequest).not.toHaveBeenCalled();
     expect(client.query).toHaveBeenLastCalledWith('COMMIT');
     expect(client.release).toHaveBeenCalled();
+  });
+
+  it('applies the configured auto-assignment after the final approval', async () => {
+    client.query.mockImplementation(async (sql) => {
+      const statement = String(sql);
+      if (sql === 'BEGIN' || sql === 'COMMIT') return {};
+      if (statement.includes('SELECT id, request_id, approval_level')) {
+        return { rowCount: 1, rows: [{ id: 55, request_id: 124, approval_level: 2 }] };
+      }
+      if (statement.includes('FROM requests') && statement.includes('FOR UPDATE')) {
+        return { rowCount: 1, rows: [{
+          request_type: 'Stock', department_id: 3, request_domain: 'clinical',
+          estimated_cost: 150, is_urgent: false, requester_id: 11,
+          status: 'Pending Approval', supply_warehouse_id: 9, assigned_to: null,
+        }] };
+      }
+      if (statement.includes('SELECT 1 FROM approvals')) return { rowCount: 1, rows: [{}] };
+      if (statement.includes('SELECT id') && statement.includes("status = 'Pending'")) {
+        return { rows: [] };
+      }
+      if (statement.includes('UPDATE public.requested_items')) return { rowCount: 0 };
+      return { rowCount: 1, rows: [] };
+    });
+
+    const req = {
+      params: { id: '55' }, body: { status: 'Approved' },
+      user: { id: 7, hasPermission: jest.fn(() => true) },
+    };
+    const res = { json: jest.fn() };
+    const next = jest.fn();
+
+    await updateApprovalStatus(req, res, next);
+
+    expect(applyAutoAssignmentForApprovedRequest).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        id: 124,
+        request_type: 'Stock',
+        supply_warehouse_id: 9,
+        assigned_to: null,
+      }),
+      7,
+    );
+    expect(client.query.mock.calls.findIndex(([sql]) => String(sql).includes("SET status = 'Approved'")))
+      .toBeLessThan(client.query.mock.calls.findIndex(([sql]) => sql === 'COMMIT'));
+    expect(next).not.toHaveBeenCalled();
   });
 
   it('only advances pending approvals from the active reclassified route', async () => {

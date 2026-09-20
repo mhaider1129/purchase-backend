@@ -257,11 +257,36 @@ const markAllNotificationsRead = async (userId, client = null) => {
   return result.rowCount || 0;
 };
 
+const markNotificationsRead = async (notificationIds, userId, client = null) => {
+  const parsedUserId = Number(userId);
+  const ids = [...new Set((Array.isArray(notificationIds) ? notificationIds : [])
+    .map(Number)
+    .filter(id => Number.isInteger(id) && id > 0))];
+
+  if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+    throw new TypeError('userId must be a positive integer');
+  }
+
+  if (ids.length === 0) return 0;
+
+  await ensureNotificationsTable();
+  const queryable = client || pool;
+  const result = await queryable.query(
+    `UPDATE notifications
+        SET is_read = true
+      WHERE user_id = $1 AND id = ANY($2::int[]) AND is_read = false`,
+    [parsedUserId, ids],
+  );
+
+  return result.rowCount || 0;
+};
+
 module.exports = {
   createNotification,
   createNotifications,
   getUserNotifications,
   markNotificationRead,
+  markNotificationsRead,
   markAllNotificationsRead,
   _private: {
     ensureNotificationsTable,

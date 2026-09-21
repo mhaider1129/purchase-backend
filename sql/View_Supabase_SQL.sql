@@ -761,7 +761,7 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  supplier_type text NOT NULL DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
+  supplier_type text DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
   tax_number text,
   bank_info jsonb,
   currency text,

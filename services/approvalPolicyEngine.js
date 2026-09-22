@@ -42,22 +42,33 @@ async function resolveStep(step, facts, dependencies) {
     else if(step.resolverType==='FIXED_USER'||step.resolverType==='FIXED_AUTHORITY') result=await dependencies.resolveFixedUser(step.resolverReference,facts.instituteId);
     else result=await dependencies.resolveCapability(capabilityAliases[step.resolverType]||step.resolverReference,facts.instituteId);
   } catch(error) { if(error.statusCode===409) return {...step,resolutionStatus:'AMBIGUOUS',resolutionReason:error.message}; throw error; }
-  if(Array.isArray(result)) return result.length===1?{...step,...result[0],resolutionStatus:'RESOLVED'}:result.length>1?{...step,resolutionStatus:'AMBIGUOUS',resolutionReason:'Multiple active authority holders'}:{...step,resolutionStatus:'UNRESOLVED',resolutionReason:'No active authority holder'};
-  return result?.userId||result?.user_id?{...step,userId:result.userId||result.user_id,userName:result.userName||result.user_name,unitId:result.unitId,resolutionSource:result.source||step.resolverType,resolutionStatus:'RESOLVED'}:{...step,resolutionStatus:'UNRESOLVED',resolutionReason:'No active authority holder'};
+  if(Array.isArray(result)) result=result.length===1?result[0]:result.length>1?{ambiguous:true}:null;
+  if(result?.ambiguous)return {...step,resolutionStatus:'AMBIGUOUS',resolutionReason:'Multiple active authority holders'};
+  if(!result?.userId&&!result?.user_id)return {...step,resolutionStatus:'UNRESOLVED',resolutionReason:'No active authority holder'};
+  const structuralHolderId=result.userId||result.user_id;
+  const base={...step,userId:structuralHolderId,userName:result.userName||result.user_name,unitId:result.unitId||result.unit_id,
+    positionId:result.positionId||result.position_id,positionHolderId:structuralHolderId,positionHolderName:result.userName||result.user_name,
+    requestedAuthority:result.position||step.displayName,resolutionSource:result.source||step.resolverType,resolutionStatus:'RESOLVED'};
+  if(!dependencies.resolveDelegation)return base;
+  const delegation=await dependencies.resolveDelegation({instituteId:facts.instituteId,delegatorUserId:structuralHolderId,
+    positionId:base.positionId,scope:'PURCHASE_REQUEST_APPROVAL',at:facts.evaluationTime});
+  if(delegation?.ambiguous)return {...base,resolutionStatus:'AMBIGUOUS',resolutionReason:'Multiple effective delegations'};
+  return delegation?{...base,userId:delegation.delegateUserId,userName:delegation.delegateUserName,actingApproverId:delegation.delegateUserId,
+    actingApproverName:delegation.delegateUserName,delegationId:delegation.id,resolutionStatus:'DELEGATED',resolutionReason:'Effective approval-authority delegation'}:base;
 }
 
 async function composeShadowRoute(version, facts, dependencies) {
   const matchedRules=[]; for(const rule of [...version.rules].filter(r=>r.isActive!==false).sort((a,b)=>a.priority-b.priority)) { const results=(rule.conditions||[]).map(c=>evaluateCondition(c,facts)); if(results.every(Boolean)&&!results.includes('UNKNOWN')) { matchedRules.push(rule); if(rule.stopProcessing) break; } }
   const candidates=matchedRules.flatMap(rule=>(rule.steps||[]).map(step=>({...step,ruleCode:rule.code}))).sort((a,b)=>a.approvalLevel-b.approvalLevel||a.stepOrder-b.stepOrder||a.ruleCode.localeCompare(b.ruleCode));
   const resolved=[]; for(const candidate of candidates) resolved.push(await resolveStep(candidate,facts,dependencies));
-  const seen=new Set(), steps=[]; for(const step of resolved) { const key=step.resolutionStatus==='RESOLVED'?`${step.userId}|${step.semanticKey}`:null; if(key&&seen.has(key)) steps.push({...step,resolutionStatus:'DEDUPLICATED',resolutionReason:'Same principal and semantic key'}); else { if(key) seen.add(key); steps.push(step); } }
+  const seen=new Set(), principals=new Map(), steps=[]; for(const step of resolved) { const routable=['RESOLVED','DELEGATED'].includes(step.resolutionStatus);const key=routable?`${step.userId}|${step.semanticKey}`:null; if(key&&seen.has(key)) steps.push({...step,resolutionStatus:'DEDUPLICATED',resolutionReason:'Same principal and semantic key'}); else { if(key) seen.add(key); const previous=routable?principals.get(String(step.userId)):null;if(routable)principals.set(String(step.userId),step.semanticKey);steps.push(previous&&previous!==step.semanticKey?{...step,duplicatePrincipal:true,resolutionReason:'Same principal resolves for a different business purpose'}:step); } }
   return {facts,matchedRules:matchedRules.map(r=>({code:r.code,priority:r.priority})),steps,warnings:[],errors:[]};
 }
 
 function normalizeCurrentRoute(rows) { return rows.map((r,index)=>({sequence:r.sequence??index+1,approvalLevel:r.approval_level??r.approvalLevel,userId:r.approver_id??r.userId,userName:r.approver_name??r.userName,status:r.status,semanticKey:'LEGACY_SEMANTIC_UNKNOWN',routeVersion:r.route_version??null})); }
 function compareApprovalRoutes(current, shadow) {
   const differences=[], usedCurrent=new Set(), usedShadow=new Set();
-  const comparable=shadow.map((step,index)=>({step,index})).filter(({step})=>step.resolutionStatus==='RESOLVED');
+  const comparable=shadow.map((step,index)=>({step,index})).filter(({step})=>['RESOLVED','DELEGATED'].includes(step.resolutionStatus));
   for(const {step,index} of shadow.map((step,index)=>({step,index}))){
     if(step.resolutionStatus==='AMBIGUOUS') differences.push({type:'AMBIGUOUS_RESOLUTION',shadowIndex:index});
     if(step.resolutionStatus==='UNRESOLVED') differences.push({type:'UNRESOLVED_RESOLUTION',shadowIndex:index});
@@ -88,7 +99,7 @@ function compareApprovalRoutes(current, shadow) {
   }
   comparable.forEach(({index})=>{if(!usedShadow.has(index))differences.push({type:'ADDED_BY_SHADOW',shadowIndex:index});});
   current.forEach((_,index)=>{if(!usedCurrent.has(index))differences.push({type:'MISSING_IN_SHADOW',currentIndex:index});});
-  const principals=new Map(); shadow.filter(s=>s.resolutionStatus==='RESOLVED').forEach((s,i)=>{const prior=principals.get(String(s.userId));if(prior&&prior.semanticKey!==s.semanticKey)differences.push({type:'DUPLICATE_PRINCIPAL',shadowIndex:i,otherShadowIndex:prior.i});else principals.set(String(s.userId),{semanticKey:s.semanticKey,i});});
+  const principals=new Map(); shadow.filter(s=>['RESOLVED','DELEGATED'].includes(s.resolutionStatus)).forEach((s,i)=>{const prior=principals.get(String(s.userId));if(prior&&prior.semanticKey!==s.semanticKey)differences.push({type:'DUPLICATE_PRINCIPAL',shadowIndex:i,otherShadowIndex:prior.i});else principals.set(String(s.userId),{semanticKey:s.semanticKey,i});});
   const count=type=>differences.filter(d=>d.type===type).length;
   const metrics={currentStepCount:current.length,shadowStepCount:shadow.filter(s=>s.resolutionStatus!=='DEDUPLICATED').length,matchedCount:count('MATCH'),addedCount:count('ADDED_BY_SHADOW'),missingCount:count('MISSING_IN_SHADOW'),differentUserCount:count('DIFFERENT_USER'),unresolvedCount:count('UNRESOLVED_RESOLUTION'),ambiguousCount:count('AMBIGUOUS_RESOLUTION')};
   const result=metrics.unresolvedCount||metrics.ambiguousCount?'UNRESOLVED':differences.every(d=>['MATCH','DUPLICATE_PRINCIPAL'].includes(d.type))?'MATCH':metrics.matchedCount?'PARTIAL_MATCH':'DIFFERENT';

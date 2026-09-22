@@ -4,6 +4,8 @@ const {
   getDepartmentsWithSections,
   createDepartment,
   createSection,
+  updateDepartment,
+  updateSection,
 } = require('../controllers/departmentsController');
 const pool = require('../config/db');
 const { authenticateUser } = require('../middleware/authMiddleware');
@@ -13,6 +15,7 @@ router.use(authenticateUser); // 🔐 Protect all department routes
 
 router.get('/', getDepartmentsWithSections); // GET /api/departments
 router.post('/', createDepartment); // POST /api/departments
+router.put('/:id', updateDepartment);
 
 // GET /api/departments/:id/sections
 router.get('/:id/sections', async (req, res) => {
@@ -138,5 +141,6 @@ router.get('/:id/hods', async (req, res) => {
 });
 
 router.post('/:id/sections', createSection); // POST /api/departments/:id/sections
+router.put('/:id/sections/:sectionId', updateSection);
 
 module.exports = router;

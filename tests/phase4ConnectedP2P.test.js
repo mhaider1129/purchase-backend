@@ -40,13 +40,9 @@ describe('Phase 4 connected P2P behavior', () => {
     expect(planCancellation({ entityType: 'INVOICE', paidAmount: 1 }).code).toBe('FINANCIAL_REVERSAL_REQUIRED');
     expect(planCancellation({ entityType: 'PURCHASE_ORDER' }).release_commitment).toBe(true);
   });
-  test('partial, final, excessive and duplicate payments are guarded under invoice lock', async () => {
-    let paid = 0; const records = new Map(); let status;
-    const repository = { lockInvoice: async (_id, fn) => fn({ status: paid ? 'PARTIALLY_PAID' : 'APPROVED_FOR_PAYMENT', approved_payable_amount: 100 }), findByIdempotencyKey: async key => records.get(key), sumPostedPayments: async () => paid, insert: async row => { paid += Number(row.amount); records.set(row.idempotency_key, row); return row; }, setInvoiceStatus: async (_id, value) => { status = value; } };
-    await postPayment({ repository, invoiceId: 1, amount: 40, idempotencyKey: 'a' }); expect(status).toBe('PARTIALLY_PAID');
-    await postPayment({ repository, invoiceId: 1, amount: 40, idempotencyKey: 'a' }); expect(paid).toBe(40);
-    await expect(postPayment({ repository, invoiceId: 1, amount: 61, idempotencyKey: 'b' })).rejects.toMatchObject({ code: 'PAYMENT_AMOUNT_EXCEEDED' });
-    await postPayment({ repository, invoiceId: 1, amount: 60, idempotencyKey: 'c' }); expect(status).toBe('PAID');
+  test('legacy invoice-oriented payment repositories fail closed', async () => {
+    expect(() => postPayment({ repository: { lockInvoice: jest.fn() }, invoiceId: 1, amount: 40, idempotencyKey: 'a' }))
+      .toThrow(expect.objectContaining({ code: 'LEGACY_PAYMENT_DISABLED', statusCode: 410 }));
   });
 });
 describe('Phase 4 connection corrections', () => {

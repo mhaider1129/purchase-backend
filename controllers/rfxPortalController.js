@@ -709,12 +709,15 @@ const awardRfxResponse = async (req, res, next) => {
     const actor = { id: req.user?.id || null };
     const awards = [];
     for (const priced of pricedItems) {
-      awards.push(await createAward({ repository, requestItem: priced.requestItem,
+      const award = await createAward({ repository, requestItem: priced.requestItem,
         supplier: { id: responseRow.supplier_id }, actor,
         input: { awarded_quantity: priced.quantity, unit_price: priced.unitPrice, currency: priced.currency,
           approved_product_id: priced.responseItem?.approved_product_id, supplier_catalog_item_id: priced.responseItem?.supplier_catalog_item_id,
           source_type: 'QUOTATION', source_id: String(priced.sourceId || responseId), selection_reason: awardNotes || `Winning RFx response ${responseId}`,
-          idempotency_key: `rfx:${rfxId}:response:${responseId}:item:${priced.requestItem.id}` } }));
+          idempotency_key: `rfx:${rfxId}:response:${responseId}:item:${priced.requestItem.id}` } });
+      awards.push(award);
+      await repository.linkDocuments(requestId, 'RFX_EVENT', rfxId, 'AWARD', award.id, actor.id);
+      await repository.linkDocuments(requestId, 'RFX_RESPONSE', responseId, 'AWARD', award.id, actor.id);
     }
     const poRow = await createPurchaseOrderFromAwards({ repository,
       awardIds: awards.map((award) => award.id), actor,

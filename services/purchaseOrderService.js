@@ -11,7 +11,7 @@ const isPoNumberCollision = (error) => error?.code === '23505' && (
   error.constraint === 'purchase_orders_po_number_key'
   || /\bpo_number\b/i.test(String(error.detail || ''))
 );
-const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities = {}, actor, input = {}, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
+const createPurchaseOrderFromAwards = async ({ repository, requestId: routeRequestId = null, awardIds, quantities = {}, actor, input = {}, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
   if (!Array.isArray(awardIds) || !awardIds.length) throw Object.assign(new Error('At least one award is required'), { code: 'AWARD_REQUIRED' });
   const awards = await tx.lockAwards(awardIds);
   if (awards.length !== awardIds.length || awards.some((award) => award.status !== 'ACTIVE')) throw Object.assign(new Error('An active award was not found'), { code: 'AWARD_NOT_FOUND' });
@@ -19,6 +19,7 @@ const createPurchaseOrderFromAwards = async ({ repository, awardIds, quantities 
   if (awards.some((award) => String(award.supplier_id) !== supplierId) || (input.supplier_id && String(input.supplier_id) !== supplierId)) throw Object.assign(new Error('PO supplier must match every award supplier'), { code: 'PO_SUPPLIER_MISMATCH' });
   const requestId = String(awards[0].request_id);
   if (awards.some((award) => String(award.request_id) !== requestId)) throw Object.assign(new Error('Awards on a PO must belong to one request'), { code: 'PO_REQUEST_MISMATCH' });
+  if (routeRequestId != null && Number(routeRequestId) !== Number(requestId)) throw Object.assign(new Error('The awards belong to a different purchase request'), { code: 'REQUEST_SCOPE_MISMATCH', statusCode: 409 });
   const currencies = new Set(awards.map((award) => String(award.currency).toUpperCase()));
   if (currencies.size !== 1) throw Object.assign(new Error('PO awards must use one currency'), { code: 'PO_CURRENCY_MISMATCH' });
   const conversions = new Map();

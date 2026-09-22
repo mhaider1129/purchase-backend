@@ -30,4 +30,11 @@ describe('Phase 4 canonical SQL writer boundary', () => {
       .map((file) => path.relative(root, file));
     expect(offenders).toEqual([]);
   });
+
+  test('no callable legacy invoice-payment adapter remains', () => {
+    const offenders = productionFiles(root)
+      .filter((file) => /postLegacyInvoicePayment/.test(fs.readFileSync(file, 'utf8')))
+      .map((file) => path.relative(root, file));
+    expect(offenders).toEqual([]);
+  });
 });

@@ -1,8 +1,5 @@
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
-const { ensureProcureToPayTables } = require('../utils/ensureProcureToPayTables');
-const { ensureFinanceCoreTables } = require('../utils/ensureFinanceCoreTables');
-const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
 const goodsReceiptService = require('../services/goodsReceiptService');
 const {
   LIFECYCLE_STATES,
@@ -48,6 +45,12 @@ const requirePermission = (req, permissionCode, fallbackRoles = []) => {
   throw createHttpError(403, 'You do not have permission to perform this action');
 };
 
+const parseRequestId = (value) => {
+  const requestId = Number(value);
+  if (!Number.isInteger(requestId) || requestId <= 0) throw createHttpError(400, 'requestId must be a positive integer');
+  return requestId;
+};
+
 const logFinanceAction = async (client, requestId, actorId, actionType, payload = {}) => {
   await client.query(
     `INSERT INTO finance_action_history (request_id, action_type, actor_id, action_payload)
@@ -90,10 +93,9 @@ const annotatePurchaseOrder = (row) => {
 const createGoodsReceipt = async (req, res, next) => {
   try {
     requirePermission(req, 'procure-to-pay.receipts.manage', ['warehousekeeper', 'warehousemanager', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
+    const requestId = parseRequestId(req.params.requestId);
     const purchaseOrderId = Number(req.body.purchase_order_id);
     const idempotencyKey = String(req.get('Idempotency-Key') || req.body.idempotency_key || '').trim();
-    if (!Number.isInteger(requestId) || requestId <= 0) throw createHttpError(400, 'Invalid request id');
     if (!idempotencyKey) throw createHttpError(400, 'Idempotency-Key header is required');
     const result = await goodsReceiptService.createGoodsReceipt({
       repository: createTransactionalP2PRepository(pool), purchaseOrderId, idempotencyKey,
@@ -113,9 +115,7 @@ const createGoodsReceipt = async (req, res, next) => {
 
 const listReceiptsByRequest = async (req, res, next) => {
   try {
-    const requestId = Number(req.params.requestId);
-    await ensureProcureToPayTables();
-    await ensureFinanceCoreTables();
+    const requestId = parseRequestId(req.params.requestId);
     const { rows } = await pool.query(
       `SELECT gr.*, COALESCE(json_agg(gri.*) FILTER (WHERE gri.id IS NOT NULL), '[]'::json) AS items
        FROM goods_receipts gr
@@ -134,8 +134,10 @@ const listReceiptsByRequest = async (req, res, next) => {
 const submitInvoice = async (req, res, next) => {
   try {
     requirePermission(req, 'procure-to-pay.invoices.manage', ['procurementspecialist', 'scm', 'admin']);
+    const requestId = parseRequestId(req.params.requestId);
     const result = await supplierInvoiceService.submitSupplierInvoice({
       repository: createTransactionalP2PRepository(pool),
+      requestId,
       purchaseOrderId: req.body.purchase_order_id,
       supplierId: req.body.supplier_id,
       invoiceNumber: req.body.invoice_number,
@@ -153,7 +155,8 @@ const submitInvoice = async (req, res, next) => {
 const runInvoiceMatch = async (req, res, next) => {
   try {
     requirePermission(req, 'procure-to-pay.match.manage', ['procurementspecialist', 'scm', 'admin']);
-    const result = await supplierInvoiceService.runInvoiceMatch({ repository: createTransactionalP2PRepository(pool), invoiceId: Number(req.params.invoiceId), actor: req.user });
+    const requestId = parseRequestId(req.params.requestId);
+    const result = await supplierInvoiceService.runInvoiceMatch({ repository: createTransactionalP2PRepository(pool), requestId, invoiceId: Number(req.params.invoiceId), actor: req.user });
     res.json(result);
   } catch (error) { next(error); }
 };
@@ -161,7 +164,8 @@ const runInvoiceMatch = async (req, res, next) => {
 const approveMatchOverride = async (req, res, next) => {
   try {
     requirePermission(req, 'finance.override-mismatch', ['scm', 'admin', 'financeapprover']);
-    const result = await supplierInvoiceService.decideMatchOverride({ repository: createTransactionalP2PRepository(pool), matchResultId: Number(req.params.matchResultId), decision: 'APPROVED', reason: req.body.reason, actor: req.user });
+    const requestId = parseRequestId(req.params.requestId);
+    const result = await supplierInvoiceService.decideMatchOverride({ repository: createTransactionalP2PRepository(pool), requestId, matchResultId: Number(req.params.matchResultId), decision: 'APPROVED', reason: req.body.reason, actor: req.user });
     res.json(result);
   } catch (error) { next(error); }
 };
@@ -169,7 +173,8 @@ const approveMatchOverride = async (req, res, next) => {
 const declineInvoiceMatch = async (req, res, next) => {
   try {
     requirePermission(req, 'finance.override-mismatch', ['scm', 'admin', 'financeapprover']);
-    const result = await supplierInvoiceService.decideMatchOverride({ repository: createTransactionalP2PRepository(pool), matchResultId: Number(req.params.matchResultId), decision: 'DECLINED', reason: req.body.reason, actor: req.user });
+    const requestId = parseRequestId(req.params.requestId);
+    const result = await supplierInvoiceService.decideMatchOverride({ repository: createTransactionalP2PRepository(pool), requestId, matchResultId: Number(req.params.matchResultId), decision: 'DECLINED', reason: req.body.reason, actor: req.user });
     res.json(result);
   } catch (error) { next(error); }
 };
@@ -178,7 +183,7 @@ const verifyFinanceRecord = async (req, res, next) => {
   try {
     // The delegated service uses assertInvoiceMatchApproved as the sole Phase 4C match authority.
     requirePermission(req, 'finance.verify', ['finance', 'scm', 'admin']);
-    const requestId = Number(req.params.requestId);
+    const requestId = parseRequestId(req.params.requestId);
     const repository = createTransactionalP2PRepository(pool);
     repository.loadRequestFinanceReadiness = async (id) => {
       const client = await pool.connect();
@@ -194,7 +199,8 @@ const verifyFinanceRecord = async (req, res, next) => {
 const createApVoucher = async (req, res, next) => {
   try {
     requirePermission(req, 'finance.voucher.create', ['finance', 'scm', 'admin']);
-    const result = await accountsPayableService.createPayableFromVerifiedInvoice({ repository: createTransactionalP2PRepository(pool), invoiceId: Number(req.body.supplier_invoice_id), actor: req.user, idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key, accountingLines: req.body.lines || [] });
+    const requestId = parseRequestId(req.params.requestId);
+    const result = await accountsPayableService.createPayableFromVerifiedInvoice({ repository: createTransactionalP2PRepository(pool), requestId, invoiceId: Number(req.body.supplier_invoice_id), actor: req.user, idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key, accountingLines: req.body.lines || [] });
     res.status(result.idempotent ? 200 : 201).json(result);
   } catch (error) {
     next(error);
@@ -212,7 +218,8 @@ const verifyApVoucher = async (req, res, next) => {
 const postToInternalLedger = async (req, res, next) => {
   try {
     requirePermission(req, 'finance.post-ledger', ['finance', 'scm', 'admin']);
-    const result = await apPostingService.postApVoucher({ repository: createTransactionalP2PRepository(pool), voucherId: Number(req.body.ap_voucher_id), actor: req.user, idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key });
+    const requestId = parseRequestId(req.params.requestId);
+    const result = await apPostingService.postApVoucher({ repository: createTransactionalP2PRepository(pool), requestId, voucherId: Number(req.body.ap_voucher_id), actor: req.user, idempotencyKey: req.get('Idempotency-Key') || req.body.idempotency_key });
     res.status(result.idempotent ? 200 : 201).json(result);
   } catch (error) {
     next(error);
@@ -290,6 +297,7 @@ const closePurchaseOrder = async (req, res, next) => {
 const createPurchaseOrder = async (req, res, next) => {
   try {
     requirePermission(req, 'procure-to-pay.purchase-orders.manage', ['scm', 'procurementspecialist', 'admin']);
+    const requestId = parseRequestId(req.params.requestId);
     const selections = req.body?.awards;
     if (!Array.isArray(selections) || !selections.length || selections.some((entry) => !entry.award_id || entry.quantity == null)) {
       throw createHttpError(400, 'awards with award_id and quantity are required');
@@ -299,6 +307,7 @@ const createPurchaseOrder = async (req, res, next) => {
     const quantities = Object.fromEntries(selections.map((entry) => [String(entry.award_id), String(entry.quantity)]));
     const purchaseOrder = await purchaseOrderService.createPurchaseOrderFromAwards({
       repository: createTransactionalP2PRepository(pool),
+      requestId,
       awardIds,
       quantities,
       actor: req.user,
@@ -314,7 +323,6 @@ const createPurchaseOrder = async (req, res, next) => {
 
 const listPurchaseOrders = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const {
       status = null,
       supplier = null,
@@ -337,7 +345,7 @@ const listPurchaseOrders = async (req, res, next) => {
     }
     if (supplier) {
       values.push(`%${supplier}%`);
-      filters.push(`COALESCE(po.supplier_name, '') ILIKE $${values.length}`);
+      filters.push(`COALESCE(s.name, po.supplier_name, '') ILIKE $${values.length}`);
     }
     if (requestId) {
       values.push(Number(requestId));
@@ -353,16 +361,16 @@ const listPurchaseOrders = async (req, res, next) => {
     }
     if (search) {
       values.push(`%${search}%`);
-      filters.push(`(po.po_number ILIKE $${values.length} OR COALESCE(po.supplier_name, '') ILIKE $${values.length} OR po.request_id::text ILIKE $${values.length})`);
+      filters.push(`(po.po_number ILIKE $${values.length} OR COALESCE(s.name, po.supplier_name, '') ILIKE $${values.length} OR po.request_id::text ILIKE $${values.length})`);
     }
 
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const totalValues = [...values];
-    const totalResult = await pool.query(`SELECT COUNT(*)::int AS total FROM purchase_orders po ${whereClause}`, totalValues);
+    const totalResult = await pool.query(`SELECT COUNT(*)::int AS total FROM purchase_orders po LEFT JOIN suppliers s ON s.id=po.supplier_id ${whereClause}`, totalValues);
 
     values.push(safePageSize, (safePage - 1) * safePageSize);
     const { rows } = await pool.query(
-      `SELECT po.*, COALESCE(SUM(poi.quantity * poi.unit_price), 0) AS total_amount,
+      `SELECT po.*, COALESCE(s.name, po.supplier_name) AS supplier_name, COALESCE(SUM(poi.quantity * poi.unit_price), 0) AS total_amount,
               COALESCE(
                 json_agg(
                   json_build_object(
@@ -380,9 +388,10 @@ const listPurchaseOrders = async (req, res, next) => {
                 '[]'::json
               ) AS items
        FROM purchase_orders po
+       LEFT JOIN suppliers s ON s.id = po.supplier_id
        LEFT JOIN purchase_order_items poi ON poi.purchase_order_id = po.id
        ${whereClause}
-       GROUP BY po.id
+       GROUP BY po.id, s.name
        ORDER BY po.created_at DESC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values
@@ -394,7 +403,6 @@ const listPurchaseOrders = async (req, res, next) => {
 
 const getProcureToPayDashboard = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const [awaitingPo, awaitingReceipt, pendingMatch, matchException, dueToday, overdue, paymentsWeek] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int AS count FROM requests WHERE status = 'approved' AND id NOT IN (SELECT request_id FROM purchase_orders)`),
       pool.query(`SELECT COUNT(*)::int AS count FROM purchase_orders po WHERE NOT EXISTS (SELECT 1 FROM goods_receipts gr WHERE gr.purchase_order_id = po.id)`),
@@ -421,7 +429,6 @@ const getProcureToPayDashboard = async (req, res, next) => {
 
 const getPoSourceRequests = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { search = null, request_id: requestId = null } = req.query;
     const values = [];
     const filters = [
@@ -511,7 +518,6 @@ const getPoSourceRequests = async (req, res, next) => {
 
 const listGoodsReceipts = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { po_id: poId = null, status = null, supplier = null, date_from: dateFrom = null, date_to: dateTo = null, page = 1, page_size: pageSize = 20 } = req.query;
     const values = [];
     const filters = [];
@@ -519,15 +525,15 @@ const listGoodsReceipts = async (req, res, next) => {
     const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
     if (poId) { values.push(Number(poId)); filters.push(`gr.purchase_order_id = $${values.length}`); }
     if (status) { values.push(status); filters.push(`COALESCE(gr.receipt_status, 'POSTED') = $${values.length}`); }
-    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(po.supplier_name, '') ILIKE $${values.length}`); }
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(s.name, po.supplier_name, '') ILIKE $${values.length}`); }
     if (dateFrom) { values.push(dateFrom); filters.push(`gr.received_at::date >= $${values.length}::date`); }
     if (dateTo) { values.push(dateTo); filters.push(`gr.received_at::date <= $${values.length}::date`); }
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
-    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM goods_receipts gr LEFT JOIN purchase_orders po ON po.id = gr.purchase_order_id ${whereClause}`, values);
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM goods_receipts gr LEFT JOIN purchase_orders po ON po.id = gr.purchase_order_id LEFT JOIN suppliers s ON s.id=po.supplier_id ${whereClause}`, values);
     values.push(safePageSize, (safePage - 1) * safePageSize);
     const { rows } = await pool.query(
-      `SELECT gr.*, po.po_number, po.supplier_name,
+      `SELECT gr.*, po.po_number, COALESCE(s.name, po.supplier_name) AS supplier_name,
               CASE
                 WHEN po.id IS NULL THEN 'NO_PO'
                 WHEN COALESCE(poi_totals.ordered_quantity, 0) <= COALESCE(poi_totals.received_quantity, 0) THEN 'FULLY_RECEIVED'
@@ -535,6 +541,7 @@ const listGoodsReceipts = async (req, res, next) => {
               END AS status
        FROM goods_receipts gr
        LEFT JOIN purchase_orders po ON po.id = gr.purchase_order_id
+       LEFT JOIN suppliers s ON s.id = po.supplier_id
        LEFT JOIN (
          SELECT purchase_order_id,
                 COALESCE(SUM(quantity), 0) AS ordered_quantity,
@@ -553,7 +560,6 @@ const listGoodsReceipts = async (req, res, next) => {
 
 const listOpenPosForReceipt = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { rows } = await pool.query(
       `SELECT po.*, COALESCE(SUM(poi.quantity), 0) AS ordered_qty, COALESCE(SUM(poi.received_quantity), 0) AS received_qty
        FROM purchase_orders po
@@ -568,26 +574,26 @@ const listOpenPosForReceipt = async (req, res, next) => {
 
 const listApInvoices = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { status = null, supplier = null, po_id: poId = null, date_from: dateFrom = null, date_to: dateTo = null, search = null, page = 1, page_size: pageSize = 20 } = req.query;
     const values = [];
     const filters = [];
     const safePage = Math.max(Number(page) || 1, 1);
     const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
-    if (supplier) { values.push(`%${supplier}%`); filters.push(`si.supplier ILIKE $${values.length}`); }
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(s.name, si.supplier, '') ILIKE $${values.length}`); }
     if (poId) { values.push(Number(poId)); filters.push(`si.purchase_order_id = $${values.length}`); }
     if (dateFrom) { values.push(dateFrom); filters.push(`si.invoice_date >= $${values.length}::date`); }
     if (dateTo) { values.push(dateTo); filters.push(`si.invoice_date <= $${values.length}::date`); }
-    if (search) { values.push(`%${search}%`); filters.push(`(si.invoice_number ILIKE $${values.length} OR si.supplier ILIKE $${values.length})`); }
+    if (search) { values.push(`%${search}%`); filters.push(`(si.invoice_number ILIKE $${values.length} OR COALESCE(s.name, si.supplier, '') ILIKE $${values.length})`); }
     if (status) { values.push(status); filters.push(`COALESCE(imr.match_status, 'SUBMITTED') = $${values.length}`); }
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM supplier_invoices si LEFT JOIN invoice_match_results imr ON imr.supplier_invoice_id = si.id ${whereClause}`, values);
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM supplier_invoices si LEFT JOIN suppliers s ON s.id=si.supplier_id LEFT JOIN invoice_match_results imr ON imr.supplier_invoice_id = si.id ${whereClause}`, values);
     values.push(safePageSize, (safePage - 1) * safePageSize);
     const { rows } = await pool.query(
-      `SELECT si.*, po.po_number, gr.receipt_number,
+      `SELECT si.*, COALESCE(s.name, si.supplier) AS supplier, po.po_number, gr.receipt_number,
               COALESCE(imr.match_status, 'SUBMITTED') AS status,
               (si.invoice_date + INTERVAL '30 day')::date AS due_date
        FROM supplier_invoices si
+       LEFT JOIN suppliers s ON s.id = si.supplier_id
        LEFT JOIN purchase_orders po ON po.id = si.purchase_order_id
        LEFT JOIN goods_receipts gr ON gr.id = si.receipt_id
        LEFT JOIN LATERAL (
@@ -608,7 +614,6 @@ const listApInvoices = async (req, res, next) => {
 
 const listInvoiceMatchingQueue = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { rows } = await pool.query(
       `SELECT si.id AS invoice_id, si.request_id, si.invoice_number, si.supplier,
               COALESCE(imr.match_status, 'MATCH_PENDING') AS match_status,
@@ -630,7 +635,6 @@ const listInvoiceMatchingQueue = async (req, res, next) => {
 
 const getPurchaseOrderDetail = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const poId = Number(req.params.poId);
     const [po, items, receipts, invoices] = await Promise.all([
       pool.query(`SELECT * FROM purchase_orders WHERE id=$1`, [poId]),
@@ -652,22 +656,21 @@ const postPayableFromInvoice = async (req, res, next) => {
 
 const listAccountsPayable = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { status = null, supplier = null, due_from: dueFrom = null, due_to: dueTo = null, overdue = null, page = 1, page_size: pageSize = 20 } = req.query;
     const values = [];
     const filters = [];
     const safePage = Math.max(Number(page) || 1, 1);
     const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
     if (status) { values.push(status); filters.push(`ap.payable_status = $${values.length}`); }
-    if (supplier) { values.push(`%${supplier}%`); filters.push(`ap.supplier_name ILIKE $${values.length}`); }
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(s.name, ap.supplier_name, '') ILIKE $${values.length}`); }
     if (dueFrom) { values.push(dueFrom); filters.push(`ap.due_date >= $${values.length}::date`); }
     if (dueTo) { values.push(dueTo); filters.push(`ap.due_date <= $${values.length}::date`); }
     if (overdue === 'true') { filters.push(`ap.due_date < CURRENT_DATE AND ap.open_balance > 0`); }
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM ap_payables ap ${whereClause}`, values);
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM ap_payables ap LEFT JOIN suppliers s ON s.id=ap.supplier_id ${whereClause}`, values);
     values.push(safePageSize, (safePage - 1) * safePageSize);
     const { rows } = await pool.query(
-      `SELECT ap.*, si.invoice_number,
+      `SELECT ap.*, COALESCE(s.name, ap.supplier_name) AS supplier_name, si.invoice_number,
               CASE
                 WHEN ap.open_balance <= 0 THEN 'PAID'
                 WHEN ap.due_date < CURRENT_DATE THEN 'OVERDUE'
@@ -676,6 +679,7 @@ const listAccountsPayable = async (req, res, next) => {
                 ELSE '30+ DAYS'
               END AS aging_bucket
        FROM ap_payables ap
+       LEFT JOIN suppliers s ON s.id = ap.supplier_id
        LEFT JOIN supplier_invoices si ON si.id = ap.supplier_invoice_id
        ${whereClause}
        ORDER BY ap.due_date ASC NULLS LAST, ap.posted_at DESC
@@ -688,20 +692,20 @@ const listAccountsPayable = async (req, res, next) => {
 
 const listPayments = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { status = null, supplier = null, date_from: dateFrom = null, date_to: dateTo = null } = req.query;
     const values = [];
     const filters = [];
     if (status) { values.push(status); filters.push(`pr.payment_status = $${values.length}`); }
-    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(ap.supplier_name, '') ILIKE $${values.length}`); }
+    if (supplier) { values.push(`%${supplier}%`); filters.push(`COALESCE(s.name, ap.supplier_name, '') ILIKE $${values.length}`); }
     if (dateFrom) { values.push(dateFrom); filters.push(`pr.paid_at::date >= $${values.length}::date`); }
     if (dateTo) { values.push(dateTo); filters.push(`pr.paid_at::date <= $${values.length}::date`); }
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
-      `SELECT pr.*, ap.id AS payable_id, ap.supplier_name, si.invoice_number
+      `SELECT pr.*, ap.id AS payable_id, COALESCE(s.name, ap.supplier_name) AS supplier_name, si.invoice_number
        FROM payment_records pr
        LEFT JOIN payment_allocations pa ON pa.payment_record_id = pr.id
        LEFT JOIN ap_payables ap ON ap.id = pa.ap_payable_id
+       LEFT JOIN suppliers s ON s.id = ap.supplier_id
        LEFT JOIN supplier_invoices si ON si.id = ap.supplier_invoice_id
        ${whereClause}
        ORDER BY pr.paid_at DESC NULLS LAST, pr.created_at DESC
@@ -723,8 +727,7 @@ const recordPayablePayment = async (req, res, next) => {
 
 const getDocumentFlow = async (req, res, next) => {
   try {
-    const requestId = Number(req.params.requestId);
-    await ensureProcureToPayTables();
+    const requestId = parseRequestId(req.params.requestId);
     const { rows } = await pool.query(`SELECT * FROM document_flow_links WHERE request_id=$1 ORDER BY created_at ASC`, [requestId]);
     res.json({ data: rows });
   } catch (error) { next(error); }
@@ -732,7 +735,6 @@ const getDocumentFlow = async (req, res, next) => {
 
 const listDocumentFlow = async (req, res, next) => {
   try {
-    await ensureProcureToPayTables();
     const { search = null, request_number = null, po_number = null, invoice_number = null, supplier = null, payment_reference = null } = req.query;
     const values = [];
     const filters = [];
@@ -746,22 +748,23 @@ const listDocumentFlow = async (req, res, next) => {
         dfl.request_id::text ILIKE $${values.length}
         OR COALESCE(po.po_number, '') ILIKE $${values.length}
         OR COALESCE(si.invoice_number, '') ILIKE $${values.length}
-        OR COALESCE(ap.supplier_name, '') ILIKE $${values.length}
+        OR COALESCE(s.name, ap.supplier_name, '') ILIKE $${values.length}
         OR COALESCE(pr.payment_reference, '') ILIKE $${values.length}
       )`);
     }
     if (request_number) addLike(`dfl.request_id::text`, request_number);
     if (po_number) addLike(`COALESCE(po.po_number, '')`, po_number);
     if (invoice_number) addLike(`COALESCE(si.invoice_number, '')`, invoice_number);
-    if (supplier) addLike(`COALESCE(ap.supplier_name, '')`, supplier);
+    if (supplier) addLike(`COALESCE(s.name, ap.supplier_name, '')`, supplier);
     if (payment_reference) addLike(`COALESCE(pr.payment_reference, '')`, payment_reference);
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const { rows } = await pool.query(
-      `SELECT dfl.*, po.po_number, si.invoice_number, ap.supplier_name, pr.payment_reference
+      `SELECT dfl.*, po.po_number, si.invoice_number, COALESCE(s.name, ap.supplier_name) AS supplier_name, pr.payment_reference
        FROM document_flow_links dfl
        LEFT JOIN purchase_orders po ON po.id::text = dfl.source_document_id OR po.id::text = dfl.target_document_id
        LEFT JOIN supplier_invoices si ON si.id::text = dfl.source_document_id OR si.id::text = dfl.target_document_id
        LEFT JOIN ap_payables ap ON ap.id::text = dfl.source_document_id OR ap.id::text = dfl.target_document_id
+       LEFT JOIN suppliers s ON s.id = ap.supplier_id
        LEFT JOIN payment_records pr ON pr.id::text = dfl.source_document_id OR pr.id::text = dfl.target_document_id
        ${whereClause}
        ORDER BY dfl.created_at DESC
@@ -774,9 +777,7 @@ const listDocumentFlow = async (req, res, next) => {
 
 const getLifecycleDetail = async (req, res, next) => {
   try {
-    const requestId = Number(req.params.requestId);
-    await ensureProcureToPayTables();
-    await ensureFinanceCoreTables();
+    const requestId = parseRequestId(req.params.requestId);
 
     const [lifecycle, stateHistory, requestMeta, requestItems, purchaseOrders, receipts, invoices, matches, vouchers, postings, payables, payments, actions, flowLinks, commitments, glPostings, journalEntries, linkedInventory] = await Promise.all([
       pool.query(`SELECT * FROM procurement_lifecycle_states WHERE request_id = $1`, [requestId]),

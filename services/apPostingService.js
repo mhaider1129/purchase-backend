@@ -6,19 +6,23 @@ const defaultAudit = require('./auditService');
 const defaultOutbox = require('./notificationOutboxService');
 
 const fail = (message, code, statusCode = 400) => Object.assign(new Error(message), { code, statusCode });
+const assertRequestScope = (requestId, canonicalRequestId) => {
+  if (requestId != null && Number(requestId) !== Number(canonicalRequestId)) throw fail('The requested resource belongs to a different purchase request', 'REQUEST_SCOPE_MISMATCH', 409);
+};
 
-const postApVoucher = ({ repository, voucherId, actor, idempotencyKey, auditService = defaultAudit, outbox = defaultOutbox }) => {
+const postApVoucher = ({ repository, requestId, voucherId, actor, idempotencyKey, auditService = defaultAudit, outbox = defaultOutbox }) => {
   const key = String(idempotencyKey || '').trim();
   if (!key) throw fail('AP posting idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
   return repository.withTransaction(async (tx) => {
     await tx.lockApPostingOperation(key);
+    const voucher = await tx.lockApVoucher(voucherId);
+    if (!voucher) throw fail('AP voucher not found', 'AP_VOUCHER_NOT_FOUND', 404);
+    assertRequestScope(requestId, voucher.request_id);
     const retry = await tx.findApPostingByIdempotency(key);
     if (retry) {
       if (String(retry.ap_voucher_id) !== String(voucherId)) throw fail('Idempotency key belongs to another voucher', 'IDEMPOTENCY_CONFLICT', 409);
       return { posting: retry, actualization: await tx.findActualizationByVoucher(voucherId), payable: await tx.findPayableByVoucher(voucherId), idempotent: true };
     }
-    const voucher = await tx.lockApVoucher(voucherId);
-    if (!voucher) throw fail('AP voucher not found', 'AP_VOUCHER_NOT_FOUND', 404);
     if (String(voucher.voucher_status).toLowerCase() !== 'verified') throw fail('Only a verified voucher can be posted', 'AP_VOUCHER_NOT_VERIFIED', 409);
     const invoice = await tx.lockInvoice(voucher.supplier_invoice_id);
     await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
@@ -33,7 +37,7 @@ const postApVoucher = ({ repository, voucherId, actor, idempotencyKey, auditServ
     const reduced = await tx.reduceActiveEncumbrance(encumbrance.id, invoice.total_amount);
     if (!reduced) throw fail('PO commitment changed or cannot cover invoice', 'PO_COMMITMENT_EXCEEDED', 409);
     await tx.synchronizeBudgetConsumedProjection(encumbrance.budget_envelope_id);
-    const payable = await tx.insertApPayable({ request_id: invoice.request_id, supplier_invoice_id: invoice.id, ap_voucher_id: voucher.id, supplier_name: invoice.supplier || invoice.supplier_name || String(invoice.supplier_id), invoice_total: invoice.total_amount, open_balance: invoice.total_amount, currency: invoice.currency, posted_by: actor.id });
+    const payable = await tx.insertApPayable({ request_id: invoice.request_id, supplier_id: invoice.supplier_id, supplier_invoice_id: invoice.id, ap_voucher_id: voucher.id, supplier_name: invoice.supplier || invoice.supplier_name || String(invoice.supplier_id), invoice_total: invoice.total_amount, open_balance: invoice.total_amount, currency: invoice.currency, posted_by: actor.id });
     if (tx.linkDocuments) {
       await tx.linkDocuments(invoice.request_id, 'AP_VOUCHER', voucher.id, 'FINANCE_POSTING', posting.id, actor.id);
       await tx.linkDocuments(invoice.request_id, 'FINANCE_POSTING', posting.id, 'ACCOUNTS_PAYABLE', payable.id, actor.id);

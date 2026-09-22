@@ -120,4 +120,68 @@ const createSection = async (req, res) => {
   }
 };
 
-module.exports = { getDepartmentsWithSections, createDepartment, createSection };
+const updateDepartment = async (req, res) => {
+  if (!req.user.hasPermission('departments.manage')) {
+    return res.status(403).json({ message: 'You do not have permission to manage departments' });
+  }
+
+  const departmentId = Number.parseInt(req.params.id, 10);
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const normalizedType = normalizeDepartmentType(req.body?.type);
+  if (!Number.isInteger(departmentId) || !name || !normalizedType) {
+    return res.status(400).json({ message: 'A valid department, name, and type are required' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `UPDATE departments
+          SET name = $1, type = $2
+        WHERE id = $3 AND institute_id = $4
+        RETURNING *`,
+      [name, normalizedType, departmentId, req.user.institute_id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Department not found' });
+    return res.json(rows[0]);
+  } catch (err) {
+    console.error('❌ Failed to update department:', err);
+    return res.status(500).json({ message: 'Failed to update department' });
+  }
+};
+
+const updateSection = async (req, res) => {
+  if (!req.user.hasPermission('departments.manage')) {
+    return res.status(403).json({ message: 'You do not have permission to manage departments' });
+  }
+
+  const departmentId = Number.parseInt(req.params.id, 10);
+  const sectionId = Number.parseInt(req.params.sectionId, 10);
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  if (!Number.isInteger(departmentId) || !Number.isInteger(sectionId) || !name) {
+    return res.status(400).json({ message: 'A valid department, section, and name are required' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `UPDATE sections s
+          SET name = $1
+         FROM departments d
+        WHERE s.id = $2 AND s.department_id = $3
+          AND d.id = s.department_id AND d.institute_id = $4
+        RETURNING s.*`,
+      [name, sectionId, departmentId, req.user.institute_id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Section not found' });
+    return res.json(rows[0]);
+  } catch (err) {
+    console.error('❌ Failed to update section:', err);
+    return res.status(500).json({ message: 'Failed to update section' });
+  }
+};
+
+module.exports = {
+  getDepartmentsWithSections,
+  createDepartment,
+  createSection,
+  updateDepartment,
+  updateSection,
+};

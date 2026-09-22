@@ -1,12 +1,6 @@
 const express = require('express');
 const router = express.Router();
 
-const withDeprecation = (handler, message) => (req, res, next) => {
-  res.set('X-API-Deprecated', 'true');
-  res.set('X-API-Deprecation-Message', message);
-  return handler(req, res, next);
-};
-
 const {
   getProcureToPayDashboard,
   getPoSourceRequests,
@@ -56,7 +50,10 @@ router.get('/payments', listPayments);
 router.get('/document-flow', listDocumentFlow);
 
 router.get('/requests/:requestId/lifecycle', getLifecycleDetail);
-router.post('/purchase-orders', withDeprecation(createPurchaseOrder, 'Use POST /api/procure-to-pay/requests/:requestId/purchase-orders'));
+router.post('/purchase-orders', (_req, res) => res.status(410).json({
+  code: 'UNSCOPED_PO_CREATION_DISABLED',
+  message: 'Use POST /api/procure-to-pay/requests/:requestId/purchase-orders',
+}));
 router.post('/requests/:requestId/purchase-orders', createPurchaseOrder);
 router.post('/purchase-orders/:poId/submit-approval', submitPurchaseOrderForApproval);
 router.post('/purchase-orders/:poId/approve', approvePurchaseOrder);

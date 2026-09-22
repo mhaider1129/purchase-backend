@@ -8,6 +8,9 @@ const defaultOutbox = require('./notificationOutboxService');
 
 const fail = (message, code, statusCode = 400) => Object.assign(new Error(message), { code, statusCode });
 const fingerprint = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const assertRequestScope = (requestId, canonicalRequestId) => {
+  if (requestId != null && Number(requestId) !== Number(canonicalRequestId)) throw fail('The requested resource belongs to a different purchase request', 'REQUEST_SCOPE_MISMATCH', 409);
+};
 
 const validateLines = (lines, invoiceTotal) => {
   if (!Array.isArray(lines) || !lines.length) throw fail('Accounting lines are required', 'ACCOUNTING_LINES_REQUIRED');
@@ -18,13 +21,14 @@ const validateLines = (lines, invoiceTotal) => {
   return { debit, credit };
 };
 
-const createPayableFromVerifiedInvoice = ({ repository, invoiceId, actor, idempotencyKey, accountingLines, auditService = defaultAudit, outbox = defaultOutbox }) => {
+const createPayableFromVerifiedInvoice = ({ repository, requestId, invoiceId, actor, idempotencyKey, accountingLines, auditService = defaultAudit, outbox = defaultOutbox }) => {
   const key = String(idempotencyKey || '').trim();
   if (!key) throw fail('AP idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
   return repository.withTransaction(async (tx) => {
     await tx.lockApOperation(key);
     const invoice = await tx.lockInvoice(invoiceId);
     if (!invoice) throw fail('Invoice not found', 'INVOICE_NOT_FOUND', 404);
+    assertRequestScope(requestId, invoice.request_id);
     const payloadFingerprint = fingerprint({ invoiceId: String(invoiceId), accountingLines });
     const retry = await tx.findApVoucherByIdempotency(key);
     if (retry) {

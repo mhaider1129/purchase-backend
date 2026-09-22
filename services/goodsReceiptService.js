@@ -51,15 +51,15 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
 
   return repository.withTransaction(async (tx) => {
     await tx.lockGoodsReceiptOperation(key);
+    const po = await tx.lockPurchaseOrder(Number(purchaseOrderId));
+    if (!po) throw createHttpError(404, 'Purchase order not found');
+    if (requestId != null && Number(po.request_id) !== Number(requestId)) throw Object.assign(createHttpError(409, 'The purchase order belongs to a different purchase request'), { code: 'REQUEST_SCOPE_MISMATCH' });
     const prior = await tx.findReceiptByIdempotency(key);
     if (prior) {
       if (prior.payload_fingerprint !== payloadFingerprint) throw Object.assign(createHttpError(409, 'Idempotency key was already used with a different receipt payload'), { code: 'IDEMPOTENCY_CONFLICT' });
       return { receipt: await tx.loadReceiptWithLines(prior.id), idempotent: true };
     }
-    const po = await tx.lockPurchaseOrder(Number(purchaseOrderId));
-    if (!po) throw createHttpError(404, 'Purchase order not found');
     if (!RECEIVABLE_STATUSES.has(po.status)) throw Object.assign(createHttpError(409, `Purchase order status ${po.status} cannot receive goods`), { code: 'PO_NOT_RECEIVABLE' });
-    if (requestId != null && Number(po.request_id) !== Number(requestId)) throw createHttpError(400, 'purchase_order_id does not belong to the provided request');
 
     const ids = lines.map((line) => Number(line.purchase_order_item_id));
     if (ids.some((id) => !Number.isInteger(id) || id <= 0) || new Set(ids).size !== ids.length) throw createHttpError(400, 'Each line requires a unique purchase_order_item_id');

@@ -15,18 +15,26 @@ const canonicalPayload = ({ supplierId, purchaseOrderId, invoiceNumber, invoiceD
   lines: (lines || []).map((line) => ({ purchase_order_item_id: String(line.purchase_order_item_id), quantity: String(line.quantity), unit_price: String(line.unit_price), tax_amount: String(line.tax_amount || 0), discount_amount: String(line.discount_amount || 0) })),
 });
 const fingerprintInvoice = (input) => crypto.createHash('sha256').update(JSON.stringify(canonicalPayload(input))).digest('hex');
+const assertRequestScope = (requestId, canonicalRequestId) => {
+  if (requestId != null && Number(requestId) !== Number(canonicalRequestId)) {
+    throw error('The requested resource belongs to a different purchase request', 'REQUEST_SCOPE_MISMATCH', 409);
+  }
+};
 
 const emit = async (tx, auditService, outbox, action, invoice, actor, metadata = {}) => {
   await auditService.writeAuditEvent({ client: tx.client, entityType: 'supplier_invoice', entityId: invoice.id, requestId: invoice.request_id, action, actorUserId: actor.id, metadata });
   await outbox.enqueueNotification(tx.client, { type: action, entityType: 'supplier_invoice', entityId: invoice.id, payload: { supplier_invoice_id: invoice.id, purchase_order_id: invoice.purchase_order_id, ...metadata }, idempotencyKey: `${action.toLowerCase()}:${invoice.id}:${metadata.match_result_id || 'submission'}` });
 };
 
-const submitSupplierInvoice = async ({ repository, purchaseOrderId, supplierId, invoiceNumber, invoiceDate, currency, lines, idempotencyKey, actor, attachmentMetadata = null, auditService = defaultAudit, outbox = defaultOutbox }) => {
+const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, supplierId, invoiceNumber, invoiceDate, currency, lines, idempotencyKey, actor, attachmentMetadata = null, auditService = defaultAudit, outbox = defaultOutbox }) => {
   if (!String(idempotencyKey || '').trim()) throw error('A non-empty idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
   if (!purchaseOrderId || !supplierId || !String(invoiceNumber || '').trim() || !invoiceDate || !currency || !Array.isArray(lines) || !lines.length) throw error('Purchase order, supplier, invoice number/date, currency and lines are required', 'INVALID_INVOICE');
   const payloadFingerprint = fingerprintInvoice({ supplierId, purchaseOrderId, invoiceNumber, invoiceDate, currency, lines });
   return repository.withTransaction(async (tx) => {
     await tx.lockInvoiceOperation(idempotencyKey);
+    const po = await tx.lockPurchaseOrder(purchaseOrderId);
+    if (!po) throw error('Purchase order not found', 'PURCHASE_ORDER_NOT_FOUND', 404);
+    assertRequestScope(requestId, po.request_id);
     const retry = await tx.findInvoiceByIdempotency(idempotencyKey);
     if (retry) {
       if (retry.payload_fingerprint !== payloadFingerprint) throw error('Idempotency key was already used with a different invoice payload', 'IDEMPOTENCY_CONFLICT', 409);
@@ -35,8 +43,6 @@ const submitSupplierInvoice = async ({ repository, purchaseOrderId, supplierId, 
     const normalized = normalizeInvoiceNumber(invoiceNumber);
     await tx.lockSupplierInvoiceIdentity(supplierId, normalized);
     if (await tx.findSupplierInvoiceByNormalizedNumber(supplierId, normalized)) throw error('Duplicate supplier invoice', 'DUPLICATE_INVOICE', 409);
-    const po = await tx.lockPurchaseOrder(purchaseOrderId);
-    if (!po) throw error('Purchase order not found', 'PURCHASE_ORDER_NOT_FOUND', 404);
     if (String(po.supplier_id) !== String(supplierId)) throw error('Invoice supplier does not match purchase order supplier', 'SUPPLIER_MISMATCH', 409);
     if (!['PO_ISSUED', 'PO_PARTIAL', 'PO_DELIVERED'].includes(po.status)) throw error(`Purchase order status ${po.status} does not permit invoicing`, 'PO_NOT_INVOICEABLE', 409);
     const poLines = await tx.loadPurchaseOrderLines(po.id);
@@ -55,8 +61,9 @@ const submitSupplierInvoice = async ({ repository, purchaseOrderId, supplierId, 
   });
 };
 
-const runInvoiceMatch = ({ repository, invoiceId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
+const runInvoiceMatch = ({ repository, requestId, invoiceId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
   const invoice = await tx.lockInvoice(invoiceId); if (!invoice) throw error('Invoice not found', 'INVOICE_NOT_FOUND', 404);
+  assertRequestScope(requestId, invoice.request_id);
   await tx.lockPurchaseOrder(invoice.purchase_order_id); // serializes competing matches for the PO
   const fullInvoice = await tx.loadInvoiceWithLines(invoice.id);
   const po = await tx.loadPurchaseOrderForInvoice(invoice.id); if (!po) throw error('Invoice purchase order not found', 'PURCHASE_ORDER_NOT_FOUND', 404);
@@ -94,11 +101,12 @@ const assertInvoiceMatchApproved = async ({ repository, invoiceId }) => {
   return state;
 };
 
-const decideMatchOverride = async ({ repository, matchResultId, decision, reason, actor, auditService = defaultAudit, outbox = defaultOutbox }) => {
+const decideMatchOverride = async ({ repository, requestId, matchResultId, decision, reason, actor, auditService = defaultAudit, outbox = defaultOutbox }) => {
   if (!String(reason || '').trim()) throw error('Override reason is required', 'OVERRIDE_REASON_REQUIRED');
   if (!['APPROVED', 'DECLINED'].includes(decision)) throw error('Invalid override decision', 'INVALID_OVERRIDE_DECISION');
   return repository.withTransaction(async (tx) => {
     const current = await tx.lockMatchResult(matchResultId); if (!current) throw error('Match result not found', 'MATCH_RESULT_NOT_FOUND', 404);
+    assertRequestScope(requestId, current.request_id);
     if (current.match_status !== 'MATCH_EXCEPTION') throw error('Only a match exception can be overridden', 'MATCH_OVERRIDE_NOT_ALLOWED', 409);
     await tx.lockInvoice(current.supplier_invoice_id);
     const latest = await tx.getEffectiveInvoiceMatchState(current.supplier_invoice_id);

@@ -8,23 +8,8 @@ const defaultOutbox = require('./notificationOutboxService');
 const fail = (message, code, statusCode = 400) => Object.assign(new Error(message), { code, statusCode });
 const paymentFingerprint = (value) => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-// Compatibility adapter for pre-cutover internal callers. Live HTTP routes use
-// the payable-oriented transaction below; this adapter can be removed once all
-// tests/import jobs have moved to AP payable IDs.
-const postLegacyInvoicePayment = ({ repository, invoiceId, amount, idempotencyKey, actorId }) => repository.lockInvoice(invoiceId, async (invoice) => {
-  if (!String(idempotencyKey || '').trim()) throw fail('Payment idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
-  const retry = await repository.findByIdempotencyKey(idempotencyKey);
-  if (retry) return retry;
-  if (!['APPROVED_FOR_PAYMENT', 'PARTIALLY_PAID'].includes(invoice.status)) throw fail('Invoice is not payable', 'INVOICE_NOT_PAYABLE', 409);
-  const remaining = subtractDecimal(invoice.approved_payable_amount, await repository.sumPostedPayments(invoiceId));
-  if (compareDecimal(amount, '0') <= 0 || compareDecimal(amount, remaining) > 0) throw fail('Payment exceeds payable amount', 'PAYMENT_AMOUNT_EXCEEDED', 409);
-  const payment = await repository.insert({ invoice_id: invoiceId, amount: String(amount), idempotency_key: idempotencyKey, actor_id: actorId, status: 'POSTED' });
-  await repository.setInvoiceStatus(invoiceId, compareDecimal(amount, remaining) === 0 ? 'PAID' : 'PARTIALLY_PAID');
-  return payment;
-});
-
 const postPayment = ({ repository, payableId, invoiceId, amount, currency, paymentReference, paymentMethod, idempotencyKey, actor, actorId, auditService = defaultAudit, outbox = defaultOutbox }) => {
-  if (!repository.withTransaction && payableId == null) return postLegacyInvoicePayment({ repository, invoiceId, amount, idempotencyKey, actorId });
+  if (!repository?.withTransaction || payableId == null) throw fail('Payments require the canonical posted AP payable command', 'LEGACY_PAYMENT_DISABLED', 410);
   const key = String(idempotencyKey || '').trim();
   if (!key) throw fail('Payment idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
   const normalized = { payable_id: String(payableId), amount: String(amount), currency: String(currency || '').toUpperCase(), payment_reference: String(paymentReference || ''), payment_method: String(paymentMethod || '') };

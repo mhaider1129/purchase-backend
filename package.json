@@ -17,7 +17,8 @@
     "validate:sql004": "node scripts/validateManualSql.js",
     "test:sql018": "node scripts/testSql018Integration.js",
     "priority:recalculate-aging": "node jobs/recalculateProcurementPriorityAging.js",
-    "test:sql028-029": "node scripts/testSql028029Integration.js"
+    "test:sql028-029": "node scripts/testSql028029Integration.js",
+    "verify:p2p-schema": "node scripts/verifyP2PSchemaContract.js"
   },
   "keywords": [
     "purchase",

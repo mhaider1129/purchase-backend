@@ -15,3 +15,5 @@ exports.run = handle(async (req, res) => res.status(201).json(await service.runS
 exports.runs = handle(async (req, res) => res.json(await service.listShadowRuns(req.query, actor(req))));
 exports.runDetail = handle(async (req, res) => { const value=await service.getShadowRun(req.params.id,actor(req)); if(!value)return res.status(404).json({error:'Shadow run not found'}); res.json(value); });
 exports.batch = handle(async (req,res)=>res.status(201).json(await service.runShadowBatch(req.body,actor(req))));
+exports.simulate = handle(async (req,res)=>res.json(await service.simulate(req.params.id,req.body,actor(req))));
+exports.readiness = handle(async (req,res)=>res.json(await service.readiness(actor(req))));

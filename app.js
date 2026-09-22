@@ -362,6 +362,7 @@ const equipmentRoutes = require('./routes/equipment');
 const maintenanceRoutes = require('./routes/maintenance');
 const organizationRoutes = require('./routes/organization');
 const approvalPoliciesRoutes = require('./routes/approvalPolicies');
+const approvalDelegationsRoutes = require('./routes/approvalDelegations');
 const fixedAssetsRoutes = require('./routes/fixedAssets');
 const rfidRoutes = require('./routes/rfid');
 const rfidIngestionRoutes = require('./routes/rfidIngestion');
@@ -447,8 +448,9 @@ const mountApiRoutes = router => {
 };
 
 mountApiRoutes(apiRouter);
-apiRouter.use(/^\/approval-polic(?:ies|y-versions|y-shadow-runs)(?:\/|$)/, authenticateUser, writeAuditTrail);
+apiRouter.use(/^\/(?:approval-polic(?:ies|y-versions|y-shadow-runs|y-readiness)|approval-authority-delegations)(?:\/|$)/, authenticateUser, writeAuditTrail);
 apiRouter.use(approvalPoliciesRoutes);
+apiRouter.use(approvalDelegationsRoutes);
 
 // Mount the API router
 app.use('/api', apiRouter);

@@ -5,6 +5,8 @@ DO $gate$
 DECLARE
   table_count integer;
   auxiliary_count integer;
+  present_objects text;
+  missing_objects text;
   compatible boolean;
 BEGIN
   IF to_regclass('public.organization_units') IS NULL OR to_regclass('public.organization_positions') IS NULL
@@ -24,7 +26,39 @@ BEGIN
     PERFORM set_config('purchase_tracker.sql_032_install','true',true);
     RETURN;
   END IF;
-  IF table_count<>3 OR auxiliary_count<>2 THEN RAISE EXCEPTION 'SQL_032_PARTIAL_OR_DRIFTED'; END IF;
+  /* An earlier pending revision of 032 created the three tables but did not yet
+     create the guard functions. Recognize that exact, upgradeable footprint;
+     every other partial combination continues to fail closed. */
+  IF table_count=3 AND auxiliary_count=0
+     AND (SELECT count(*)=16 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_authority_delegations')
+     AND (SELECT count(*)=9 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_route_snapshots')
+     AND (SELECT count(*)=17 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_route_snapshot_steps')
+     AND (SELECT count(*)=5 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_authority_delegations'
+       AND (column_name,data_type,is_nullable) IN (('id','bigint','NO'),('institute_id','integer','NO'),('effective_from','timestamp with time zone','NO'),('effective_to','timestamp with time zone','NO'),('row_version','integer','NO')))
+     AND (SELECT count(*)=4 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_route_snapshots'
+       AND (column_name,data_type,is_nullable) IN (('id','bigint','NO'),('request_id','integer','NO'),('policy_version_id','bigint','NO'),('facts_snapshot','jsonb','NO')))
+     AND (SELECT count(*)=4 FROM information_schema.columns WHERE table_schema='public' AND table_name='approval_route_snapshot_steps'
+       AND (column_name,data_type,is_nullable) IN (('id','bigint','NO'),('snapshot_id','bigint','NO'),('sequence','integer','NO'),('resolution_type','character varying','NO')))
+     AND to_regclass('public.approval_route_snapshot_steps_approver_idx') IS NULL THEN
+    PERFORM set_config('purchase_tracker.sql_032_upgrade_legacy','true',true);
+    RETURN;
+  END IF;
+  IF table_count<>3 OR auxiliary_count<>2 THEN
+    SELECT string_agg(name, ', ' ORDER BY name) FILTER (WHERE present),
+           string_agg(name, ', ' ORDER BY name) FILTER (WHERE NOT present)
+      INTO present_objects, missing_objects
+    FROM (
+      SELECT 'table public.'||name AS name, to_regclass('public.'||name) IS NOT NULL AS present
+      FROM (VALUES ('approval_authority_delegations'),('approval_route_snapshots'),('approval_route_snapshot_steps')) tables(name)
+      UNION ALL
+      SELECT 'function public.'||name||'()' AS name, to_regprocedure('public.'||name||'()') IS NOT NULL AS present
+      FROM (VALUES ('approval_route_snapshot_guard'),('approval_route_snapshot_validate')) functions(name)
+    ) inventory;
+
+    RAISE EXCEPTION 'SQL_032_PARTIAL_OR_DRIFTED'
+      USING DETAIL = format('Present: %s. Missing: %s.', coalesce(present_objects, 'none'), coalesce(missing_objects, 'none')),
+            HINT = 'Do not drop objects blindly. Compare the existing SQL 032 objects with this file; restore or migrate any pre-existing schema, then rerun the complete file.';
+  END IF;
 
   /* A rerun is accepted only after proving every material 032 contract. Constraint
      names below are stable because 032 owns them; generated PK/FK names are not used. */
@@ -35,7 +69,7 @@ BEGIN
       ('effective_to','timestamp with time zone','NO'),('scope','character varying','NO'),('reason','text','NO'),
       ('status','character varying','NO'),('created_by','integer','NO'),('created_at','timestamp with time zone','NO'),
       ('revoked_by','integer','YES'),('revoked_at','timestamp with time zone','YES'),('revocation_reason','text','YES'),
-      ('row_version','integer','NO'),('authority_kind','text','NO'),('authority_id','bigint','NO'),
+      ('row_version','integer','NO'),('authority_kind','text','YES'),('authority_id','bigint','YES'),
       ('effective_period','tstzrange','YES')) expected(name,type,nullable)
       ON c.column_name=expected.name AND c.data_type=expected.type AND c.is_nullable=expected.nullable
       WHERE c.table_schema='public' AND c.table_name='approval_authority_delegations')
@@ -110,9 +144,107 @@ BEGIN
     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='approval_snapshot_generation_ck' AND pg_get_constraintdef(oid) LIKE '%generation_number >= 1%')
     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='approval_snapshot_step_resolution_ck' AND pg_get_constraintdef(oid) LIKE '%AMBIGUOUS%DUPLICATE_PRINCIPAL%');
 
-  IF NOT compatible THEN RAISE EXCEPTION 'SQL_032_PARTIAL_OR_DRIFTED'; END IF;
+  IF NOT compatible THEN
+    RAISE EXCEPTION 'SQL_032_PARTIAL_OR_DRIFTED'
+      USING DETAIL = 'All five owned objects exist, but one or more columns, constraints, indexes, triggers, foreign keys, permissions, or generated expressions do not match SQL 032.',
+            HINT = 'Run the SQL 032 drift-diagnostic queries in docs/approval-policy-engine.md; do not rerun selected CREATE statements or drop objects blindly.';
+  END IF;
   RAISE NOTICE 'SQL_032_COMPLETE_COMPATIBLE';
 END $gate$;
+
+DO $upgrade_legacy$
+DECLARE constraint_name text;
+BEGIN
+IF current_setting('purchase_tracker.sql_032_upgrade_legacy',true) IS DISTINCT FROM 'true' THEN RETURN; END IF;
+
+/* Preserve legacy rows while bringing the earlier pending 032 table footprint
+   forward. Anonymous checks/uniques are replaced by stable governed names. */
+FOR constraint_name IN
+  SELECT conname FROM pg_constraint
+  WHERE conrelid='public.approval_authority_delegations'::regclass AND contype='c'
+LOOP EXECUTE format('ALTER TABLE approval_authority_delegations DROP CONSTRAINT %I',constraint_name); END LOOP;
+
+ALTER TABLE approval_authority_delegations
+  ADD COLUMN authority_kind TEXT GENERATED ALWAYS AS (CASE WHEN organization_position_id IS NOT NULL THEN 'POSITION' ELSE 'USER' END) STORED,
+  ADD COLUMN authority_id BIGINT GENERATED ALWAYS AS (COALESCE(organization_position_id,delegator_user_id::bigint)) STORED,
+  ADD COLUMN effective_period TSTZRANGE GENERATED ALWAYS AS (tstzrange(effective_from,effective_to,'[)')) STORED,
+  ADD CONSTRAINT approval_delegation_authority_ck CHECK(organization_position_id IS NOT NULL OR delegator_user_id IS NOT NULL),
+  ADD CONSTRAINT approval_delegation_self_ck CHECK(delegate_user_id IS DISTINCT FROM delegator_user_id),
+  ADD CONSTRAINT approval_delegation_period_ck CHECK(effective_to>effective_from),
+  ADD CONSTRAINT approval_delegation_status_ck CHECK(status IN('ACTIVE','REVOKED')),
+  ADD CONSTRAINT approval_delegation_row_version_ck CHECK(row_version>0),
+  ADD CONSTRAINT approval_delegation_revocation_ck CHECK((status='ACTIVE' AND revoked_by IS NULL AND revoked_at IS NULL AND revocation_reason IS NULL) OR (status='REVOKED' AND revoked_by IS NOT NULL AND revoked_at IS NOT NULL AND length(btrim(revocation_reason))>0));
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+ALTER TABLE approval_authority_delegations ADD CONSTRAINT approval_delegation_no_overlap_excl EXCLUDE USING gist
+  (institute_id WITH =,authority_kind WITH =,authority_id WITH =,scope WITH =,effective_period WITH &&) WHERE (status='ACTIVE');
+
+ALTER TABLE approval_route_snapshots
+  ADD COLUMN generation_number INTEGER,
+  ADD COLUMN generation_reason TEXT,
+  ADD COLUMN supersedes_snapshot_id BIGINT REFERENCES approval_route_snapshots(id),
+  ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1;
+WITH numbered AS (
+  SELECT id,row_number() OVER(PARTITION BY request_id ORDER BY generated_at,id)::integer AS generation_number
+  FROM approval_route_snapshots
+)
+UPDATE approval_route_snapshots s SET generation_number=n.generation_number FROM numbered n WHERE n.id=s.id;
+WITH predecessors AS (
+  SELECT id,lag(id) OVER(PARTITION BY request_id ORDER BY generation_number) AS supersedes_snapshot_id
+  FROM approval_route_snapshots
+)
+UPDATE approval_route_snapshots s SET supersedes_snapshot_id=p.supersedes_snapshot_id FROM predecessors p WHERE p.id=s.id;
+ALTER TABLE approval_route_snapshots ALTER COLUMN generation_number SET NOT NULL;
+FOR constraint_name IN
+  SELECT conname FROM pg_constraint
+  WHERE conrelid='public.approval_route_snapshots'::regclass AND contype='u'
+LOOP EXECUTE format('ALTER TABLE approval_route_snapshots DROP CONSTRAINT %I',constraint_name); END LOOP;
+ALTER TABLE approval_route_snapshots
+  ADD CONSTRAINT approval_snapshot_generation_ck CHECK(generation_number>=1),
+  ADD CONSTRAINT approval_snapshot_row_version_ck CHECK(row_version=1),
+  ADD CONSTRAINT approval_snapshot_generation_uq UNIQUE(request_id,generation_number),
+  ADD CONSTRAINT approval_snapshot_supersedes_uq UNIQUE(supersedes_snapshot_id);
+DROP INDEX approval_route_snapshots_request_idx;
+CREATE INDEX approval_route_snapshots_request_idx ON approval_route_snapshots(institute_id,request_id,generation_number DESC);
+
+FOR constraint_name IN
+  SELECT conname FROM pg_constraint
+  WHERE conrelid='public.approval_route_snapshot_steps'::regclass AND contype IN('c','u')
+LOOP EXECUTE format('ALTER TABLE approval_route_snapshot_steps DROP CONSTRAINT %I',constraint_name); END LOOP;
+ALTER TABLE approval_route_snapshot_steps
+  ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1,
+  ADD CONSTRAINT approval_snapshot_step_sequence_ck CHECK(sequence>0),
+  ADD CONSTRAINT approval_snapshot_step_level_ck CHECK(approval_level>0),
+  ADD CONSTRAINT approval_snapshot_step_resolution_ck CHECK(resolution_type IN('RESOLVED','DELEGATED','UNRESOLVED','AMBIGUOUS','DEDUPLICATED','DUPLICATE_PRINCIPAL')),
+  ADD CONSTRAINT approval_snapshot_step_row_version_ck CHECK(row_version=1),
+  ADD CONSTRAINT approval_snapshot_step_sequence_uq UNIQUE(snapshot_id,sequence);
+CREATE INDEX approval_route_snapshot_steps_approver_idx ON approval_route_snapshot_steps(snapshot_id,acting_approver_id);
+
+CREATE FUNCTION approval_route_snapshot_guard() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN RAISE EXCEPTION 'APPROVAL_ROUTE_SNAPSHOT_IMMUTABLE' USING ERRCODE='55000'; END $fn$;
+CREATE FUNCTION approval_route_snapshot_validate() RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE prior approval_route_snapshots%ROWTYPE;
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM requests WHERE id=NEW.request_id AND institute_id=NEW.institute_id) THEN RAISE EXCEPTION 'SNAPSHOT_REQUEST_INSTITUTE_MISMATCH'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM approval_policy_versions v JOIN approval_policies p ON p.id=v.approval_policy_id WHERE v.id=NEW.policy_version_id AND p.id=NEW.policy_id AND p.institute_id=NEW.institute_id) THEN RAISE EXCEPTION 'SNAPSHOT_POLICY_INSTITUTE_MISMATCH'; END IF;
+ IF NEW.generation_number=1 AND NEW.supersedes_snapshot_id IS NOT NULL THEN RAISE EXCEPTION 'SNAPSHOT_FIRST_GENERATION_CANNOT_SUPERSEDE'; END IF;
+ IF NEW.generation_number>1 THEN
+   IF NEW.supersedes_snapshot_id IS NULL THEN RAISE EXCEPTION 'SNAPSHOT_SUPERSEDES_REQUIRED'; END IF;
+   SELECT * INTO prior FROM approval_route_snapshots WHERE id=NEW.supersedes_snapshot_id;
+   IF NOT FOUND OR prior.request_id<>NEW.request_id OR prior.institute_id<>NEW.institute_id OR prior.generation_number<>NEW.generation_number-1 THEN RAISE EXCEPTION 'SNAPSHOT_SUPERSEDES_INVALID'; END IF;
+ END IF;
+ RETURN NEW;
+END $fn$;
+CREATE TRIGGER approval_route_snapshots_validate_trg BEFORE INSERT ON approval_route_snapshots FOR EACH ROW EXECUTE FUNCTION approval_route_snapshot_validate();
+CREATE TRIGGER approval_route_snapshots_immutable_trg BEFORE UPDATE OR DELETE ON approval_route_snapshots FOR EACH ROW EXECUTE FUNCTION approval_route_snapshot_guard();
+CREATE TRIGGER approval_route_snapshot_steps_immutable_trg BEFORE UPDATE OR DELETE ON approval_route_snapshot_steps FOR EACH ROW EXECUTE FUNCTION approval_route_snapshot_guard();
+INSERT INTO permissions(code,name,description) VALUES
+ ('approval-delegation.view','View approval delegations','View institute-scoped approval-authority delegations'),
+ ('approval-delegation.manage','Manage approval delegations','Create and revoke governed approval-authority delegations'),
+ ('approval-policy.simulate','Simulate approval policies','Run side-effect-free institute-scoped policy simulations')
+ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description;
+ALTER TABLE approval_policy_shadow_steps DROP CONSTRAINT IF EXISTS approval_policy_shadow_steps_resolution_status_check;
+ALTER TABLE approval_policy_shadow_steps ADD CONSTRAINT approval_policy_shadow_steps_resolution_status_check CHECK(resolution_status IN('RESOLVED','DELEGATED','UNRESOLVED','AMBIGUOUS','SKIPPED','DEDUPLICATED','DUPLICATE_PRINCIPAL'));
+END $upgrade_legacy$;
 
 DO $install$
 BEGIN

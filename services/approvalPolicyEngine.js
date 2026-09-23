@@ -23,13 +23,14 @@ function evaluateCondition(condition, facts) {
   throw new Error(`Unsupported condition: ${condition.type}`);
 }
 
-function validateVersion(version) {
+function validateVersionStructure(version) {
   const errors=[], warnings=[]; if(!version?.policy) errors.push('Policy is required'); if(!version?.rules?.length) errors.push('At least one rule is required');
   const priorities=new Set(); for(const rule of version?.rules||[]) { if(!Number.isInteger(rule.priority)||priorities.has(rule.priority)) errors.push(`Rule priority must be a unique integer: ${rule.code}`); priorities.add(rule.priority);
     for(const c of rule.conditions||[]) if(!CONDITION_TYPES.includes(c.type)||c.value===undefined) errors.push(`Invalid condition in ${rule.code}`);
     const configured=new Set(); for(const s of rule.steps||[]) { if(!RESOLVER_TYPES.includes(s.resolverType)) errors.push(`Invalid resolver in ${rule.code}`); if(!Number.isInteger(s.approvalLevel)||s.approvalLevel<1||!Number.isInteger(s.stepOrder)||s.stepOrder<1) errors.push(`Invalid step order/level in ${rule.code}`); if(!s.semanticKey) errors.push(`Semantic key required in ${rule.code}`); const key=`${s.approvalLevel}|${s.semanticKey}|${s.resolverType}|${s.resolverReference||''}`; if(configured.has(key)) errors.push(`Duplicate semantic step configuration in ${rule.code}`); configured.add(key); if(['POSITION','CAPABILITY_HOLDER','FIXED_USER','FIXED_AUTHORITY'].includes(s.resolverType)&&!s.resolverReference) errors.push(`Resolver reference required in ${rule.code}`); }
   } return {valid:errors.length===0,errors,warnings};
 }
+const validateVersion=validateVersionStructure;
 
 async function resolveStep(step, facts, dependencies) {
   let result;
@@ -106,4 +107,4 @@ function compareApprovalRoutes(current, shadow) {
   return {result,differences,metrics};
 }
 
-module.exports={LIVE_ROUTING_ENABLED,CONDITION_TYPES,RESOLVER_TYPES,CAPABILITY_ALIASES:capabilityAliases,decimalCompare,evaluateCondition,validateVersion,composeShadowRoute,normalizeCurrentRoute,compareApprovalRoutes};
+module.exports={LIVE_ROUTING_ENABLED,CONDITION_TYPES,RESOLVER_TYPES,CAPABILITY_ALIASES:capabilityAliases,decimalCompare,evaluateCondition,validateVersionStructure,validateVersion,composeShadowRoute,normalizeCurrentRoute,compareApprovalRoutes};

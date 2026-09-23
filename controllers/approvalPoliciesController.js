@@ -8,6 +8,7 @@ exports.update = handle(async (req, res) => res.json(await service.updatePolicy(
 exports.createVersion = handle(async (req, res) => res.status(201).json(await service.createVersion(req.params.id, req.body, actor(req))));
 exports.versions = handle(async (req, res) => res.json(await service.getVersions(req.params.id, actor(req))));
 exports.version = handle(async (req, res) => { const value=await service.hydrateVersion(req.params.id,actor(req)); if(!value)return res.status(404).json({error:'Version not found'}); res.json(value); });
+exports.versionReadiness = handle(async (req,res)=>res.json(await service.versionReadiness(req.params.id,actor(req))));
 exports.patchVersion = handle(async (req, res) => res.json(await service.replaceDraft(req.params.id, req.body, actor(req))));
 exports.validate = handle(async (req, res) => res.json(await service.validate(req.params.id, actor(req))));
 exports.enterShadow = handle(async (req, res) => res.json(await service.enterShadow(req.params.id, actor(req))));

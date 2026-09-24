@@ -51,13 +51,6 @@ const defaultResources = [
     requireAll: false,
   },
   {
-    resourceKey: 'feature.maintenanceStock',
-    label: 'Maintenance Stock',
-    description: 'Shows the maintenance stock dashboard.',
-    permissions: ['warehouse.manage-supply'],
-    requireAll: false,
-  },
-  {
     resourceKey: 'feature.itemMaster',
     label: 'Item Master Data',
     description: 'Shows the central item master catalog (read-only).',

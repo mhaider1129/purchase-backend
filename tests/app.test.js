@@ -122,7 +122,6 @@ describe('Express app', () => {
       '/warehouses',
       '/roles',
       '/permissions',
-      '/maintenance-stock',
       '/procurement-plans',
       '/planning',
       '/stock-items',

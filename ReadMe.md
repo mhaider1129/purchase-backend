@@ -77,7 +77,6 @@ The system is designed to support healthcare institutions with complex approval 
 - Warehouse transfers
 - Inventory tracking
 - Item master management
-- Maintenance stock management
 - Inventory movement logging
 
 ---

@@ -39,7 +39,7 @@ Repository-wide SQL, JavaScript, JSX, tests and architecture documents were sear
 | `warehouse_stock_levels` | Balance by warehouse/stock/status/batch/lot/serial/expiry; contains item-name display and Generic column. | Inventory engine and legacy warehouse controllers. | Canonical balance key uses `stock_item_id`; name is display/legacy matching in some controllers. | **PROJECTION**, some **LEGACY COMPATIBILITY** |
 | `contract_items` | Contract-line free-text/name/generic/brand, `item_id`, unit and authoritative contracted price. | Contracts controller/Contract form. | No verified Generic/Product/Catalog FK chain; catalog `contract_id` is header-only. | **DISCONNECTED**, **TO_MIGRATE** |
 | RFx/quotation/award line records | Sourcing descriptions and transaction price. | RFx/award services and UI. | Mostly request-line identity; awarded Product/Catalog does not reliably survive to PO. | **TRANSACTION_SNAPSHOT**, **TO_MIGRATE** |
-| `monthly_dispensing`, warehouse supply/template lines, maintenance stock, technical inspections, recalls | Domain-specific name-bearing records. | Respective controllers/pages/runtime ensures. | Name/search/display or independent legacy matching; not new canonical masters. | **PROJECTION** or **LEGACY COMPATIBILITY** |
+| `monthly_dispensing`, warehouse supply/template lines, technical inspections, and recalls | Domain-specific name-bearing records. | Respective controllers/pages/runtime ensures. | Name/search/display or independent legacy matching; not new canonical masters. | **PROJECTION** or **LEGACY COMPATIBILITY** |
 
 ## Legacy migration rule
 

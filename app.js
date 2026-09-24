@@ -319,7 +319,6 @@ const dashboardRoutes = require('./routes/dashboard');
 const departmentsRoutes = require('./routes/departments');
 const warehousesRoutes = require('./routes/warehouses');
 const rolesRoutes = require('./routes/roles');
-const maintenanceStockRoutes = require('./routes/maintenanceStock');
 const procurementPlansRoutes = require('./routes/procurementPlans');
 const planningRoutes = require('./routes/planning');
 const stockItemsRoutes = require('./routes/stockItems');
@@ -395,7 +394,6 @@ const protectedApiRoutes = [
   { path: '/warehouses', router: warehousesRoutes },
   { path: '/roles', router: rolesRoutes },
   { path: '/permissions', router: permissionsRouter },
-  { path: '/maintenance-stock', router: maintenanceStockRoutes },
   { path: '/procurement-plans', router: procurementPlansRoutes },
   { path: '/planning', router: planningRoutes },
   { path: '/stock-items', router: stockItemsRoutes },

@@ -17,7 +17,7 @@ Legend: Tx/Lock/Neg/UOM/ID/Track/Audit/Rev/Scope are transaction, row lock, nega
 | `utils/recalculateAvailableQuantity` | derives and updates `stock_items.available_quantity` | joins caller/no/N/A/N/A/N/A/N/A | **historical compatibility projection** |
 | `repositories/inventoryRepository.setupWarehouse` | creates a zero projection row during governed item creation | Y/N/N/A/Y/N/item-master audit/N/Y | **valid projection initialization** |
 | `itemRecallsController` | recall records/status only; does not change quantity projection | varies/N/N/A/item/references/N/N/partial | **disconnected control; migrate status blocking 3B** |
-| custody, dispensing, maintenance stock, stock requests | business/custody/request records; no direct warehouse balance SQL found | varies | **historical/read-only or disconnected upstream** |
+| custody, dispensing, and stock requests | business/custody/request records; no direct warehouse balance SQL found | varies | **historical/read-only or disconnected upstream** |
 | reports, dashboards, scheduled jobs, frontend calls | read/derive or call above endpoints | N/A | **historical/read-only** |
 
 ## Every direct balance update/insert

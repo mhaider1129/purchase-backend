@@ -201,7 +201,8 @@ const listTechnicalInspections = async (req, res, next) => {
   try {
     await ensureTechnicalInspectionsTable();
 
-    const { search, start_date, end_date, category } = req.query || {};
+    const { search, start_date, end_date, category, acceptance_status } =
+      req.query || {};
 
     const clauses = [];
     const params = [];
@@ -218,6 +219,19 @@ const listTechnicalInspections = async (req, res, next) => {
     if (category) {
       clauses.push(`LOWER(item_category) = $${idx}`);
       params.push(String(category).trim().toLowerCase());
+      idx += 1;
+    }
+
+    if (acceptance_status) {
+      const normalizedStatus = normalizeAcceptanceStatus(acceptance_status);
+      if (!normalizedStatus) {
+        throw createHttpError(
+          400,
+          'Acceptance status must be pending, passed, or failed'
+        );
+      }
+      clauses.push(`acceptance_status = $${idx}`);
+      params.push(normalizedStatus);
       idx += 1;
     }
 

@@ -4,8 +4,10 @@ const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureReques
 const uom = require('../../services/uomConversionService');
 
 const PRIVILEGED_ROLES = new Set(['SCM', 'Admin', 'Procurement Supervisor', 'ProcurementSupervisor']);
+const OVERAGE_APPROVER_ROLES = new Set(['SCM', 'Admin']);
 const BLOCKED_REQUEST_STATUSES = new Set(['rejected', 'cancelled', 'canceled', 'closed', 'completed', 'received']);
 const BLOCKED_ITEM_STATUSES = new Set(['purchased', 'completed', 'fully_procured', 'canceled', 'cancelled', 'not_procured', 'unable_to_procure']);
+const TERMINALLY_BLOCKED_ITEM_STATUSES = new Set(['canceled', 'cancelled', 'not_procured', 'unable_to_procure']);
 
 const parsePositiveInteger = (value, fieldLabel) => {
   const numeric = Number(value);
@@ -245,14 +247,17 @@ const addProcurementItemEvent = async (req, res, next) => {
     const remainingQuantityBeforeEvent = Math.max(requestedQuantity - previousPurchasedQuantity, 0);
     const normalizedItemStatus = String(item.procurement_status || '').trim().toLowerCase();
 
-    if (BLOCKED_ITEM_STATUSES.has(normalizedItemStatus) || remainingQuantityBeforeEvent <= 0) {
+    const isOverage = eventQuantity > remainingQuantityBeforeEvent;
+
+    if (TERMINALLY_BLOCKED_ITEM_STATUSES.has(normalizedItemStatus)
+        || ((BLOCKED_ITEM_STATUSES.has(normalizedItemStatus) || remainingQuantityBeforeEvent <= 0) && !isOverage)) {
       await client.query('ROLLBACK');
       return next(createHttpError(400, 'Item is already fully procured, cancelled, or unable to procure'));
     }
 
-    if (eventQuantity > remainingQuantityBeforeEvent) {
+    if (isOverage && !procurementNote) {
       await client.query('ROLLBACK');
-      return next(createHttpError(400, `event_quantity cannot exceed remaining quantity (${remainingQuantityBeforeEvent})`));
+      return next(createHttpError(400, 'A justification note is required when requesting more than the remaining quantity'));
     }
 
     if (supplierId !== null) {
@@ -274,14 +279,16 @@ const addProcurementItemEvent = async (req, res, next) => {
       : null;
     const itemTotalCost = effectiveUnitCost !== null ? Number((newPurchasedQuantity * effectiveUnitCost).toFixed(2)) : item.total_cost;
     const procurementStatus = deriveItemStatus(newPurchasedQuantity, requestedQuantity);
+    const overageApprovalStatus = isOverage ? 'pending' : 'not_required';
 
     const eventRes = await client.query(
       `INSERT INTO public.procurement_item_events (
          request_id, requested_item_id, procurement_user_id, event_quantity,
          previous_purchased_quantity, new_purchased_quantity, remaining_quantity,
          unit_cost, total_cost, supplier_id, supplier_name, procurement_note, procurement_date,
-         procurement_quantity, procurement_unit_of_measure, units_per_package, package_unit_cost
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13::date, CURRENT_DATE),$14,$15,$16,$17)
+         procurement_quantity, procurement_unit_of_measure, units_per_package, package_unit_cost,
+         overage_approval_status
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13::date, CURRENT_DATE),$14,$15,$16,$17,$18)
        RETURNING *`,
       [
         requestId,
@@ -301,8 +308,23 @@ const addProcurementItemEvent = async (req, res, next) => {
         procurementUnitOfMeasure || item.unit_of_measure || null,
         unitsPerPackage,
         unitCost,
+        overageApprovalStatus,
       ]
     );
+
+    if (isOverage) {
+      await client.query(
+        `INSERT INTO request_logs (request_id, action, actor_id, comments)
+         VALUES ($1, 'Procurement Overage Approval Requested', $2, $3)`,
+        [requestId, userId, `Requested ${eventQuantity} for '${item.item_name}', exceeding the remaining quantity ${remainingQuantityBeforeEvent}. Justification: ${procurementNote}`]
+      );
+      await client.query('COMMIT');
+      return res.status(202).json({
+        message: 'Over-quantity entry submitted for SCM approval. Quantities will update only after approval.',
+        event: eventRes.rows[0],
+        requires_scm_approval: true,
+      });
+    }
 
     const updatedItemRes = await client.query(
       `UPDATE public.requested_items
@@ -349,6 +371,82 @@ const addProcurementItemEvent = async (req, res, next) => {
     await client.query('ROLLBACK');
     console.error('❌ Failed to add procurement entry:', err.message);
     next(err.statusCode ? err : createHttpError(500, 'Failed to add procurement entry'));
+  } finally {
+    client.release();
+  }
+};
+
+const decideProcurementOverage = async (req, res, next) => {
+  const requestId = Number(req.params.requestId);
+  const eventId = Number(req.params.eventId);
+  const decision = String(req.body?.decision || '').trim().toLowerCase();
+  const decisionNote = String(req.body?.decision_note || '').trim() || null;
+  if (!Number.isInteger(requestId) || requestId <= 0 || !Number.isInteger(eventId) || eventId <= 0) {
+    return next(createHttpError(400, 'requestId and eventId must be positive integers'));
+  }
+  if (!['approved', 'rejected'].includes(decision)) return next(createHttpError(400, 'decision must be approved or rejected'));
+  if (!OVERAGE_APPROVER_ROLES.has(req.user.role) && !req.user.hasPermission?.('requests.manage')) {
+    return next(createHttpError(403, 'Only SCM or Admin may decide over-quantity requests'));
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const eventRes = await client.query(
+      `SELECT pie.*, ri.item_name, ri.quantity, ri.purchased_quantity, ri.unit_cost AS current_unit_cost,
+              ri.total_cost AS current_total_cost
+       FROM public.procurement_item_events pie
+       JOIN public.requested_items ri ON ri.id = pie.requested_item_id
+       WHERE pie.id = $1 AND pie.request_id = $2 FOR UPDATE OF pie, ri`,
+      [eventId, requestId]
+    );
+    if (!eventRes.rowCount) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(404, 'Over-quantity request not found'));
+    }
+    const event = eventRes.rows[0];
+    if (event.overage_approval_status !== 'pending') {
+      await client.query('ROLLBACK');
+      return next(createHttpError(409, 'This over-quantity request has already been decided'));
+    }
+
+    let updatedItem = null;
+    if (decision === 'approved') {
+      const currentPurchased = Number(event.purchased_quantity || 0);
+      const newPurchased = currentPurchased + Number(event.event_quantity);
+      const effectiveUnitCost = event.unit_cost ?? event.current_unit_cost;
+      const totalCost = effectiveUnitCost === null ? event.current_total_cost : Number((newPurchased * Number(effectiveUnitCost)).toFixed(2));
+      const itemRes = await client.query(
+        `UPDATE public.requested_items SET purchased_quantity = $1, unit_cost = COALESCE($2, unit_cost),
+           total_cost = COALESCE($3, total_cost), procurement_status = 'purchased',
+           procurement_updated_by = $4, procurement_updated_at = CURRENT_TIMESTAMP
+         WHERE id = $5 RETURNING *`,
+        [newPurchased, event.unit_cost, totalCost, req.user.id, event.requested_item_id]
+      );
+      updatedItem = itemRes.rows[0];
+      await client.query(
+        `UPDATE public.procurement_item_events SET previous_purchased_quantity = $1, new_purchased_quantity = $2,
+           remaining_quantity = 0, overage_approval_status = 'approved', overage_decided_by = $3,
+           overage_decided_at = CURRENT_TIMESTAMP, overage_decision_note = $4 WHERE id = $5`,
+        [currentPurchased, newPurchased, req.user.id, decisionNote, eventId]
+      );
+      await recalculateRequestProcurementStatus(client, requestId);
+    } else {
+      await client.query(
+        `UPDATE public.procurement_item_events SET overage_approval_status = 'rejected', overage_decided_by = $1,
+           overage_decided_at = CURRENT_TIMESTAMP, overage_decision_note = $2 WHERE id = $3`,
+        [req.user.id, decisionNote, eventId]
+      );
+    }
+    await client.query(
+      `INSERT INTO request_logs (request_id, action, actor_id, comments) VALUES ($1, $2, $3, $4)`,
+      [requestId, `Procurement Overage ${decision === 'approved' ? 'Approved' : 'Rejected'}`, req.user.id, `${event.item_name}: ${event.event_quantity}. ${decisionNote || ''}`]
+    );
+    await client.query('COMMIT');
+    return res.json({ message: `Over-quantity request ${decision}.`, item: updatedItem });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    return next(err.statusCode ? err : createHttpError(500, 'Failed to decide over-quantity request'));
   } finally {
     client.release();
   }
@@ -410,4 +508,5 @@ module.exports = {
   addProcurementItemEvent,
   getProcurementItemEvents,
   recalculateRequestProcurementStatus,
+  decideProcurementOverage,
 };

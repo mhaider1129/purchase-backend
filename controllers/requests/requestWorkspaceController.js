@@ -222,6 +222,9 @@ const getProcurementEvents = async (requestId) => safeQuery(
           u.name AS procurement_user_name,
           pie.procurement_date,
           pie.procurement_note AS note,
+          pie.overage_approval_status,
+          pie.overage_decision_note,
+          pie.overage_decided_at,
           pie.created_at
    FROM public.procurement_item_events pie
    LEFT JOIN public.requested_items ri ON ri.id = pie.requested_item_id
@@ -426,6 +429,10 @@ const buildAvailableActions = (user, request, approvals, items) => {
   if (isPrivileged || hasPermission(user, 'requests.assign')) {
     actions.add('assign_procurement');
     if (request.assigned_to) actions.add('reassign_procurement');
+  }
+
+  if (role === 'scm' || role === 'admin' || hasPermission(user, 'requests.manage')) {
+    actions.add('decide_procurement_overage');
   }
 
   if (isProcurement) {

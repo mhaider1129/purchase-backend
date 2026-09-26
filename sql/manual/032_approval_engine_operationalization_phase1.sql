@@ -135,8 +135,10 @@ BEGIN
     AND EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
       WHERE a.attrelid='public.approval_authority_delegations'::regclass AND a.attname='authority_id'
       AND pg_get_expr(d.adbin,d.adrelid) LIKE '%organization_position_id%delegator_user_id%')
-    AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='approval_delegation_no_overlap_excl'
-      AND pg_get_constraintdef(oid) LIKE '%EXCLUDE USING gist%effective_period WITH &&%status =%ACTIVE%')
+    AND EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_index i ON i.indexrelid=c.conindid
+      WHERE c.connamespace='public'::regnamespace AND c.conname='approval_delegation_no_overlap_excl'
+      AND c.contype='x' AND pg_get_constraintdef(c.oid) LIKE '%EXCLUDE USING gist%effective_period WITH &&%'
+      AND regexp_replace(lower(pg_get_expr(i.indpred,i.indrelid)),'[^a-z0-9]+','','g') LIKE '%status%active%')
     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='approval_delegation_status_ck' AND pg_get_constraintdef(oid) LIKE '%ACTIVE%REVOKED%')
     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='approval_delegation_self_ck' AND pg_get_constraintdef(oid) LIKE '%delegate_user_id IS DISTINCT FROM delegator_user_id%')
     AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='approval_delegation_period_ck' AND pg_get_constraintdef(oid) LIKE '%effective_to > effective_from%')

@@ -761,7 +761,7 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  supplier_type text NOT NULL DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
+  supplier_type text DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
   tax_number text,
   bank_info jsonb,
   currency text,
@@ -1425,11 +1425,13 @@ CREATE TABLE public.ap_payables (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   currency character varying,
   ap_voucher_id bigint,
+  supplier_id integer NOT NULL,
   CONSTRAINT ap_payables_pkey PRIMARY KEY (id),
   CONSTRAINT ap_payables_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT ap_payables_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
   CONSTRAINT ap_payables_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id),
-  CONSTRAINT ap_payables_ap_voucher_id_fkey FOREIGN KEY (ap_voucher_id) REFERENCES public.ap_vouchers(id)
+  CONSTRAINT ap_payables_ap_voucher_id_fkey FOREIGN KEY (ap_voucher_id) REFERENCES public.ap_vouchers(id),
+  CONSTRAINT ap_payables_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id)
 );
 CREATE TABLE public.payment_allocations (
   id bigint NOT NULL DEFAULT nextval('payment_allocations_id_seq'::regclass),

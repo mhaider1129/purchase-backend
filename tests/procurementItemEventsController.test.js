@@ -173,7 +173,23 @@ describe('procurement item events', () => {
     }));
   });
 
-  it('blocks an event quantity greater than remaining quantity', async () => {
+  it('submits an event quantity greater than remaining quantity for SCM approval', async () => {
+    const client = buildClient({ itemOverrides: { purchased_quantity: 60, procurement_status: 'partially_procured' } });
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ event_quantity: 41, procurement_note: 'Supplier carton cannot be split' });
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await addProcurementItemEvent(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ requires_scm_approval: true }));
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE public.requested_items'), expect.anything());
+  });
+
+  it('requires a justification for an over-quantity request', async () => {
     const client = buildClient({ itemOverrides: { purchased_quantity: 60, procurement_status: 'partially_procured' } });
     pool.connect.mockResolvedValue(client);
     const req = buildRequest({ event_quantity: 41 });
@@ -183,23 +199,22 @@ describe('procurement item events', () => {
     await addProcurementItemEvent(req, res, next);
 
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400 }));
-    expect(next.mock.calls[0][0].message).toContain('remaining quantity (40)');
+    expect(next.mock.calls[0][0].message).toContain('justification note');
     expect(client.query).toHaveBeenCalledWith('ROLLBACK');
   });
 
-  it('blocks an event when the item is already fully procured', async () => {
+  it('allows a fully procured item to request an additional approved overage', async () => {
     const client = buildClient({ itemOverrides: { purchased_quantity: 100, procurement_status: 'purchased' } });
     pool.connect.mockResolvedValue(client);
-    const req = buildRequest({ event_quantity: 1 });
+    const req = buildRequest({ event_quantity: 1, procurement_note: 'Minimum order quantity' });
     const res = buildResponse();
     const next = jest.fn();
 
     await addProcurementItemEvent(req, res, next);
 
-    expect(next).toHaveBeenCalledWith(expect.objectContaining({
-      statusCode: 400,
-      message: 'Item is already fully procured, cancelled, or unable to procure',
-    }));
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ requires_scm_approval: true }));
   });
 
   it('blocks procurement for an item rejected during approval even when its procurement status is pending', async () => {

@@ -4,7 +4,7 @@ const router = express.Router();
 const { authenticateUser } = require('../middleware/authMiddleware');
 router.use(authenticateUser); // 🔐 Protect all routes
 const { getCompletedAssignedRequests } = require('../controllers/requests/procurementHistoryController');
-const { addProcurementItemEvent, getProcurementItemEvents } = require('../controllers/requests/procurementItemEventsController');
+const { addProcurementItemEvent, getProcurementItemEvents, decideProcurementOverage } = require('../controllers/requests/procurementItemEventsController');
 const { getFullRequestDetails, addRequestNote } = require('../controllers/requests/requestWorkspaceController');
 const upload = require('../middleware/upload');
 const { resolveIdentity, linkPending } = require('../controllers/requests/itemIdentityResolutionController');
@@ -86,6 +86,7 @@ router.put('/:id/cost', authenticateUser, updateRequestCost);
 router.put('/:id/edit', upload.any(), updateRequestBeforeApproval);
 router.put('/:id/request-type', rewireRequestType);
 router.post('/:requestId/items/:itemId/procurement-events', addProcurementItemEvent);
+router.patch('/:requestId/procurement-events/:eventId/overage-decision', decideProcurementOverage);
 router.post('/:requestId/items/:itemId/resolve-identity', resolveIdentity);
 router.post('/:requestId/items/:itemId/pending-item', linkPending);
 router.get('/:requestId/items/:itemId/procurement-events', getProcurementItemEvents);

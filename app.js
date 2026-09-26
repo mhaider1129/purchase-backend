@@ -446,7 +446,17 @@ const mountApiRoutes = router => {
 };
 
 mountApiRoutes(apiRouter);
-apiRouter.use(/^\/(?:approval-polic(?:ies|y-versions|y-shadow-runs|y-readiness)|approval-authority-delegations)(?:\/|$)/, authenticateUser, writeAuditTrail);
+apiRouter.use(
+  [
+    '/approval-policies',
+    '/approval-policy-versions',
+    '/approval-policy-shadow-runs',
+    '/approval-policy-readiness',
+    '/approval-authority-delegations',
+  ],
+  authenticateUser,
+  writeAuditTrail,
+);
 apiRouter.use(approvalPoliciesRoutes);
 apiRouter.use(approvalDelegationsRoutes);
 

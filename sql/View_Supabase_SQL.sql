@@ -761,7 +761,7 @@ CREATE TABLE public.suppliers (
   contact_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  supplier_type text DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
+  supplier_type text NOT NULL DEFAULT 'Local Trader'::text CHECK (supplier_type = ANY (ARRAY['Manufacturer'::text, 'Authorized Agent'::text, 'Authorized Distributor'::text, 'Sub-distributor'::text, 'Local Trader'::text, 'Service Provider'::text, 'Contractor'::text])),
   tax_number text,
   bank_info jsonb,
   currency text,
@@ -1558,9 +1558,9 @@ CREATE TABLE public.inventory_transactions (
   CONSTRAINT inventory_transactions_approved_product_id_fkey FOREIGN KEY (approved_product_id) REFERENCES public.approved_products(id),
   CONSTRAINT inventory_transactions_supplier_catalog_item_id_fkey FOREIGN KEY (supplier_catalog_item_id) REFERENCES public.supplier_catalog_items(id),
   CONSTRAINT inventory_transactions_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
-  CONSTRAINT inventory_transactions_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id),
   CONSTRAINT inventory_transactions_reversal_of_movement_id_fkey FOREIGN KEY (reversal_of_movement_id) REFERENCES public.inventory_transactions(id),
-  CONSTRAINT inventory_transactions_reversed_by_movement_id_fkey FOREIGN KEY (reversed_by_movement_id) REFERENCES public.inventory_transactions(id)
+  CONSTRAINT inventory_transactions_reversed_by_movement_id_fkey FOREIGN KEY (reversed_by_movement_id) REFERENCES public.inventory_transactions(id),
+  CONSTRAINT inventory_transactions_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 CREATE TABLE public.finance_chart_of_accounts (
   id integer NOT NULL DEFAULT nextval('finance_chart_of_accounts_id_seq'::regclass),

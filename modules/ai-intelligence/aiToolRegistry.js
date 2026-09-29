@@ -1,4 +1,3 @@
-
 'use strict';
 
 const { aiError } = require('./aiErrors');
@@ -22,18 +21,20 @@ class AiToolRegistry {
     authorizeTool(context,name);
     const validated=validators[name](parameters);
     const started=Date.now();
+    let result;
     try {
-      const result=await tool.execute(validated,context);
+      result=await tool.execute(validated,context);
       const resultBytes=Buffer.byteLength(JSON.stringify(result),'utf8');
       if (resultBytes > this.maxResultBytes) {
         throw aiError(413,'AI_TOOL_RESULT_TOO_LARGE','AI tool result is too large; narrow the requested filters');
       }
-      await this.auditService.tool({interactionId,toolName:name,parameters:validated,resultMetadata:{coverage:result.coverage || null,warnings:(result.warnings || []).length,result_bytes:resultBytes},recordCount:result.recordCount,elapsedMs:Date.now()-started,success:true});
-      return result;
     } catch (error) {
       await this.auditService.tool({interactionId,toolName:name,parameters:validated,resultMetadata:{},recordCount:null,elapsedMs:Date.now()-started,success:false,errorCode:error.code || 'AI_TOOL_ERROR'});
       throw error;
     }
+    const resultBytes=Buffer.byteLength(JSON.stringify(result),'utf8');
+    await this.auditService.tool({interactionId,toolName:name,parameters:validated,resultMetadata:{coverage:result.coverage || null,warnings:(result.warnings || []).length,result_bytes:resultBytes},recordCount:result.recordCount,elapsedMs:Date.now()-started,success:true});
+    return result;
   }
 }
 

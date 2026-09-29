@@ -7,49 +7,19 @@ const { ensureWarehouseSupplyApprovalColumns } = require('../../utils/ensureWare
 const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureRequestedItemFinancialsTable');
 const { ensureFinanceCoreTables } = require('../../utils/ensureFinanceCoreTables');
 const { ensureRequestedItemAssignmentColumns } = require('./assignRequestController');
+const {
+  findAuthorizedRequest,
+  filterAuthorizedRequestItems,
+} = require('../../services/requestAuthorizationService');
 
 const getRequestDetails = async (req, res, next) => {
   const { id } = req.params;
-  const { id: userId } = req.user;
-  const isPrivilegedViewer = req.user.hasPermission('requests.view-all');
-
   try {
     await ensureRequestedItemAssignmentColumns();
-    let accessCheck;
-
-    if (isPrivilegedViewer) {
-      accessCheck = await pool.query(
-        `SELECT r.*, p.name AS project_name
-         FROM requests r
-         LEFT JOIN projects p ON r.project_id = p.id
-         WHERE r.id = $1
-         LIMIT 1`,
-        [id],
-      );
-    } else {
-      accessCheck = await pool.query(
-        `SELECT r.*, p.name AS project_name
-         FROM requests r
-         LEFT JOIN projects p ON r.project_id = p.id
-         LEFT JOIN approvals a ON r.id = a.request_id
-         WHERE r.id = $1 AND (
-           r.requester_id = $2
-           OR a.approver_id = $2
-           OR r.assigned_to = $2
-           OR EXISTS (
-             SELECT 1 FROM public.requested_items access_ri
-             WHERE access_ri.request_id = r.id AND access_ri.assigned_to = $2
-           )
-         )
-         LIMIT 1`,
-        [id, userId],
-      );
-    }
-
-    if (accessCheck.rowCount === 0)
+    const authorization = await findAuthorizedRequest({ requestId: id, user: req.user });
+    if (!authorization)
       return next(createHttpError(404, 'Request not found or access denied'));
-
-    const request = accessCheck.rows[0];
+    const { request, privileged: isPrivilegedViewer } = authorization;
 
     let itemsRes;
     if (request.request_type === 'Warehouse Supply') {
@@ -174,18 +144,9 @@ const getRequestDetails = async (req, res, next) => {
       assignedUser = assignedRes.rows[0] || null;
     }
 
-    const isSplitAssignee = itemsRes.rows.some((item) => Number(item.assigned_to) === Number(req.user.id))
-      && Number(request.assigned_to) !== Number(req.user.id)
-      && !isPrivilegedViewer;
-
-    const shouldHideRejectedItems =
-      request.status === 'Approved' && (Number(request.assigned_to) === Number(req.user.id) || isSplitAssignee);
-
-    const filteredItems = itemsRes.rows.filter((item) => {
-      if (isSplitAssignee && Number(item.assigned_to) !== Number(req.user.id)) return false;
-      if (shouldHideRejectedItems && item.approval_status === 'Rejected') return false;
-      return true;
-    });
+    const filteredItems = filterAuthorizedRequestItems(
+      itemsRes.rows, request, req.user, isPrivilegedViewer,
+    );
 
     res.json({
       request,

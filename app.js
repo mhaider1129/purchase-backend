@@ -354,6 +354,7 @@ const requestAutoAssignmentRulesRoutes = require('./routes/requestAutoAssignment
 const departmentRequestedItemsRoutes = require('./routes/departmentRequestedItems');
 const procurementEvaluationsRoutes = require('./routes/procurementEvaluations');
 const printServiceRequestsRoutes = require('./routes/printServiceRequests');
+const documentBrandingRoutes = require('./routes/documentBranding');
 const procurementPerformanceRoutes = require('./routes/procurementPerformance');
 const procurementPriorityRoutes = require('./routes/procurementPriority');
 const sparePartsRoutes = require('./routes/spareParts');
@@ -365,9 +366,12 @@ const approvalDelegationsRoutes = require('./routes/approvalDelegations');
 const fixedAssetsRoutes = require('./routes/fixedAssets');
 const rfidRoutes = require('./routes/rfid');
 const rfidIngestionRoutes = require('./routes/rfidIngestion');
+const { createAiRouter } = require('./modules/ai-intelligence/routes');
+const { createAiRouter } = require('./modules/ai-intelligence/routes');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
+const aiRoutes = createAiRouter();
 
 // =========================
 // 🔓 Public Routes
@@ -429,6 +433,7 @@ const protectedApiRoutes = [
   { path: '/department-requested-items', router: departmentRequestedItemsRoutes },
   { path: '/procurement-evaluations', router: procurementEvaluationsRoutes },
   { path: '/print-service-requests', router: printServiceRequestsRoutes },
+  { path: '/document-branding', router: documentBrandingRoutes },
   { path: '/procurement-performance', router: procurementPerformanceRoutes },
   { path: '/procurement-priority', router: procurementPriorityRoutes },
   { path: '/spare-parts', router: sparePartsRoutes },
@@ -437,6 +442,8 @@ const protectedApiRoutes = [
   { path: '/organization', router: organizationRoutes },
   { path: '/assets', router: fixedAssetsRoutes },
   { path: '/rfid', router: rfidRoutes },
+  { path: '/ai', router: aiRoutes },
+  { path: '/ai', router: createAiRouter() },
 ];
 
 const mountApiRoutes = router => {

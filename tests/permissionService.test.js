@@ -8,9 +8,13 @@ const {
   getDefaultPermissionsForRole,
   applyDefaultRolePermissions,
   getPermissionsForUserId,
+  CORE_PERMISSION_DEFINITIONS,
 } = require('../utils/permissionService');
 
 describe('permissionService defaults', () => {
+  it('registers AI use in the canonical permission catalog', () => {
+    expect(CORE_PERMISSION_DEFINITIONS).toContainEqual(expect.objectContaining({ code: 'ai-intelligence.use' }));
+  });
   beforeEach(() => {
     jest.clearAllMocks();
   });

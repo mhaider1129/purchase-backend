@@ -124,6 +124,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
 
 const CORE_PERMISSION_DEFINITIONS = [
 
+  { code: 'ai-intelligence.use', name: 'Use AI Intelligence', description: 'Use the read-only, audited AI Intelligence assistant within existing data scopes.' },
+
   { code: 'approval-policy.view', name: 'View approval policies', description: 'View approval policy definitions and versions.' },
   { code: 'approval-policy.manage', name: 'Manage approval policies', description: 'Create policies and edit draft versions.' },
   { code: 'approval-policy.publish-shadow', name: 'Publish approval policy to shadow', description: 'Move validated policy versions into shadow mode.' },
@@ -590,4 +592,5 @@ module.exports = {
   buildPermissionSet,
   getDefaultPermissionsForRole,
   applyDefaultRolePermissions,
+  CORE_PERMISSION_DEFINITIONS,
 };

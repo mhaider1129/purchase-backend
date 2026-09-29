@@ -28,6 +28,13 @@ const ensureWarehouseSupplyTables = async (client = pool) => {
     `CREATE INDEX IF NOT EXISTS idx_wsi_request_id ON public.warehouse_supply_items(request_id)`,
     `CREATE INDEX IF NOT EXISTS idx_wsup_request_id ON public.warehouse_supplied_items(request_id)`,
 
+    // CREATE TABLE IF NOT EXISTS does not add columns to installations that
+    // already have the legacy table. Item conversion relies on this link both
+    // when inserting the warehouse item and when deciding whether every
+    // purchase item was diverted from procurement.
+    `ALTER TABLE public.warehouse_supply_items ADD COLUMN IF NOT EXISTS requested_item_id INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_wsi_requested_item_id ON public.warehouse_supply_items(requested_item_id)`,
+
     `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS batch_id INTEGER`,
     `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS lot_number TEXT`,
     `ALTER TABLE public.warehouse_supplied_items ADD COLUMN IF NOT EXISTS expiry_date DATE`,

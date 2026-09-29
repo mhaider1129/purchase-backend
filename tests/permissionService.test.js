@@ -7,6 +7,7 @@ const pool = require('../config/db');
 const {
   getDefaultPermissionsForRole,
   applyDefaultRolePermissions,
+  getPermissionsForUserId,
 } = require('../utils/permissionService');
 
 describe('permissionService defaults', () => {
@@ -90,6 +91,31 @@ describe('permissionService defaults', () => {
       expect(result).toEqual({ applied: true, reason: 'applied', missing: [] });
       expect(warnSpy).not.toHaveBeenCalled();
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('getPermissionsForUserId', () => {
+    it('loads the effective union of direct and role permissions and data scopes', async () => {
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{ role: 'Procurement Specialist', permissions: ['requests.view-all', 'ai-intelligence.use'] }],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ code: 'institute_ids', values: ['3', '4'] }],
+        });
+
+      const result = await getPermissionsForUserId(17);
+
+      expect(pool.query.mock.calls[0][0]).toContain('role_permissions');
+      expect(pool.query.mock.calls[0][0]).toContain('UNION');
+      expect(pool.query.mock.calls[1][0]).toContain('role_data_scopes');
+      expect(pool.query.mock.calls[1][0]).toContain('UNION');
+      expect(result).toEqual({
+        permissions: ['requests.view-all', 'ai-intelligence.use'],
+        dataScopes: { institute_ids: ['3', '4'] },
+        role: 'Procurement Specialist',
+        found: true,
+      });
     });
   });
 });

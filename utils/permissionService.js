@@ -407,8 +407,17 @@ const getPermissionsForUserId = async (userId) => {
     `SELECT u.role,
             COALESCE(ARRAY_AGG(DISTINCT p.code ORDER BY p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
        FROM users u
-       LEFT JOIN user_permissions up ON up.user_id = u.id
-       LEFT JOIN permissions p ON p.id = up.permission_id
+       LEFT JOIN LATERAL (
+         SELECT up.permission_id
+           FROM user_permissions up
+          WHERE up.user_id = u.id
+         UNION
+         SELECT rp.permission_id
+           FROM roles role_definition
+           JOIN role_permissions rp ON rp.role_id = role_definition.id
+          WHERE LOWER(BTRIM(role_definition.name)) = LOWER(BTRIM(u.role))
+       ) effective_permissions ON TRUE
+       LEFT JOIN permissions p ON p.id = effective_permissions.permission_id
       WHERE u.id = $1
       GROUP BY u.id, u.role`,
     [userId]
@@ -422,10 +431,21 @@ const getPermissionsForUserId = async (userId) => {
 
   const scopeRes = await pool.query(
     `SELECT ds.code,
-            COALESCE(ARRAY_AGG(DISTINCT uds.scope_value ORDER BY uds.scope_value) FILTER (WHERE uds.scope_value IS NOT NULL), '{}') AS values
-       FROM user_data_scopes uds
-       INNER JOIN data_scopes ds ON ds.id = uds.data_scope_id
-      WHERE uds.user_id = $1
+            COALESCE(ARRAY_AGG(DISTINCT effective_scopes.scope_value ORDER BY effective_scopes.scope_value)
+              FILTER (WHERE effective_scopes.scope_value IS NOT NULL), '{}') AS values
+       FROM users u
+       JOIN LATERAL (
+         SELECT uds.data_scope_id, uds.scope_value
+           FROM user_data_scopes uds
+          WHERE uds.user_id = u.id
+         UNION
+         SELECT rds.data_scope_id, rds.scope_value
+           FROM roles role_definition
+           JOIN role_data_scopes rds ON rds.role_id = role_definition.id
+          WHERE LOWER(BTRIM(role_definition.name)) = LOWER(BTRIM(u.role))
+       ) effective_scopes ON TRUE
+       INNER JOIN data_scopes ds ON ds.id = effective_scopes.data_scope_id
+      WHERE u.id = $1
       GROUP BY ds.code`,
     [userId]
   );

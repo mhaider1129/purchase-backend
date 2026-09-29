@@ -183,8 +183,10 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     if (!POSITION_TYPES.includes(type)) throw httpError(400, 'Invalid positionType');
     const active = payload.isActive ?? before?.is_active ?? true;
     const semanticHead = type === HEAD_TYPE[(await repo.get(unitId, client))?.unit_type];
-    const requestedHead = payload.isUnitHead ?? before?.is_unit_head ?? false;
-    if (requestedHead && !semanticHead) throw httpError(400, 'isUnitHead must match the canonical head position type');
+    // isUnitHead is derived from the unit and position types. Ignore the
+    // client-supplied flag so stale legacy data and older clients cannot make
+    // a valid edit fail or grant authority to a non-head position. The write
+    // below always normalizes the stored flag to this server-derived value.
     const isHead = semanticHead;
     if (active && (UNIQUE_AUTHORITIES.has(type) || isHead)) {
       const from=present(payload.effectiveFrom)?payload.effectiveFrom:before?.effective_from;

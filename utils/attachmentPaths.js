@@ -36,7 +36,9 @@ function serializeAttachment(row) {
   let downloadUrl = null;
 
   if (row.id) {
-    downloadUrl = `/api/attachments/${row.id}/download`;
+    // API clients are configured with `/api` as their base URL.  Returning an
+    // API-prefixed relative URL makes axios request `/api/api/...`.
+    downloadUrl = `/attachments/${row.id}/download`;
   }
 
   const result = {

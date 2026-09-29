@@ -32,7 +32,15 @@ async function legacyHeadCandidates(departmentId,instituteId,client){const r=awa
     AND (UPPER(COALESCE(u.role,''))='HOD' OR r.id IS NOT NULL)
   GROUP BY u.id,u.name,u.email,u.department_id,u.is_active,u.role
   ORDER BY u.name`,[departmentId,instituteId]);return r.rows;}
-async function reconciliationDecision(unitId,client){const r=await db(client).query(`SELECT * FROM organization_head_reconciliation_decisions WHERE organization_unit_id=$1 AND superseded_at IS NULL ORDER BY decided_at DESC,id DESC LIMIT 1`,[unitId]);return r.rows[0]||null;}
+async function reconciliationDecision(unitId,client){
+  try{const r=await db(client).query(`SELECT * FROM organization_head_reconciliation_decisions WHERE organization_unit_id=$1 AND superseded_at IS NULL ORDER BY decided_at DESC,id DESC LIMIT 1`,[unitId]);return r.rows[0]||null;}
+  catch(error){
+    // Discovery existed before durable decisions. Keep read-only health/preview
+    // available during migration 016 rollout; decision writes remain fail-closed.
+    if(error?.code==='42P01'||error?.code==='42703')return null;
+    throw error;
+  }
+}
 async function saveReconciliationDecision(data,client){
   if(!client)throw new TypeError('saveReconciliationDecision requires a transaction client');
   await client.query('UPDATE organization_head_reconciliation_decisions SET superseded_at=now() WHERE organization_unit_id=$1 AND superseded_at IS NULL',[data.unitId]);

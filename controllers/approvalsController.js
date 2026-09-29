@@ -985,6 +985,15 @@ const updateApprovalItems = async (req, res, next) => {
       await ensureWarehouseSupplyApprovalColumns(client);
     } else {
       await ensureRequestedItemApprovalColumns(client);
+
+      // A Warehouse Manager can convert purchase lines in this endpoint. The
+      // destination table may still be on the legacy schema even though the
+      // source is a regular purchase request, so prepare it before any item
+      // updates are attempted. Otherwise the later requested_item_id insert
+      // fails and rolls the entire item-decision transaction back with a 500.
+      if (items.some((item) => Boolean(item?.convert_to_warehouse_supply))) {
+        await ensureWarehouseSupplyApprovalColumns(client);
+      }
     }
 
     const targetTable = isWarehouseSupply ? 'warehouse_supply_items' : 'requested_items';

@@ -9,7 +9,8 @@ function requirePermissions(context, permissions) {
 }
 
 const TOOL_PERMISSIONS = Object.freeze({
-  get_request_summary: ['requests.view-all'],
+  // Record-level request authorization is delegated to the same authority as the normal request view.
+  get_request_summary: [],
   get_pending_approvals: [],
   get_procurement_cases: ['procurement-performance.view'],
   get_supplier_summary: ['procurement-performance.view'],

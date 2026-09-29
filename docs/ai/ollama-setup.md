@@ -64,6 +64,15 @@ optional provider selected with `AI_PROVIDER=openai`; its credentials are server
 Apply migrations 033 and 034 using the repository's reviewed manual-migration
 process, then grant `ai-intelligence.use` only to intended users or roles.
 
+## Audit failure policy
+
+AI execution is **fail-closed** when its dedicated audit records cannot be
+persisted. Failure to insert an interaction, insert a tool execution, or finish
+an interaction produces a controlled `503 AI_AUDIT_UNAVAILABLE` response. The
+failure is never swallowed and no successful AI response is returned without
+its required audit record. If recording a terminal failure also fails, the
+audit failure takes precedence because audit completeness cannot be asserted.
+
 ## Authenticated health check
 
 ```bash

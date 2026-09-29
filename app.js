@@ -367,7 +367,6 @@ const fixedAssetsRoutes = require('./routes/fixedAssets');
 const rfidRoutes = require('./routes/rfid');
 const rfidIngestionRoutes = require('./routes/rfidIngestion');
 const { createAiRouter } = require('./modules/ai-intelligence/routes');
-const { createAiRouter } = require('./modules/ai-intelligence/routes');
 
 const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
@@ -443,7 +442,6 @@ const protectedApiRoutes = [
   { path: '/assets', router: fixedAssetsRoutes },
   { path: '/rfid', router: rfidRoutes },
   { path: '/ai', router: aiRoutes },
-  { path: '/ai', router: createAiRouter() },
 ];
 
 const mountApiRoutes = router => {

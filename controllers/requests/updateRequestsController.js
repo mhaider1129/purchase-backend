@@ -818,6 +818,8 @@ const markRequestAsCompleted = async (req, res, next) => {
       `SELECT
          COALESCE(SUM(
            CASE
+             WHEN LOWER(TRIM(COALESCE(approval_status, ''))) = 'rejected'
+             THEN 0
              WHEN procurement_status IS NULL
                OR TRIM(procurement_status) = ''
                OR (
@@ -830,6 +832,8 @@ const markRequestAsCompleted = async (req, res, next) => {
          ), 0) AS missing_required,
          COALESCE(SUM(
            CASE
+             WHEN LOWER(TRIM(COALESCE(approval_status, ''))) = 'rejected'
+             THEN 0
              WHEN procurement_status IS NULL
                OR TRIM(procurement_status) = ''
              THEN 0

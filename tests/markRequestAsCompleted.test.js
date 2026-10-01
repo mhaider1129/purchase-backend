@@ -81,6 +81,9 @@ describe('markRequestAsCompleted', () => {
     await markRequestAsCompleted(req, res, next);
 
     const statusSummarySql = client.query.mock.calls[1][0];
+    expect(statusSummarySql).toMatch(
+      /LOWER\(TRIM\(COALESCE\(approval_status, ''\)\)\) = 'rejected'\s+THEN 0/g,
+    );
     expect(statusSummarySql).toContain("'not_procured'");
     expect(statusSummarySql).toContain("'canceled'");
     expect(statusSummarySql).toMatch(
@@ -106,6 +109,41 @@ describe('markRequestAsCompleted', () => {
       expect.stringContaining('marked as completed'),
     );
     expect(client.release).toHaveBeenCalled();
+  });
+
+  it('excludes approval-rejected items from both completion checks', async () => {
+    client.query
+      .mockResolvedValueOnce({}) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [{ missing_required: 0, invalid_status: 0 }],
+      })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          request_type: 'Purchase',
+          department_id: 3,
+          requester_id: null,
+          initiated_by_technician_id: null,
+        }],
+      })
+      .mockResolvedValueOnce({}) // update requests
+      .mockResolvedValueOnce({}) // insert request log
+      .mockResolvedValueOnce({}); // COMMIT
+
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await markRequestAsCompleted(buildRequest(), res, next);
+
+    const statusSummarySql = client.query.mock.calls[1][0];
+    expect(statusSummarySql.match(
+      /LOWER\(TRIM\(COALESCE\(approval_status, ''\)\)\) = 'rejected'\s+THEN 0/g,
+    )).toHaveLength(2);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({
+      message: '✅ Request marked as completed',
+      status: 'completed',
+    });
   });
 
   it('does not require a purchased quantity for not procured or canceled items', async () => {

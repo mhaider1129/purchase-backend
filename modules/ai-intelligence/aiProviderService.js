@@ -22,7 +22,7 @@ class InvalidProvider {
   }
 
   async healthCheck() {
-    return { status: 'unavailable', provider: this.name, model: null };
+    return { status: 'unavailable', provider: this.name, model: null, reason: 'AI_PROVIDER_CONFIGURATION_ERROR' };
   }
 
   async supportsTools() {

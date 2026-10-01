@@ -21,9 +21,12 @@ class OllamaProvider {
   async healthCheck() {
     try {
       const toolsSupported = await this.supportsTools();
-      return { status: toolsSupported ? 'available' : 'unavailable', provider: this.name, model: this.model };
-    } catch (_error) {
-      return { status: 'unavailable', provider: this.name, model: this.model };
+      return {
+        status: toolsSupported ? 'available' : 'unavailable', provider: this.name, model: this.model,
+        ...(!toolsSupported && { reason: 'AI_MODEL_TOOLS_UNSUPPORTED' }),
+      };
+    } catch (error) {
+      return { status: 'unavailable', provider: this.name, model: this.model, reason: error.code || 'AI_SERVICE_UNAVAILABLE' };
     }
   }
 

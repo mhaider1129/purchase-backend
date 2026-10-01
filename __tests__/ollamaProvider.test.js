@@ -25,7 +25,7 @@ describe('provider selection', () => {
   test('unknown provider fails safely without crashing router construction', async () => {
     const provider = createAiProvider({ environment: { AI_PROVIDER: 'sql-agent' } });
     await expect(provider.respond()).rejects.toMatchObject({ code: 'AI_PROVIDER_CONFIGURATION_ERROR', statusCode: 503 });
-    await expect(provider.healthCheck()).resolves.toEqual({ status: 'unavailable', provider: 'sql-agent', model: null });
+    await expect(provider.healthCheck()).resolves.toEqual({ status: 'unavailable', provider: 'sql-agent', model: null, reason: 'AI_PROVIDER_CONFIGURATION_ERROR' });
   });
 
   test('invalid Ollama configuration fails safely without crashing application setup', async () => {
@@ -46,7 +46,7 @@ describe('Ollama HTTP provider', () => {
   test('unavailable Ollama returns controlled health and chat errors', async () => {
     const fetch = jest.fn().mockRejectedValue(new Error('connection refused'));
     const provider = new OllamaProvider({ fetch });
-    await expect(provider.healthCheck()).resolves.toMatchObject({ status: 'unavailable' });
+    await expect(provider.healthCheck()).resolves.toMatchObject({ status: 'unavailable', reason: 'AI_SERVICE_UNAVAILABLE' });
     await expect(provider.respond({ systemInstruction: 'x', message: 'x', tools: [], executeTool: jest.fn() }))
       .rejects.toMatchObject({ code: 'AI_SERVICE_UNAVAILABLE', statusCode: 503 });
   });
@@ -97,7 +97,9 @@ describe('Ollama HTTP provider', () => {
 
   test('model without tool capability fails closed', async () => {
     const fetch = jest.fn().mockResolvedValue(jsonResponse({ capabilities: ['completion'] }));
-    await expect(new OllamaProvider({ fetch }).respond({ systemInstruction: 'x', message: 'x', tools: [tool], executeTool: jest.fn() }))
+    const provider = new OllamaProvider({ fetch });
+    await expect(provider.healthCheck()).resolves.toMatchObject({ status: 'unavailable', reason: 'AI_MODEL_TOOLS_UNSUPPORTED' });
+    await expect(provider.respond({ systemInstruction: 'x', message: 'x', tools: [tool], executeTool: jest.fn() }))
       .rejects.toMatchObject({ code: 'AI_MODEL_TOOLS_UNSUPPORTED' });
   });
 });

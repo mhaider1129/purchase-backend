@@ -84,8 +84,10 @@ curl --fail-with-body \
 
 An installed, tool-capable configured model returns `available`; an absent model,
 unsupported model, or stopped Ollama returns HTTP 503 with `unavailable`. The response
-never includes the base URL or a credential. Other Purchase Tracker modules continue
-operating when AI is unavailable.
+includes a safe `reason` code so the assistant can distinguish an unreachable service,
+invalid configuration, timeout, and a model without tool support. It never includes
+the base URL or a credential. Other Purchase Tracker modules continue operating when
+AI is unavailable.
 
 ## Changing models and resource considerations
 

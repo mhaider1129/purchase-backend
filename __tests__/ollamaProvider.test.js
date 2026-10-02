@@ -95,6 +95,46 @@ describe('Ollama HTTP provider', () => {
     expect(chatPayload).not.toHaveProperty('shell');
   });
 
+  test('model tool call may omit optional buyerId', async () => {
+    const attentionTool = { name: 'get_attention_items', description: 'Read attention items', parameters: { type: 'object', properties: { buyerId: { type: 'integer', minimum: 1 } }, additionalProperties: false } };
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'get_attention_items', arguments: {} } }] } }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', content: 'These cases need attention.' } }));
+    const executeTool = jest.fn().mockResolvedValue({ data: [], recordCount: 0 });
+    await new OllamaProvider({ fetch }).respond({ systemInstruction: 'read only', message: 'Show pending cases needing attention', tools: [attentionTool], executeTool });
+    expect(executeTool).toHaveBeenCalledWith('get_attention_items', {});
+    const schema = JSON.parse(fetch.mock.calls[1][1].body).tools[0].function.parameters;
+    expect(schema.required).toBeUndefined();
+  });
+
+  test('null optional filters reach the registry unchanged for consistent normalization', async () => {
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', tool_calls: [{ function: { name: 'get_attention_items', arguments: JSON.stringify({ buyerId: null, dateFrom: null }) } }] } }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', content: 'Done.' } }));
+    const executeTool = jest.fn().mockResolvedValue({ data: [], recordCount: 0 });
+    await new OllamaProvider({ fetch }).respond({ systemInstruction: 'x', message: 'x', tools: [], executeTool });
+    expect(executeTool).toHaveBeenCalledWith('get_attention_items', { buyerId: null, dateFrom: null });
+  });
+
+  test('invalid model arguments are returned to the model for correction within the iteration limit', async () => {
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', tool_calls: [{ function: { name: 'get_attention_items', arguments: { buyerId: 0 } } }] } }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', tool_calls: [{ function: { name: 'get_attention_items', arguments: {} } }] } }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', content: 'Corrected.' } }));
+    const invalid = Object.assign(new Error('buyerId must be a positive integer'), { code: 'AI_INVALID_PARAMETERS', statusCode: 400 });
+    const executeTool = jest.fn().mockRejectedValueOnce(invalid).mockResolvedValueOnce({ data: [], recordCount: 0 });
+    const result = await new OllamaProvider({ fetch, maxToolIterations: 3 }).respond({ systemInstruction: 'x', message: 'x', tools: [], executeTool });
+    expect(result.message).toBe('Corrected.');
+    expect(executeTool).toHaveBeenNthCalledWith(1, 'get_attention_items', { buyerId: 0 });
+    expect(executeTool).toHaveBeenNthCalledWith(2, 'get_attention_items', {});
+    const correctionPayload = JSON.parse(fetch.mock.calls[2][1].body);
+    expect(correctionPayload.messages.at(-1)).toMatchObject({ role: 'tool', tool_name: 'get_attention_items' });
+    expect(JSON.parse(correctionPayload.messages.at(-1).content)).toMatchObject({ error: { code: 'AI_INVALID_PARAMETERS', retryable: true } });
+  });
+
   test('unknown model-requested tool remains rejected by the registry callback', async () => {
     const fetch = jest.fn()
       .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))

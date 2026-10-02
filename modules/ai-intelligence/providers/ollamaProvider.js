@@ -75,7 +75,7 @@ class OllamaProvider {
       for (const call of calls) {
         const name = call?.function?.name;
         const parameters = normalizeArguments(call?.function?.arguments);
-        const result = await executeTool(name, parameters);
+        const result = await executeToolSafely(executeTool, name, parameters);
         messages.push({ role: 'tool', tool_name: name, content: JSON.stringify(result) });
       }
     }
@@ -84,6 +84,16 @@ class OllamaProvider {
 
   request(path, options) {
     return fetchJson({ fetchImplementation: this.fetch, url: `${this.baseUrl}${path}`, options, timeoutMs: this.timeoutMs });
+  }
+}
+
+async function executeToolSafely(executeTool, name, parameters) {
+  try {
+    return await executeTool(name, parameters);
+  } catch (error) {
+    if (error?.code !== 'AI_INVALID_PARAMETERS') throw error;
+    return { error: { code: error.code, message: error.message, retryable: true,
+      instruction: 'Correct the arguments and call the tool again. Omit optional arguments that the user did not specify.' } };
   }
 }
 

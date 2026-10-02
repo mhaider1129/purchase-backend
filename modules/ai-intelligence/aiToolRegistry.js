@@ -19,17 +19,18 @@ class AiToolRegistry {
     const tool=this.tools[name];
     if (!tool) throw aiError(400,'AI_UNKNOWN_TOOL',`Unknown AI tool: ${name}`);
     authorizeTool(context,name);
-    const validated=validators[name](parameters);
     const started=Date.now();
+    let validated;
     let result;
     try {
+      validated=validators[name](parameters);
       result=await tool.execute(validated,context);
       const resultBytes=Buffer.byteLength(JSON.stringify(result),'utf8');
       if (resultBytes > this.maxResultBytes) {
         throw aiError(413,'AI_TOOL_RESULT_TOO_LARGE','AI tool result is too large; narrow the requested filters');
       }
     } catch (error) {
-      await this.auditService.tool({interactionId,toolName:name,parameters:validated,resultMetadata:{},recordCount:null,elapsedMs:Date.now()-started,success:false,errorCode:error.code || 'AI_TOOL_ERROR'});
+      await this.auditService.tool({interactionId,toolName:name,parameters:validated || parameters,resultMetadata:{},recordCount:null,elapsedMs:Date.now()-started,success:false,errorCode:error.code || 'AI_TOOL_ERROR'});
       throw error;
     }
     const resultBytes=Buffer.byteLength(JSON.stringify(result),'utf8');

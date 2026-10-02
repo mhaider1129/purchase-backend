@@ -60,6 +60,10 @@ AI_MAX_TOOL_RESULT_BYTES=65536
 
 `OPENAI_API_KEY` and `OPENAI_MODEL` are not required for Ollama. OpenAI remains an
 optional provider selected with `AI_PROVIDER=openai`; its credentials are server-only.
+If `AI_PROVIDER` is omitted, the backend automatically keeps using OpenAI when both
+`OPENAI_API_KEY` and a model (`OPENAI_MODEL` or legacy `AI_MODEL`) are present. This
+prevents an existing OpenAI deployment from accidentally attempting localhost Ollama
+after an application upgrade. An explicit `AI_PROVIDER` always takes precedence.
 
 Apply migrations 033 and 034 using the repository's reviewed manual-migration
 process, then grant `ai-intelligence.use` only to intended users or roles.

@@ -8,7 +8,7 @@ class OpenAiProvider {
     const environment = options.environment || process.env;
     this.name = 'openai';
     this.apiKey = options.apiKey || environment.OPENAI_API_KEY || null;
-    this.model = options.model || environment.OPENAI_MODEL || null;
+    this.model = options.model || environment.OPENAI_MODEL || environment.AI_MODEL || null;
     this.timeoutMs = boundedInteger(options.timeoutMs ?? environment.AI_TIMEOUT_MS, 60000, {
       minimum: 1000, maximum: 300000, name: 'AI_TIMEOUT_MS',
     });

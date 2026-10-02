@@ -32,7 +32,14 @@ class InvalidProvider {
 
 function createAiProvider(options = {}) {
   const environment = options.environment || process.env;
-  const name = String(options.provider || environment.AI_PROVIDER || 'ollama').trim().toLowerCase();
+  const configuredProvider = options.provider || environment.AI_PROVIDER;
+  // Existing deployments pre-date AI_PROVIDER and already carry OpenAI
+  // credentials. Prefer that complete configuration rather than silently
+  // switching those installations to a local Ollama server that is not there.
+  const defaultProvider = environment.OPENAI_API_KEY && (environment.OPENAI_MODEL || environment.AI_MODEL)
+    ? 'openai'
+    : 'ollama';
+  const name = String(configuredProvider || defaultProvider).trim().toLowerCase();
   const factory = PROVIDERS[name];
   if (!factory) return new InvalidProvider(name);
   try {

@@ -93,6 +93,29 @@ describe('Ollama HTTP provider', () => {
     expect(chatPayload.tools[0].function.name).toBe('get_request_summary');
     expect(chatPayload).not.toHaveProperty('sql');
     expect(chatPayload).not.toHaveProperty('shell');
+    expect(chatPayload).toMatchObject({ think: false, keep_alive: '10m' });
+  });
+
+  test('reuses the model capability check and allows reasoning to be explicitly enabled', async () => {
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))
+      .mockResolvedValue(jsonResponse({ message: { role: 'assistant', content: 'Ready.' } }));
+    const provider = new OllamaProvider({ fetch, think: true, keepAlive: '20m' });
+
+    await expect(provider.healthCheck()).resolves.toMatchObject({ status: 'available' });
+    await expect(provider.respond({ systemInstruction: 'x', message: 'one', tools: [], executeTool: jest.fn() }))
+      .resolves.toMatchObject({ message: 'Ready.' });
+    await expect(provider.respond({ systemInstruction: 'x', message: 'two', tools: [], executeTool: jest.fn() }))
+      .resolves.toMatchObject({ message: 'Ready.' });
+
+    expect(fetch.mock.calls.filter(([url]) => url.endsWith('/api/show'))).toHaveLength(1);
+    const chatPayload = JSON.parse(fetch.mock.calls[1][1].body);
+    expect(chatPayload).toMatchObject({ think: true, keep_alive: '20m' });
+  });
+
+  test('rejects invalid latency configuration', async () => {
+    const provider = createAiProvider({ environment: { AI_PROVIDER: 'ollama', OLLAMA_THINK: 'sometimes' } });
+    await expect(provider.respond()).rejects.toMatchObject({ code: 'AI_PROVIDER_CONFIGURATION_ERROR', statusCode: 503 });
   });
 
   test('model tool call may omit optional buyerId', async () => {

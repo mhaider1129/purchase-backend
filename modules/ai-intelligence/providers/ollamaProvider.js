@@ -15,7 +15,16 @@ class OllamaProvider {
     this.maxToolIterations = boundedInteger(options.maxToolIterations ?? environment.AI_MAX_TOOL_ITERATIONS, 6, {
       minimum: 1, maximum: 20, name: 'AI_MAX_TOOL_ITERATIONS',
     });
+    // Qwen 3 enables its (comparatively expensive) reasoning mode by default.
+    // Procurement answers are grounded by our tools, so hidden chain-of-thought adds
+    // latency without adding data. It can still be enabled explicitly for a deployment.
+    this.think = parseBoolean(options.think ?? environment.OLLAMA_THINK, false, 'OLLAMA_THINK');
+    this.keepAlive = String(options.keepAlive ?? environment.OLLAMA_KEEP_ALIVE ?? '10m').trim();
+    if (!this.keepAlive || this.keepAlive.length > 32) {
+      throw aiError(503, 'AI_PROVIDER_CONFIGURATION_ERROR', 'OLLAMA_KEEP_ALIVE must be between 1 and 32 characters');
+    }
     this.fetch = options.fetch || global.fetch;
+    this.toolsSupportPromise = null;
   }
 
   async healthCheck() {
@@ -31,15 +40,23 @@ class OllamaProvider {
   }
 
   async supportsTools() {
+    if (this.toolsSupportPromise) return this.toolsSupportPromise;
+    this.toolsSupportPromise = this.inspectToolSupport();
     try {
-      const payload = await this.request('/api/show', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: this.model }),
-      });
-      return Array.isArray(payload.capabilities) && payload.capabilities.includes('tools');
+      return await this.toolsSupportPromise;
     } catch (error) {
+      // Do not permanently cache transient startup or network failures.
+      this.toolsSupportPromise = null;
       if (error.code === 'AI_PROVIDER_TIMEOUT') throw error;
       throw aiError(503, 'AI_SERVICE_UNAVAILABLE', 'Unable to inspect the configured Ollama model');
     }
+  }
+
+  async inspectToolSupport() {
+    const payload = await this.request('/api/show', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: this.model }),
+    });
+    return Array.isArray(payload.capabilities) && payload.capabilities.includes('tools');
   }
 
   async respond({ systemInstruction, message, context = {}, tools, executeTool }) {
@@ -62,7 +79,14 @@ class OllamaProvider {
       const payload = await this.request('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.model, messages, tools: ollamaTools, stream: false }),
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          tools: ollamaTools,
+          stream: false,
+          think: this.think,
+          keep_alive: this.keepAlive,
+        }),
       });
       const assistant = payload?.message;
       if (!assistant || typeof assistant !== 'object') {
@@ -85,6 +109,15 @@ class OllamaProvider {
   request(path, options) {
     return fetchJson({ fetchImplementation: this.fetch, url: `${this.baseUrl}${path}`, options, timeoutMs: this.timeoutMs });
   }
+}
+
+function parseBoolean(value, fallback, name) {
+  if (value == null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  throw aiError(503, 'AI_PROVIDER_CONFIGURATION_ERROR', `${name} must be true or false`);
 }
 
 async function executeToolSafely(executeTool, name, parameters) {

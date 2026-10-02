@@ -16,6 +16,26 @@ describe('provider selection', () => {
     expect(provider.model).toBe('qwen3:4b');
   });
 
+  test('existing OpenAI configuration is selected when AI_PROVIDER is unset', () => {
+    const provider = createAiProvider({ environment: { OPENAI_API_KEY: 'secret', OPENAI_MODEL: 'gpt-4.1-mini' } });
+    expect(provider.name).toBe('openai');
+    expect(provider.model).toBe('gpt-4.1-mini');
+  });
+
+  test('explicit provider takes precedence over auto-detection', () => {
+    const provider = createAiProvider({ environment: {
+      AI_PROVIDER: 'ollama', OPENAI_API_KEY: 'secret', OPENAI_MODEL: 'gpt-4.1-mini', OLLAMA_MODEL: 'qwen3:8b',
+    } });
+    expect(provider).toBeInstanceOf(OllamaProvider);
+    expect(provider.model).toBe('qwen3:8b');
+  });
+
+  test('generic AI_MODEL remains compatible with explicitly selected providers', () => {
+    expect(createAiProvider({ environment: { AI_PROVIDER: 'ollama', AI_MODEL: 'qwen3:8b' } }).model).toBe('qwen3:8b');
+    expect(createAiProvider({ environment: { AI_PROVIDER: 'openai', OPENAI_API_KEY: 'secret', AI_MODEL: 'gpt-4.1-mini' } }).model)
+      .toBe('gpt-4.1-mini');
+  });
+
   test('AI_PROVIDER=ollama selects configured Ollama', () => {
     const provider = createAiProvider({ environment: { AI_PROVIDER: 'ollama', OLLAMA_MODEL: 'mistral:latest' } });
     expect(provider).toBeInstanceOf(OllamaProvider);

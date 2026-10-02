@@ -7,7 +7,7 @@ class OllamaProvider {
   constructor(options = {}) {
     const environment = options.environment || process.env;
     this.name = 'ollama';
-    this.model = options.model || environment.OLLAMA_MODEL || 'qwen3:4b';
+    this.model = options.model || environment.OLLAMA_MODEL || environment.AI_MODEL || 'qwen3:4b';
     this.baseUrl = normalizeBaseUrl(options.baseUrl || environment.OLLAMA_BASE_URL || 'http://127.0.0.1:11434');
     this.timeoutMs = boundedInteger(options.timeoutMs ?? environment.AI_TIMEOUT_MS, 60000, {
       minimum: 1000, maximum: 300000, name: 'AI_TIMEOUT_MS',

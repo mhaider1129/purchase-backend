@@ -56,7 +56,16 @@ OLLAMA_MODEL=qwen3:4b
 AI_TIMEOUT_MS=60000
 AI_MAX_TOOL_ITERATIONS=6
 AI_MAX_TOOL_RESULT_BYTES=65536
+OLLAMA_THINK=false
+OLLAMA_KEEP_ALIVE=10m
 ```
+
+`OLLAMA_THINK=false` avoids Qwen 3's lengthy hidden reasoning pass. The assistant's
+procurement facts remain grounded in the same read-only tools. Set it to `true` only
+when the additional model reasoning is worth the increased response time.
+`OLLAMA_KEEP_ALIVE` keeps the model loaded between requests so repeated analyses do
+not pay the model-loading cost. The backend also caches the model's tool-capability
+check after the first successful inspection; transient inspection failures are retried.
 
 `OPENAI_API_KEY` and `OPENAI_MODEL` are not required for Ollama. OpenAI remains an
 optional provider selected with `AI_PROVIDER=openai`; its credentials are server-only.

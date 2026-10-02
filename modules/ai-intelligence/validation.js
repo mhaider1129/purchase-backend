@@ -3,23 +3,34 @@
 const { aiError } = require('./aiErrors');
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
+const omitted = value => value == null || (typeof value === 'string' && value.trim() === '');
 const integer = (value, name) => {
+  if (omitted(value)) throw aiError(400, 'AI_INVALID_PARAMETERS', `${name} must be a positive integer`);
+  if (typeof value !== 'number' && typeof value !== 'string') throw aiError(400, 'AI_INVALID_PARAMETERS', `${name} must be a positive integer`);
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw aiError(400, 'AI_INVALID_PARAMETERS', `${name} must be a positive integer`);
   return parsed;
 };
-const optionalInteger = (value, name) => value == null ? undefined : integer(value, name);
-const limit = value => value == null ? 50 : Math.min(integer(value, 'limit'), 200);
+const optionalInteger = (value, name) => omitted(value) ? undefined : integer(value, name);
+const limit = value => {
+  if (omitted(value)) return 50;
+  const parsed = integer(value, 'limit');
+  if (parsed > 200) throw aiError(400, 'AI_INVALID_PARAMETERS', 'limit must not exceed 200');
+  return parsed;
+};
 const date = (value, name, required = false) => {
-  if (value == null && !required) return undefined;
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+  if (omitted(value) && !required) return undefined;
+  const parsed = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00Z`)
+    : null;
+  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
     throw aiError(400, 'AI_INVALID_PARAMETERS', `${name} must be a valid YYYY-MM-DD date`);
   }
   return value;
 };
 const text = (value, name) => {
-  if (value == null) return undefined;
-  if (typeof value !== 'string' || !value.trim() || value.length > 100) throw aiError(400, 'AI_INVALID_PARAMETERS', `${name} must be a non-empty string`);
+  if (omitted(value)) return undefined;
+  if (typeof value !== 'string' || value.length > 100) throw aiError(400, 'AI_INVALID_PARAMETERS', `${name} must be a non-empty string`);
   return value.trim();
 };
 function only(input, allowed) {

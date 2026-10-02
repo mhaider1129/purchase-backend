@@ -52,11 +52,21 @@ class OpenAiProvider {
         let parameters;
         try { parameters = JSON.parse(call.arguments || '{}'); }
         catch (_error) { throw aiError(502, 'AI_PROVIDER_INVALID_RESPONSE', 'AI provider returned malformed tool parameters'); }
-        const result = await executeTool(call.name, parameters);
+        const result = await executeToolSafely(executeTool, call.name, parameters);
         input.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(result) });
       }
     }
     throw aiError(502, 'AI_PROVIDER_TOOL_LIMIT', `AI provider exceeded ${this.maxToolIterations} tool iterations`);
+  }
+}
+
+async function executeToolSafely(executeTool, name, parameters) {
+  try {
+    return await executeTool(name, parameters);
+  } catch (error) {
+    if (error?.code !== 'AI_INVALID_PARAMETERS') throw error;
+    return { error: { code: error.code, message: error.message, retryable: true,
+      instruction: 'Correct the arguments and call the tool again. Omit optional arguments that the user did not specify.' } };
   }
 }
 

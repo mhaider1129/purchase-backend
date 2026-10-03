@@ -9,6 +9,8 @@ jest.mock('../utils/ensureRequestedItemFinancialsTable', () => ({
 
 const pool = require('../config/db');
 const { addProcurementItemEvent, decideProcurementOverage } = require('../controllers/requests/procurementItemEventsController');
+const fs = require('fs');
+const path = require('path');
 
 const buildResponse = () => {
   const res = { status: jest.fn(), json: jest.fn() };
@@ -377,5 +379,17 @@ describe('procurement item events', () => {
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('overage_decided_by = $3'), [100, 103, 7, 'MOQ accepted', 31]);
     expect(client.query).toHaveBeenCalledWith('COMMIT');
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Over-quantity request approved.' }));
+  });
+
+  it('ships the decision audit columns required by the overage endpoint', () => {
+    const migration = fs.readFileSync(
+      path.join(__dirname, '../sql/migrations/20261003_procurement_event_overage_decisions.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS overage_decided_by INTEGER');
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS overage_decided_at TIMESTAMP');
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS overage_decision_note TEXT');
+    expect(migration).toContain('procurement_item_events_overage_decided_by_fkey');
   });
 });

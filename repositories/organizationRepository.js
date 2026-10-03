@@ -22,12 +22,11 @@ async function legacyHeadCandidates(departmentId,instituteId,client){const r=awa
   SELECT DISTINCT u.id,u.name,u.email,u.department_id,u.is_active,
     ARRAY_REMOVE(ARRAY[
       CASE WHEN UPPER(COALESCE(u.role,''))='HOD' THEN 'users.role=HOD' END,
-      CASE WHEN bool_or(r.id IS NOT NULL) THEN 'user_roles→roles.name=HOD' END,
+      CASE WHEN bool_or(r.id IS NOT NULL) THEN 'users.role→roles.name=HOD' END,
       CASE WHEN u.department_id=$1 THEN 'users.department_id' END
     ],NULL) evidence
   FROM users u
-  LEFT JOIN user_roles ur ON ur.user_id=u.id
-  LEFT JOIN roles r ON r.id=ur.role_id AND UPPER(r.name)='HOD'
+  LEFT JOIN roles r ON LOWER(BTRIM(r.name))=LOWER(BTRIM(u.role)) AND UPPER(BTRIM(r.name))='HOD'
   WHERE u.institute_id=$2 AND u.department_id=$1
     AND (UPPER(COALESCE(u.role,''))='HOD' OR r.id IS NOT NULL)
   GROUP BY u.id,u.name,u.email,u.department_id,u.is_active,u.role

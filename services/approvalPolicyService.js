@@ -51,7 +51,7 @@ async function validateVersionReadiness(version,actor,client=pool){
         if(!user||String(user.institute_id)!==String(actor.instituteId))diagnostic('ERROR','FIXED_USER_INVALID','Fixed user is missing or belongs to another institute',{stepId:step.id});else if(!user.is_active)diagnostic('ERROR','FIXED_USER_INACTIVE','Fixed user is inactive',{stepId:step.id});
       }else if(step.resolverType==='CAPABILITY_HOLDER'||engine.CAPABILITY_ALIASES[step.resolverType]){
         const code=engine.CAPABILITY_ALIASES[step.resolverType]||step.resolverReference;
-        const count=Number((await client.query(`SELECT count(DISTINCT u.id)::int count FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE p.code=$1 AND u.institute_id=$2 AND COALESCE(u.is_active,true)`,[code,actor.instituteId])).rows[0]?.count||0);
+        const count=Number((await client.query(`SELECT count(DISTINCT u.id)::int count FROM users u JOIN roles r ON LOWER(BTRIM(r.name))=LOWER(BTRIM(u.role)) JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE p.code=$1 AND u.institute_id=$2 AND COALESCE(u.is_active,true)`,[code,actor.instituteId])).rows[0]?.count||0);
         if(count===0)diagnostic('WARNING','CAPABILITY_VACANT','Capability has no current active holder',{stepId:step.id});else if(count>1)diagnostic('ERROR','CAPABILITY_AMBIGUOUS','Capability has multiple current holders',{stepId:step.id});
       }
     }

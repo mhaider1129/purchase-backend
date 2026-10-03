@@ -18,7 +18,7 @@ class AiService {
     const interactionId=await this.auditService.start({userId:context.userId,instituteId:context.instituteIds[0],sessionId:conversationId,provider:this.provider.name,model:this.provider.model});
     const collected=[];
     try {
-      const response=await this.provider.respond({systemInstruction:SYSTEM_INSTRUCTION,message:request.message,context:request.context,tools:this.registry.definitions(),executeTool:async(name,parameters)=>{const result=await this.registry.execute({name,parameters,context,interactionId});collected.push({name,result});return result;}});
+      const response=await this.provider.respond({systemInstruction:SYSTEM_INSTRUCTION,message:request.message,context:request.context,tools:this.registry.definitions(),requestId:interactionId,executeTool:async(name,parameters)=>{const result=await this.registry.execute({name,parameters,context,interactionId});collected.push({name,result});return result;}});
       const result={conversationId,message:response.message || 'No response was generated.',sources:dedupe(collected.flatMap(entry=>entry.result.sources || [])),toolsUsed:collected.map(entry=>entry.name),warnings:collected.flatMap(entry=>entry.result.warnings || []),coverage:Object.assign({},...collected.map(entry=>entry.result.coverage || {})),suggestedActions:[]};
       await this.auditService.finish(interactionId,'COMPLETED',{provider:this.provider.name,tool_count:collected.length,source_count:result.sources.length,duration_ms:Date.now()-startedAt});
       return result;

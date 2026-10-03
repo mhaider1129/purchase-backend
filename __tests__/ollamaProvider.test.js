@@ -96,6 +96,76 @@ describe('Ollama HTTP provider', () => {
     expect(chatPayload).toMatchObject({ think: false, keep_alive: '10m' });
   });
 
+  test('emits safe iteration and tool diagnostics with Ollama timing metadata', async () => {
+    const logger = { info: jest.fn() };
+    const secretPrompt = 'show private procurement record SECRET-987654';
+    const secretResult = { data: [{ notes: 'CONFIDENTIAL-TOOL-RESULT' }], recordCount: 1 };
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))
+      .mockResolvedValueOnce(jsonResponse({
+        message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'get_request_summary', arguments: { requestId: 42 } } }] },
+        total_duration: 3_370_000_000,
+        load_duration: 2_830_000_000,
+        prompt_eval_count: 123,
+        prompt_eval_duration: 340_000_000,
+        eval_count: 8,
+        eval_duration: 150_000_000,
+        done_reason: 'stop',
+      }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', content: 'Request 42 is pending.' } }));
+    const executeTool = jest.fn().mockResolvedValue(secretResult);
+
+    const result = await new OllamaProvider({ fetch, logger }).respond({
+      systemInstruction: 'SYSTEM POLICY THAT MUST NOT BE LOGGED', message: secretPrompt,
+      requestId: 'interaction-123', tools: [tool], executeTool,
+    });
+
+    expect(result).toEqual({ message: 'Request 42 is pending.', model: 'qwen3:4b' });
+    const iteration = logger.info.mock.calls.map(([entry]) => entry)
+      .find(entry => entry.event === 'ai.ollama.iteration' && entry.iteration === 1);
+    expect(iteration).toMatchObject({
+      requestId: 'interaction-123', iteration: 1, model: 'qwen3:4b', think: false,
+      messageCount: 2, toolCount: 1, success: true, toolCallCount: 1,
+      totalDurationMs: 3370, loadDurationMs: 2830, promptEvalCount: 123,
+      promptEvalDurationMs: 340, evalCount: 8, evalDurationMs: 150, doneReason: 'stop',
+    });
+    expect(iteration.requestPayloadBytes).toBeGreaterThan(iteration.messagesBytes);
+    expect(iteration.toolSchemaBytes).toBeGreaterThan(0);
+    expect(iteration.toolResultBytes).toBe(0);
+    const secondIteration = logger.info.mock.calls.map(([entry]) => entry)
+      .find(entry => entry.event === 'ai.ollama.iteration' && entry.iteration === 2);
+    expect(secondIteration.toolResultBytes).toBe(Buffer.byteLength(JSON.stringify(secretResult)));
+    expect(secondIteration.ollamaRequestElapsedMs).toEqual(expect.any(Number));
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'ai.tool.execution', requestId: 'interaction-123', iteration: 1,
+      toolName: 'get_request_summary', executionElapsedMs: expect.any(Number),
+      resultBytes: Buffer.byteLength(JSON.stringify(secretResult)), success: true,
+      retryableValidationError: false,
+    }));
+    const diagnostics = JSON.stringify(logger.info.mock.calls);
+    expect(diagnostics).not.toContain(secretPrompt);
+    expect(diagnostics).not.toContain('SYSTEM POLICY THAT MUST NOT BE LOGGED');
+    expect(diagnostics).not.toContain('CONFIDENTIAL-TOOL-RESULT');
+  });
+
+  test('logs retryable validation result metadata without changing correction behavior', async () => {
+    const logger = jest.fn();
+    const invalid = Object.assign(new Error('private invalid argument details'), { code: 'AI_INVALID_PARAMETERS' });
+    const fetch = jest.fn()
+      .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', tool_calls: [{ function: { name: 'get_attention_items', arguments: { buyerId: 0 } } }] } }))
+      .mockResolvedValueOnce(jsonResponse({ message: { role: 'assistant', content: 'Corrected.' } }));
+
+    await expect(new OllamaProvider({ fetch, logger }).respond({
+      systemInstruction: 'x', message: 'x', tools: [], executeTool: jest.fn().mockRejectedValue(invalid),
+    })).resolves.toMatchObject({ message: 'Corrected.' });
+    expect(logger).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'ai.tool.execution', toolName: 'get_attention_items',
+      resultBytes: expect.any(Number), success: false, retryableValidationError: true,
+    }));
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('private invalid argument details');
+  });
+
   test('reuses the model capability check and allows reasoning to be explicitly enabled', async () => {
     const fetch = jest.fn()
       .mockResolvedValueOnce(jsonResponse({ capabilities: ['tools'] }))

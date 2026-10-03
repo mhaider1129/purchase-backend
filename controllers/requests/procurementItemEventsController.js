@@ -446,6 +446,7 @@ const decideProcurementOverage = async (req, res, next) => {
     return res.json({ message: `Over-quantity request ${decision}.`, item: updatedItem });
   } catch (err) {
     await client.query('ROLLBACK');
+    console.error('❌ Failed to decide procurement overage:', err.message);
     return next(err.statusCode ? err : createHttpError(500, 'Failed to decide over-quantity request'));
   } finally {
     client.release();

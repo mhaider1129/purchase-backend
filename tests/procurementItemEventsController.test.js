@@ -8,7 +8,7 @@ jest.mock('../utils/ensureRequestedItemFinancialsTable', () => ({
 }));
 
 const pool = require('../config/db');
-const { addProcurementItemEvent } = require('../controllers/requests/procurementItemEventsController');
+const { addProcurementItemEvent, decideProcurementOverage } = require('../controllers/requests/procurementItemEventsController');
 
 const buildResponse = () => {
   const res = { status: jest.fn(), json: jest.fn() };
@@ -342,5 +342,40 @@ describe('procurement item events', () => {
         procurement_status: 'partially_procured',
       }),
     }));
+  });
+
+  it('approves an over-quantity event and records the decision audit details', async () => {
+    const client = { query: jest.fn(), release: jest.fn() };
+    client.query.mockImplementation(async (sql, params) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (/FROM public\.procurement_item_events pie/.test(sql)) {
+        return { rowCount: 1, rows: [{
+          id: 31, request_id: 10, requested_item_id: 20, item_name: 'Gloves',
+          event_quantity: 3, purchased_quantity: 100, unit_cost: 5,
+          current_unit_cost: 5, current_total_cost: 500, overage_approval_status: 'pending',
+        }] };
+      }
+      if (/UPDATE public\.requested_items/.test(sql)) {
+        return { rowCount: 1, rows: [{ id: 20, purchased_quantity: params[0], total_cost: params[2] }] };
+      }
+      if (/UPDATE public\.procurement_item_events/.test(sql)) return { rowCount: 1 };
+      if (/COUNT\(\*\)::int AS total_items/.test(sql)) {
+        return { rows: [{ total_items: 1, fully_procured_items: 1, started_items: 1 }] };
+      }
+      if (/UPDATE requests/.test(sql) || /INSERT INTO request_logs/.test(sql)) return { rowCount: 1 };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ decision: 'approved', decision_note: 'MOQ accepted' }, { role: 'SCM' });
+    req.params.eventId = '31';
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await decideProcurementOverage(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('overage_decided_by = $3'), [100, 103, 7, 'MOQ accepted', 31]);
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Over-quantity request approved.' }));
   });
 });

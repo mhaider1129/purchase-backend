@@ -15,7 +15,7 @@ executive office and resolving its executive head. `MEDICAL` and `OPERATIONAL`
 classification remain reporting and future-policy attributes; they neither establish
 the reporting parent nor imply CMO/COO approval.
 
-Legacy HOD discovery combines the existing `users.role`/`user_roles` HOD evidence with
+Legacy HOD discovery combines the existing `users.role`/`roles` HOD evidence with
 the user's department link. It is reconciliation input only. Administrators must
 review assignments, configured organization heads are never automatically replaced,
 and bulk reconciliation accepts only one active, same-institute, unambiguously linked

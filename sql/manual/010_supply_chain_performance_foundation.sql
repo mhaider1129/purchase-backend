@@ -189,3 +189,5 @@ VALUES
  ('procurement-performance.view-executive','View executive procurement performance','View executive aggregate reporting'),
  ('procurement-performance.manage-highlights','Manage strategic case highlights','Manage evidence-linked strategic highlights')
 ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description;
+
+COMMIT;

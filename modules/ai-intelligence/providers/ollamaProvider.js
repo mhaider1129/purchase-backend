@@ -2,6 +2,7 @@
 
 const { aiError } = require('../aiErrors');
 const { boundedInteger, normalizeBaseUrl, fetchJson } = require('./providerUtils');
+const { log } = require('../../../utils/observability');
 
 class OllamaProvider {
   constructor(options = {}) {
@@ -24,6 +25,7 @@ class OllamaProvider {
       throw aiError(503, 'AI_PROVIDER_CONFIGURATION_ERROR', 'OLLAMA_KEEP_ALIVE must be between 1 and 32 characters');
     }
     this.fetch = options.fetch || global.fetch;
+    this.logger = options.logger || (metadata => log('info', metadata.event, metadata));
     this.toolsSupportPromise = null;
   }
 
@@ -59,7 +61,7 @@ class OllamaProvider {
     return Array.isArray(payload.capabilities) && payload.capabilities.includes('tools');
   }
 
-  async respond({ systemInstruction, message, context = {}, tools, executeTool }) {
+  async respond({ systemInstruction, message, context = {}, tools, executeTool, requestId }) {
     if (!this.model) throw aiError(503, 'AI_PROVIDER_CONFIGURATION_ERROR', 'OLLAMA_MODEL is required');
     if (!(await this.supportsTools())) {
       throw aiError(503, 'AI_MODEL_TOOLS_UNSUPPORTED', 'The configured Ollama model does not advertise tool support');
@@ -76,31 +78,82 @@ class OllamaProvider {
     }));
 
     for (let iteration = 0; iteration < this.maxToolIterations; iteration += 1) {
-      const payload = await this.request('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          tools: ollamaTools,
-          stream: false,
-          think: this.think,
-          keep_alive: this.keepAlive,
-        }),
-      });
+      const requestPayload = {
+        model: this.model,
+        messages,
+        tools: ollamaTools,
+        stream: false,
+        think: this.think,
+        keep_alive: this.keepAlive,
+      };
+      const body = JSON.stringify(requestPayload);
+      const requestMetadata = {
+        event: 'ai.ollama.iteration',
+        requestId: requestId ?? null,
+        iteration: iteration + 1,
+        model: this.model,
+        think: this.think,
+        messageCount: messages.length,
+        toolCount: ollamaTools.length,
+        requestPayloadBytes: byteLength(body),
+        messagesBytes: serializedBytes(messages),
+        toolSchemaBytes: serializedBytes(ollamaTools),
+        toolResultBytes: messages
+          .filter(entry => entry?.role === 'tool')
+          .reduce((total, entry) => total + byteLength(entry.content), 0),
+      };
+      const requestStarted = Date.now();
+      let payload;
+      try {
+        payload = await this.request('/api/chat', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        });
+      } catch (error) {
+        this.logDiagnostic({
+          ...requestMetadata,
+          ollamaRequestElapsedMs: Date.now() - requestStarted,
+          success: false,
+          errorCode: error?.code || 'AI_SERVICE_UNAVAILABLE',
+        });
+        throw error;
+      }
       const assistant = payload?.message;
+      const calls = Array.isArray(assistant?.tool_calls) ? assistant.tool_calls : [];
+      this.logDiagnostic({
+        ...requestMetadata,
+        ollamaRequestElapsedMs: Date.now() - requestStarted,
+        success: true,
+        ...ollamaTimingMetadata(payload),
+        toolCallCount: calls.length,
+      });
       if (!assistant || typeof assistant !== 'object') {
         throw aiError(502, 'AI_PROVIDER_INVALID_RESPONSE', 'Ollama returned an invalid chat response');
       }
       messages.push(assistant);
-      const calls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
       if (!calls.length) return { message: assistant.content || 'No response was generated.', model: this.model };
 
       for (const call of calls) {
         const name = call?.function?.name;
         const parameters = normalizeArguments(call?.function?.arguments);
-        const result = await executeToolSafely(executeTool, name, parameters);
-        messages.push({ role: 'tool', tool_name: name, content: JSON.stringify(result) });
+        const toolStarted = Date.now();
+        let result;
+        try {
+          result = await executeToolSafely(executeTool, name, parameters);
+        } catch (error) {
+          this.logDiagnostic({ event: 'ai.tool.execution', requestId: requestId ?? null,
+            iteration: iteration + 1, toolName: name || null, executionElapsedMs: Date.now() - toolStarted,
+            resultBytes: null, success: false, retryableValidationError: false,
+            errorCode: error?.code || 'AI_TOOL_ERROR' });
+          throw error;
+        }
+        const serializedResult = JSON.stringify(result);
+        const retryableValidationError = result?.error?.code === 'AI_INVALID_PARAMETERS'
+          && result?.error?.retryable === true;
+        this.logDiagnostic({ event: 'ai.tool.execution', requestId: requestId ?? null,
+          iteration: iteration + 1, toolName: name || null, executionElapsedMs: Date.now() - toolStarted,
+          resultBytes: byteLength(serializedResult), success: !retryableValidationError,
+          retryableValidationError });
+        messages.push({ role: 'tool', tool_name: name, content: serializedResult });
       }
     }
     throw aiError(502, 'AI_PROVIDER_TOOL_LIMIT', `AI provider exceeded ${this.maxToolIterations} tool iterations`);
@@ -109,6 +162,39 @@ class OllamaProvider {
   request(path, options) {
     return fetchJson({ fetchImplementation: this.fetch, url: `${this.baseUrl}${path}`, options, timeoutMs: this.timeoutMs });
   }
+
+  logDiagnostic(metadata) {
+    try {
+      if (typeof this.logger === 'function') this.logger(metadata);
+      else if (typeof this.logger?.info === 'function') this.logger.info(metadata);
+    } catch (_error) {
+      // Diagnostics must never alter provider behavior.
+    }
+  }
+}
+
+function byteLength(value) {
+  return Buffer.byteLength(typeof value === 'string' ? value : '', 'utf8');
+}
+
+function serializedBytes(value) {
+  return byteLength(JSON.stringify(value));
+}
+
+function nanosecondsToMilliseconds(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value / 1e6 : undefined;
+}
+
+function ollamaTimingMetadata(payload) {
+  return Object.fromEntries(Object.entries({
+    totalDurationMs: nanosecondsToMilliseconds(payload?.total_duration),
+    loadDurationMs: nanosecondsToMilliseconds(payload?.load_duration),
+    promptEvalCount: Number.isFinite(payload?.prompt_eval_count) ? payload.prompt_eval_count : undefined,
+    promptEvalDurationMs: nanosecondsToMilliseconds(payload?.prompt_eval_duration),
+    evalCount: Number.isFinite(payload?.eval_count) ? payload.eval_count : undefined,
+    evalDurationMs: nanosecondsToMilliseconds(payload?.eval_duration),
+    doneReason: typeof payload?.done_reason === 'string' ? payload.done_reason : undefined,
+  }).filter(([, value]) => value !== undefined));
 }
 
 function parseBoolean(value, fallback, name) {

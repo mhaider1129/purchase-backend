@@ -2,7 +2,7 @@ const service=require('../services/organizationService').createOrganizationServi
 const reconciliation=require('../services/organizationReconciliationService').createOrganizationReconciliationService();
 const wrap=fn=>async(req,res,next)=>{try{await fn(req,res);}catch(e){next(e);}};
 const actor=(req,p={})=>({...p,instituteId:req.user.institute_id,actorId:req.user.id});
-const scope=(req,p={})=>({...p,instituteId:req.user.institute_id});
+const scope=(req,p={})=>({...p,institute:req.user.institute_id});
 const scopedUnit=async(req,id=req.params.id)=>{const unit=await service.repo.get(id);if(!unit||String(unit.institute_id)!==String(req.user.institute_id)){const error=new Error('Organization unit not found');error.statusCode=404;throw error;}return unit;};
 const scopedPosition=async(req)=>{const position=await service.repo.getPosition(req.params.positionId);if(!position||String(position.institute_id)!==String(req.user.institute_id)){const error=new Error('Organization position not found');error.statusCode=404;throw error;}return position;};
 exports.tree=wrap(async(req,res)=>res.json(await service.tree(scope(req,req.query))));

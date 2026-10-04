@@ -36,9 +36,9 @@ async function resolveStep(step, facts, dependencies) {
   let result;
   try {
     if(step.resolverType==='REQUESTER') result={userId:facts.requesterId,userName:facts.requesterName,source:'REQUEST'};
-    else if(step.resolverType==='DEPARTMENT_HEAD') result=await dependencies.organization.resolveDepartmentHead(facts.departmentId);
-    else if(step.resolverType==='SECTION_HEAD') result=await dependencies.organization.resolveSectionHead(facts.sectionId);
-    else if(step.resolverType==='EXECUTIVE_OWNER') result=await dependencies.organization.resolveExecutiveOwner(facts.departmentId);
+    else if(step.resolverType==='DEPARTMENT_HEAD') result=await dependencies.organization.resolveDepartmentHead(facts.departmentId,facts.instituteId);
+    else if(step.resolverType==='SECTION_HEAD') result=await dependencies.organization.resolveSectionHead(facts.sectionId,facts.instituteId);
+    else if(step.resolverType==='EXECUTIVE_OWNER') result=await dependencies.organization.resolveExecutiveOwner(facts.departmentId,facts.instituteId);
     else if(step.resolverType==='POSITION') result=await dependencies.organization.resolvePosition(step.resolverReference,facts.instituteId);
     else if(step.resolverType==='FIXED_USER'||step.resolverType==='FIXED_AUTHORITY') result=await dependencies.resolveFixedUser(step.resolverReference,facts.instituteId);
     else result=await dependencies.resolveCapability(capabilityAliases[step.resolverType]||step.resolverReference,facts.instituteId);

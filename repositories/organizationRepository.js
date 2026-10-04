@@ -16,7 +16,10 @@ async function list(filters={}, client) {
 async function get(id,client,options={}){const lock=options.lock?' FOR UPDATE OF u':'';const r=await db(client).query(`SELECT ${fields} FROM organization_units u LEFT JOIN departments d ON d.id=u.department_id LEFT JOIN sections s ON s.id=u.section_id LEFT JOIN organization_units p ON p.id=u.parent_unit_id WHERE u.id=$1${lock}`,[id]);return r.rows[0];}
 async function ancestors(id,client){const r=await db(client).query(`WITH RECURSIVE a AS (SELECT *,0 depth FROM organization_units WHERE id=$1 UNION ALL SELECT p.*,a.depth+1 FROM organization_units p JOIN a ON a.parent_unit_id=p.id) SELECT * FROM a WHERE id<>$1 ORDER BY depth DESC`,[id]);return r.rows;}
 async function descendants(id,client){const r=await db(client).query(`WITH RECURSIVE d AS (SELECT *,0 depth FROM organization_units WHERE id=$1 UNION ALL SELECT c.*,d.depth+1 FROM organization_units c JOIN d ON c.parent_unit_id=d.id) SELECT * FROM d WHERE id<>$1 ORDER BY depth,sort_order,name`,[id]);return r.rows;}
-async function positions(id,client){const r=await db(client).query(`SELECT p.*,u.name user_name,u.email user_email FROM organization_positions p LEFT JOIN users u ON u.id=p.user_id WHERE organization_unit_id=$1 ORDER BY is_active DESC,is_unit_head DESC,id`,[id]);return r.rows;}
+async function positions(id,client,instituteId){const values=[id];const scope=instituteId==null?'':` AND ou.institute_id=$${values.push(instituteId)}`;const r=await db(client).query(`SELECT p.*,u.name user_name,u.email user_email,u.is_active user_is_active
+  FROM organization_positions p JOIN organization_units ou ON ou.id=p.organization_unit_id
+  LEFT JOIN users u ON u.id=p.user_id AND u.institute_id=ou.institute_id
+  WHERE p.organization_unit_id=$1${scope} ORDER BY p.is_active DESC,p.is_unit_head DESC,p.id`,values);return r.rows;}
 async function getPosition(id,client){const r=await db(client).query('SELECT p.*,ou.institute_id FROM organization_positions p JOIN organization_units ou ON ou.id=p.organization_unit_id WHERE p.id=$1',[id]);return r.rows[0];}
 async function legacyHeadCandidates(departmentId,instituteId,client){const r=await db(client).query(`
   SELECT DISTINCT u.id,u.name,u.email,u.department_id,u.is_active,

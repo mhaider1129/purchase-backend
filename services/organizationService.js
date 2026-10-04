@@ -1,5 +1,6 @@
 const defaultRepository = require('../repositories/organizationRepository');
 const defaultAudit = require('./auditService').writeAuditEvent;
+const { createOrganizationAuthorityService } = require('./organizationAuthorityService');
 
 const TYPES = ['INSTITUTE', 'EXECUTIVE_OFFICE', 'DIRECTORATE', 'DEPARTMENT', 'SECTION', 'UNIT'];
 const POSITION_TYPES = ['UNIT_HEAD', 'EXECUTIVE_HEAD', 'DEPARTMENT_HEAD', 'SECTION_HEAD', 'CUSTOM'];
@@ -16,6 +17,7 @@ const previousDay=value=>{const date=new Date(`${dateOnly(value)}T00:00:00Z`);da
 const periodsOverlap=(aFrom,aTo,bFrom,bTo)=>(!aTo||!bFrom||dateOnly(aTo)>=dateOnly(bFrom))&&(!bTo||!aFrom||dateOnly(bTo)>=dateOnly(aFrom));
 
 function createOrganizationService(repo = defaultRepository, audit = defaultAudit) {
+  const authority = createOrganizationAuthorityService(repo);
   const transaction = async work => {
     const client = await repo.pool.connect();
     try {
@@ -55,30 +57,25 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
   const getOrganizationalPath = async (id, client) => [...await repo.ancestors(id, client), await repo.get(id, client)].filter(Boolean);
 
   const resolvePositionHolder = async (unitId, type, client) => {
-    const matches = (await repo.positions(unitId, client)).filter(position => position.position_type === type && effective(position));
-    if (matches.length > 1) throw httpError(409, `Ambiguous active ${type} authority for organization unit ${unitId}`);
-    return matches[0] || null;
+    const unit=await repo.get(unitId,client); if(!unit)return null;
+    const result=await authority.resolveTypedPosition(unitId,type,unit.institute_id,client);
+    if(result.status==='AMBIGUOUS')throw httpError(409,`Ambiguous active ${type} authority for organization unit ${unitId}`);
+    return result.status==='RESOLVED'?{...result,user_id:result.userId,user_name:result.userName,position_id:result.positionId,position:result.positionName}:null;
   };
 
   const resolveExecutiveForUnit = async (id, client) => {
-    const chain = [await repo.get(id, client), ...(await repo.ancestors(id, client)).reverse()];
-    const executiveUnit = chain.find(unit => unit?.unit_type === 'EXECUTIVE_OFFICE');
-    if (!executiveUnit) return null;
-    const position = await resolvePositionHolder(executiveUnit.id, 'EXECUTIVE_HEAD', client) ||
-      await resolvePositionHolder(executiveUnit.id, 'UNIT_HEAD', client);
-    return position ? { unitId: executiveUnit.id, unitName: executiveUnit.name, position: position.position_name,
-      userId: position.user_id, userName: position.user_name } : null;
+    const unit=await repo.get(id,client);if(!unit)return null;
+    const result=await authority.resolveExecutiveOwner(id,unit.institute_id,client);
+    if(result.status==='AMBIGUOUS')throw httpError(409,`Ambiguous active EXECUTIVE_HEAD authority for organization unit ${result.organizationUnitId}`);
+    return result.status==='RESOLVED'?{...result,unitId:result.organizationUnitId,unitName:result.organizationUnitName,position:result.positionName}:null;
   };
 
   const getTree = async filters => {
     const rows = await repo.list(filters);
     await Promise.all(rows.map(async row=>{
-      const type=HEAD_TYPE[row.unit_type];
-      if(!type)return;
-      row.positions=await repo.positions(row.id);
-      const matches=row.positions.filter(position=>position.position_type===type&&effective(position));
-      if(matches.length>1)row.authorityError=`Ambiguous active ${type} authority for organization unit ${row.id}`;
-      else row.unitHead=matches[0]||null;
+      row.positions=await repo.positions(row.id,null,row.institute_id);
+      row.unitHead=await authority.resolveUnitHead(row.id,row.institute_id);
+      if(row.unitHead.status==='AMBIGUOUS')row.authorityError=`Ambiguous current unit-head authority for organization unit ${row.id}`;
     }));
     const nodes = new Map(rows.map(row => [String(row.id), { ...row, children: [] }]));
     const roots = [];
@@ -92,21 +89,19 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     const [children, positions, path] = await Promise.all([
       repo.list({ parent: id }, client), repo.positions(id, client), getOrganizationalPath(id, client)
     ]);
-    const headType=HEAD_TYPE[unit.unit_type];
-    const heads = positions.filter(position => position.position_type===headType && effective(position));
-    let executiveOwner=null,executiveAmbiguous=false;
-    try{executiveOwner=await resolveExecutiveForUnit(id,client);}catch(error){if(error.statusCode!==409)throw error;executiveAmbiguous=true;}
+    const unitHead=await authority.resolveUnitHead(id,unit.institute_id,client);
+    const executiveOwner=await authority.resolveExecutiveOwner(id,unit.institute_id,client);
     const reasons=[];
     if(unit.is_active===false)reasons.push('INACTIVE_UNIT');
     if(unit.unit_type==='DEPARTMENT'){
       if(!unit.parent_unit_id)reasons.push('MISSING_PARENT');
-      if(heads.length===0)reasons.push('MISSING_DEPARTMENT_HEAD');
-      if(heads.length>1)reasons.push('AMBIGUOUS_HEAD');
-      if(!executiveOwner&&!executiveAmbiguous)reasons.push('MISSING_EXECUTIVE_OWNER');
-      if(executiveAmbiguous)reasons.push('AMBIGUOUS_EXECUTIVE_OWNER');
+      if(unitHead.status==='UNASSIGNED')reasons.push('MISSING_DEPARTMENT_HEAD');
+      if(unitHead.status==='AMBIGUOUS')reasons.push('AMBIGUOUS_HEAD');
+      if(executiveOwner.status==='UNASSIGNED')reasons.push('MISSING_EXECUTIVE_OWNER');
+      if(executiveOwner.status==='AMBIGUOUS')reasons.push('AMBIGUOUS_EXECUTIVE_OWNER');
     }
     return { ...unit, children, positions, path: path.map(item => item.name), ancestors: path.slice(0, -1),
-      executiveOwner, unitHead: heads.length===1?heads[0]:null,authorityError:heads.length>1?`Ambiguous active ${headType} authority for organization unit ${id}`:null,
+      executiveOwner, unitHead,authorityError:unitHead.status==='AMBIGUOUS'?`Ambiguous current unit-head authority for organization unit ${id}`:null,
       approvalRoutingReadiness:{status:reasons.length?'INCOMPLETE':'READY',reasons} };
   };
 
@@ -204,16 +199,21 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     return result.rows[0];
   });
 
-  const linkedUnit = async (field, id) => (await repo.list({})).find(unit => String(unit[field]) === String(id));
+  const linkedUnit = async (field, id, instituteId) => (await repo.list(instituteId == null ? {} : { institute: instituteId }))
+    .find(unit => String(unit[field]) === String(id));
+  const legacyAuthority = result => {
+    if(result.status==='AMBIGUOUS')throw httpError(409,'Ambiguous current organization authority');
+    return result.status==='RESOLVED'?{...result,user_id:result.userId,user_name:result.userName,position_id:result.positionId,position:result.positionName}:null;
+  };
   return {
     getTree, tree: getTree, getUnit, detail: getUnit, getAncestorUnits, getDescendantUnits, getOrganizationalPath,
     createUnit, create: createUnit, updateUnit, update: updateUnit, moveUnit, archiveUnit, archive: archiveUnit,
     createPosition: (unitId, payload) => savePosition(unitId, payload), updatePosition: (id, payload) => savePosition(null, payload, id),
     archivePosition: (id, actorId) => savePosition(null, { isActive: false, actorId }, id), savePosition,
-    resolvePositionHolder, assignHead, assignHeadWithClient, transaction,
-    resolveDepartmentHead: async id => { const unit = await linkedUnit('department_id', id); return unit ? resolvePositionHolder(unit.id, 'DEPARTMENT_HEAD') : null; },
-    resolveSectionHead: async id => { const unit = await linkedUnit('section_id', id); return unit ? resolvePositionHolder(unit.id, 'SECTION_HEAD') : null; },
-    resolveExecutiveOwner: async id => { const unit = await linkedUnit('department_id', id); return unit ? resolveExecutiveForUnit(unit.id) : null; },
+    resolvePositionHolder, authority, assignHead, assignHeadWithClient, transaction,
+    resolveDepartmentHead: async (id,instituteId) => { const unit = await linkedUnit('department_id',id,instituteId); return unit ? legacyAuthority(await authority.resolveUnitHead(unit.id,unit.institute_id)) : null; },
+    resolveSectionHead: async (id,instituteId) => { const unit = await linkedUnit('section_id',id,instituteId); return unit ? legacyAuthority(await authority.resolveUnitHead(unit.id,unit.institute_id)) : null; },
+    resolveExecutiveOwner: async (id,instituteId) => { const unit = await linkedUnit('department_id',id,instituteId); return unit ? legacyAuthority(await authority.resolveExecutiveOwner(unit.id,unit.institute_id)) : null; },
     repo
   };
 }

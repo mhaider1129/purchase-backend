@@ -96,7 +96,7 @@ const createConnectedP2PRepository = (client) => ({
   sumActiveEncumbrances: async (id) => (await one(client,"SELECT COALESCE(SUM(amount),0)::text amount FROM commitment_ledger WHERE budget_envelope_id=$1 AND stage='encumbrance' AND state='ACTIVE'",[id])).amount,
   findCommitmentByIdempotency: (key) => one(client,'SELECT * FROM commitment_ledger WHERE idempotency_key=$1',[key]),
   insertEncumbrance: (c) => one(client,`INSERT INTO commitment_ledger (request_id,budget_envelope_id,purchase_order_id,stage,state,amount,currency,source_type,source_id,idempotency_key,actor_id)
-    VALUES ($1,$2,$3,'encumbrance','ACTIVE',$4,$5,'purchase_order',$3::text,$6,$7) RETURNING *`,[c.request_id,c.budget_envelope_id,c.purchase_order_id,c.amount,c.currency,c.idempotency_key,c.actor_id]),
+    VALUES ($1,$2,$3,'encumbrance','ACTIVE',$4,$5,'purchase_order',$3::bigint::text,$6,$7) RETURNING *`,[c.request_id,c.budget_envelope_id,c.purchase_order_id,c.amount,c.currency,c.idempotency_key,c.actor_id]),
   releaseCommitment: (id) => one(client,"UPDATE commitment_ledger SET state='RELEASED' WHERE id=$1 AND stage='encumbrance' AND state='ACTIVE' RETURNING *",[id]),
   async lockActivePoEncumbrance(id) {
     const rows = (await client.query("SELECT * FROM commitment_ledger WHERE purchase_order_id=$1 AND stage='encumbrance' AND state='ACTIVE' FOR UPDATE", [id])).rows;
@@ -111,7 +111,7 @@ const createConnectedP2PRepository = (client) => ({
     RETURNING *`,[id,reduction]),
   insertCommitmentActualization: (c) => one(client,`INSERT INTO commitment_ledger
     (request_id,budget_envelope_id,purchase_order_id,stage,state,amount,currency,source_type,source_id,parent_commitment_id,supplier_invoice_id,ap_voucher_id,idempotency_key,actor_id)
-    VALUES ($1,$2,$3,'actual','ACTIVE',$4,$5,'ap_voucher',$6::text,$7,$8,$6,$9,$10) RETURNING *`,
+    VALUES ($1,$2,$3,'actual','ACTIVE',$4,$5,'ap_voucher',$6::bigint::text,$7,$8,$6,$9,$10) RETURNING *`,
   [c.request_id,c.budget_envelope_id,c.purchase_order_id,c.amount,c.currency,c.ap_voucher_id,c.parent_commitment_id||c.id,c.supplier_invoice_id,c.idempotency_key,c.actor_id]),
   async findActualizationByVoucher(id) {
     const rows=(await client.query("SELECT * FROM commitment_ledger WHERE ap_voucher_id=$1 AND stage='actual'",[id])).rows;
@@ -174,7 +174,7 @@ const createConnectedP2PRepository = (client) => ({
   findApVoucherByIdempotency: (key) => one(client,'SELECT * FROM ap_vouchers WHERE idempotency_key=$1',[key]),
   findPayableByInvoice: (id) => one(client,"SELECT * FROM ap_payables WHERE supplier_invoice_id=$1 AND payable_status IN ('OPEN','PARTIALLY_PAID','PAID') ORDER BY id DESC LIMIT 1",[id]),
   lockPayable: (id) => one(client,'SELECT * FROM ap_payables WHERE id=$1 FOR UPDATE',[id]),
-  insertApVoucher: (v) => one(client,`INSERT INTO ap_vouchers (request_id,supplier_invoice_id,voucher_number,voucher_status,currency,total_amount,created_by,idempotency_key,payload_fingerprint) VALUES ($1,$2,'APV-'||$1||'-'||nextval(pg_get_serial_sequence('ap_vouchers','id')),'draft',$3,$4,$5,$6,$7) RETURNING *`,[v.request_id,v.supplier_invoice_id,v.currency,v.total_amount,v.created_by,v.idempotency_key,v.payload_fingerprint]),
+  insertApVoucher: (v) => one(client,`INSERT INTO ap_vouchers (request_id,supplier_invoice_id,voucher_number,voucher_status,currency,total_amount,created_by,idempotency_key,payload_fingerprint) VALUES ($1,$2,'APV-'||$1::integer::text||'-'||nextval(pg_get_serial_sequence('ap_vouchers','id')),'draft',$3,$4,$5,$6,$7) RETURNING *`,[v.request_id,v.supplier_invoice_id,v.currency,v.total_amount,v.created_by,v.idempotency_key,v.payload_fingerprint]),
   insertApVoucherLine: (l) => one(client,`INSERT INTO ap_voucher_lines (ap_voucher_id,line_number,account_code,description,debit_amount,credit_amount,reference_type,reference_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[l.ap_voucher_id,l.line_number,l.account_code||null,l.description||`Line ${l.line_number}`,l.debit_amount||'0',l.credit_amount||'0',l.reference_type||null,l.reference_id||null]),
   insertApPayable: (p) => one(client,`INSERT INTO ap_payables (request_id,supplier_id,supplier_invoice_id,ap_voucher_id,supplier_name,invoice_total,open_balance,currency,payable_status,posted_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9) RETURNING *`,[p.request_id,p.supplier_id,p.supplier_invoice_id,p.ap_voucher_id,p.supplier_name,p.invoice_total,p.open_balance,p.currency,p.posted_by]),
   findPayableByVoucher: (id) => one(client,'SELECT * FROM ap_payables WHERE ap_voucher_id=$1',[id]),
@@ -201,7 +201,13 @@ const createConnectedP2PRepository = (client) => ({
     (SELECT COUNT(*) FROM ap_payables WHERE request_id=$1 AND payable_status IN ('OPEN','PARTIALLY_PAID'))::int unsettled_payable_count,
     COALESCE((SELECT SUM(pa.amount) FROM payment_allocations pa JOIN ap_payables ap ON ap.id=pa.ap_payable_id JOIN payment_records pr ON pr.id=pa.payment_record_id WHERE ap.request_id=$1 AND pr.payment_status='paid'),0)::text paid_amount,
     (SELECT COUNT(*) FROM commitment_ledger WHERE request_id=$1 AND stage='encumbrance' AND state='ACTIVE' AND amount>0)::int active_commitment_count,
-    (SELECT COUNT(*) FROM supplier_invoices si WHERE si.request_id=$1 AND UPPER(si.status) IN ('MATCH_PENDING','AP_INVOICE_SUBMITTED','MATCH_EXCEPTION'))::int unresolved_financial_obligation_count`,[id]),
+    (SELECT COUNT(*) FROM supplier_invoices si WHERE si.request_id=$1
+      AND UPPER(si.status) NOT IN ('CANCELLED','VOIDED','DECLINED','SUPERSEDED','REPLACED')
+      AND (UPPER(si.status) IN ('MATCH_PENDING','AP_INVOICE_SUBMITTED','MATCH_EXCEPTION')
+        OR NOT EXISTS (SELECT 1 FROM ap_payables ap JOIN ap_vouchers av ON av.id=ap.ap_voucher_id
+          WHERE ap.supplier_invoice_id=si.id AND av.supplier_invoice_id=si.id
+            AND ap.request_id=si.request_id AND av.request_id=si.request_id
+            AND LOWER(av.voucher_status)='posted')) )::int unresolved_financial_obligation_count`,[id]),
   linkDocuments: (requestId,sourceType,sourceId,targetType,targetId,createdBy) => one(client,`INSERT INTO document_flow_links (request_id,source_document_type,source_document_id,target_document_type,target_document_id,created_by) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (request_id,source_document_type,source_document_id,target_document_type,target_document_id) DO UPDATE SET request_id=EXCLUDED.request_id RETURNING *`,[requestId,sourceType,String(sourceId),targetType,String(targetId),createdBy]),
 
   // Names consumed by purchaseOrderService; still entity-specific SQL above.

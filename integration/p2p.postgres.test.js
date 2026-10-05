@@ -22,6 +22,7 @@ const apService = require('../services/accountsPayableService');
 const { postApVoucher } = require('../services/apPostingService');
 const { postPayment } = require('../services/paymentService');
 const { deriveCompletion } = require('../services/p2pCompletionService');
+const { collectBaseline, CHECKS } = require('../scripts/lib/p2pBaseline');
 const repository = createTransactionalP2PRepository(pool);
 const one = async (sql, values = []) => (await pool.query(sql, values)).rows[0];
 let keySequence = 0;
@@ -284,4 +285,43 @@ test('partial fulfilment releases unused commitment without claiming receipt com
   assert.equal(closed.commitment.amount, '400.00');
   assert.equal(closed.commitment.state, 'RELEASED');
   assert.deepEqual(await completion(c), { procurement_complete: true, receipt_complete: false, financial_complete: true });
+});
+
+test('read-only baseline executes real catalog and reconciliation SQL without changing evidence', async () => {
+  const c = await postedCase();
+  const paid = await postPayment(paymentArgs(c, c.payable, '30'));
+  // Deliberate corrupt/legacy candidates exist only in the runner-created database.
+  await pool.query('UPDATE ap_payables SET open_balance=69 WHERE id=$1', [c.payable.id]);
+  await pool.query('UPDATE payment_records SET amount_paid=31 WHERE id=$1', [paid.payment.id]);
+  await pool.query(`INSERT INTO invoice_items(supplier_invoice_id,purchase_order_item_id,requested_item_id,quantity,unit_price,line_total)
+    VALUES($1,$2,$3,1,100,100)`, [c.inv.id,c.line.id,c.item.id]);
+  await pool.query(`CREATE TABLE contracts(id BIGSERIAL PRIMARY KEY,amount_paid NUMERIC(18,2),currency TEXT DEFAULT 'USD');
+    CREATE TABLE contract_invoices(id BIGSERIAL PRIMARY KEY,contract_id BIGINT,supplier_id BIGINT,invoice_number TEXT,currency TEXT,net_payable_amount NUMERIC(18,2));
+    CREATE TABLE contract_payments(id BIGSERIAL PRIMARY KEY,contract_id BIGINT,invoice_id BIGINT,currency TEXT,status TEXT,amount NUMERIC(18,2));
+    CREATE TABLE journal_entries(id BIGSERIAL PRIMARY KEY,source_type TEXT,source_id TEXT,journal_type TEXT,currency TEXT)`);
+  const contract = await one('INSERT INTO contracts(amount_paid) VALUES(0) RETURNING id');
+  const contractInvoice = await one(`INSERT INTO contract_invoices(contract_id,supplier_id,invoice_number,currency,net_payable_amount)
+    VALUES($1,1,$2,'USD',100) RETURNING id`, [contract.id,c.inv.invoice_number]);
+  await pool.query(`INSERT INTO contract_payments(contract_id,invoice_id,currency,status,amount) VALUES
+    ($1,$2,'USD','paid',70),($1,$2,'USD','paid',70),($1,$2,'IQD','paid',1),($1,NULL,'USD','paid',5)`, [contract.id,contractInvoice.id]);
+  await pool.query("INSERT INTO journal_entries(source_type,source_id,journal_type,currency) VALUES('AP_VOUCHER','fixture','accrual','USD'),('AP_VOUCHER','fixture','accrual','USD')");
+  const beforeSnapshot = await snapshot();
+  const beforeContract = await pool.query('SELECT * FROM contract_payments ORDER BY id');
+  const client = await pool.connect();
+  let report;
+  try { report = await collectBaseline(client); } finally { client.release(); }
+  assert.equal(report.connection_context.transaction_read_only, 'on');
+  assert.equal(report.capture_complete, false, 'Focused fixture does not implement all hospital modules');
+  for (const check of CHECKS) assert.equal(report.checks[check.id].status, 'measured', `${check.id} SQL must execute`);
+  for (const name of ['cross_source_supplier_bill_candidates','repeated_invoice_po_line_groups',
+    'payable_balance_or_overpayment_candidates','paid_record_allocation_total_mismatch','contract_paid_without_invoice',
+    'contract_paid_currency_or_contract_mismatch','contract_invoice_overpayment_candidates',
+    'contract_header_paid_projection_candidates','po_maker_approver_same_actor','journal_duplicate_source_groups']) {
+    assert.ok(BigInt(report.checks[name].rows[0].candidate_count)>0n, `${name} must detect the seeded candidate`);
+  }
+  assert.ok(report.schema.columns.some(column => column.table_name==='invoice_items' && column.column_name==='quantity' && column.data_type==='numeric(18,4)'));
+  assert.ok(report.schema.constraints.some(constraint => constraint.constraint_name==='ap_payables_supplier_id_fkey'));
+  assert.equal(report.row_counts.contract_payments.rows[0].row_count,'4');
+  assert.deepEqual(await snapshot(),beforeSnapshot);
+  assert.deepEqual((await pool.query('SELECT * FROM contract_payments ORDER BY id')).rows,beforeContract.rows);
 });

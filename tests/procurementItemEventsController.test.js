@@ -344,6 +344,11 @@ describe('procurement item events', () => {
     const client = { query: jest.fn(), release: jest.fn() };
     client.query.mockImplementation(async (sql, params) => {
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (/FROM information_schema\.columns/.test(sql)) return { rows: [
+        { column_name: 'overage_decided_by' },
+        { column_name: 'overage_decided_at' },
+        { column_name: 'overage_decision_note' },
+      ] };
       if (/FROM public\.procurement_item_events pie/.test(sql)) {
         return { rowCount: 1, rows: [{
           id: 31, request_id: 10, requested_item_id: 20, item_name: 'Gloves',
@@ -373,6 +378,38 @@ describe('procurement item events', () => {
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('overage_decided_by = $3'), [100, 103, 7, 'MOQ accepted', 31]);
     expect(client.query).toHaveBeenCalledWith('COMMIT');
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Over-quantity request approved.' }));
+  });
+
+  it('decides a pending overage when legacy tables lack decision metadata columns', async () => {
+    const client = { query: jest.fn(), release: jest.fn() };
+    client.query.mockImplementation(async (sql, params) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (/FROM information_schema\.columns/.test(sql)) return { rows: [] };
+      if (/FROM public\.procurement_item_events pie/.test(sql)) return { rowCount: 1, rows: [{
+        id: 32, request_id: 10, requested_item_id: 20, item_name: 'Gloves', event_quantity: 3,
+        purchased_quantity: 100, overage_approval_status: 'pending',
+      }] };
+      if (/UPDATE public\.procurement_item_events/.test(sql)) return { rowCount: 1 };
+      if (/INSERT INTO request_logs/.test(sql)) return { rowCount: 1 };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ decision: 'rejected' }, { role: 'SCM' });
+    req.params.eventId = '32';
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await decideProcurementOverage(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringMatching(/overage_approval_status = 'rejected' WHERE id = \$1/),
+      [32]
+    );
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Over-quantity request rejected.' }));
+    const logCall = client.query.mock.calls.find(([sql]) => /INSERT INTO request_logs/.test(sql));
+    expect(logCall[1][1]).toBe('Procurement Overage Rejected');
   });
 
   it('ships the decision audit columns required by the overage endpoint', () => {

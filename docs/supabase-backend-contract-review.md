@@ -53,9 +53,21 @@ If SQL 035 reports `Populated partial module procurement_evaluation_results.crea
 
 The backend's result persistence INSERT and `ensureResultPersistenceSchema` do not require `created_at` or `updated_at`. The original reconciliation was too strict for these optional metadata fields. SQL 038 adds only missing columns as nullable timestamptz **without an initial default**, then sets defaults separately for future inserts. Existing timestamps, custom defaults, result amounts, scores, ranking and compliance values are preserved. Missing historical timestamps remain NULL; no date is copied from a parent case or fabricated from the migration time. An insert default for `updated_at` is not an automatic update trigger.
 
-Only these two result metadata fields are exempted from the populated-partial-module preflight. Missing financial, compliance, identity, approval and other required/defaulted fields still stop for explicit reconciliation. Existing type or NOT NULL drift is not altered.
+The timestamp compatibility exception is limited to these two result metadata fields; a separate offer-model exception is described below. Missing financial, compliance, identity, approval and other required/defaulted fields still stop for explicit reconciliation. Existing type or NOT NULL drift is not altered.
 
 The procurement-evaluation Jest suite passed all 17 tests for this correction. Regression coverage includes a populated results table lacking both timestamps, repair through corrected SQL 035 and standalone SQL 038, repeated application, unchanged historical JSON row values, preserved existing timestamps/defaults and non-NULL defaults on new results.
+
+## Existing offers missing model JSON (2026-10-06)
+
+If SQL 035 reports `procurement_evaluation_offers.service_model`, SQL 038 has handled a different problem: result timestamps. Run the complete `sql/manual/039_evaluation_offer_model_compatibility.sql`, then retry the original SQL 035. The corrected SQL 035 also includes this repair.
+
+The `OFFER_FIELDS` whitelist accepts six optional JSON model fields: `technical_model`, `contract_model`, `package_model`, `service_model`, `risk_model`, and `scenario_metadata`. The payload normalizer permits NULL, and the calculation service does not use these model fields. Their columns are needed to store supplied model payloads, but missing historical model contents must not be inferred as empty objects.
+
+SQL 039 adds each missing field as nullable JSONB without an initial default and then sets an empty-object default separately for future inserts. Historical unknown model fields remain NULL; existing model data, custom defaults, offer costs, compliance/disqualification decisions and other row values are preserved. It repairs the six related metadata fields together rather than requiring separate retries for each missing field. Existing type/constraint drift is not rewritten.
+
+The populated-module preflight exception is limited to those six JSON model fields. Checks for missing prices, risk amounts, scores, required timestamps, identities and compliance flags remain. The read-only verification continues to require the six column names because the API can write them when supplied.
+
+Regression coverage exercises populated offers missing all six model fields, corrected SQL 035 and standalone SQL 039, unchanged historical non-model values, NULL historical models, repeat application, JSON payload writes, insert defaults, and preservation of existing model values/custom defaults. An additional compatibility run verifies retrying the original merged SQL 035 after SQL 039.
 
 ## Existing-table column gaps
 

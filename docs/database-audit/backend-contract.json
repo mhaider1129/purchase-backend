@@ -5941,5 +5941,15 @@
       "created_at",
       "updated_at"
     ]
+  },
+  "nullableCompatibilityColumns": {
+    "procurement_evaluation_offers": [
+      "technical_model",
+      "contract_model",
+      "package_model",
+      "service_model",
+      "risk_model",
+      "scenario_metadata"
+    ]
   }
 }

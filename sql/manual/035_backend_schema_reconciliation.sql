@@ -943,12 +943,6 @@ DO $partial_preflight$ DECLARE candidate record; populated boolean; BEGIN
     ('procurement_evaluation_offers','minimum_annual_commitment_amount'),
     ('procurement_evaluation_offers','minimum_annual_commitment_tests'),
     ('procurement_evaluation_offers','free_device_included'),
-    ('procurement_evaluation_offers','technical_model'),
-    ('procurement_evaluation_offers','contract_model'),
-    ('procurement_evaluation_offers','package_model'),
-    ('procurement_evaluation_offers','service_model'),
-    ('procurement_evaluation_offers','risk_model'),
-    ('procurement_evaluation_offers','scenario_metadata'),
     ('procurement_evaluation_offers','is_compliant'),
     ('procurement_evaluation_offers','created_at'),
     ('procurement_evaluation_offers','updated_at'),
@@ -6411,17 +6405,29 @@ ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS commer
 -- Column source: backend-query-derived-contract
 ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS risk_notes text;
 -- Column source: backend-query-derived-contract
-ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS technical_model jsonb DEFAULT '{}'::jsonb;
--- Column source: backend-query-derived-contract
-ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS contract_model jsonb DEFAULT '{}'::jsonb;
--- Column source: backend-query-derived-contract
-ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS package_model jsonb DEFAULT '{}'::jsonb;
--- Column source: backend-query-derived-contract
-ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS service_model jsonb DEFAULT '{}'::jsonb;
--- Column source: backend-query-derived-contract
-ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS risk_model jsonb DEFAULT '{}'::jsonb;
--- Column source: backend-query-derived-contract
-ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS scenario_metadata jsonb DEFAULT '{}'::jsonb;
+-- Optional offer models: unknown historical contents remain NULL.
+LOCK TABLE public.procurement_evaluation_offers IN ACCESS EXCLUSIVE MODE;
+
+DO $offer_models$
+DECLARE column_name text;
+BEGIN
+  FOREACH column_name IN ARRAY ARRAY[
+    'technical_model','contract_model','package_model',
+    'service_model','risk_model','scenario_metadata'
+  ] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_attribute a
+       WHERE a.attrelid='public.procurement_evaluation_offers'::regclass
+         AND a.attname=column_name AND NOT a.attisdropped
+    ) THEN
+      -- No initial default: do not infer model contents for historical offers.
+      EXECUTE format('ALTER TABLE public.procurement_evaluation_offers ADD COLUMN %I jsonb',column_name);
+      -- Only subsequent inserts receive an empty-model default.
+      EXECUTE format('ALTER TABLE public.procurement_evaluation_offers ALTER COLUMN %I SET DEFAULT ''{}''::jsonb',column_name);
+    END IF;
+  END LOOP;
+END $offer_models$;
+
 -- Column source: backend-query-derived-contract
 ALTER TABLE public.procurement_evaluation_offers ADD COLUMN IF NOT EXISTS is_compliant boolean DEFAULT true;
 -- Column source: backend-query-derived-contract

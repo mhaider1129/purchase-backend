@@ -95,6 +95,44 @@ async function validateEvaluationResultTimestamps(client, historicalRow) {
   console.log('Populated evaluation results: metadata repair, preservation, defaults and repeat checks PASS');
 }
 
+async function validateEvaluationOfferModels(client, historicalOffer) {
+  const modelFields=contract.nullableCompatibilityColumns.procurement_evaluation_offers;
+  const compatibilityPatch=read('sql/manual/039_evaluation_offer_model_compatibility.sql');
+  const values=async()=> (await client.query('SELECT to_jsonb(o)-$1::text[] AS value FROM procurement_evaluation_offers o ORDER BY id',[modelFields])).rows.map(row=>row.value);
+  assert.deepEqual((await values())[0],historicalOffer);
+  const historical=(await client.query('SELECT * FROM procurement_evaluation_offers WHERE id=$1',[historicalOffer.id])).rows[0];
+  for(const field of modelFields) assert.equal(historical[field],null);
+  await client.query("INSERT INTO procurement_evaluation_offers(offer_name,device_price,is_compliant,is_disqualified) VALUES ('New offer',2345.67,false,true)");
+  const future=(await client.query('SELECT * FROM procurement_evaluation_offers WHERE id<>$1',[historicalOffer.id])).rows[0];
+  for(const field of modelFields) assert.deepEqual(future[field],{});
+  const originalValues=await values();
+  // Disposable Docker fixture only: reproduce missing legacy JSON fields for standalone SQL 039.
+  for(const field of modelFields) await client.query(`ALTER TABLE procurement_evaluation_offers DROP COLUMN ${field}`);
+  await client.query(compatibilityPatch);
+  await client.query(compatibilityPatch);
+  assert.deepEqual(await values(),originalValues);
+  const repaired=(await client.query('SELECT * FROM procurement_evaluation_offers ORDER BY id')).rows;
+  for(const row of repaired) for(const field of modelFields) assert.equal(row[field],null);
+  const columns=(await client.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_offers' AND column_name=ANY($1::text[]) ORDER BY column_name",[modelFields])).rows;
+  assert.equal(columns.length,6);
+  for(const column of columns) { assert.equal(column.data_type,'jsonb'); assert.equal(column.is_nullable,'YES'); assert(column.column_default); }
+  // Supplied model payloads are stored, and existing models/defaults survive retries.
+  await client.query('UPDATE procurement_evaluation_offers SET service_model=$1::jsonb WHERE id=$2',[{contract_kind:'maintenance',supplier_term:'retain existing data'},historicalOffer.id]);
+  await client.query(`ALTER TABLE procurement_evaluation_offers ALTER COLUMN service_model SET DEFAULT '{"custom":true}'::jsonb`);
+  const snapshot=(await client.query('SELECT * FROM procurement_evaluation_offers ORDER BY id')).rows;
+  const defaults=(await client.query("SELECT column_name,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_offers' AND column_name=ANY($1::text[]) ORDER BY column_name",[modelFields])).rows;
+  await client.query(compatibilityPatch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  assert.deepEqual((await client.query('SELECT * FROM procurement_evaluation_offers ORDER BY id')).rows,snapshot);
+  assert.deepEqual((await client.query("SELECT column_name,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_offers' AND column_name=ANY($1::text[]) ORDER BY column_name",[modelFields])).rows,defaults);
+  // The optional-model exception must not permit invented historical offer prices.
+  await client.query('BEGIN; ALTER TABLE procurement_evaluation_offers DROP COLUMN device_price');
+  await assert.rejects(client.query(read('sql/manual/035_backend_schema_reconciliation.sql')), /Populated partial module procurement_evaluation_offers.device_price/);
+  await client.query('ROLLBACK');
+  assert.deepEqual((await client.query('SELECT * FROM procurement_evaluation_offers ORDER BY id')).rows,snapshot);
+  console.log('Populated offers: JSON compatibility, preservation, writes, defaults and financial guard checks PASS');
+}
+
 async function run() {
   const name = `p2p_disposable_${crypto.randomBytes(8).toString('hex')}`;
   const password = crypto.randomBytes(24).toString('hex');
@@ -158,6 +196,12 @@ async function run() {
     await client.query(resultsCreate.replace(/^  (?:created_at|updated_at) timestamptz.*\n/gm,''));
     await client.query("INSERT INTO procurement_evaluation_results(tco_period_cost,final_weighted_score,compliance_passed,knockout_failed,scoring_breakdown) VALUES (12345.67,63.125,false,true,'{\"test\":\"preserve historical result\"}')");
     const historicalResult=(await client.query('SELECT to_jsonb(r) AS value FROM procurement_evaluation_results r')).rows[0].value;
+    const offersCreate=patch.match(/CREATE TABLE IF NOT EXISTS public\.procurement_evaluation_offers \([\s\S]*?\n\);/)[0];
+    const modelPattern=new RegExp('^  (?:'+contract.nullableCompatibilityColumns.procurement_evaluation_offers.join('|')+') jsonb.*\\n','gm');
+    await client.query(offersCreate.replace(modelPattern,''));
+    await client.query("INSERT INTO procurement_evaluation_offers(offer_name,pricing_model,device_price,minimum_annual_commitment_amount,is_compliant,is_disqualified,created_at,updated_at) VALUES ('Historical offer','PURCHASE',24680.12,10000,false,true,'2019-01-02T03:04:05Z','2020-02-03T04:05:06Z')");
+    const historicalOffer=(await client.query('SELECT to_jsonb(o) AS value FROM procurement_evaluation_offers o')).rows[0].value;
+
     // Prove that populated partial modules stop before inferred/default historical values.
     await client.query("BEGIN; CREATE TABLE public.generic_items(id bigint PRIMARY KEY,item_code text); INSERT INTO public.generic_items VALUES (1,'partial-existing');");
     await assert.rejects(client.query(patch), /Populated partial module generic_items/);
@@ -176,6 +220,7 @@ async function run() {
     await client.query(patch);
     console.log('Schema patch repeat application PASS');
     await validateEvaluationResultTimestamps(client,historicalResult);
+    await validateEvaluationOfferModels(client,historicalOffer);
     await validatePreservation(client);
     await verifyMissing(client);
     const postflight = (await client.query(verificationSql)).rows;

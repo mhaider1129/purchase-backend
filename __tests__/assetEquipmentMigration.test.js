@@ -13,4 +13,6 @@ test('019 installs a tenant-safe optional one-to-one Asset link', () => {
 
 test('019 introduces first-class equipment permissions and migrates existing role access', () => {
   for (const permission of ['equipment.view', 'equipment.manage', 'spare-parts.view', 'spare-parts.manage-compatibility']) expect(sql).toContain(permission);
-  expe
+  expect(sql).toMatch(/INSERT INTO public\.role_permissions\(role_id,permission_id\)[^;]*target\.code='equipment\.view'[^;]*source\.code='spare-parts\.view'/);
+  expect(sql).toMatch(/INSERT INTO public\.role_permissions\(role_id,permission_id\)[^;]*target\.code='equipment\.manage'[^;]*source\.code='spare-parts\.manage-compatibility'/);
+});

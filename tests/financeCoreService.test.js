@@ -79,6 +79,20 @@ describe('financeCoreService', () => {
 
     expect(journal.id).toBe(99);
     expect(client.query).toHaveBeenCalledTimes(3);
+    expect(client.query.mock.calls[0][1][6]).toBe('120.00');
+  });
+
+  test.each([
+    ['unbalanced journal', 120, [{ accountCode: 'EXP', debitAmount: 120 }, { accountCode: 'AP', creditAmount: 119 }], 'UNBALANCED_JOURNAL'],
+    ['incorrect header total', 121, [{ accountCode: 'EXP', debitAmount: 120 }, { accountCode: 'AP', creditAmount: 120 }], 'JOURNAL_TOTAL_MISMATCH'],
+    ['missing lines', 120, [], 'ACCOUNTING_LINES_REQUIRED'],
+    ['missing account code', 120, [{ debitAmount: 120 }, { accountCode: 'AP', creditAmount: 120 }], 'ACCOUNT_CODE_REQUIRED'],
+    ['negative amount', 120, [{ accountCode: 'EXP', debitAmount: -120 }, { accountCode: 'AP', creditAmount: -120 }], 'INVALID_ACCOUNTING_AMOUNT'],
+    ['fractional cents', '0.01', [{ accountCode: 'EXP', debitAmount: '0.004' }, { accountCode: 'EXP', debitAmount: '0.004' }, { accountCode: 'AP', creditAmount: '0.01' }], 'ACCOUNTING_AMOUNT_PRECISION'],
+  ])('rejects %s before writing a posted header or any lines', async (_name, totalAmount, lines, code) => {
+    const client = { query: jest.fn() };
+    await expect(createJournalEntry(client, { totalAmount, lines })).rejects.toMatchObject({ code, statusCode: 400 });
+    expect(client.query).not.toHaveBeenCalled();
   });
 
 });

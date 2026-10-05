@@ -14,7 +14,7 @@ Audited against `origin/master` at `e2053f01` on 2026-10-05. This replaces the e
 
 The context export cannot be executed directly. Two array types are shown as generic `ARRAY`; two conversion-factor checks end with truncated `NOT VALI)` text; FK targets and creation order are incomplete. The UI export also includes untyped `ARRAY[]`. Only the disposable test fixture normalizes these export artifacts. Original snapshots remain unchanged.
 
-Static extraction inspected 16,758 string literals, including 2,417 SQL literals. The reconciled inventory contains 224 tables and 3,149 columns, retaining the 100 baseline tables and merging current maintained definitions with active query requirements. Dynamic SQL and data-dependent workflows require additional application testing; query planning does not execute a business operation.
+Static extraction inspected 16,758 string literals, including 2,417 SQL literals. The reconciled inventory contains 224 tables and 3,147 required column names plus two optional result metadata fields, retaining the 100 baseline tables and merging current maintained definitions with active query requirements. Dynamic SQL and data-dependent workflows require additional application testing; query planning does not execute a business operation.
 
 Three deferred SQL-only foundations (`item_attribute_templates`, `stock_item_attribute_suggestions`, `item_uom_conversions`) are excluded from the runtime patch. The first two have no active backend consumer; migration 009 explicitly describes the third as a deferred foundation rather than runtime conversion authority. Number-allocator tables are included because deployed numbering functions require them. `stock_item_migration_staging` is included because `databaseCapabilityService` requires it for stock import readiness.
 
@@ -46,6 +46,16 @@ Module-table RLS is enabled; no permissive browser-write policies or grants are 
 Sequence advances never lower existing values. PostgreSQL sequence `setval` effects are nontransactional: a later failure may leave a harmless upward advance, while ordinary DDL/data changes roll back. Sequence gaps do not indicate lost business records.
 
 Reference tables already exist in the snapshot (`item_categories`, `item_uom`, `item_manufacturers`), but it does not show their rows. Empty dropdowns can therefore reflect missing/inactive reference **data** or missing role authorization. No category/UOM/manufacturer rows or authority users are invented. `item-master.references-maintain` already exists in the supplied permission catalog; confirm the intended steward's effective grants separately.
+
+## Existing evaluation results without timestamps (2026-10-06)
+
+If SQL 035 reports `Populated partial module procurement_evaluation_results.created_at`, run the complete `sql/manual/038_evaluation_result_timestamp_compatibility.sql` and then retry the original SQL 035. Alternatively, run the corrected SQL 035, which includes the same repair.
+
+The backend's result persistence INSERT and `ensureResultPersistenceSchema` do not require `created_at` or `updated_at`. The original reconciliation was too strict for these optional metadata fields. SQL 038 adds only missing columns as nullable timestamptz **without an initial default**, then sets defaults separately for future inserts. Existing timestamps, custom defaults, result amounts, scores, ranking and compliance values are preserved. Missing historical timestamps remain NULL; no date is copied from a parent case or fabricated from the migration time. An insert default for `updated_at` is not an automatic update trigger.
+
+Only these two result metadata fields are exempted from the populated-partial-module preflight. Missing financial, compliance, identity, approval and other required/defaulted fields still stop for explicit reconciliation. Existing type or NOT NULL drift is not altered.
+
+The procurement-evaluation Jest suite passed all 17 tests for this correction. Regression coverage includes a populated results table lacking both timestamps, repair through corrected SQL 035 and standalone SQL 038, repeated application, unchanged historical JSON row values, preserved existing timestamps/defaults and non-NULL defaults on new results.
 
 ## Existing-table column gaps
 
@@ -222,7 +232,7 @@ This list describes the supplied snapshot, not confirmed live absence. Tables de
 
 `node scripts/testBackendSchemaReconciliation.js` starts a digest-pinned PostgreSQL 16 Docker container with tmpfs storage and a randomized loopback-only database. It never reads application `DATABASE_URL` or imports runtime database helpers. Snapshot hashes prevent testing a stale fixture against changed inputs.
 
-Verified: populated-partial-install rejection and transaction rollback; repeated application of all three patches; all 224 relations and 3,149 required column names; read-only preflight and postflight; existing user/catalog/grant/UI-row preservation; custom require-all access; toggle preservation; monotonically advancing sequences; new draft governance; generated UOM alias; inventory status splitting and duplicate rejection; posted inventory update/delete rejection; module RLS and browser-role read/write denial.
+Verified: populated-partial-install rejection and transaction rollback; repeated application of all three patches; all 224 relations and 3,147 required column names; read-only preflight and postflight; existing user/catalog/grant/UI-row preservation; custom require-all access; toggle preservation; monotonically advancing sequences; new draft governance; generated UOM alias; inventory status splitting and duplicate rejection; posted inventory update/delete rejection; module RLS and browser-role read/write denial.
 
 Static, complete, single-statement query literals passed directly to `query`/`one`/`many` were checked with EXPLAIN **without ANALYZE**, using null parameter bindings: **1,510 passed, 10 known pre-existing failures, zero unexpected failures**. Dynamic/assembled SQL and SQL stored indirectly in variables are not part of that count. The runner reports the known failures explicitly; it does not represent them as passing queries.
 

@@ -2381,7 +2381,6 @@
       "commitment_warning",
       "compliance_passed",
       "cost_score",
-      "created_at",
       "evaluation_case_id",
       "final_weighted_score",
       "id",
@@ -2399,8 +2398,7 @@
       "tco_period_cost",
       "technical_score",
       "total_annual_cost",
-      "total_expected_reported_tests",
-      "updated_at"
+      "total_expected_reported_tests"
     ],
     "procurement_evaluation_scores": [
       "comments",
@@ -5937,5 +5935,11 @@
     "item_attribute_templates",
     "stock_item_attribute_suggestions",
     "item_uom_conversions"
-  ]
+  ],
+  "optionalColumns": {
+    "procurement_evaluation_results": [
+      "created_at",
+      "updated_at"
+    ]
+  }
 }

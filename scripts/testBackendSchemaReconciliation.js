@@ -64,6 +64,37 @@ async function validatePreservation(client) {
   } finally { await query('RESET ROLE'); }
 }
 
+async function validateEvaluationResultTimestamps(client, historicalRow) {
+  const metadataPatch=read('sql/manual/038_evaluation_result_timestamp_compatibility.sql');
+  const values=async()=> (await client.query("SELECT to_jsonb(r)-'created_at'-'updated_at' AS value FROM procurement_evaluation_results r ORDER BY id")).rows.map(row=>row.value);
+  assert.deepEqual((await values())[0],historicalRow);
+  const before=(await client.query('SELECT created_at,updated_at FROM procurement_evaluation_results WHERE id=$1',[historicalRow.id])).rows[0];
+  assert.deepEqual(before,{created_at:null,updated_at:null});
+  await client.query('INSERT INTO procurement_evaluation_results(tco_period_cost,final_weighted_score,compliance_passed) VALUES (4321.25,75.125,false)');
+  const future=(await client.query('SELECT created_at,updated_at FROM procurement_evaluation_results WHERE id<>$1',[historicalRow.id])).rows[0];
+  assert(future.created_at instanceof Date && future.updated_at instanceof Date);
+  const originalValues=await values();
+  // Local Docker fixture only: reproduce the reported legacy schema for SQL 038.
+  await client.query('ALTER TABLE procurement_evaluation_results DROP COLUMN created_at, DROP COLUMN updated_at');
+  await client.query(metadataPatch);
+  await client.query(metadataPatch);
+  assert.deepEqual(await values(),originalValues);
+  assert.equal((await client.query('SELECT count(*)::integer AS n FROM procurement_evaluation_results WHERE created_at IS NOT NULL OR updated_at IS NOT NULL')).rows[0].n,0);
+  const columns=(await client.query("SELECT column_name,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_results' AND column_name IN ('created_at','updated_at') ORDER BY column_name")).rows;
+  assert.equal(columns.length,2);
+  for(const column of columns) { assert.equal(column.is_nullable,'YES'); assert(column.column_default); }
+  // Existing timestamp values and customized defaults must not be rewritten.
+  await client.query("UPDATE procurement_evaluation_results SET created_at='2020-01-02T03:04:05Z',updated_at='2020-02-03T04:05:06Z' WHERE id=$1",[historicalRow.id]);
+  await client.query("ALTER TABLE procurement_evaluation_results ALTER COLUMN created_at SET DEFAULT '2021-01-01T00:00:00Z'::timestamptz");
+  const snapshot=(await client.query('SELECT * FROM procurement_evaluation_results ORDER BY id')).rows;
+  const defaults=(await client.query("SELECT column_name,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_results' AND column_name IN ('created_at','updated_at') ORDER BY column_name")).rows;
+  await client.query(metadataPatch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  assert.deepEqual((await client.query('SELECT * FROM procurement_evaluation_results ORDER BY id')).rows,snapshot);
+  assert.deepEqual((await client.query("SELECT column_name,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_results' AND column_name IN ('created_at','updated_at') ORDER BY column_name")).rows,defaults);
+  console.log('Populated evaluation results: metadata repair, preservation, defaults and repeat checks PASS');
+}
+
 async function run() {
   const name = `p2p_disposable_${crypto.randomBytes(8).toString('hex')}`;
   const password = crypto.randomBytes(24).toString('hex');
@@ -122,6 +153,11 @@ async function run() {
     assert.equal(count('missing_permissions'), 6);
     assert.equal(count('missing_ui_resources'), 0);
     const patch = read('sql/manual/035_backend_schema_reconciliation.sql');
+    // The deployed backend stores complete financial results without metadata timestamps.
+    const resultsCreate=patch.match(/CREATE TABLE IF NOT EXISTS public\.procurement_evaluation_results \([\s\S]*?\n\);/)[0];
+    await client.query(resultsCreate.replace(/^  (?:created_at|updated_at) timestamptz.*\n/gm,''));
+    await client.query("INSERT INTO procurement_evaluation_results(tco_period_cost,final_weighted_score,compliance_passed,knockout_failed,scoring_breakdown) VALUES (12345.67,63.125,false,true,'{\"test\":\"preserve historical result\"}')");
+    const historicalResult=(await client.query('SELECT to_jsonb(r) AS value FROM procurement_evaluation_results r')).rows[0].value;
     // Prove that populated partial modules stop before inferred/default historical values.
     await client.query("BEGIN; CREATE TABLE public.generic_items(id bigint PRIMARY KEY,item_code text); INSERT INTO public.generic_items VALUES (1,'partial-existing');");
     await assert.rejects(client.query(patch), /Populated partial module generic_items/);
@@ -139,6 +175,7 @@ async function run() {
     }
     await client.query(patch);
     console.log('Schema patch repeat application PASS');
+    await validateEvaluationResultTimestamps(client,historicalResult);
     await validatePreservation(client);
     await verifyMissing(client);
     const postflight = (await client.query(verificationSql)).rows;

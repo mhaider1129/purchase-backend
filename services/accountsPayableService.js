@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { addDecimal, compareDecimal } = require('./purchaseOrderTotalsService');
+const { validateAccountingEntry } = require('./accountingEntryValidation');
 const supplierInvoiceService = require('./supplierInvoiceService');
 const defaultAudit = require('./auditService');
 const defaultOutbox = require('./notificationOutboxService');
@@ -13,12 +13,7 @@ const assertRequestScope = (requestId, canonicalRequestId) => {
 };
 
 const validateLines = (lines, invoiceTotal) => {
-  if (!Array.isArray(lines) || !lines.length) throw fail('Accounting lines are required', 'ACCOUNTING_LINES_REQUIRED');
-  const debit = addDecimal(...lines.map((line) => line.debit_amount || '0'));
-  const credit = addDecimal(...lines.map((line) => line.credit_amount || '0'));
-  if (compareDecimal(debit, credit) !== 0) throw fail('Voucher debit and credit totals must balance', 'UNBALANCED_VOUCHER');
-  if (compareDecimal(credit, invoiceTotal) !== 0) throw fail('Voucher liability must reconcile to the supplier invoice', 'VOUCHER_INVOICE_MISMATCH');
-  return { debit, credit };
+  return validateAccountingEntry({ lines, totalAmount: invoiceTotal });
 };
 
 const createPayableFromVerifiedInvoice = ({ repository, requestId, invoiceId, actor, idempotencyKey, accountingLines, auditService = defaultAudit, outbox = defaultOutbox }) => {

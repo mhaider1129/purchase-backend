@@ -1,6 +1,7 @@
 'use strict';
 
-const { addDecimal, compareDecimal } = require('./purchaseOrderTotalsService');
+const { compareDecimal } = require('./purchaseOrderTotalsService');
+const { validateAccountingEntry } = require('./accountingEntryValidation');
 const supplierInvoiceService = require('./supplierInvoiceService');
 const defaultAudit = require('./auditService');
 const defaultOutbox = require('./notificationOutboxService');
@@ -26,9 +27,14 @@ const postApVoucher = ({ repository, requestId, voucherId, actor, idempotencyKey
     if (String(voucher.voucher_status).toLowerCase() !== 'verified') throw fail('Only a verified voucher can be posted', 'AP_VOUCHER_NOT_VERIFIED', 409);
     const invoice = await tx.lockInvoice(voucher.supplier_invoice_id);
     await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
-    const debit = addDecimal(...voucher.lines.map((line) => line.debit_amount || '0'));
-    const credit = addDecimal(...voucher.lines.map((line) => line.credit_amount || '0'));
-    if (compareDecimal(debit, credit) || compareDecimal(credit, invoice.total_amount)) throw fail('Voucher totals do not reconcile to invoice', 'VOUCHER_INVOICE_MISMATCH', 409);
+    validateAccountingEntry({
+      lines: voucher.lines,
+      totalAmount: invoice.total_amount,
+      // Preserve the existing posting API's conflict response for persisted
+      // vouchers whose totals no longer reconcile to the source invoice.
+      unbalancedCode: 'VOUCHER_INVOICE_MISMATCH',
+      balanceErrorStatusCode: 409,
+    });
     const po = await tx.lockPurchaseOrder(invoice.purchase_order_id);
     const encumbrance = await tx.lockActivePoEncumbrance(po.id);
     if (!encumbrance || compareDecimal(invoice.total_amount, encumbrance.amount) > 0) throw fail('Invoice exceeds remaining PO commitment', 'PO_COMMITMENT_EXCEEDED', 409);

@@ -1,4 +1,5 @@
 const createHttpError = require('../utils/httpError');
+const { validateAccountingEntry } = require('./accountingEntryValidation');
 
 const getCurrentFiscalYear = () => new Date().getUTCFullYear();
 
@@ -149,10 +150,18 @@ const createJournalEntry = async (client, {
   actorId = null,
   lines = [],
 }) => {
-  const normalizedAmount = Number(totalAmount) || 0;
-  if (normalizedAmount <= 0) {
-    return null;
+  const totals = validateAccountingEntry({
+    lines,
+    totalAmount,
+    debitField: 'debitAmount',
+    creditField: 'creditAmount',
+    unbalancedCode: 'UNBALANCED_JOURNAL',
+    mismatchCode: 'JOURNAL_TOTAL_MISMATCH',
+  });
+  if (lines.some(line => typeof line.accountCode !== 'string' || !line.accountCode.trim())) {
+    throw Object.assign(createHttpError(400, 'Every journal line requires an account code'), { code: 'ACCOUNT_CODE_REQUIRED' });
   }
+  const normalizedAmount = totals.debit;
 
   const journalReference = `${referencePrefix}-${requestId || 'GEN'}-${Date.now()}`;
   const journalRes = await client.query(

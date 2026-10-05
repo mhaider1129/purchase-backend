@@ -8,7 +8,7 @@ CREATE TABLE supplier_compliance_artifacts (id BIGSERIAL PRIMARY KEY, supplier_i
   artifact_type TEXT, name TEXT, expiry_date DATE, status TEXT, blocked BOOLEAN);
 CREATE TABLE supplier_evaluations (id BIGSERIAL PRIMARY KEY, supplier_id INTEGER REFERENCES suppliers,
   evaluation_date DATE, overall_score NUMERIC, compliance_score NUMERIC, weighted_overall_score NUMERIC);
-CREATE TABLE requests (id SERIAL PRIMARY KEY, department_id INTEGER REFERENCES departments, project_id INTEGER, status TEXT);
+CREATE TABLE requests (id SERIAL PRIMARY KEY, institute_id INTEGER, department_id INTEGER REFERENCES departments, project_id INTEGER, status TEXT);
 CREATE TABLE item_uom (id SERIAL PRIMARY KEY, name TEXT, uom_code TEXT, is_active BOOLEAN DEFAULT TRUE);
 CREATE TABLE generic_items (id BIGSERIAL PRIMARY KEY, base_uom_id INTEGER REFERENCES item_uom,
   inventory_uom_id INTEGER REFERENCES item_uom, lifecycle_status TEXT, is_active BOOLEAN,
@@ -19,6 +19,7 @@ CREATE TABLE supplier_catalog_items (id BIGSERIAL PRIMARY KEY, supplier_id INTEG
   approved_product_id BIGINT REFERENCES approved_products, purchasing_uom_id INTEGER REFERENCES item_uom,
   conversion_factor NUMERIC(18,4), is_active BOOLEAN);
 CREATE TABLE requested_items (id SERIAL PRIMARY KEY, request_id INTEGER REFERENCES requests,
+  approval_status TEXT DEFAULT 'Approved',
   generic_item_id BIGINT REFERENCES generic_items, quantity INTEGER NOT NULL,
   preferred_product_id BIGINT REFERENCES approved_products, mandatory_product_id BIGINT REFERENCES approved_products, request_mode TEXT CONSTRAINT requested_items_request_mode_check CHECK(request_mode IN ('generic_item','generic_item_with_preference','specific_approved_product','free_text','pending_item_creation','approved_free_text_exception','service')),
   catalog_status TEXT CONSTRAINT requested_items_catalog_status_check CHECK(catalog_status IN ('catalogued','pending_mapping','approved_exception')),

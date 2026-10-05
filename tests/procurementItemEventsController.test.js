@@ -98,7 +98,8 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
       };
     }
     if (/UPDATE requests/.test(sql)) return {};
-    throw new Error(`Unexpected SQL: ${sql}`);
+    if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
+      throw new Error(`Unexpected SQL: ${sql}`);
   });
   return client;
 };
@@ -298,6 +299,7 @@ describe('procurement item events', () => {
         return { rows: [{ total_items: 1, fully_procured_items: 0, started_items: 1 }] };
       }
       if (/UPDATE requests/.test(sql)) return {};
+      if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
       throw new Error(`Unexpected SQL: ${sql}`);
     });
 
@@ -364,6 +366,7 @@ describe('procurement item events', () => {
         return { rows: [{ total_items: 1, fully_procured_items: 1, started_items: 1 }] };
       }
       if (/UPDATE requests/.test(sql) || /INSERT INTO request_logs/.test(sql)) return { rowCount: 1 };
+      if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
       throw new Error(`Unexpected SQL: ${sql}`);
     });
     pool.connect.mockResolvedValue(client);
@@ -391,6 +394,7 @@ describe('procurement item events', () => {
       }] };
       if (/UPDATE public\.procurement_item_events/.test(sql)) return { rowCount: 1 };
       if (/INSERT INTO request_logs/.test(sql)) return { rowCount: 1 };
+      if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
       throw new Error(`Unexpected SQL: ${sql}`);
     });
     pool.connect.mockResolvedValue(client);

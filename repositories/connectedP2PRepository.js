@@ -34,7 +34,7 @@ const createConnectedP2PRepository = (client) => ({
     FROM procurement_awards a LEFT JOIN purchase_order_items poi ON poi.award_id=a.id
     LEFT JOIN purchase_orders po ON po.id=poi.purchase_order_id WHERE a.id=$1 GROUP BY a.id`, [awardId]),
   loadAwardUomSnapshot: (awardId) => one(client, `SELECT g.id generic_item_id,
-    ri.request_mode,ri.catalog_status,ri.preferred_product_id,ri.mandatory_product_id,ri.restriction_justification,
+    ri.request_mode,ri.catalog_status,ri.approval_status,ri.preferred_product_id,ri.mandatory_product_id,ri.restriction_justification,ri.stocking_policy,
     COALESCE(ri.canonical_description_snapshot,ri.item_name_snapshot,ri.item_name,p.product_name,p.product_description) item_name,
     c.purchasing_uom_id source_uom_id,su.uom_code source_uom,
     g.base_uom_id generic_base_uom_id,g.inventory_uom_id,iu.id base_uom_id,iu.uom_code base_uom,
@@ -44,13 +44,13 @@ const createConnectedP2PRepository = (client) => ({
     JOIN approved_products p ON p.id=a.approved_product_id JOIN generic_items g ON g.id=p.generic_item_id
     JOIN item_uom su ON su.id=c.purchasing_uom_id JOIN item_uom iu ON iu.id=g.inventory_uom_id
     WHERE a.id=$1 AND a.supplier_id=c.supplier_id AND ri.generic_item_id=g.id FOR SHARE OF ri`, [awardId]),
-  loadAwardExceptionSnapshot: (awardId) => one(client, `SELECT ri.request_mode,ri.catalog_status,
-    ri.restriction_justification,
+  loadAwardExceptionSnapshot: (awardId) => one(client, `SELECT ri.request_mode,ri.catalog_status,ri.approval_status,
+    ri.restriction_justification,ri.preferred_product_id,ri.mandatory_product_id,ri.stocking_policy,
     COALESCE(ri.canonical_description_snapshot,ri.item_name_snapshot,ri.item_name) item_name,
     ri.unit_of_measure source_uom,ri.unit_of_measure base_uom,NULL::integer source_uom_id,NULL::integer base_uom_id,
     NULL::bigint generic_item_id,'1'::text conversion_factor
     FROM procurement_awards a JOIN requested_items ri ON ri.id=a.request_item_id
-    WHERE a.id=$1 AND ri.request_mode IN ('approved_free_text_exception','service') FOR SHARE OF ri`, [awardId]),
+    WHERE a.id=$1 AND (ri.request_mode IN ('approved_free_text_exception','service','free_text') OR ri.request_mode IS NULL) AND ri.generic_item_id IS NULL FOR SHARE OF ri`, [awardId]),
 
   nextPurchaseOrderNumber: () => one(client, `SELECT 'PO-' || to_char(CURRENT_DATE, 'YYYY') || '-' ||
     lpad(nextval('public.purchase_order_number_seq')::text, 6, '0') AS po_number`),

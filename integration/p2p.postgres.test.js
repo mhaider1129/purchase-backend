@@ -428,3 +428,143 @@ test('stock provenance diagnostics handle absent and populated legacy columns wi
     assert.deepEqual((await client.query('SELECT id,supplier_catalog_item_id FROM public.stock_items ORDER BY id')).rows,before);
   } finally {await client.query('ROLLBACK');client.release();}
 });
+
+const policyService = require('../services/procurementIdentityPolicyService');
+async function changeIdentityPolicy(enforce) {
+  const client=await pool.connect();
+  try { await client.query('BEGIN'); await policyService.updatePolicy(client,{enforce_item_identity:enforce,reason:'Integration catalog rollout'},{id:1}); await client.query('COMMIT'); }
+  catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+}
+test('manual policy migration is idempotent and preserves an administrator setting',async()=>{
+  await applyDevelopmentMigration('20261005_03_procurement_identity_policy.sql');
+  assert.equal((await policyService.loadPolicy(pool)).enforce_item_identity,true);
+  await changeIdentityPolicy(false);
+  await applyDevelopmentMigration('20261005_03_procurement_identity_policy.sql');
+  assert.equal((await policyService.loadPolicy(pool)).enforce_item_identity,false);
+  await changeIdentityPolicy(true);
+});
+test('free-text and legacy award-to-PO flow works during rollout; strict re-enable preserves documents and blocks new procurement',async()=>{
+  await changeIdentityPolicy(false);
+  try {
+    for(const mode of ['free_text',null]) {
+      const request=await one("INSERT INTO requests(status) VALUES('Approved') RETURNING *");
+      const item=await one("INSERT INTO requested_items(request_id,item_name,quantity,unit_of_measure,request_mode,catalog_status,stocking_policy) VALUES($1,'Original description',2,'Piece',$2,'pending_mapping','non_stock') RETURNING *",[request.id,mode]);
+      const actor={id:1};
+      const award=await createAward({repository,requestItem:item,supplier:{id:1},actor,input:{awarded_quantity:'2',unit_price:'10',currency:'USD',source_type:'DIRECT_PROCUREMENT',selection_reason:'Temporary rollout',idempotency_key:key('compat')}});
+      const po=await poService.createPurchaseOrderFromAwards({repository,requestId:request.id,awardIds:[award.id],quantities:{[award.id]:'1'},actor});
+      assert.equal(po.lines[0].generic_item_id,null);assert.equal(po.lines[0].line_type,'NON_INVENTORY');assert.equal(po.lines[0].base_uom,'Piece');
+      assert.equal((await one('SELECT request_mode FROM requested_items WHERE id=$1',[item.id])).request_mode,mode);
+      assert.ok((await one("SELECT count(*)::int n FROM item_master_audit_events WHERE requested_item_id=$1 AND action='procurement.compatibility_used'",[item.id])).n>=2);
+      await changeIdentityPolicy(true);
+      await assert.rejects(()=>poService.createPurchaseOrderFromAwards({repository,awardIds:[award.id],quantities:{[award.id]:'1'},actor}),{code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'});
+      assert.equal((await one('SELECT item_name FROM purchase_order_items WHERE id=$1',[po.lines[0].id])).item_name,'Original description');
+      const {resolveRequestItem}=require('../services/requestItemResolutionService');
+      await assert.rejects(()=>repository.withTransaction(tx=>resolveRequestItem(tx.client,request.id,item.id,{generic_item_id:1,reason:'Change identity'},actor)),{code:'REQUEST_ITEM_ALREADY_CONSUMED'});
+      await changeIdentityPolicy(false);
+    }
+  } finally { await changeIdentityPolicy(true); }
+});
+test('re-enable waits for an in-flight compatibility transaction',async()=>{
+  await changeIdentityPolicy(false);
+  const worker=await pool.connect(),admin=await pool.connect();
+  try {
+    await worker.query('BEGIN');
+    await policyService.assertReadyForCommand(worker,{request_mode:'free_text',stocking_policy:'non_stock'},{id:1},'lock_test');
+    await admin.query('BEGIN');await admin.query("SET LOCAL lock_timeout='100ms'");
+    await assert.rejects(()=>admin.query('UPDATE procurement_identity_policy SET enforce_item_identity=TRUE WHERE id=1'),{code:'55P03'});
+    await admin.query('ROLLBACK');await worker.query('COMMIT');
+    await changeIdentityPolicy(true);
+  } finally {await admin.query('ROLLBACK');await worker.query('ROLLBACK');admin.release();worker.release();await changeIdentityPolicy(true);}
+});
+
+test('current policy governs sourcing and quotation submission without relaxing financial line checks',async()=>{
+  const {assertRequestItemsReadyForSourcing}=require('../services/sourcingReadinessService');
+  const {submitLinkedRfxResponse}=require('../services/rfxResponseService');
+  const request=await one("INSERT INTO requests(status) VALUES('Approved') RETURNING *");
+  const item=await one("INSERT INTO requested_items(request_id,item_name,quantity,unit_of_measure,request_mode,catalog_status,stocking_policy) VALUES($1,'Rollout quotation',2,'Piece','free_text','pending_mapping','non_stock') RETURNING *",[request.id]);
+  const submit=async(unit_price='10')=>{
+    const client=await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await assertRequestItemsReadyForSourcing(client,request.id,[item],{id:1});
+      const quotation=await submitLinkedRfxResponse({repository:{client,loadRequestedItems:async()=>[item],insertResponse:async row=>({...row,id:99}),insertResponseItem:async row=>row},event:{id:99,request_id:request.id},supplierId:1,submittedBy:1,lines:[{requested_item_id:item.id,quoted_quantity:'2',unit_price,currency:'USD'}]});
+      await client.query('COMMIT');return quotation;
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  };
+  await assert.rejects(()=>submit(),{code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'});
+  await changeIdentityPolicy(false);
+  try {
+    assert.equal((await submit()).quotation_total,'20.00000000');
+    await assert.rejects(()=>submit('-1'),{code:'RFX_INVALID_LINE_PRICING'});
+    await assert.rejects(()=>repository.withTransaction(tx=>policyService.assertReadyForCommand(tx.client,{...item,request_mode:'pending_item_creation'},{id:1})),{code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'});
+  }finally{await changeIdentityPolicy(true);}
+  await assert.rejects(()=>submit(),{code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'});
+});
+test('mapping unit validation accepts controlled equivalents and prevents reinterpreting balances',async()=>{
+  const {StockItemMappingService}=require('../services/stockItemMappingService');
+  const StockItemMappingRepository=require('../repositories/stockItemMappingRepository');
+  // Bring this focused fixture's unused display-name projection into the real UOM contract.
+  await pool.query('ALTER TABLE item_uom ADD COLUMN IF NOT EXISTS uom_name text');
+  await pool.query('ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS identity_source text, ADD COLUMN IF NOT EXISTS mapped_by integer, ADD COLUMN IF NOT EXISTS mapped_at timestamptz, ADD COLUMN IF NOT EXISTS mapping_notes text');
+  await pool.query("UPDATE item_uom SET uom_name='Piece' WHERE id=1");
+  const generic=await one("INSERT INTO generic_items(inventory_uom_id,lifecycle_status,is_active) VALUES(1,'active',TRUE) RETURNING *");
+  const stock=await one("INSERT INTO stock_items(unit,available_quantity) VALUES('Piece',7) RETURNING *");
+  const mapping={generic_item_id:generic.id,approved_product_id:null};
+  await repository.withTransaction(async tx=>{
+    await new StockItemMappingService(pool).validateStockUnit(tx.client,stock.id,mapping);
+    await new StockItemMappingRepository(tx.client).applyIdentity(stock.id,mapping,1,'Controlled unit confirmed');
+  });
+  const mapped=await one('SELECT * FROM stock_items WHERE id=$1',[stock.id]);
+  assert.equal(mapped.inventory_uom_id,1);assert.equal(mapped.mapping_status,'mapped_generic');assert.equal(mapped.available_quantity,'7.0000');
+  await pool.query("UPDATE stock_items SET unit='Box',inventory_uom_id=NULL WHERE id=$1",[stock.id]);
+  await assert.rejects(()=>repository.withTransaction(tx=>new StockItemMappingService(pool).validateStockUnit(tx.client,stock.id,mapping)),{code:'mapping_inventory_uom_mismatch'});
+  assert.equal((await one('SELECT available_quantity FROM stock_items WHERE id=$1',[stock.id])).available_quantity,'7.0000');
+});
+
+test('mapping proposals, review and concurrent approvals preserve one active identity and its balance',async()=>{
+  const {StockItemMappingService}=require('../services/stockItemMappingService');
+  // Focused mapping contract uses the same field names as the normalized mapping repository.
+  await pool.query(`CREATE TABLE item_categories(id serial PRIMARY KEY,category_name text);
+    ALTER TABLE generic_items ADD COLUMN category_id integer REFERENCES item_categories;
+    CREATE TABLE stock_item_master_mappings(id bigserial PRIMARY KEY,stock_item_id integer REFERENCES stock_items,
+      generic_item_id bigint REFERENCES generic_items,approved_product_id bigint REFERENCES approved_products,
+      mapping_status text,active boolean DEFAULT FALSE,version integer DEFAULT 1,review_notes text,
+      created_by integer REFERENCES users,reviewed_by integer REFERENCES users,reviewed_at timestamptz,
+      created_at timestamptz DEFAULT NOW(),updated_at timestamptz DEFAULT NOW());`);
+  const generic=await one("INSERT INTO generic_items(inventory_uom_id,lifecycle_status,is_active) VALUES(1,'active',TRUE) RETURNING *");
+  const stock=await one("INSERT INTO stock_items(unit,available_quantity) VALUES('Piece',7) RETURNING *");
+  const mappingService=new StockItemMappingService(pool);
+  const mappings=[];
+  for(let i=0;i<2;i++){
+    const proposed=await mappingService.propose({stock_item_id:stock.id,generic_item_id:generic.id,reason:'Steward confirmed equivalent unit'},1);
+    const reviewed=await mappingService.review({stockItemId:stock.id,mappingId:Number(proposed.id),expectedVersion:proposed.version,reason:'Review completed'},1);
+    mappings.push(reviewed);
+  }
+  await Promise.all(mappings.map(mapping=>mappingService.approve({stockItemId:stock.id,mappingId:Number(mapping.id),expectedVersion:mapping.version,reason:'Approved identity'},1)));
+  assert.equal((await one("SELECT count(*)::int n FROM stock_item_master_mappings WHERE stock_item_id=$1 AND active AND mapping_status='approved'",[stock.id])).n,1);
+  const actual=await one('SELECT * FROM stock_items WHERE id=$1',[stock.id]);
+  assert.equal(actual.generic_item_id,generic.id);assert.equal(actual.inventory_uom_id,1);assert.equal(actual.available_quantity,'7.0000');
+  assert.equal((await one("SELECT count(*)::int n FROM item_master_audit_events WHERE entity_type='stock_item' AND entity_id=$1 AND action='mapping_proposed'",[stock.id])).n,2);
+});
+
+test('workspace and steward queue resolution lock consistently and close the same referral',async()=>{
+  const {resolveRequestItem}=require('../services/requestItemResolutionService');
+  const {ItemMasterFoundationService}=require('../services/itemMasterFoundationService');
+  await pool.query(`CREATE TABLE pending_item_requests(id bigserial PRIMARY KEY,request_id integer REFERENCES requests,
+    requested_item_id integer REFERENCES requested_items,proposed_name text,status text,resolution_type text,
+    resolved_generic_item_id bigint REFERENCES generic_items,resolved_product_id bigint REFERENCES approved_products,
+    resolution_notes text,resolved_by integer REFERENCES users,resolved_at timestamptz,updated_at timestamptz DEFAULT NOW());`);
+  const request=await one("INSERT INTO requests(status) VALUES('Approved') RETURNING *");
+  const item=await one("INSERT INTO requested_items(request_id,item_name,quantity,unit_of_measure,request_mode,catalog_status,stocking_policy) VALUES($1,'Original requester wording',2,'Piece','pending_item_creation','pending_mapping','non_stock') RETURNING *",[request.id]);
+  const generic=await one("INSERT INTO generic_items(inventory_uom_id,lifecycle_status,is_active,generic_name) VALUES(1,'active',TRUE,'Governed item') RETURNING *");
+  const pending=await one("INSERT INTO pending_item_requests(request_id,requested_item_id,proposed_name,status) VALUES($1,$2,'Original requester wording','review') RETURNING *",[request.id,item.id]);
+  const actor={id:1};
+  await Promise.all([
+    repository.withTransaction(tx=>resolveRequestItem(tx.client,request.id,item.id,{generic_item_id:Number(generic.id),reason:'Confirmed in request workspace'},actor)),
+    new ItemMasterFoundationService(pool).resolvePending(Number(pending.id),{resolution_type:'existing_generic',generic_item_id:Number(generic.id),notes:'Confirmed by steward'},actor),
+  ]);
+  const resolved=await one('SELECT * FROM pending_item_requests WHERE id=$1',[pending.id]);
+  assert.equal(resolved.status,'resolved');assert.equal(resolved.resolved_generic_item_id,generic.id);
+  const line=await one('SELECT * FROM requested_items WHERE id=$1',[item.id]);
+  assert.equal(line.generic_item_id,generic.id);assert.equal(line.request_mode,'generic_item');assert.equal(line.item_name,'Original requester wording');assert.equal(line.quantity,2);
+});

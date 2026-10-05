@@ -1,5 +1,5 @@
 const { insertRequestedItem } = require('../../services/requestedItemWriteService');
-const { assertProcurementReady } = require('../../services/procurementItemIdentityService');
+const { assertReadyForCommand } = require('../../services/procurementIdentityPolicyService');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureRequestedItemFinancialsTable');
@@ -240,7 +240,7 @@ const addProcurementItemEvent = async (req, res, next) => {
       return next(createHttpError(400, 'Cannot register procurement for a rejected item'));
     }
 
-    assertProcurementReady(item);
+    await assertReadyForCommand(client, item, req.user, 'register_procurement');
 
     const requestedQuantity = Number(item.quantity || 0);
     const previousPurchasedQuantity = Number(item.purchased_quantity || 0);

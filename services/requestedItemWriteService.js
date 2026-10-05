@@ -277,6 +277,7 @@ async function applyRequestedItemEdits(client, requestId, items, actor) {
 }
 
 module.exports = {
+  assertLineNotConsumed,
   EDIT_FIELDS,
   insertRequestedItem,
   recordNewIdentity,

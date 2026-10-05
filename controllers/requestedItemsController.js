@@ -7,7 +7,7 @@ const { ensureRequestedItemFinancialsTable } = require('../utils/ensureRequested
 const { sendRequestWorkflowEmail } = require('../utils/workflowEmailNotifications');
 const { createNotifications } = require('../utils/notificationService');
 const { insertRequestedItem } = require('../services/requestedItemWriteService');
-const { assertProcurementReady } = require('../services/procurementItemIdentityService');
+const { assertReadyForCommand } = require('../services/procurementIdentityPolicyService');
 
 const parseOptionalNumber = (value, fieldLabel) => {
   if (value === undefined || value === null || value === '') {
@@ -431,7 +431,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
 
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'fulfill this order item');
-    if (['purchased','partially_procured'].includes(normalizedProcurementStatus)) assertProcurementReady(item);
+    if (['purchased','partially_procured'].includes(normalizedProcurementStatus)) await assertReadyForCommand(client, item, req.user, 'register_procurement');
 
     const closesWithoutPurchase = ['not_procured', 'canceled'].includes(normalizedProcurementStatus);
 
@@ -580,7 +580,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
 
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'update purchased quantity for this order item');
-    if (purchased_quantity > Number(item.purchased_quantity || 0)) assertProcurementReady(item);
+    if (purchased_quantity > Number(item.purchased_quantity || 0)) await assertReadyForCommand(client, item, req.user, 'register_procurement');
 
     const currentReceivedQuantity = Number(item.received_quantity || 0);
     if (purchased_quantity < currentReceivedQuantity) {

@@ -12,6 +12,9 @@ const {
 
 const router = express.Router();
 const foundation = require('../controllers/itemMasterFoundationController');
+const identityPolicy = require('../controllers/procurementIdentityPolicyController');
+router.get('/procurement-policy', identityPolicy.get);
+router.put('/procurement-policy', foundation.requirePermission('permissions.manage'), identityPolicy.update);
 
 // Migration-owned normalized hierarchy. Keep above `/:id` so Express does not
 // interpret "foundation" or "reference" as a legacy numeric identifier.

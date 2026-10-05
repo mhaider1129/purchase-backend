@@ -36,3 +36,10 @@ describe('stock item mapping queue', () => {
     expect(values).toEqual([42, 25, 0]);
   });
 });
+test('mapping search matches stock name/ID with parameterized input',async()=>{
+  const db={query:jest.fn().mockResolvedValue({rows:[]})};
+  await new StockItemMappingService(db).list({q:"Infusion'",page:2});
+  const [sql,values]=db.query.mock.calls[0];
+  expect(sql).toContain("CONCAT_WS(' ',si.name,si.id::text,si.category,si.brand)");
+  expect(sql).not.toContain("Infusion'");expect(values).toEqual(["Infusion'",25,25]);
+});

@@ -3,6 +3,7 @@ class StockItemMappingRepository {
   async queue(filters, pagination) {
     const values = []; const where = [];
     const add = (value, expression) => { if (value != null && value !== '') { values.push(value); where.push(expression(values.length)); } };
+    add(filters.q, n => `CONCAT_WS(' ',si.name,si.id::text,si.category,si.brand) ILIKE '%' || $${n} || '%'`);
     add(filters.status, n => `COALESCE(m.mapping_status, si.mapping_status, 'unmapped') = $${n}`);
     add(filters.stockItemId, n => `si.id = $${n}`);
     add(filters.genericItemId, n => `COALESCE(m.generic_item_id, si.generic_item_id) = $${n}`);
@@ -70,7 +71,7 @@ class StockItemMappingRepository {
   }
   async applyIdentity(stockItemId, mapping, actorId, reason) {
     await this.client.query(`UPDATE stock_items SET generic_item_id=$1,approved_product_id=$2,
-      mapping_status=$3,identity_source='normalized',mapped_by=$4,mapped_at=now(),mapping_notes=$5 WHERE id=$6`,
+      inventory_uom_id=(SELECT inventory_uom_id FROM generic_items WHERE id=$1),mapping_status=$3,identity_source='normalized',mapped_by=$4,mapped_at=now(),mapping_notes=$5 WHERE id=$6`,
     [mapping.generic_item_id,mapping.approved_product_id,mapping.approved_product_id?'mapped_product':'mapped_generic',actorId,reason,stockItemId]);
   }
   async audit(stockItemId, action, actorId, reason, values) {

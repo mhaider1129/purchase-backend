@@ -1,5 +1,6 @@
 'use strict';
 const { assertProcurementReady } = require('./procurementItemIdentityService');
+const { assertReadyForCommand, isCompatibilityCandidate } = require('./procurementIdentityPolicyService');
 
 const { parseDecimal, formatDecimal, compareDecimal } = require('./purchaseOrderTotalsService');
 
@@ -14,7 +15,7 @@ const parseEight = (value) => {
   return BigInt(whole) * 100000000n + BigInt((fraction + '00000000').slice(0, 8));
 };
 
-function normalizeQuotationLines(lines, requestedItems, currency = 'USD') {
+function normalizeQuotationLines(lines, requestedItems, currency = 'USD', compatibilityIds = new Set()) {
   if (!Array.isArray(lines) || !lines.length) throw fail('Linked RFx responses require quotation lines', 'RFX_LINE_PRICING_REQUIRED');
   const requested = new Map(requestedItems.map((item) => [String(item.id), item]));
   const seen = new Set();
@@ -49,7 +50,7 @@ function normalizeQuotationLines(lines, requestedItems, currency = 'USD') {
     }
     // Multiplying two four-place scaled integers retains all eight decimal places.
     total += quantity * unitPrice;
-    const requestedItem=requested.get(key); assertProcurementReady(requestedItem); const mode=String(requestedItem.request_mode||''); const physical=Boolean(mode)&&!['service','approved_free_text_exception'].includes(mode); if(physical&&(!line.approved_product_id||!line.supplier_catalog_item_id))throw fail('Physical quotation line requires offered Product and Supplier Catalog Item','RFX_CATALOG_IDENTITY_REQUIRED',409); return { requested_item_id: requestedItem.id, quoted_quantity: formatDecimal(quantity, 4), free_quantity: formatDecimal(freeQuantity, 4), unit_price: formatDecimal(unitPrice, 4), currency: lineCurrency, brand: line.brand || null, offered_specs: line.offered_specs ?? line.specs ?? null, notes: line.notes || null, approved_product_id:line.approved_product_id||null, supplier_catalog_item_id:line.supplier_catalog_item_id||null };
+    const requestedItem=requested.get(key); if(!compatibilityIds.has(String(requestedItem.id))) assertProcurementReady(requestedItem); const mode=String(requestedItem.request_mode||''); const physical=!isCompatibilityCandidate(requestedItem)&&Boolean(mode)&&!['service','approved_free_text_exception'].includes(mode); if(physical&&(!line.approved_product_id||!line.supplier_catalog_item_id))throw fail('Physical quotation line requires offered Product and Supplier Catalog Item','RFX_CATALOG_IDENTITY_REQUIRED',409); if(!physical&&(line.approved_product_id||line.supplier_catalog_item_id))throw fail('Resolve item identity before attaching a physical catalog offer','RFX_CATALOG_IDENTITY_INVALID',409); return { requested_item_id: requestedItem.id, quoted_quantity: formatDecimal(quantity, 4), free_quantity: formatDecimal(freeQuantity, 4), unit_price: formatDecimal(unitPrice, 4), currency: lineCurrency, brand: line.brand || null, offered_specs: line.offered_specs ?? line.specs ?? null, notes: line.notes || null, approved_product_id:line.approved_product_id||null, supplier_catalog_item_id:line.supplier_catalog_item_id||null };
   });
   if (seen.size !== requested.size) throw fail('Quotation must cover every requested item', 'RFX_INCOMPLETE_QUOTATION');
   if (currencies.size !== 1) throw fail('A quotation response must use one currency', 'RFX_MIXED_CURRENCY_NOT_SUPPORTED');
@@ -60,13 +61,15 @@ const compareScaled = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 
 async function submitLinkedRfxResponse({ repository, event, supplierId, submittedBy, bidAmount, notes, responseData, lines }) {
   const requestedItems = await repository.loadRequestedItems(event.request_id);
-  const quotation = normalizeQuotationLines(lines, requestedItems);
+  const compatibilityIds = new Set();
+  for(const item of requestedItems){await assertReadyForCommand(repository.client,item,{id:submittedBy},'submit_quotation');if(isCompatibilityCandidate(item))compatibilityIds.add(String(item.id));}
+  const quotation = normalizeQuotationLines(lines, requestedItems, 'USD', compatibilityIds);
   if (bidAmount !== undefined && bidAmount !== null && bidAmount !== '' && parseEight(quotation.total) !== parseEight(bidAmount)) throw fail('Header bid amount does not match authoritative quotation lines', 'RFX_QUOTATION_TOTAL_MISMATCH', 409);
   const response = await repository.insertResponse({ rfx_id: event.id, request_id: event.request_id, supplier_id: supplierId, submitted_by: submittedBy, bid_amount: quotation.total, currency: quotation.currency, notes, response_data: responseData });
   const persistedLines = [];
   for (const line of quotation.lines) {
     const requested = requestedItems.find((item) => String(item.id) === String(line.requested_item_id));
-    const governedPhysical = requested?.request_mode && !['service','approved_free_text_exception'].includes(requested.request_mode);
+    const governedPhysical = !isCompatibilityCandidate(requested) && requested?.request_mode && !['service','approved_free_text_exception'].includes(requested.request_mode);
     if (governedPhysical && typeof repository.assertOfferIdentity !== 'function') throw fail('RFx catalog authority is not configured', 'RFX_CATALOG_AUTHORITY_REQUIRED', 500);
     if (governedPhysical) {
       const identity = await repository.assertOfferIdentity(line,supplierId);

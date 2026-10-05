@@ -163,6 +163,8 @@ const getItems = async (requestId) => {
     `SELECT ri.id AS item_id,
             ri.id,
             ri.item_name,
+            ri.request_mode,ri.catalog_status,ri.generic_item_id,ri.preferred_product_id,ri.mandatory_product_id,
+            ri.stocking_policy,ri.restriction_justification,ri.canonical_description_snapshot,ri.item_name_snapshot,
             ri.brand,
             NULL::text AS category,
             NULL::text AS sub_category,
@@ -415,6 +417,7 @@ const buildTimeline = (request, approvals, procurementEvents, linkedRecords, att
 const buildAvailableActions = (user, request, approvals, items) => {
   const role = normalize(user?.role);
   const actions = new Set(['upload_attachment', 'add_note', 'export_pdf']);
+  if (hasPermission(user, 'item-master.map') && ['approved','assigned','completed'].includes(normalize(request.status))) actions.add('resolve_item_identity');
   const assignedToUser = Number(request.assigned_to) === Number(user.id) || items.some((item) => Number(item.assigned_to) === Number(user.id));
   const isPrivileged = hasPermission(user, 'requests.manage') || PRIVILEGED_ROLES.has(role);
   const isProcurement = isPrivileged || PROCUREMENT_ROLES.has(role) || assignedToUser;

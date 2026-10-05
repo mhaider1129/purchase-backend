@@ -1,6 +1,7 @@
 'use strict';
 const createHttpError = require('../utils/httpError');
 const { auditItemMaster, resolveIdentity, writeResolvedIdentity } = require('./procurementItemIdentityService');
+const { assertLineNotConsumed } = require('./requestedItemWriteService');
 
 const notFound=()=>Object.assign(createHttpError(404,'Requested item not found in request'),{code:'REQUEST_ITEM_NOT_FOUND_IN_REQUEST'});
 const resolveRequestItem = async (client, requestId, itemId, input, actor) => {
@@ -10,6 +11,7 @@ const resolveRequestItem = async (client, requestId, itemId, input, actor) => {
   if (!current.rowCount) throw notFound();
   const line = current.rows[0];
   if (!['approved','completed','assigned'].includes(String(line.request_status).toLowerCase())) throw createHttpError(409, 'Request approval must complete before item identity resolution');
+  await assertLineNotConsumed(client,itemId);
 
   let genericId = input.generic_item_id ? Number(input.generic_item_id) : null;
   let productId = input.approved_product_id ? Number(input.approved_product_id) : null;
@@ -24,6 +26,16 @@ const resolveRequestItem = async (client, requestId, itemId, input, actor) => {
   const identity = await resolveIdentity(client,line,{generic_item_id:genericId,preferred_product_id:productId,
     request_mode:productId?'generic_item_with_preference':'generic_item'},actor);
   const updated = await writeResolvedIdentity(client,itemId,identity);
+  // Resolving from the request workspace also closes its active steward referral.
+  if (line.request_mode === 'pending_item_creation') {
+    const referrals = await client.query(`UPDATE pending_item_requests SET status='resolved',resolution_type=$2,
+      resolved_generic_item_id=$3,resolved_product_id=$4,resolution_notes=$5,resolved_by=$6,
+      resolved_at=NOW(),updated_at=NOW() WHERE requested_item_id=$1 AND status IN ('submitted','review','needs_information') RETURNING *`,
+      [itemId,productId?'existing_product':'existing_generic',genericId,productId||null,reason,actor.id]);
+    for(const referral of referrals.rows) await auditItemMaster(client,{entityType:'pending_item_request',entityId:referral.id,
+      action:`resolved.${referral.resolution_type}`,actorId:actor.id,reason,requestId:line.request_id,requestedItemId:itemId,
+      next:referral,context:{resolution_source:'request_workspace'}});
+  }
   await auditItemMaster(client, { entityType:'requested_item', entityId:itemId, action:stockItemId?'resolved.stock_item':productId?'resolved.product':'resolved.generic', actorId:actor.id, reason, previous:line, next:updated.rows[0], requestId:line.request_id, requestedItemId:itemId, sourceId:stockItemId, targetId:productId||genericId, context:{ stock_item_id:stockItemId, resolved_generic_item_id:genericId, resolved_product_id:productId, resolved_at:new Date().toISOString() } });
   return { ...updated.rows[0], resolution: { state:productId?'RESOLVED_PRODUCT':'RESOLVED_GENERIC', resolved_generic_item_id:genericId, resolved_product_id:productId, stock_item_id:stockItemId, resolved_by:actor.id, reason } };
 };
@@ -35,6 +47,7 @@ const linkPendingItemRequest = async (client, requestId, itemId, input, actor) =
   if(!found.rowCount) throw notFound();
   const line=found.rows[0];
   if(!['approved','completed','assigned'].includes(String(line.request_status).toLowerCase())) throw createHttpError(409,'Request approval must complete before master-data referral');
+  await assertLineNotConsumed(client,itemId);
   const existing=await client.query("SELECT * FROM pending_item_requests WHERE requested_item_id=$1 AND status IN ('submitted','review','needs_information') ORDER BY id FOR UPDATE",[itemId]);
   if(existing.rowCount)return existing.rows[0];
   const terminal=await client.query('SELECT id FROM pending_item_requests WHERE requested_item_id=$1 ORDER BY id DESC LIMIT 1',[itemId]);

@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const validator = require('../validators/itemMasterFoundationValidator');
 const uomAuthority = require('./uomConversionService');
+const { assertLineNotConsumed } = require('./requestedItemWriteService');
 const { resolveIdentity, writeResolvedIdentity } = require('./procurementItemIdentityService');
 
 const SORTS = Object.freeze({ name: 'generic_name', code: 'item_code', updated: 'updated_at', created: 'created_at' });
@@ -260,7 +261,7 @@ class ItemMasterFoundationService {
     const p=validator.pending(payload||{}); const result=await this.db.query(`INSERT INTO pending_item_requests (proposed_name,item_type,category,required_specifications,intended_use,requested_quantity,requested_uom,justification,request_id,requested_item_id,requester_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,Object.values(p).concat(actorId)); return result.rows[0];
   }
 
-  async pendingQueue(query={}) { const {page,pageSize}=pageOptions(query); const params=[]; let clause=''; if(query.status){params.push(query.status);clause='WHERE status=$1';} params.push(pageSize,(page-1)*pageSize); const result=await this.db.query(`SELECT *,COUNT(*) OVER()::INTEGER total_count FROM pending_item_requests ${clause} ORDER BY created_at ASC LIMIT $${params.length-1} OFFSET $${params.length}`,params); return {data:result.rows.map(({total_count,...row})=>row),page,page_size:pageSize,total:result.rows[0]?.total_count||0}; }
+  async pendingQueue(query={}) { const {page,pageSize}=pageOptions(query); const params=[]; let clause=''; if(query.status==='open'){clause="WHERE status IN ('submitted','review','needs_information')";}else if(query.status){params.push(query.status);clause='WHERE status=$1';} params.push(pageSize,(page-1)*pageSize); const result=await this.db.query(`SELECT *,COUNT(*) OVER()::INTEGER total_count FROM pending_item_requests ${clause} ORDER BY created_at ASC LIMIT $${params.length-1} OFFSET $${params.length}`,params); return {data:result.rows.map(({total_count,...row})=>row),page,page_size:pageSize,total:result.rows[0]?.total_count||0}; }
 
   async referenceData() {
     const [categories,uom,manufacturers] = await Promise.all([
@@ -311,11 +312,22 @@ class ItemMasterFoundationService {
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
-      const pendingResult = await client.query(
-        `SELECT p.*,r.institute_id,r.department_id FROM pending_item_requests p
-         LEFT JOIN requests r ON r.id=p.request_id WHERE p.id=$1 FOR UPDATE OF p`, [id]);
+      const pendingLookup = `SELECT p.*,r.institute_id,r.department_id FROM pending_item_requests p
+         LEFT JOIN requests r ON r.id=p.request_id WHERE p.id=$1`;
+      const pendingResult = await client.query(pendingLookup,[id]);
       if (!pendingResult.rowCount) throw createHttpError(404, 'Pending item request not found');
-      const pending = pendingResult.rows[0];
+      const initial = pendingResult.rows[0];
+      if (actor?.institute_id && initial.institute_id && Number(actor.institute_id) !== Number(initial.institute_id)) throw createHttpError(403, 'Pending item belongs to another institute');
+      // Match request-workspace resolution's lock order: line, then referral.
+      let requestedLine;
+      if(initial.requested_item_id) {
+        const line = await client.query('SELECT * FROM public.requested_items WHERE id=$1 AND request_id=$2 FOR UPDATE',[initial.requested_item_id,initial.request_id]);
+        requestedLine=line.rows[0];
+      }
+      const lockedPending = await client.query(`${pendingLookup} FOR UPDATE OF p`,[id]);
+      if(!lockedPending.rowCount) throw createHttpError(404,'Pending item request not found');
+      const pending = lockedPending.rows[0];
+      if(String(pending.requested_item_id || '') !== String(initial.requested_item_id || '') || String(pending.request_id || '') !== String(initial.request_id || '')) throw createHttpError(409,'Pending referral scope changed; reload before resolving');
       if (!['submitted','review','needs_information'].includes(pending.status)) {
         const sameGeneric = Number(pending.resolved_generic_item_id) === Number(payload.generic_item_id);
         const sameProduct = (pending.resolved_product_id == null && payload.product_id == null) || Number(pending.resolved_product_id) === Number(payload.product_id);
@@ -326,12 +338,7 @@ class ItemMasterFoundationService {
         throw createHttpError(409, 'Pending item has already been resolved to a different governed identity');
       }
       if (actor?.institute_id && pending.institute_id && Number(actor.institute_id) !== Number(pending.institute_id)) throw createHttpError(403, 'Pending item belongs to another institute');
-      let requestedLine;
-      if (pending.requested_item_id) {
-        const line = await client.query('SELECT * FROM public.requested_items WHERE id=$1 AND request_id=$2 FOR UPDATE', [pending.requested_item_id,pending.request_id]);
-        if (!line.rowCount) throw createHttpError(409, 'Related request line no longer exists');
-        requestedLine = line.rows[0];
-      }
+      if (pending.requested_item_id && !requestedLine) throw createHttpError(409, 'Related request line no longer exists');
       let genericItemId = payload.generic_item_id ? Number(payload.generic_item_id) : null;
       let productId = payload.product_id ? Number(payload.product_id) : null;
       let resolvedIdentity;
@@ -364,7 +371,7 @@ class ItemMasterFoundationService {
         genericItemId = created.rows[0].id;
       }
       if (pending.requested_item_id) {
-        if (resolvedIdentity) await writeResolvedIdentity(client,pending.requested_item_id,resolvedIdentity);
+        if (resolvedIdentity) { await assertLineNotConsumed(client,pending.requested_item_id); await writeResolvedIdentity(client,pending.requested_item_id,resolvedIdentity); }
         if (resolutionType === 'rejected') await client.query("UPDATE public.requested_items SET catalog_status='pending_mapping',procurement_status='rejected' WHERE id=$1", [pending.requested_item_id]);
       }
       const status = resolutionType === 'needs_information' ? 'needs_information' : resolutionType === 'rejected' ? 'rejected' : resolutionType === 'approved_free_text_exception' ? 'approved_exception' : resolutionType === 'new_generic_draft' ? 'review' : 'resolved';

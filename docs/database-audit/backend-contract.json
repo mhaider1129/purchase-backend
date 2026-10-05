@@ -1,0 +1,5941 @@
+{
+  "baselineRef": "e2053f01",
+  "snapshots": {
+    "View_Supabase_SQL.sql": "7cab5846aa1ac736211206a7bad9da1af9495b35f6064aece8a6890198a04dde",
+    "permissions_Table.sql": "09a9f3721d6e82fde33130c93ec1f51e35bc63a2d77d1673d64a322f9e3f7357",
+    "UI_resource_permissions.sql": "e95fccf5585f276d845f1917804272a3778ee03bdc7697290151b3f01df10fe2"
+  },
+  "requiredColumns": {
+    "ai_interactions": [
+      "completed_at",
+      "created_at",
+      "feature",
+      "id",
+      "institute_id",
+      "metadata",
+      "model",
+      "provider",
+      "session_id",
+      "started_at",
+      "status",
+      "user_id"
+    ],
+    "ai_tool_executions": [
+      "created_at",
+      "error_code",
+      "execution_time_ms",
+      "id",
+      "interaction_id",
+      "parameters",
+      "record_count",
+      "result_metadata",
+      "success",
+      "tool_name"
+    ],
+    "ap_payables": [
+      "ap_voucher_id",
+      "created_at",
+      "currency",
+      "due_date",
+      "id",
+      "invoice_total",
+      "open_balance",
+      "payable_status",
+      "posted_at",
+      "posted_by",
+      "request_id",
+      "supplier_id",
+      "supplier_invoice_id",
+      "supplier_name"
+    ],
+    "ap_voucher_lines": [
+      "account_code",
+      "ap_voucher_id",
+      "credit_amount",
+      "debit_amount",
+      "description",
+      "id",
+      "line_number",
+      "reference_id",
+      "reference_type"
+    ],
+    "ap_vouchers": [
+      "contract_id",
+      "created_at",
+      "created_by",
+      "currency",
+      "id",
+      "idempotency_key",
+      "payload_fingerprint",
+      "posted_at",
+      "posted_by",
+      "request_id",
+      "supplier_invoice_id",
+      "total_amount",
+      "verified_at",
+      "verified_by",
+      "voided_at",
+      "voucher_number",
+      "voucher_status"
+    ],
+    "approval_authority_delegations": [
+      "authority_id",
+      "authority_kind",
+      "created_at",
+      "created_by",
+      "delegate_user_id",
+      "delegator_user_id",
+      "effective_from",
+      "effective_period",
+      "effective_to",
+      "id",
+      "institute_id",
+      "organization_position_id",
+      "reason",
+      "revocation_reason",
+      "revoked_at",
+      "revoked_by",
+      "row_version",
+      "scope",
+      "status"
+    ],
+    "approval_logs": [
+      "action",
+      "approval_id",
+      "approver_id",
+      "comments",
+      "created_at",
+      "id",
+      "request_id",
+      "timestamp"
+    ],
+    "approval_policies": [
+      "code",
+      "created_at",
+      "created_by",
+      "description",
+      "id",
+      "institute_id",
+      "is_active",
+      "name",
+      "request_scope",
+      "updated_at",
+      "updated_by"
+    ],
+    "approval_policy_rule_conditions": [
+      "condition_group",
+      "condition_type",
+      "condition_value",
+      "created_at",
+      "id",
+      "policy_rule_id"
+    ],
+    "approval_policy_rule_steps": [
+      "approval_level",
+      "created_at",
+      "display_name",
+      "id",
+      "parallel_group",
+      "policy_rule_id",
+      "required",
+      "resolver_reference",
+      "resolver_type",
+      "semantic_key",
+      "step_order"
+    ],
+    "approval_policy_rules": [
+      "created_at",
+      "description",
+      "id",
+      "is_active",
+      "name",
+      "policy_version_id",
+      "priority",
+      "rule_code",
+      "stop_processing"
+    ],
+    "approval_policy_shadow_differences": [
+      "created_at",
+      "current_step_sequence",
+      "details",
+      "difference_type",
+      "id",
+      "shadow_run_id",
+      "shadow_step_sequence"
+    ],
+    "approval_policy_shadow_runs": [
+      "created_at",
+      "existing_route_version",
+      "facts_snapshot",
+      "generated_at",
+      "generated_by",
+      "id",
+      "policy_version_id",
+      "request_id",
+      "run_status",
+      "summary"
+    ],
+    "approval_policy_shadow_steps": [
+      "approval_level",
+      "created_at",
+      "id",
+      "parallel_group",
+      "resolution_reason",
+      "resolution_status",
+      "resolved_unit_id",
+      "resolved_user_id",
+      "resolved_user_name",
+      "resolver_reference",
+      "resolver_type",
+      "semantic_key",
+      "sequence",
+      "shadow_run_id"
+    ],
+    "approval_policy_versions": [
+      "activated_at",
+      "activated_by",
+      "approval_policy_id",
+      "change_reason",
+      "created_at",
+      "created_by",
+      "effective_from",
+      "effective_to",
+      "id",
+      "status",
+      "validated_at",
+      "validated_by",
+      "version_number"
+    ],
+    "approval_route_rules": [
+      "approval_level",
+      "approver_id",
+      "department_type",
+      "id",
+      "max_amount",
+      "min_amount",
+      "request_type",
+      "role",
+      "version_id",
+      "warehouse_id"
+    ],
+    "approval_route_snapshot_steps": [
+      "acting_approver_id",
+      "approval_level",
+      "delegation_id",
+      "generated_at",
+      "id",
+      "parallel_group",
+      "policy_rule_id",
+      "policy_step_id",
+      "required_authority",
+      "resolution_reason",
+      "resolution_type",
+      "resolved_position_id",
+      "resolved_unit_id",
+      "row_version",
+      "semantic_key",
+      "sequence",
+      "snapshot_id",
+      "structural_holder_id"
+    ],
+    "approval_route_snapshots": [
+      "facts_snapshot",
+      "generated_at",
+      "generated_by",
+      "generation_number",
+      "generation_reason",
+      "id",
+      "institute_id",
+      "policy_id",
+      "policy_version_id",
+      "request_id",
+      "route_generation_context",
+      "row_version",
+      "supersedes_snapshot_id"
+    ],
+    "approval_route_versions": [
+      "change_summary",
+      "created_at",
+      "created_by",
+      "id",
+      "is_active",
+      "version_label"
+    ],
+    "approval_routes": [
+      "approval_level",
+      "department_type",
+      "id",
+      "max_amount",
+      "min_amount",
+      "request_type",
+      "role"
+    ],
+    "approvals": [
+      "approval_level",
+      "approval_route_version",
+      "approved_at",
+      "approver_id",
+      "comments",
+      "decided_at",
+      "id",
+      "is_active",
+      "is_superseded",
+      "is_urgent",
+      "rejected_at",
+      "reminder_sent_at",
+      "request_id",
+      "route_snapshot",
+      "route_snapshot_id",
+      "status",
+      "superseded_at",
+      "superseded_by_user_id",
+      "superseded_reason",
+      "updated_at"
+    ],
+    "approved_products": [
+      "approval_status",
+      "approved_at",
+      "approved_by",
+      "certifications",
+      "created_at",
+      "created_by",
+      "effective_from",
+      "effective_to",
+      "generic_item_id",
+      "id",
+      "institute_id",
+      "inventory_conversion_factor",
+      "is_active",
+      "is_preferred",
+      "manufacturer",
+      "manufacturer_id",
+      "manufacturer_part_number",
+      "model",
+      "normalized_manufacturer_part_number",
+      "package_configuration",
+      "package_quantity",
+      "product_description",
+      "product_identifier",
+      "product_name",
+      "product_uom",
+      "product_uom_id",
+      "regulatory_identifiers",
+      "technical_notes",
+      "technical_specifications",
+      "updated_at"
+    ],
+    "approved_spare_parts": [
+      "created_at",
+      "created_by",
+      "criticality",
+      "description",
+      "drawing_number",
+      "estimated_annual_consumption",
+      "failure_consequence",
+      "generic_item_id",
+      "id",
+      "institute_id",
+      "interchangeability_status",
+      "is_consumable",
+      "is_repairable",
+      "is_safety_critical",
+      "is_serialized",
+      "lifecycle_status",
+      "manufacturer_name",
+      "manufacturer_part_number",
+      "name",
+      "oem_part_number",
+      "preferred_approved_product_id",
+      "recommended_max_quantity",
+      "recommended_min_quantity",
+      "recommended_safety_stock",
+      "recommended_stocking_policy",
+      "revision",
+      "row_version",
+      "shelf_life_days",
+      "spare_part_code",
+      "spare_part_type",
+      "stock_item_id",
+      "storage_conditions",
+      "technical_approval_reason",
+      "technical_approval_status",
+      "technical_approved_at",
+      "technical_approved_by",
+      "technical_specification",
+      "typical_lead_time_days",
+      "updated_at",
+      "updated_by"
+    ],
+    "asset_categories": [
+      "code",
+      "created_at",
+      "created_by",
+      "description",
+      "id",
+      "institute_id",
+      "is_active",
+      "name",
+      "parent_category_id",
+      "updated_at",
+      "updated_by"
+    ],
+    "asset_exceptions": [
+      "acknowledged_at",
+      "acknowledged_by",
+      "asset_id",
+      "asset_tag_id",
+      "created_at",
+      "detected_at",
+      "exception_type",
+      "id",
+      "institute_id",
+      "resolution_notes",
+      "resolved_at",
+      "resolved_by",
+      "rfid_business_event_id",
+      "severity",
+      "status"
+    ],
+    "asset_inventory_discoveries": [
+      "condition_observed",
+      "department_id",
+      "description",
+      "discovered_at",
+      "discovered_by",
+      "evidence",
+      "id",
+      "institute_id",
+      "manufacturer",
+      "model",
+      "notes",
+      "observed_location_id",
+      "registered_asset_id",
+      "registered_at",
+      "serial_number",
+      "session_id"
+    ],
+    "asset_inventory_expected_assets": [
+      "asset_id",
+      "asset_number_snapshot",
+      "category_id",
+      "category_name_snapshot",
+      "condition_snapshot",
+      "description_snapshot",
+      "expected_custodian_name_snapshot",
+      "expected_custodian_user_id",
+      "expected_department_id",
+      "expected_department_name_snapshot",
+      "expected_location_id",
+      "expected_location_name_snapshot",
+      "expected_rfid_epc_snapshot",
+      "expected_section_id",
+      "expected_section_name_snapshot",
+      "id",
+      "institute_id",
+      "operational_status_snapshot",
+      "session_id",
+      "snapshot_at"
+    ],
+    "asset_inventory_findings": [
+      "acknowledged_at",
+      "acknowledged_by",
+      "asset_id",
+      "context",
+      "created_at",
+      "created_by",
+      "discovery_id",
+      "expected_asset_id",
+      "finding_type",
+      "id",
+      "institute_id",
+      "observation_id",
+      "resolution_code",
+      "resolution_notes",
+      "resolved_at",
+      "resolved_by",
+      "session_id",
+      "severity",
+      "status"
+    ],
+    "asset_inventory_number_allocators": [
+      "institute_id",
+      "next_value",
+      "prefix"
+    ],
+    "asset_inventory_observations": [
+      "asset_id",
+      "condition_observed",
+      "created_at",
+      "dedupe_key",
+      "id",
+      "institute_id",
+      "notes",
+      "observation_method",
+      "observed_at",
+      "observed_by",
+      "observed_custodian_user_id",
+      "observed_department_id",
+      "observed_identifier",
+      "observed_location_id",
+      "operational_status_observed",
+      "raw_evidence",
+      "rfid_business_event_id",
+      "rfid_read_event_id",
+      "session_id"
+    ],
+    "asset_inventory_resolutions": [
+      "business_object_id",
+      "business_object_type",
+      "created_at",
+      "created_by",
+      "finding_id",
+      "from_status",
+      "id",
+      "institute_id",
+      "resolution_code",
+      "resolution_notes",
+      "to_status"
+    ],
+    "asset_inventory_sessions": [
+      "cancellation_reason",
+      "cancelled_at",
+      "cancelled_by",
+      "completed_at",
+      "completed_by",
+      "counting_started_at",
+      "created_at",
+      "created_by",
+      "description",
+      "id",
+      "include_descendants",
+      "institute_id",
+      "name",
+      "review_started_at",
+      "row_version",
+      "scope_department_id",
+      "scope_location_id",
+      "scope_type",
+      "session_number",
+      "started_at",
+      "started_by",
+      "status",
+      "updated_at",
+      "updated_by"
+    ],
+    "asset_locations": [
+      "code",
+      "created_at",
+      "created_by",
+      "department_id",
+      "id",
+      "institute_id",
+      "is_active",
+      "location_type",
+      "name",
+      "parent_location_id",
+      "section_id",
+      "updated_at",
+      "updated_by"
+    ],
+    "asset_movements": [
+      "actual_return_at",
+      "approved_at",
+      "approved_by",
+      "asset_id",
+      "created_at",
+      "dispatched_at",
+      "dispatched_by",
+      "expected_return_at",
+      "from_department_id",
+      "from_location_id",
+      "id",
+      "institute_id",
+      "movement_type",
+      "origin_movement_id",
+      "reason",
+      "received_at",
+      "received_by",
+      "requested_at",
+      "requested_by",
+      "status",
+      "to_department_id",
+      "to_location_id",
+      "updated_at"
+    ],
+    "asset_number_allocators": [
+      "institute_id",
+      "next_value",
+      "prefix"
+    ],
+    "asset_tags": [
+      "asset_id",
+      "created_at",
+      "epc",
+      "id",
+      "installed_at",
+      "installed_by",
+      "institute_id",
+      "is_primary",
+      "notes",
+      "qr_value",
+      "replacement_reason",
+      "retired_at",
+      "retired_by",
+      "tag_status",
+      "tag_type",
+      "tid",
+      "updated_at"
+    ],
+    "assets": [
+      "acquisition_amount_iqd",
+      "acquisition_cost",
+      "acquisition_currency",
+      "acquisition_date",
+      "acquisition_method",
+      "approved_product_id",
+      "asset_category_id",
+      "asset_class",
+      "asset_number",
+      "capitalization_status",
+      "condition",
+      "created_at",
+      "created_by",
+      "creation_source",
+      "currency",
+      "current_location_id",
+      "deployment_date",
+      "description",
+      "exchange_rate_effective_date",
+      "exchange_rate_source",
+      "exchange_rate_to_iqd",
+      "finance_asset_number",
+      "generic_item_id",
+      "goods_receipt_id",
+      "goods_receipt_item_id",
+      "id",
+      "institute_id",
+      "is_active",
+      "manufacturer",
+      "model",
+      "notes",
+      "operational_status",
+      "owner_name",
+      "ownership_type",
+      "purchase_order_id",
+      "purchase_order_item_id",
+      "purchase_request_id",
+      "reconciliation_status",
+      "requested_item_id",
+      "responsible_department_id",
+      "responsible_section_id",
+      "row_version",
+      "serial_number",
+      "stock_item_id",
+      "supplier_id",
+      "updated_at",
+      "updated_by",
+      "warranty_expiry"
+    ],
+    "attachments": [
+      "contract_id",
+      "file_name",
+      "file_path",
+      "id",
+      "item_id",
+      "request_id",
+      "uploaded_at",
+      "uploaded_by"
+    ],
+    "audit_logs": [
+      "action",
+      "action_type",
+      "actor_id",
+      "created_at",
+      "description",
+      "details",
+      "id",
+      "target_id",
+      "target_type",
+      "user_id"
+    ],
+    "audit_registry_entries": [
+      "account_name",
+      "audit_status",
+      "completed_at",
+      "created_at",
+      "created_by",
+      "currency",
+      "finance_issued_amount",
+      "id",
+      "notes",
+      "request_id",
+      "requester_id",
+      "requester_type",
+      "required_after_payment",
+      "required_before_payment",
+      "returned_amount",
+      "updated_at",
+      "updated_by"
+    ],
+    "budget_envelopes": [
+      "allocated_amount",
+      "consumed_amount",
+      "created_at",
+      "created_by",
+      "currency",
+      "department_id",
+      "fiscal_year",
+      "id",
+      "project_id",
+      "updated_at"
+    ],
+    "commitment_ledger": [
+      "actor_id",
+      "amount",
+      "ap_voucher_id",
+      "budget_envelope_id",
+      "created_at",
+      "currency",
+      "id",
+      "idempotency_key",
+      "journal_entry_id",
+      "notes",
+      "parent_commitment_id",
+      "purchase_order_id",
+      "request_id",
+      "source_id",
+      "source_type",
+      "stage",
+      "state",
+      "supplier_invoice_id"
+    ],
+    "contract_ai_extractions": [
+      "confidence_score",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "document_id",
+      "document_version_id",
+      "error_message",
+      "extracted_dates",
+      "extracted_obligations",
+      "extracted_parties",
+      "extracted_payment_terms",
+      "extracted_renewal_clause",
+      "extracted_risks",
+      "extracted_termination_clause",
+      "extracted_value",
+      "extraction_status",
+      "id",
+      "model",
+      "provider",
+      "raw_json",
+      "summary",
+      "updated_at"
+    ],
+    "contract_alerts": [
+      "alert_type",
+      "contract_id",
+      "created_at",
+      "id",
+      "is_active",
+      "last_triggered_at",
+      "metadata",
+      "threshold_value"
+    ],
+    "contract_amendments": [
+      "amendment_date",
+      "amendment_number",
+      "approved_by",
+      "change_summary",
+      "contract_id",
+      "created_at",
+      "id",
+      "revised_expiry",
+      "revised_value",
+      "snapshot"
+    ],
+    "contract_approvals": [
+      "approval_level",
+      "assigned_at",
+      "comments",
+      "contract_id",
+      "created_at",
+      "decided_at",
+      "decision",
+      "id",
+      "is_active",
+      "is_active_level",
+      "review_sections",
+      "reviewer_department_id",
+      "reviewer_id",
+      "reviewer_role",
+      "stage",
+      "status",
+      "updated_at",
+      "workflow_level"
+    ],
+    "contract_clause_assignments": [
+      "clause_id",
+      "contract_id",
+      "created_at",
+      "custom_override_content",
+      "id",
+      "sort_order"
+    ],
+    "contract_clauses": [
+      "clause_content",
+      "clause_title",
+      "clause_type",
+      "clause_version",
+      "created_at",
+      "created_by",
+      "id",
+      "is_active",
+      "language",
+      "updated_at"
+    ],
+    "contract_consumption": [
+      "amount",
+      "consumption_date",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "currency",
+      "description",
+      "id",
+      "invoice_id",
+      "source_id",
+      "source_type"
+    ],
+    "contract_document_versions": [
+      "checksum",
+      "contract_id",
+      "document_id",
+      "file_name",
+      "file_size",
+      "file_url",
+      "id",
+      "is_current",
+      "mime_type",
+      "notes",
+      "storage_path",
+      "uploaded_at",
+      "uploaded_by",
+      "version_number"
+    ],
+    "contract_documents": [
+      "contract_id",
+      "created_at",
+      "created_by",
+      "current_version_id",
+      "description",
+      "document_type",
+      "id",
+      "status",
+      "title",
+      "updated_at"
+    ],
+    "contract_equipment_coverage": [
+      "calibration_included",
+      "consumables_included",
+      "contract_id",
+      "corrective_included",
+      "coverage_end",
+      "coverage_limit",
+      "coverage_start",
+      "coverage_type",
+      "created_at",
+      "created_by",
+      "currency",
+      "equipment_id",
+      "id",
+      "institute_id",
+      "labor_included",
+      "notes",
+      "parts_included",
+      "pm_included",
+      "resolution_time_hours",
+      "response_time_hours",
+      "software_included",
+      "travel_included",
+      "updated_at",
+      "updated_by",
+      "uptime_target_percent"
+    ],
+    "contract_evaluations": [
+      "contract_id",
+      "created_at",
+      "criterion_code",
+      "criterion_id",
+      "criterion_name",
+      "criterion_role",
+      "evaluation_criteria",
+      "evaluation_notes",
+      "evaluator_id",
+      "id",
+      "request_fulfillment_metrics",
+      "status",
+      "technical_inspection_results",
+      "total_score",
+      "updated_at"
+    ],
+    "contract_invoices": [
+      "amount",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "currency",
+      "discount_amount",
+      "document_id",
+      "due_date",
+      "id",
+      "invoice_date",
+      "invoice_number",
+      "matching_flags",
+      "matching_status",
+      "net_payable_amount",
+      "notes",
+      "penalty_amount",
+      "received_date",
+      "retention_amount",
+      "status",
+      "supplier_id",
+      "tax_amount",
+      "updated_at"
+    ],
+    "contract_items": [
+      "approved_product_id",
+      "brand_name",
+      "contract_id",
+      "contracted_price",
+      "created_at",
+      "currency",
+      "delivered_quantity",
+      "generic_item_id",
+      "generic_name",
+      "id",
+      "is_active",
+      "item_id",
+      "item_name",
+      "lead_time_days",
+      "minimum_order_quantity",
+      "notes",
+      "price_valid_from",
+      "price_valid_to",
+      "requested_quantity",
+      "supplier_catalog_item_id",
+      "unit",
+      "updated_at",
+      "warranty_terms"
+    ],
+    "contract_legal_reviews": [
+      "approved",
+      "approved_clauses",
+      "comments",
+      "contract_id",
+      "flagged_clauses",
+      "governing_law",
+      "id",
+      "jurisdiction",
+      "legal_risk_level",
+      "reviewed_at",
+      "reviewer_id"
+    ],
+    "contract_logs": [
+      "action",
+      "actor_id",
+      "contract_id",
+      "created_at",
+      "details",
+      "id"
+    ],
+    "contract_negotiations": [
+      "approved_changes",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "discussion_summary",
+      "id",
+      "negotiated_terms",
+      "negotiated_value",
+      "negotiation_round",
+      "rejected_changes",
+      "requested_changes"
+    ],
+    "contract_obligations": [
+      "completed_at",
+      "completed_by",
+      "completion_notes",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "description",
+      "due_date",
+      "evidence_document_id",
+      "evidence_required",
+      "id",
+      "next_due_date",
+      "obligation_type",
+      "owner_department_id",
+      "owner_user_id",
+      "priority",
+      "proof_attachment_id",
+      "recurrence",
+      "recurrence_interval",
+      "responsible_party",
+      "status",
+      "title",
+      "updated_at"
+    ],
+    "contract_payments": [
+      "amount",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "currency",
+      "id",
+      "invoice_id",
+      "method",
+      "notes",
+      "payment_date",
+      "payment_reference",
+      "status",
+      "updated_at"
+    ],
+    "contract_renewal_events": [
+      "alert_date",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "decided_at",
+      "decided_by",
+      "decision",
+      "decision_notes",
+      "id",
+      "notice_days",
+      "renewal_date",
+      "renewal_type",
+      "status",
+      "updated_at"
+    ],
+    "contract_required_documents": [
+      "attachment_id",
+      "contract_id",
+      "created_at",
+      "document_type",
+      "id",
+      "is_uploaded",
+      "notes",
+      "updated_at"
+    ],
+    "contract_risk_assessments": [
+      "assessed_at",
+      "assessed_by",
+      "assessment_source",
+      "contract_id",
+      "created_at",
+      "id",
+      "notes",
+      "risk_factors",
+      "risk_level",
+      "risk_score"
+    ],
+    "contract_sla_events": [
+      "breached",
+      "contract_id",
+      "created_at",
+      "event_type",
+      "id",
+      "notes",
+      "resolution_time_minutes",
+      "response_time_minutes",
+      "target_resolution_minutes",
+      "target_response_minutes"
+    ],
+    "contract_templates": [
+      "contract_category",
+      "contract_type",
+      "created_at",
+      "created_by",
+      "default_alert_rules",
+      "default_clauses",
+      "default_currency",
+      "default_sections",
+      "id",
+      "is_active",
+      "template_name",
+      "updated_at"
+    ],
+    "contract_versions": [
+      "change_summary",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "id",
+      "snapshot",
+      "version_number"
+    ],
+    "contracts": [
+      "actual_consumed_value",
+      "alert_rules",
+      "amount_paid",
+      "authorized_signatory",
+      "block_overspend",
+      "change_management_terms",
+      "clm_additional_payload",
+      "commercial_terms",
+      "committed_value",
+      "compliance_legal_terms",
+      "contract_category",
+      "contract_manager_id",
+      "contract_owner",
+      "contract_type",
+      "contract_value",
+      "created_at",
+      "created_by",
+      "currency",
+      "deliverables",
+      "delivery_logistics_details",
+      "delivery_terms",
+      "description",
+      "digital_attachments_tracking",
+      "end_date",
+      "end_user_department_id",
+      "estimated_contract_value",
+      "exclusions",
+      "financial_payment_control",
+      "first_party",
+      "framework_ceiling_value",
+      "framework_end_date",
+      "framework_remaining_balance",
+      "framework_start_date",
+      "id",
+      "institute",
+      "is_framework_agreement",
+      "is_historical_contract",
+      "main_technical_department_id",
+      "payment_terms_details",
+      "penalties_incentives",
+      "performance_management",
+      "procurement_method",
+      "reference_number",
+      "renewal_notice_days",
+      "renewal_type",
+      "reserve_budget_on_activation",
+      "risk_dispute_management",
+      "scope_summary",
+      "second_party",
+      "secondary_technical_reviews",
+      "service_coverage",
+      "signing_date",
+      "sla_details",
+      "sla_requirements",
+      "source_request_id",
+      "start_date",
+      "status",
+      "supplier_id",
+      "technical_department_ids",
+      "technical_specifications",
+      "termination_exit_terms",
+      "title",
+      "updated_at",
+      "vendor",
+      "vendor_address",
+      "vendor_contact_email",
+      "vendor_contact_person",
+      "vendor_contact_phone",
+      "vendor_tax_id",
+      "warranty_terms"
+    ],
+    "custody_records": [
+      "acknowledgment_accepted",
+      "acknowledgment_accepted_at",
+      "asset_category",
+      "asset_id",
+      "asset_tag",
+      "building",
+      "condition_at_issue",
+      "cost_center",
+      "created_at",
+      "custodian_department_id",
+      "custodian_user_id",
+      "custody_code",
+      "custody_type",
+      "description",
+      "floor",
+      "hod_approval_status",
+      "hod_approved_at",
+      "hod_user_id",
+      "id",
+      "issued_by",
+      "item_name",
+      "manufacturer",
+      "model",
+      "pre_existing_condition",
+      "quantity",
+      "room",
+      "section_unit",
+      "serial_number",
+      "status",
+      "updated_at",
+      "user_approval_status",
+      "user_approved_at"
+    ],
+    "data_scopes": [
+      "code",
+      "description",
+      "id",
+      "name"
+    ],
+    "department_item_follow_up_notes": [
+      "created_at",
+      "created_by",
+      "department_id",
+      "department_response",
+      "id",
+      "next_follow_up_date",
+      "note",
+      "request_id",
+      "requested_item_id",
+      "section_id"
+    ],
+    "department_priority_rankings": [
+      "department_id",
+      "department_rank",
+      "department_rank_total",
+      "id",
+      "institute_id",
+      "procurement_case_id",
+      "ranked_at",
+      "ranked_by",
+      "valid_until"
+    ],
+    "department_stock_levels": [
+      "department_id",
+      "expiry_date",
+      "id",
+      "lot_number",
+      "quantity",
+      "section_id",
+      "serial_number",
+      "stock_item_id",
+      "updated_at",
+      "updated_by",
+      "warehouse_batch_id"
+    ],
+    "department_stock_movements": [
+      "created_at",
+      "created_by",
+      "department_stock_level_id",
+      "direction",
+      "expiry_date",
+      "id",
+      "lot_number",
+      "notes",
+      "quantity",
+      "reference_request_id",
+      "serial_number",
+      "source_batch_id",
+      "source_warehouse_id"
+    ],
+    "departments": [
+      "id",
+      "institute_id",
+      "name",
+      "type"
+    ],
+    "document_branding_settings": [
+      "document_code",
+      "key",
+      "logo_data",
+      "template_data",
+      "updated_at",
+      "updated_by"
+    ],
+    "document_flow_links": [
+      "created_at",
+      "created_by",
+      "id",
+      "metadata",
+      "request_id",
+      "source_document_id",
+      "source_document_type",
+      "target_document_id",
+      "target_document_type"
+    ],
+    "employee_tasks": [
+      "assigned_at",
+      "assigned_by",
+      "assigned_to",
+      "completed_at",
+      "description",
+      "employee_update",
+      "id",
+      "status",
+      "title",
+      "updated_at"
+    ],
+    "evaluation_criteria": [
+      "assignment_config",
+      "code",
+      "components",
+      "created_at",
+      "id",
+      "name",
+      "role"
+    ],
+    "finance_action_history": [
+      "action_payload",
+      "action_type",
+      "actor_id",
+      "created_at",
+      "id",
+      "request_id"
+    ],
+    "finance_chart_of_accounts": [
+      "account_type",
+      "code",
+      "created_at",
+      "id",
+      "is_active",
+      "name"
+    ],
+    "finance_cost_centers": [
+      "code",
+      "created_at",
+      "department_id",
+      "id",
+      "is_active",
+      "name",
+      "project_id"
+    ],
+    "finance_postings": [
+      "ap_voucher_id",
+      "created_at",
+      "id",
+      "idempotency_key",
+      "liability_recognized_amount",
+      "posted_at",
+      "posted_by",
+      "posting_reference",
+      "posting_status",
+      "request_id",
+      "supplier_invoice_id"
+    ],
+    "generic_item_merges": [
+      "completed_at",
+      "conflict_details",
+      "created_at",
+      "id",
+      "merge_reason",
+      "reviewed_by",
+      "source_generic_item_id",
+      "status",
+      "target_generic_item_id"
+    ],
+    "generic_items": [
+      "approved_at",
+      "approved_by",
+      "base_uom",
+      "base_uom_id",
+      "batch_controlled",
+      "canonical_description",
+      "category",
+      "category_id",
+      "conversion_rules",
+      "created_at",
+      "created_by",
+      "criticality",
+      "expiry_controlled",
+      "generic_name",
+      "hazard_information",
+      "id",
+      "institute_id",
+      "interchangeability_policy",
+      "inventory_uom",
+      "inventory_uom_id",
+      "is_active",
+      "is_proprietary",
+      "is_sterile",
+      "item_code",
+      "item_type",
+      "lifecycle_status",
+      "purchasing_uom",
+      "purchasing_uom_id",
+      "retired_at",
+      "serial_controlled",
+      "specification",
+      "standardization_status",
+      "storage_requirements",
+      "structured_fingerprint",
+      "subcategory",
+      "updated_at",
+      "updated_by"
+    ],
+    "gl_posting_lines": [
+      "account_code",
+      "cost_center_id",
+      "created_at",
+      "credit_amount",
+      "debit_amount",
+      "description",
+      "gl_posting_id",
+      "id",
+      "line_no"
+    ],
+    "gl_postings": [
+      "created_at",
+      "currency",
+      "id",
+      "journal_entry_id",
+      "posted_at",
+      "posted_by",
+      "posting_reference",
+      "posting_status",
+      "request_id",
+      "source_id",
+      "source_type",
+      "total_amount"
+    ],
+    "goods_receipt_items": [
+      "approved_product_id",
+      "base_uom",
+      "batch_number",
+      "conversion_factor",
+      "damaged_quantity",
+      "expiry_date",
+      "generic_item_id",
+      "goods_receipt_id",
+      "id",
+      "item_name",
+      "line_notes",
+      "lot_number",
+      "ordered_quantity",
+      "purchase_order_item_id",
+      "received_quantity",
+      "requested_item_id",
+      "serial_number",
+      "short_quantity",
+      "source_uom",
+      "stock_item_id",
+      "stock_status",
+      "supplier_catalog_item_id",
+      "unit_price",
+      "warehouse_id"
+    ],
+    "goods_receipts": [
+      "created_at",
+      "discrepancy_notes",
+      "id",
+      "idempotency_key",
+      "notes",
+      "payload_fingerprint",
+      "purchase_order_id",
+      "receipt_number",
+      "received_at",
+      "received_by",
+      "request_id",
+      "warehouse_location"
+    ],
+    "governance_audit_trail": [
+      "action",
+      "actor_id",
+      "actor_role",
+      "created_at",
+      "id",
+      "ip_address",
+      "method",
+      "module",
+      "payload",
+      "request_id",
+      "request_path",
+      "required_permissions",
+      "resource",
+      "status_code",
+      "user_agent"
+    ],
+    "institutes": [
+      "created_at",
+      "governance_group",
+      "id",
+      "name",
+      "updated_at"
+    ],
+    "inventory_cycle_count_lines": [
+      "counted_at",
+      "counted_by",
+      "counted_quantity",
+      "cycle_count_id",
+      "id",
+      "posted_at",
+      "posted_movement_id",
+      "stock_item_id",
+      "system_quantity",
+      "variance",
+      "warehouse_stock_level_id"
+    ],
+    "inventory_cycle_counts": [
+      "created_at",
+      "id",
+      "notes",
+      "opened_by",
+      "posted_at",
+      "posted_by",
+      "reviewed_at",
+      "reviewed_by",
+      "status",
+      "warehouse_id"
+    ],
+    "inventory_reservation_allocations": [
+      "consumed_quantity",
+      "created_at",
+      "id",
+      "released_quantity",
+      "reservation_id",
+      "reserved_quantity",
+      "updated_at",
+      "warehouse_stock_level_id"
+    ],
+    "inventory_reservation_issue_operations": [
+      "created_at",
+      "created_by",
+      "id",
+      "idempotency_key",
+      "inventory_movement_id",
+      "requested_quantity",
+      "reservation_id"
+    ],
+    "inventory_reservations": [
+      "consumed_at",
+      "consumed_by",
+      "consumed_quantity",
+      "created_at",
+      "created_by",
+      "document_id",
+      "document_line_id",
+      "document_type",
+      "expires_at",
+      "id",
+      "idempotency_key",
+      "metadata",
+      "quantity",
+      "released_at",
+      "released_by",
+      "status",
+      "stock_item_id",
+      "warehouse_id"
+    ],
+    "inventory_transaction_allocations": [
+      "allocation_sequence",
+      "base_uom",
+      "batch_number",
+      "created_at",
+      "expiry_date",
+      "id",
+      "inventory_transaction_id",
+      "lot_number",
+      "quantity",
+      "serial_number",
+      "stock_item_id",
+      "stock_status",
+      "warehouse_id",
+      "warehouse_stock_level_id"
+    ],
+    "inventory_transactions": [
+      "approved_product_id",
+      "base_uom",
+      "batch_id",
+      "batch_number",
+      "command_fingerprint",
+      "conversion_factor",
+      "correlation_id",
+      "created_at",
+      "created_by",
+      "department_id",
+      "department_stock_movement_id",
+      "destination_location",
+      "expiry_date",
+      "generic_item_id",
+      "id",
+      "idempotency_key",
+      "institute_id",
+      "lot_number",
+      "metadata",
+      "movement_type",
+      "notes",
+      "posted_at",
+      "quantity",
+      "reference_document",
+      "reference_request_id",
+      "reference_transfer_id",
+      "reversal_of_movement_id",
+      "reversed_by_movement_id",
+      "section_id",
+      "serial_number",
+      "source_document_id",
+      "source_document_line_id",
+      "source_document_type",
+      "source_location",
+      "source_quantity",
+      "source_uom",
+      "stock_item_id",
+      "stock_status",
+      "supplier_catalog_item_id",
+      "supplier_id",
+      "transaction_type",
+      "unit_cost",
+      "warehouse_id",
+      "warehouse_stock_movement_id"
+    ],
+    "inventory_transfer_allocation_links": [
+      "created_at",
+      "dispatch_allocation_id",
+      "dispatch_movement_id",
+      "dispatched_quantity",
+      "id",
+      "received_quantity",
+      "transfer_id",
+      "transfer_line_id",
+      "updated_at"
+    ],
+    "inventory_transfer_movement_links": [
+      "created_at",
+      "dispatch_movement_id",
+      "dispatched_quantity",
+      "id",
+      "receipt_movement_ids",
+      "received_quantity",
+      "transfer_id",
+      "transfer_line_id",
+      "updated_at"
+    ],
+    "inventory_transfer_receipt_operations": [
+      "created_at",
+      "created_by",
+      "id",
+      "idempotency_key",
+      "receipt_movement_ids",
+      "transfer_id"
+    ],
+    "invoice_items": [
+      "description",
+      "discount_amount",
+      "id",
+      "line_total",
+      "purchase_order_item_id",
+      "quantity",
+      "requested_item_id",
+      "supplier_invoice_id",
+      "tax_amount",
+      "unit_price"
+    ],
+    "invoice_match_override_decisions": [
+      "actor_id",
+      "decided_at",
+      "decision",
+      "id",
+      "invoice_match_result_id",
+      "original_variances",
+      "reason"
+    ],
+    "invoice_match_results": [
+      "id",
+      "match_policy",
+      "match_status",
+      "matched_at",
+      "matched_by",
+      "mismatch_reasons",
+      "override_approved",
+      "override_at",
+      "override_by",
+      "override_reason",
+      "request_id",
+      "supplier_invoice_id",
+      "variances"
+    ],
+    "item_brands": [
+      "brand_name",
+      "created_at",
+      "id",
+      "is_active",
+      "manufacturer_id",
+      "updated_at"
+    ],
+    "item_categories": [
+      "category_name",
+      "created_at",
+      "created_by",
+      "description",
+      "id",
+      "is_active",
+      "normalized_name",
+      "updated_at",
+      "updated_by"
+    ],
+    "item_conversion": [
+      "conversion_factor",
+      "created_at",
+      "from_uom_id",
+      "id",
+      "is_bidirectional",
+      "item_master_id",
+      "to_uom_id",
+      "updated_at"
+    ],
+    "item_duplicate_reviews": [
+      "candidate_id",
+      "created_at",
+      "decision",
+      "entity_type",
+      "id",
+      "matching_attributes",
+      "review_notes",
+      "reviewed_at",
+      "reviewed_by",
+      "score",
+      "source_id"
+    ],
+    "item_manufacturers": [
+      "aliases",
+      "contact_info",
+      "country_of_origin",
+      "created_at",
+      "created_by",
+      "id",
+      "is_active",
+      "manufacturer_name",
+      "normalized_name",
+      "updated_at",
+      "updated_by"
+    ],
+    "item_master": [
+      "base_uom_id",
+      "brand_id",
+      "category_id",
+      "created_at",
+      "created_by",
+      "description",
+      "generic_name",
+      "id",
+      "item_code",
+      "item_name",
+      "manufacturer_id",
+      "status",
+      "updated_at",
+      "updated_by"
+    ],
+    "item_master_aliases": [
+      "alias_type",
+      "alias_value",
+      "created_at",
+      "created_by",
+      "generic_item_id",
+      "id",
+      "normalized_alias",
+      "source_id",
+      "source_table"
+    ],
+    "item_master_audit_events": [
+      "action",
+      "actor_id",
+      "created_at",
+      "entity_id",
+      "entity_type",
+      "id",
+      "new_values",
+      "organizational_context",
+      "previous_values",
+      "reason",
+      "request_id",
+      "requested_item_id",
+      "source_id",
+      "target_id"
+    ],
+    "item_master_documents": [
+      "document_name",
+      "document_type",
+      "file_path",
+      "id",
+      "item_id",
+      "metadata",
+      "uploaded_at",
+      "uploaded_by"
+    ],
+    "item_master_items": [
+      "approved_at",
+      "approved_by",
+      "batch_controlled",
+      "brand_name",
+      "category",
+      "contract_eligibility",
+      "created_at",
+      "created_by",
+      "expiry_controlled",
+      "generic_name",
+      "id",
+      "institute_applicability",
+      "item_classification",
+      "item_code",
+      "item_name",
+      "pack_size",
+      "preferred_suppliers",
+      "rejection_reason",
+      "reorder_level",
+      "safety_stock",
+      "serial_controlled",
+      "specifications",
+      "standard_cost",
+      "status",
+      "storage_condition",
+      "subcategory",
+      "submitted_at",
+      "submitted_by",
+      "unit_of_measure",
+      "updated_at",
+      "updated_by"
+    ],
+    "item_recalls": [
+      "capa_reference",
+      "created_at",
+      "department_id",
+      "escalated_at",
+      "escalated_by_user_id",
+      "escalated_to_procurement",
+      "final_report",
+      "id",
+      "initiated_by_user_id",
+      "item_id",
+      "item_name",
+      "lot_number",
+      "ncr_reference",
+      "notes",
+      "quantity",
+      "quarantine_active",
+      "quarantine_reason",
+      "quarantine_started_at",
+      "reason",
+      "recall_notice",
+      "recall_type",
+      "status",
+      "supplier_letters",
+      "updated_at",
+      "warehouse_notes"
+    ],
+    "item_uom": [
+      "created_at",
+      "created_by",
+      "description",
+      "id",
+      "is_active",
+      "is_base_uom",
+      "name",
+      "normalized_uom_code",
+      "uom_code",
+      "uom_name",
+      "updated_at",
+      "updated_by"
+    ],
+    "item_variants": [
+      "created_at",
+      "id",
+      "item_master_id",
+      "sku",
+      "status",
+      "updated_at",
+      "variant_attributes",
+      "variant_code",
+      "variant_name"
+    ],
+    "journal_entries": [
+      "created_at",
+      "currency",
+      "entry_status",
+      "id",
+      "journal_reference",
+      "journal_type",
+      "posted_at",
+      "posted_by",
+      "request_id",
+      "source_id",
+      "source_type",
+      "total_amount"
+    ],
+    "journal_entry_lines": [
+      "account_code",
+      "cost_center_id",
+      "created_at",
+      "credit_amount",
+      "debit_amount",
+      "description",
+      "id",
+      "journal_entry_id",
+      "line_no"
+    ],
+    "legacy_item_mappings": [
+      "generic_item_id",
+      "id",
+      "legacy_code_snapshot",
+      "legacy_item_id",
+      "legacy_name_snapshot",
+      "mapped_at",
+      "mapped_by",
+      "mapping_reason",
+      "mapping_status",
+      "source_table"
+    ],
+    "maintainable_equipment": [
+      "asset_id",
+      "created_at",
+      "department_id",
+      "equipment_code",
+      "id",
+      "institute_id",
+      "lifecycle_status",
+      "manufacturer",
+      "model",
+      "name",
+      "serial_number",
+      "updated_at"
+    ],
+    "maintenance_part_inventory_operations": [
+      "created_at",
+      "created_by",
+      "id",
+      "idempotency_key",
+      "institute_id",
+      "inventory_movement_id",
+      "operation_type",
+      "quantity",
+      "reservation_id",
+      "work_order_part_id"
+    ],
+    "maintenance_stock": [
+      "id",
+      "item_name",
+      "quantity",
+      "updated_at"
+    ],
+    "maintenance_work_order_allocators": [
+      "institute_id",
+      "next_value"
+    ],
+    "maintenance_work_order_parts": [
+      "action",
+      "created_at",
+      "created_by",
+      "id",
+      "installed_serial_number",
+      "institute_id",
+      "issued_at",
+      "issued_inventory_movement_id",
+      "notes",
+      "quantity_planned",
+      "quantity_used",
+      "removed_serial_number",
+      "reservation_id",
+      "reserved_at",
+      "spare_part_id",
+      "stock_item_id",
+      "updated_at",
+      "work_order_id"
+    ],
+    "maintenance_work_orders": [
+      "assigned_to",
+      "completed_at",
+      "coverage_id",
+      "created_at",
+      "created_by",
+      "downtime_ended_at",
+      "downtime_started_at",
+      "equipment_id",
+      "failure_code",
+      "id",
+      "institute_id",
+      "priority",
+      "problem_description",
+      "requested_at",
+      "resolution_summary",
+      "row_version",
+      "started_at",
+      "status",
+      "updated_at",
+      "updated_by",
+      "work_order_number",
+      "work_order_type"
+    ],
+    "monthly_dispensing": [
+      "created_at",
+      "created_by",
+      "facility_name",
+      "id",
+      "item_name",
+      "month_start",
+      "notes",
+      "quantity",
+      "unit"
+    ],
+    "non_po_receipt_approvals": [
+      "approval_status",
+      "approval_step",
+      "approved_at",
+      "approved_by",
+      "assigned_role",
+      "comments",
+      "created_at",
+      "goods_receipt_id",
+      "id",
+      "request_id"
+    ],
+    "notification_outbox": [
+      "created_at",
+      "entity_id",
+      "entity_type",
+      "event_type",
+      "id",
+      "idempotency_key",
+      "last_error",
+      "next_attempt_at",
+      "payload",
+      "processed_at",
+      "processing_started_at",
+      "recipient_user_id",
+      "retry_count",
+      "status"
+    ],
+    "notifications": [
+      "created_at",
+      "id",
+      "is_read",
+      "link",
+      "message",
+      "metadata",
+      "outbox_event_id",
+      "title",
+      "user_id"
+    ],
+    "organization_head_reconciliation_decisions": [
+      "decided_at",
+      "decided_by",
+      "decision",
+      "id",
+      "institute_id",
+      "legacy_user_id",
+      "organization_head_position_id",
+      "organization_head_user_id",
+      "organization_unit_id",
+      "reason",
+      "superseded_at"
+    ],
+    "organization_positions": [
+      "created_at",
+      "created_by",
+      "effective_from",
+      "effective_to",
+      "id",
+      "is_active",
+      "is_unit_head",
+      "organization_unit_id",
+      "position_name",
+      "position_type",
+      "updated_at",
+      "updated_by",
+      "user_id"
+    ],
+    "organization_units": [
+      "classification",
+      "code",
+      "created_at",
+      "created_by",
+      "department_id",
+      "id",
+      "institute_id",
+      "is_active",
+      "name",
+      "parent_unit_id",
+      "section_id",
+      "sort_order",
+      "unit_type",
+      "updated_at",
+      "updated_by"
+    ],
+    "payment_allocations": [
+      "amount",
+      "ap_payable_id",
+      "created_at",
+      "id",
+      "payment_record_id"
+    ],
+    "payment_records": [
+      "amount_paid",
+      "ap_voucher_id",
+      "created_at",
+      "currency",
+      "id",
+      "idempotency_key",
+      "paid_at",
+      "paid_by",
+      "payload_fingerprint",
+      "payment_method",
+      "payment_reference",
+      "payment_status",
+      "request_id",
+      "reversal_of_payment_id",
+      "supplier_invoice_id"
+    ],
+    "pending_item_requests": [
+      "assigned_steward_id",
+      "category",
+      "created_at",
+      "id",
+      "intended_use",
+      "item_type",
+      "justification",
+      "proposed_name",
+      "request_id",
+      "requested_item_id",
+      "requested_quantity",
+      "requested_uom",
+      "requester_id",
+      "required_specifications",
+      "resolution_notes",
+      "resolution_type",
+      "resolved_at",
+      "resolved_by",
+      "resolved_generic_item_id",
+      "resolved_product_id",
+      "status",
+      "updated_at"
+    ],
+    "permissions": [
+      "code",
+      "description",
+      "id",
+      "name"
+    ],
+    "planning_settings": [
+      "created_at",
+      "demand_history_days",
+      "demand_history_months",
+      "forecast_horizon_months",
+      "forecast_window_size",
+      "id",
+      "mrp_bucket_days",
+      "mrp_horizon_days",
+      "safety_history_days",
+      "safety_lead_time_days",
+      "safety_review_period_days",
+      "updated_at",
+      "updated_by",
+      "warehouse_id"
+    ],
+    "print_service_requests": [
+      "accepted_at",
+      "accepted_by",
+      "claimed_at",
+      "completed_at",
+      "completed_by",
+      "created_at",
+      "department_id",
+      "form_name",
+      "id",
+      "notes",
+      "quantity",
+      "requester_id",
+      "section_id",
+      "status",
+      "updated_at"
+    ],
+    "print_service_settings": [
+      "key",
+      "updated_at",
+      "updated_by",
+      "value"
+    ],
+    "procurement_awards": [
+      "actor_id",
+      "approved_product_id",
+      "awarded_at",
+      "awarded_quantity",
+      "currency",
+      "id",
+      "idempotency_key",
+      "payload_fingerprint",
+      "request_id",
+      "request_item_id",
+      "selection_reason",
+      "source_id",
+      "source_type",
+      "status",
+      "supplier_catalog_item_id",
+      "supplier_id",
+      "unit_price"
+    ],
+    "procurement_case_activities": [
+      "activity_at",
+      "activity_type",
+      "actor_id",
+      "created_at",
+      "id",
+      "idempotency_key",
+      "metadata",
+      "notes",
+      "procurement_case_id",
+      "related_entity_id",
+      "related_entity_type",
+      "source",
+      "supplier_id"
+    ],
+    "procurement_case_complexity_factors": [
+      "assessed_at",
+      "assessed_by",
+      "assessment_reason",
+      "factor_code",
+      "factor_value",
+      "id",
+      "model_version",
+      "points",
+      "procurement_case_id"
+    ],
+    "procurement_cases": [
+      "activity_coverage",
+      "alternative_product_investigated",
+      "assigned_at",
+      "assigned_buyer_id",
+      "case_status",
+      "closed_at",
+      "commercial_coverage",
+      "commercially_ready_at",
+      "complexity_class",
+      "complexity_coverage",
+      "complexity_model_version",
+      "complexity_score",
+      "created_at",
+      "created_by",
+      "cycle_time_coverage",
+      "department_id",
+      "discontinued_or_obsolete",
+      "existing_supplier",
+      "id",
+      "institute_id",
+      "international_procurement",
+      "logistics_coverage",
+      "oem_only",
+      "opened_at",
+      "pending_override_reason",
+      "pending_root_cause",
+      "request_id",
+      "requested_item_id",
+      "sole_source",
+      "sourcing_method",
+      "sourcing_started_at",
+      "strategic_highlight",
+      "strategic_summary",
+      "updated_at",
+      "updated_by",
+      "workload_model_version",
+      "workload_units"
+    ],
+    "procurement_evaluation_cases": [
+      "category",
+      "created_at",
+      "created_by",
+      "currency",
+      "department_id",
+      "description",
+      "evaluation_period_years",
+      "evaluation_type",
+      "expected_annual_growth_rate",
+      "finalized_at",
+      "finalized_by",
+      "id",
+      "recommendation_summary",
+      "request_id",
+      "section_id",
+      "selected_offer_id",
+      "status",
+      "title",
+      "updated_at"
+    ],
+    "procurement_evaluation_criteria": [
+      "created_at",
+      "criteria_group",
+      "criteria_name",
+      "evaluation_case_id",
+      "higher_is_better",
+      "id",
+      "is_knockout",
+      "is_required",
+      "max_value",
+      "metric_key",
+      "min_value",
+      "normalization_method",
+      "required_threshold",
+      "scoring_type",
+      "target_value",
+      "updated_at",
+      "weight"
+    ],
+    "procurement_evaluation_offer_test_costs": [
+      "alternative_group",
+      "annual_quantity",
+      "annual_test_cost",
+      "calculated_effective_cost_per_reported_test",
+      "calibrator_cost_per_kit",
+      "calibrator_frequency_per_kit",
+      "company_absorbs_qc",
+      "company_absorbs_repeats",
+      "company_absorbs_waste",
+      "created_at",
+      "dependency_group",
+      "element_type",
+      "evaluation_case_id",
+      "expected_waste_percentage",
+      "fixed_consumable_cost_per_kit",
+      "id",
+      "kit_price",
+      "notes",
+      "offer_id",
+      "onboard_stability_days",
+      "open_vial_stability_days",
+      "other_kit_related_cost",
+      "price_per_reportable_test",
+      "pricing_method",
+      "qc_cost_per_kit",
+      "qc_frequency_per_kit",
+      "quantity",
+      "repeat_rate_percentage",
+      "shelf_life_months",
+      "test_id",
+      "tests_per_kit",
+      "unit_cost",
+      "updated_at",
+      "usable_tests_per_kit"
+    ],
+    "procurement_evaluation_offers": [
+      "annual_calibration_qc_cost",
+      "annual_fixed_consumables_cost",
+      "annual_maintenance_cost",
+      "annual_service_contract_cost",
+      "annual_spare_parts_cost",
+      "commercial_notes",
+      "commitment_penalty_terms",
+      "compliance_status",
+      "contract_model",
+      "country_of_origin",
+      "created_at",
+      "customs_cost",
+      "delivery_time_days",
+      "device_discount_value",
+      "device_price",
+      "disqualification_reason",
+      "downtime_cost",
+      "evaluation_case_id",
+      "expected_lifetime_years",
+      "free_device_included",
+      "fx_risk_cost",
+      "id",
+      "included_volume",
+      "installation_cost",
+      "is_compliant",
+      "is_disqualified",
+      "lease_monthly_payment",
+      "lease_term_months",
+      "manufacturer_name",
+      "minimum_annual_commitment_amount",
+      "minimum_annual_commitment_tests",
+      "model_name",
+      "obsolescence_risk_cost",
+      "offer_name",
+      "other_initial_cost",
+      "overage_price",
+      "package_model",
+      "payment_terms",
+      "penalty_or_sla_adjustment",
+      "pricing_model",
+      "reagent_rental_terms",
+      "risk_model",
+      "risk_notes",
+      "scenario_metadata",
+      "service_model",
+      "shipping_cost",
+      "sla_penalty_amount",
+      "stockout_risk_cost",
+      "subscription_base_fee",
+      "supplier_id",
+      "supplier_name",
+      "supplier_risk_premium",
+      "technical_model",
+      "technical_notes",
+      "training_cost",
+      "updated_at",
+      "uptime_guarantee_percentage",
+      "warranty_years"
+    ],
+    "procurement_evaluation_results": [
+      "annual_commitment_adjustment",
+      "annual_fixed_cost",
+      "annual_variable_test_cost",
+      "average_cost_per_reported_test",
+      "commitment_volume_shortfall",
+      "commitment_warning",
+      "compliance_passed",
+      "cost_score",
+      "created_at",
+      "evaluation_case_id",
+      "final_weighted_score",
+      "id",
+      "initial_cost",
+      "knockout_failed",
+      "offer_id",
+      "pricing_model",
+      "rank",
+      "recommendation_reason",
+      "risk_adjusted_tco",
+      "risk_score",
+      "scoring_breakdown",
+      "shortfall_tests",
+      "supplier_score",
+      "tco_period_cost",
+      "technical_score",
+      "total_annual_cost",
+      "total_expected_reported_tests",
+      "updated_at"
+    ],
+    "procurement_evaluation_scores": [
+      "comments",
+      "created_at",
+      "criteria_id",
+      "evaluation_case_id",
+      "evaluator_id",
+      "id",
+      "offer_id",
+      "raw_value",
+      "score",
+      "updated_at",
+      "weighted_score"
+    ],
+    "procurement_evaluation_tests": [
+      "category",
+      "created_at",
+      "dependency_risk",
+      "evaluation_case_id",
+      "expected_monthly_volume",
+      "growth_rate",
+      "id",
+      "is_alternative",
+      "is_required",
+      "notes",
+      "test_code",
+      "test_name",
+      "unit",
+      "updated_at"
+    ],
+    "procurement_identity_policy": [
+      "enforce_item_identity",
+      "id",
+      "reason",
+      "updated_at",
+      "updated_by"
+    ],
+    "procurement_item_events": [
+      "created_at",
+      "event_quantity",
+      "id",
+      "new_purchased_quantity",
+      "overage_approval_status",
+      "overage_decided_at",
+      "overage_decided_by",
+      "overage_decision_note",
+      "package_unit_cost",
+      "previous_purchased_quantity",
+      "procurement_date",
+      "procurement_note",
+      "procurement_quantity",
+      "procurement_unit_of_measure",
+      "procurement_user_id",
+      "remaining_quantity",
+      "request_id",
+      "requested_item_id",
+      "supplier_id",
+      "supplier_name",
+      "total_cost",
+      "unit_cost",
+      "units_per_package"
+    ],
+    "procurement_lifecycle_states": [
+      "created_at",
+      "created_by",
+      "finance_match_policy",
+      "finance_state",
+      "id",
+      "last_transition_at",
+      "payment_state",
+      "procurement_state",
+      "request_id",
+      "updated_at"
+    ],
+    "procurement_plan_item_consumptions": [
+      "created_at",
+      "department_stock_movement_id",
+      "id",
+      "plan_item_id",
+      "quantity",
+      "warehouse_stock_movement_id"
+    ],
+    "procurement_plan_item_requests": [
+      "created_at",
+      "id",
+      "plan_item_id",
+      "quantity",
+      "request_id",
+      "requested_item_id",
+      "total_cost",
+      "unit_cost"
+    ],
+    "procurement_plan_items": [
+      "created_at",
+      "currency",
+      "description",
+      "id",
+      "item_name",
+      "needed_by_date",
+      "plan_id",
+      "planned_quantity",
+      "planned_total_cost",
+      "planned_unit_cost",
+      "stock_item_id",
+      "unit_of_measure"
+    ],
+    "procurement_plans": [
+      "created_at",
+      "department_id",
+      "file_name",
+      "file_path",
+      "id",
+      "plan_year"
+    ],
+    "procurement_priority_group_members": [
+      "added_at",
+      "added_by",
+      "group_id",
+      "procurement_case_id",
+      "removed_at"
+    ],
+    "procurement_priority_groups": [
+      "created_at",
+      "created_by",
+      "id",
+      "institute_id",
+      "institutional_rank",
+      "institutional_rank_reason",
+      "is_public",
+      "name",
+      "public_description",
+      "public_title",
+      "status",
+      "tier_override",
+      "tier_override_reason",
+      "updated_at",
+      "updated_by"
+    ],
+    "procurement_priority_history": [
+      "calculated_at",
+      "calculated_by",
+      "calculated_by_system",
+      "factor_breakdown",
+      "id",
+      "institutional_rank",
+      "model_version",
+      "procurement_case_id",
+      "score",
+      "tier",
+      "trigger",
+      "trigger_reason"
+    ],
+    "procurement_priority_profiles": [
+      "approved_initiative_id",
+      "coverage_status",
+      "created_at",
+      "deadline_at",
+      "deadline_consequence",
+      "deadline_evidence_reference",
+      "deadline_type",
+      "department_id",
+      "dependency_level",
+      "dependency_reason",
+      "id",
+      "impact_level",
+      "impact_reason",
+      "institute_id",
+      "institutional_override_reason",
+      "institutional_rank",
+      "is_public",
+      "model_version",
+      "p0_justification",
+      "procurement_case_id",
+      "public_description",
+      "public_title",
+      "regulatory_level",
+      "regulatory_reason",
+      "row_version",
+      "scm_assessed_at",
+      "scm_assessed_by",
+      "scm_assessment",
+      "scm_reason",
+      "service_risk_level",
+      "service_risk_override_reason",
+      "supply_chain_owned_at",
+      "system_score",
+      "system_suggested_rank",
+      "system_tier",
+      "updated_at"
+    ],
+    "procurement_state_history": [
+      "changed_at",
+      "changed_by",
+      "from_state",
+      "id",
+      "metadata",
+      "reason",
+      "request_id",
+      "to_state"
+    ],
+    "procurement_value_events": [
+      "baseline_amount",
+      "baseline_type",
+      "created_at",
+      "currency",
+      "entered_by",
+      "evidence_entity_id",
+      "evidence_entity_type",
+      "final_amount",
+      "id",
+      "notes",
+      "procurement_case_id",
+      "value_type",
+      "verified_at",
+      "verified_by",
+      "verified_value"
+    ],
+    "project_department_visibility": [
+      "created_at",
+      "department_id",
+      "project_id"
+    ],
+    "projects": [
+      "created_at",
+      "created_by",
+      "id",
+      "is_active",
+      "name"
+    ],
+    "purchase_order_items": [
+      "approved_product_id",
+      "award_id",
+      "base_uom",
+      "base_uom_id",
+      "conversion_factor",
+      "created_at",
+      "generic_item_id",
+      "id",
+      "invoiced_quantity",
+      "item_name",
+      "line_type",
+      "price_source_id",
+      "price_source_type",
+      "purchase_order_id",
+      "quantity",
+      "received_quantity",
+      "request_id",
+      "request_item_id",
+      "requested_item_id",
+      "source_uom",
+      "source_uom_id",
+      "supplier_catalog_item_id",
+      "unit_price"
+    ],
+    "purchase_orders": [
+      "amendment_reason",
+      "approval_required",
+      "approval_route",
+      "approved_at",
+      "approved_by",
+      "budget_cost_center",
+      "cancellation_reason",
+      "contract_id",
+      "contract_reference",
+      "created_at",
+      "created_by",
+      "currency",
+      "delivery_location",
+      "expected_delivery_date",
+      "id",
+      "issue_event_at",
+      "issued_at",
+      "issued_by",
+      "issued_to_supplier_at",
+      "last_amended_at",
+      "notes",
+      "payment_terms",
+      "po_number",
+      "request_id",
+      "rfx_id",
+      "rfx_response_id",
+      "source_document_id",
+      "source_document_type",
+      "status",
+      "supplier_contact_email",
+      "supplier_id",
+      "supplier_name",
+      "tax_terms",
+      "terms",
+      "total_amount",
+      "updated_at"
+    ],
+    "request_auto_assignment_rules": [
+      "assignee_user_id",
+      "created_at",
+      "created_by",
+      "id",
+      "is_active",
+      "request_type",
+      "updated_at",
+      "updated_by",
+      "warehouse_id"
+    ],
+    "request_edit_approvals": [
+      "approval_id",
+      "created_at",
+      "decided_at",
+      "id",
+      "payload",
+      "request_id",
+      "requested_by",
+      "status"
+    ],
+    "request_logs": [
+      "action",
+      "actor_id",
+      "comments",
+      "id",
+      "request_id",
+      "timestamp"
+    ],
+    "requested_item_financials": [
+      "committed_cost",
+      "contract_id",
+      "contract_item_id",
+      "contract_value_snapshot",
+      "created_at",
+      "created_by",
+      "currency",
+      "id",
+      "invoice_number",
+      "paid_cost",
+      "po_number",
+      "request_id",
+      "requested_item_id",
+      "savings_baseline",
+      "savings_driver",
+      "savings_notes",
+      "updated_at"
+    ],
+    "requested_items": [
+      "approval_comments",
+      "approval_status",
+      "approved_at",
+      "approved_by",
+      "assigned_at",
+      "assigned_by",
+      "assigned_to",
+      "assignment_notes",
+      "available_quantity",
+      "brand",
+      "canonical_description_snapshot",
+      "catalog_status",
+      "device_info",
+      "generic_item_id",
+      "id",
+      "intended_use",
+      "is_received",
+      "item_name",
+      "item_name_snapshot",
+      "mandatory_product_id",
+      "marked_at",
+      "marked_by",
+      "po_issuance_method",
+      "preferred_product_id",
+      "preferred_product_reason",
+      "procurement_comment",
+      "procurement_status",
+      "procurement_updated_at",
+      "procurement_updated_by",
+      "purchase_type",
+      "purchased_quantity",
+      "quantity",
+      "receipt_issue_notes",
+      "receipt_issue_quantity",
+      "receipt_issue_reported_at",
+      "receipt_issue_resolved_at",
+      "receipt_issue_status",
+      "received_at",
+      "received_by",
+      "received_quantity",
+      "request_id",
+      "request_mode",
+      "required_date",
+      "restriction_justification",
+      "specs",
+      "stocking_policy",
+      "total_cost",
+      "unit_cost",
+      "unit_of_measure"
+    ],
+    "requests": [
+      "approval_route_snapshot",
+      "approval_route_snapshot_id",
+      "assigned_to",
+      "auto_received_at",
+      "awarded_at",
+      "awarded_rfx_id",
+      "awarded_rfx_response_id",
+      "awarded_supplier_id",
+      "client_submission_key",
+      "completed_at",
+      "created_at",
+      "department_id",
+      "estimated_cost",
+      "id",
+      "initiated_by_technician_id",
+      "institute_id",
+      "is_urgent",
+      "justification",
+      "lifecycle_version",
+      "maintenance_ref_number",
+      "po_issued_at",
+      "print_count",
+      "project_id",
+      "purchase_order_id",
+      "purchase_order_number",
+      "receipt_prompt_sent_at",
+      "request_domain",
+      "request_type",
+      "requester_id",
+      "scheduled_for",
+      "section_id",
+      "sent_to_central_supply_at",
+      "sent_to_central_supply_by",
+      "sourcing_status",
+      "status",
+      "supply_warehouse_id",
+      "temporary_requester_name",
+      "updated_at"
+    ],
+    "rfid_antennas": [
+      "antenna_port",
+      "antenna_type",
+      "configuration",
+      "created_at",
+      "enabled",
+      "id",
+      "institute_id",
+      "location_id",
+      "name",
+      "reader_id",
+      "updated_at"
+    ],
+    "rfid_business_events": [
+      "asset_id",
+      "asset_tag_id",
+      "authorization_status",
+      "confidence_score",
+      "created_at",
+      "direction",
+      "epc",
+      "event_type",
+      "first_seen_at",
+      "from_location_id",
+      "id",
+      "institute_id",
+      "last_seen_at",
+      "metadata",
+      "observation_count",
+      "portal_id",
+      "reader_id",
+      "related_asset_movement_id",
+      "status",
+      "to_location_id"
+    ],
+    "rfid_integration_clients": [
+      "client_identifier",
+      "created_at",
+      "credential_hash",
+      "enabled",
+      "id",
+      "institute_id",
+      "last_used_at",
+      "scopes"
+    ],
+    "rfid_portal_antennas": [
+      "antenna_id",
+      "direction_role",
+      "portal_id",
+      "sequence_group",
+      "sort_order"
+    ],
+    "rfid_portals": [
+      "code",
+      "configuration",
+      "created_at",
+      "enabled",
+      "from_location_id",
+      "id",
+      "institute_id",
+      "location_id",
+      "name",
+      "portal_type",
+      "to_location_id",
+      "updated_at"
+    ],
+    "rfid_read_events": [
+      "antenna_id",
+      "asset_id",
+      "asset_tag_id",
+      "business_event_id",
+      "created_at",
+      "epc",
+      "external_event_id",
+      "id",
+      "institute_id",
+      "integration_client_id",
+      "portal_id",
+      "processed_at",
+      "processing_attempts",
+      "processing_error",
+      "processing_status",
+      "raw_payload",
+      "read_timestamp",
+      "reader_id",
+      "rssi",
+      "source_type",
+      "tid"
+    ],
+    "rfid_readers": [
+      "code",
+      "configuration",
+      "created_at",
+      "device_identifier",
+      "firmware_version",
+      "id",
+      "institute_id",
+      "ip_address",
+      "is_active",
+      "last_seen_at",
+      "location_id",
+      "manufacturer",
+      "model",
+      "name",
+      "reader_type",
+      "serial_number",
+      "status",
+      "updated_at"
+    ],
+    "rfx_events": [
+      "created_at",
+      "created_by",
+      "description",
+      "details",
+      "due_date",
+      "id",
+      "request_id",
+      "rfx_type",
+      "status",
+      "title",
+      "updated_at"
+    ],
+    "rfx_response_items": [
+      "approved_product_id",
+      "brand",
+      "created_at",
+      "currency",
+      "free_quantity",
+      "id",
+      "notes",
+      "offered_specs",
+      "quoted_quantity",
+      "requested_item_id",
+      "rfx_response_id",
+      "supplier_catalog_item_id",
+      "unit_price"
+    ],
+    "rfx_responses": [
+      "bid_amount",
+      "created_at",
+      "id",
+      "notes",
+      "request_id",
+      "response_data",
+      "rfx_id",
+      "status",
+      "submitted_by",
+      "supplier_id"
+    ],
+    "risk_register": [
+      "category",
+      "closed_at",
+      "created_at",
+      "created_by_user_id",
+      "description",
+      "due_date",
+      "high_risk_item",
+      "id",
+      "impact",
+      "likelihood",
+      "medication_risk",
+      "owner",
+      "response_plan",
+      "risk_score",
+      "status",
+      "supplier_risk",
+      "title",
+      "updated_at",
+      "updated_by_user_id"
+    ],
+    "role_data_scopes": [
+      "data_scope_id",
+      "role_id",
+      "scope_value"
+    ],
+    "role_permissions": [
+      "permission_id",
+      "role_id"
+    ],
+    "roles": [
+      "id",
+      "name"
+    ],
+    "route_capability_policies": [
+      "module",
+      "permissions",
+      "resource",
+      "route_prefix",
+      "updated_at"
+    ],
+    "sections": [
+      "department_id",
+      "id",
+      "name"
+    ],
+    "spare_part_equipment_compatibility": [
+      "approved_at",
+      "approved_by",
+      "compatibility_status",
+      "compatibility_type",
+      "confirmation_reference",
+      "created_at",
+      "created_by",
+      "equipment_id",
+      "id",
+      "oem_confirmed",
+      "serial_number_from",
+      "serial_number_to",
+      "spare_part_id",
+      "technical_notes",
+      "updated_at"
+    ],
+    "stock_item_master_mappings": [
+      "active",
+      "approved_product_id",
+      "candidate_details",
+      "confidence_score",
+      "created_at",
+      "created_by",
+      "generic_item_id",
+      "id",
+      "mapping_status",
+      "match_method",
+      "original_brand_snapshot",
+      "original_category_snapshot",
+      "original_description_snapshot",
+      "original_name_snapshot",
+      "original_subcategory_snapshot",
+      "original_uom_snapshot",
+      "previous_identity",
+      "proposed_attributes",
+      "proposed_generic_name",
+      "review_notes",
+      "reviewed_at",
+      "reviewed_by",
+      "stock_item_id",
+      "updated_at",
+      "version"
+    ],
+    "stock_item_migration_staging": [
+      "id",
+      "import_batch_id",
+      "imported_at",
+      "source_brand",
+      "source_category",
+      "source_checksum",
+      "source_cost_snapshot",
+      "source_description",
+      "source_name",
+      "source_quantity_snapshot",
+      "source_stock_item_id",
+      "source_subcategory",
+      "source_uom",
+      "validation_errors",
+      "validation_status"
+    ],
+    "stock_item_requests": [
+      "approved_by",
+      "description",
+      "id",
+      "inserted_at",
+      "name",
+      "requested_by",
+      "review_notes",
+      "status",
+      "unit"
+    ],
+    "stock_items": [
+      "approved_product_id",
+      "available_quantity",
+      "brand",
+      "category",
+      "category_id",
+      "cost",
+      "created_at",
+      "created_by",
+      "description",
+      "generic_item_id",
+      "id",
+      "identity_source",
+      "institute_id",
+      "inventory_uom_id",
+      "item_master_id",
+      "item_variant_id",
+      "legacy_identity_snapshot",
+      "manufacturer_id",
+      "mapped_at",
+      "mapped_by",
+      "mapping_notes",
+      "mapping_status",
+      "name",
+      "sub_category",
+      "unit",
+      "updated_at"
+    ],
+    "supplier_catalog_items": [
+      "approved_product_id",
+      "availability_status",
+      "contract_id",
+      "conversion_factor",
+      "created_at",
+      "created_by",
+      "currency",
+      "effective_from",
+      "effective_to",
+      "id",
+      "is_active",
+      "is_approved_supplier",
+      "is_preferred_supplier",
+      "lead_time_days",
+      "minimum_order_quantity",
+      "order_multiple",
+      "package_size",
+      "purchasing_uom",
+      "purchasing_uom_id",
+      "supplier_description",
+      "supplier_id",
+      "supplier_item_code",
+      "tax_rate",
+      "unit_price",
+      "updated_at",
+      "updated_by"
+    ],
+    "supplier_compliance_artifacts": [
+      "artifact_type",
+      "blocked",
+      "created_at",
+      "created_by",
+      "document_url",
+      "expiry_date",
+      "id",
+      "name",
+      "status",
+      "supplier_id",
+      "updated_at"
+    ],
+    "supplier_contacts": [
+      "created_at",
+      "email",
+      "id",
+      "is_primary",
+      "name",
+      "notes",
+      "phone_number",
+      "position",
+      "responsibility",
+      "supplier_id",
+      "updated_at"
+    ],
+    "supplier_document_submissions": [
+      "document_type",
+      "file_name",
+      "file_size_bytes",
+      "id",
+      "metadata",
+      "mime_type",
+      "notes",
+      "purchase_order_id",
+      "reference_number",
+      "request_id",
+      "reviewed_at",
+      "reviewed_by",
+      "rfq_id",
+      "storage_path",
+      "submission_status",
+      "submitted_at",
+      "supplier_id",
+      "supplier_user_id"
+    ],
+    "supplier_evaluations": [
+      "action_items",
+      "communication_effectiveness",
+      "compliance_alignment",
+      "compliance_score",
+      "corrective_actions_score",
+      "cost_score",
+      "created_at",
+      "criteria_responses",
+      "delivery_as_scheduled",
+      "delivery_in_good_condition",
+      "delivery_meets_quality_expectations",
+      "delivery_score",
+      "esg_compliance_score",
+      "evaluation_criteria_notes",
+      "evaluation_date",
+      "evaluator_id",
+      "evaluator_name",
+      "id",
+      "kpi_weights",
+      "operations_effectiveness_rating",
+      "otif_score",
+      "overall_score",
+      "overall_supplier_happiness",
+      "payment_terms_comfort",
+      "price_satisfaction",
+      "quality_score",
+      "scheduled_annually",
+      "strengths",
+      "supplier_id",
+      "supplier_name",
+      "travel_required",
+      "updated_at",
+      "weaknesses",
+      "weighted_overall_score"
+    ],
+    "supplier_invoices": [
+      "attachment_metadata",
+      "contract_id",
+      "currency",
+      "discount_amount",
+      "extra_charges",
+      "id",
+      "idempotency_key",
+      "invoice_date",
+      "invoice_number",
+      "normalized_invoice_number",
+      "payload_fingerprint",
+      "po_equivalent_number",
+      "purchase_order_id",
+      "receipt_id",
+      "request_id",
+      "status",
+      "submitted_at",
+      "submitted_by",
+      "subtotal_amount",
+      "supplier",
+      "supplier_id",
+      "tax_amount",
+      "total_amount",
+      "updated_at"
+    ],
+    "supplier_issues": [
+      "capa_plan",
+      "capa_required",
+      "contract_id",
+      "created_at",
+      "created_by",
+      "description",
+      "due_date",
+      "id",
+      "request_id",
+      "resolved_at",
+      "severity",
+      "status",
+      "supplier_id",
+      "updated_at"
+    ],
+    "supplier_portal_sessions": [
+      "expires_at",
+      "id",
+      "ip_address",
+      "issued_at",
+      "last_seen_at",
+      "metadata",
+      "refresh_token_hash",
+      "revoked_at",
+      "revoked_reason",
+      "session_token_hash",
+      "supplier_user_id",
+      "user_agent"
+    ],
+    "supplier_principals": [
+      "authorization_document_url",
+      "authorization_expiry_date",
+      "authorization_start_date",
+      "authorization_status",
+      "authorized_brands",
+      "authorized_categories",
+      "created_at",
+      "id",
+      "is_active",
+      "principal_country",
+      "principal_name",
+      "relationship_type",
+      "supplier_id",
+      "updated_at",
+      "verification_notes",
+      "verified_at",
+      "verified_by"
+    ],
+    "supplier_scorecards": [
+      "contract_id",
+      "created_at",
+      "created_by",
+      "id",
+      "lead_time_variance",
+      "notes",
+      "otif_score",
+      "period_end",
+      "period_start",
+      "quality_defects",
+      "request_id",
+      "supplier_id",
+      "updated_at"
+    ],
+    "supplier_users": [
+      "auth_provider",
+      "created_at",
+      "email",
+      "full_name",
+      "id",
+      "invited_by",
+      "is_active",
+      "last_login_at",
+      "password_hash",
+      "role",
+      "supplier_id",
+      "updated_at"
+    ],
+    "suppliers": [
+      "bank_info",
+      "contact_email",
+      "contact_phone",
+      "country",
+      "created_at",
+      "credit_limit",
+      "currency",
+      "id",
+      "institute_id",
+      "is_authorized_agent",
+      "is_authorized_distributor",
+      "is_contractor",
+      "is_manufacturer",
+      "is_service_provider",
+      "is_sub_distributor",
+      "lead_time_days",
+      "name",
+      "notes",
+      "payment_terms",
+      "regulatory_risk_level",
+      "status",
+      "supplier_category",
+      "supplier_type",
+      "tax_number",
+      "updated_at"
+    ],
+    "technical_inspections": [
+      "acceptance_notes",
+      "acceptance_recorded_at",
+      "acceptance_recorded_by",
+      "acceptance_status",
+      "approvals",
+      "category_checklist",
+      "created_at",
+      "created_by",
+      "created_by_name",
+      "general_checklist",
+      "id",
+      "inspection_date",
+      "inspectors",
+      "item_category",
+      "item_name",
+      "location",
+      "lot_number",
+      "manufacturer",
+      "model_number",
+      "request_id",
+      "requested_item_id",
+      "serial_number",
+      "summary",
+      "supplier_name",
+      "updated_at"
+    ],
+    "ui_resource_permissions": [
+      "description",
+      "label",
+      "permissions",
+      "require_all",
+      "resource_key"
+    ],
+    "user_data_scopes": [
+      "data_scope_id",
+      "scope_value",
+      "user_id"
+    ],
+    "user_permissions": [
+      "permission_id",
+      "user_id"
+    ],
+    "user_registration_requests": [
+      "created_at",
+      "department_id",
+      "email",
+      "employee_id",
+      "id",
+      "institute_id",
+      "name",
+      "password_hash",
+      "rejection_reason",
+      "requested_role",
+      "reviewed_at",
+      "reviewer_id",
+      "section_id",
+      "status",
+      "updated_at"
+    ],
+    "user_section_assignments": [
+      "section_id",
+      "user_id"
+    ],
+    "users": [
+      "can_request_medication",
+      "created_at",
+      "department_id",
+      "email",
+      "employee_id",
+      "id",
+      "institute_id",
+      "is_active",
+      "name",
+      "password",
+      "phone_number",
+      "role",
+      "section_id",
+      "updated_at",
+      "warehouse_id"
+    ],
+    "warehouse_item_batches": [
+      "available_quantity",
+      "batch_number",
+      "expiry_date",
+      "id",
+      "lot_number",
+      "manufactured_date",
+      "metadata",
+      "quantity",
+      "received_at",
+      "received_date",
+      "stock_item_id",
+      "supplier_id",
+      "unit_cost",
+      "warehouse_id"
+    ],
+    "warehouse_replenishment_policies": [
+      "id",
+      "is_active",
+      "lead_time_days",
+      "lot_size",
+      "reorder_point",
+      "review_period_days",
+      "safety_stock",
+      "stock_item_id",
+      "updated_at",
+      "updated_by",
+      "warehouse_id"
+    ],
+    "warehouse_replenishment_tasks": [
+      "created_at",
+      "created_by",
+      "current_quantity",
+      "due_date",
+      "id",
+      "reorder_point",
+      "safety_stock",
+      "status",
+      "stock_item_id",
+      "suggested_quantity",
+      "warehouse_id"
+    ],
+    "warehouse_stock_levels": [
+      "batch_id",
+      "batch_number",
+      "expiry_date",
+      "generic_item_id",
+      "id",
+      "item_name",
+      "lot_number",
+      "quantity",
+      "reserved_quantity",
+      "serial_number",
+      "stock_item_id",
+      "stock_status",
+      "updated_at",
+      "updated_by",
+      "warehouse_id"
+    ],
+    "warehouse_stock_movements": [
+      "batch_id",
+      "created_at",
+      "created_by",
+      "direction",
+      "expiry_date",
+      "id",
+      "item_name",
+      "lot_number",
+      "notes",
+      "quantity",
+      "reference_request_id",
+      "reference_transfer_id",
+      "serial_number",
+      "stock_item_id",
+      "to_department_id",
+      "to_section_id",
+      "warehouse_id"
+    ],
+    "warehouse_supplied_items": [
+      "batch_id",
+      "department_id",
+      "department_stock_level_id",
+      "expiry_date",
+      "id",
+      "item_id",
+      "lot_number",
+      "received_at",
+      "received_by",
+      "request_id",
+      "section_id",
+      "supplied_at",
+      "supplied_by",
+      "supplied_from_stock_level_id",
+      "supplied_quantity",
+      "warehouse_id"
+    ],
+    "warehouse_supply_items": [
+      "approval_comments",
+      "approval_status",
+      "approved_at",
+      "approved_by",
+      "created_at",
+      "id",
+      "item_name",
+      "quantity",
+      "request_id",
+      "requested_item_id",
+      "updated_at"
+    ],
+    "warehouse_supply_templates": [
+      "department_id",
+      "id",
+      "inserted_at",
+      "items",
+      "template_name"
+    ],
+    "warehouse_transfer_items": [
+      "id",
+      "item_name",
+      "notes",
+      "quantity",
+      "stock_item_id",
+      "transfer_id"
+    ],
+    "warehouse_transfer_requests": [
+      "approved_at",
+      "approved_by",
+      "created_at",
+      "destination_warehouse_id",
+      "dispatched_at",
+      "dispatched_by",
+      "id",
+      "notes",
+      "origin_warehouse_id",
+      "received_at",
+      "rejected_at",
+      "rejected_by",
+      "rejection_reason",
+      "requested_by",
+      "status",
+      "updated_at"
+    ],
+    "warehouses": [
+      "created_at",
+      "department_id",
+      "description",
+      "id",
+      "institute_id",
+      "is_active",
+      "location",
+      "name",
+      "type",
+      "updated_at"
+    ]
+  },
+  "missingTables": {
+    "contract_templates": "controllers/contractGovernanceController.js:35",
+    "contract_clauses": "controllers/contractGovernanceController.js:50",
+    "contract_clause_assignments": "controllers/contractGovernanceController.js:63",
+    "contract_obligations": "controllers/contractsController.js:1170",
+    "contract_sla_events": "controllers/contractGovernanceController.js:89",
+    "contract_negotiations": "controllers/contractGovernanceController.js:102",
+    "contract_legal_reviews": "controllers/contractGovernanceController.js:116",
+    "contract_payments": "controllers/contractsController.js:3791",
+    "contract_versions": "controllers/contractGovernanceController.js:142",
+    "contract_amendments": "controllers/contractsController.js:981",
+    "contract_alerts": "controllers/contractsController.js:995",
+    "contract_approvals": "controllers/contractsController.js:1007",
+    "contract_items": "controllers/contractsController.js:1034",
+    "contract_required_documents": "controllers/contractsController.js:1064",
+    "contract_logs": "controllers/contractsController.js:1077",
+    "contract_documents": "controllers/contractsController.js:1109",
+    "contract_document_versions": "controllers/contractsController.js:1123",
+    "contract_renewal_events": "controllers/contractsController.js:1181",
+    "contract_risk_assessments": "controllers/contractsController.js:3742",
+    "contract_ai_extractions": "controllers/contractsController.js:3743",
+    "contract_invoices": "controllers/contractsController.js:3774",
+    "contract_consumption": "controllers/contractsController.js:3797",
+    "planning_settings": "controllers/demandPlanningController.js:240",
+    "supplier_contacts": "controllers/suppliersController.js:64",
+    "document_branding_settings": "sql/migrations/20260929_document_branding.sql",
+    "print_service_requests": "routes/printServiceRequests.js:14",
+    "print_service_settings": "routes/printServiceRequests.js:14",
+    "route_capability_policies": "utils/capabilityPolicyService.js:5",
+    "department_item_follow_up_notes": "utils/ensureDepartmentItemFollowUpNotesTable.js:8",
+    "journal_entries": "utils/ensureFinanceCoreTables.js:50",
+    "journal_entry_lines": "utils/ensureFinanceCoreTables.js:64",
+    "project_department_visibility": "utils/ensureProjectsTable.js:36",
+    "request_auto_assignment_rules": "utils/ensureRequestAutoAssignmentRulesTable.js:10",
+    "request_edit_approvals": "utils/ensureRequestEditApprovalsTable.js:4",
+    "employee_tasks": "sql/development/20261005_02_employee_tasks.sql",
+    "procurement_identity_policy": "sql/development/20261005_03_procurement_identity_policy.sql",
+    "inventory_transaction_allocations": "sql/manual/004_inventory_transaction_engine.sql",
+    "inventory_transfer_movement_links": "sql/manual/005_inventory_operations.sql",
+    "inventory_transfer_allocation_links": "sql/manual/005_inventory_operations.sql",
+    "inventory_transfer_receipt_operations": "sql/manual/005_inventory_operations.sql",
+    "inventory_reservations": "sql/manual/005_inventory_operations.sql",
+    "inventory_reservation_allocations": "sql/manual/005_inventory_operations.sql",
+    "inventory_reservation_issue_operations": "sql/manual/005_inventory_operations.sql",
+    "inventory_cycle_counts": "sql/manual/005_inventory_operations.sql",
+    "inventory_cycle_count_lines": "sql/manual/005_inventory_operations.sql",
+    "rfx_response_items": "sql/manual/006_connected_procure_to_pay.sql",
+    "procurement_awards": "sql/manual/006_connected_procure_to_pay.sql",
+    "invoice_match_override_decisions": "sql/manual/006_connected_procure_to_pay.sql",
+    "procurement_cases": "sql/manual/010_supply_chain_performance_foundation.sql",
+    "procurement_case_activities": "sql/manual/010_supply_chain_performance_foundation.sql",
+    "procurement_case_complexity_factors": "sql/manual/010_supply_chain_performance_foundation.sql",
+    "procurement_value_events": "sql/manual/010_supply_chain_performance_foundation.sql",
+    "procurement_priority_profiles": "sql/manual/012_procurement_priority_foundation.sql",
+    "department_priority_rankings": "sql/manual/012_procurement_priority_foundation.sql",
+    "procurement_priority_history": "sql/manual/012_procurement_priority_foundation.sql",
+    "procurement_priority_groups": "sql/manual/012_procurement_priority_foundation.sql",
+    "procurement_priority_group_members": "sql/manual/012_procurement_priority_foundation.sql",
+    "maintainable_equipment": "sql/manual/013_approved_spare_parts_foundation.sql",
+    "approved_spare_parts": "sql/manual/013_approved_spare_parts_foundation.sql",
+    "spare_part_equipment_compatibility": "sql/manual/013_approved_spare_parts_foundation.sql",
+    "organization_units": "sql/manual/014_organization_hierarchy.sql",
+    "organization_positions": "sql/manual/014_organization_hierarchy.sql",
+    "approval_policies": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "approval_policy_versions": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "approval_policy_rules": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "approval_policy_rule_conditions": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "approval_policy_rule_steps": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "approval_policy_shadow_runs": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "approval_policy_shadow_steps": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "approval_policy_shadow_differences": "sql/manual/015_approval_policy_engine_foundation.sql",
+    "organization_head_reconciliation_decisions": "sql/manual/016_organization_hierarchy_cutover_readiness.sql",
+    "asset_number_allocators": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "asset_categories": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "asset_locations": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "assets": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "asset_movements": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "asset_tags": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "rfid_readers": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "rfid_antennas": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "rfid_portals": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "rfid_portal_antennas": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "rfid_integration_clients": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "rfid_read_events": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "rfid_business_events": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "asset_exceptions": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "contract_equipment_coverage": "sql/manual/021_contract_equipment_coverage.sql",
+    "maintenance_work_order_allocators": "sql/manual/024_maintenance_work_orders.sql",
+    "maintenance_work_orders": "sql/manual/024_maintenance_work_orders.sql",
+    "maintenance_work_order_parts": "sql/manual/024_maintenance_work_orders.sql",
+    "maintenance_part_inventory_operations": "sql/manual/025_maintenance_inventory_execution.sql",
+    "asset_inventory_number_allocators": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "asset_inventory_sessions": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "asset_inventory_expected_assets": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "asset_inventory_observations": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "asset_inventory_discoveries": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "asset_inventory_findings": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "asset_inventory_resolutions": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "approval_authority_delegations": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "approval_route_snapshots": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "approval_route_snapshot_steps": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "ai_interactions": "sql/manual/033_ai_intelligence_foundation.sql",
+    "ai_tool_executions": "sql/manual/033_ai_intelligence_foundation.sql",
+    "procurement_item_events": "sql/migrations/20260608_procurement_item_events.sql",
+    "supplier_principals": "sql/migrations/20260608_supplier_classification_principals.sql",
+    "generic_items": "sql/migrations/20260727_item_master_foundation.sql",
+    "approved_products": "sql/migrations/20260727_item_master_foundation.sql",
+    "supplier_catalog_items": "sql/migrations/20260727_item_master_foundation.sql",
+    "pending_item_requests": "sql/migrations/20260727_item_master_foundation.sql",
+    "item_duplicate_reviews": "sql/migrations/20260727_item_master_foundation.sql",
+    "item_master_aliases": "sql/migrations/20260727_item_master_foundation.sql",
+    "legacy_item_mappings": "sql/migrations/20260727_item_master_foundation.sql",
+    "generic_item_merges": "sql/migrations/20260727_item_master_foundation.sql",
+    "item_master_audit_events": "sql/migrations/20260727_item_master_foundation.sql",
+    "stock_item_master_mappings": "sql/migrations/phase1b/02_stock_item_mapping_tables.sql",
+    "stock_item_migration_staging": "sql/migrations/phase1b/02_stock_item_mapping_tables.sql",
+    "notification_outbox": "backend-query-derived-contract",
+    "user_section_assignments": "backend-query-derived-contract",
+    "procurement_evaluation_cases": "backend-query-derived-contract",
+    "procurement_evaluation_offers": "backend-query-derived-contract",
+    "procurement_evaluation_tests": "backend-query-derived-contract",
+    "procurement_evaluation_offer_test_costs": "backend-query-derived-contract",
+    "procurement_evaluation_criteria": "backend-query-derived-contract",
+    "procurement_evaluation_scores": "backend-query-derived-contract",
+    "procurement_evaluation_results": "backend-query-derived-contract"
+  },
+  "missingColumns": {
+    "contract_evaluations": {
+      "total_score": {
+        "definition": "numeric",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "purchase_orders": {
+      "contract_id": {
+        "definition": "integer REFERENCES contracts(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "suppliers": {
+      "institute_id": {
+        "definition": "integer REFERENCES institutes(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "approval_route_rules": {
+      "approver_id": {
+        "definition": "integer REFERENCES users(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "commitment_ledger": {
+      "journal_entry_id": {
+        "definition": "BIGINT REFERENCES public.journal_entries(id) ON DELETE SET NULL",
+        "source": "utils/ensureFinanceCoreTables.js:36"
+      }
+    },
+    "gl_postings": {
+      "journal_entry_id": {
+        "definition": "BIGINT REFERENCES public.journal_entries(id) ON DELETE SET NULL",
+        "source": "utils/ensureFinanceCoreTables.js:76"
+      }
+    },
+    "item_uom": {
+      "name": {
+        "definition": "text GENERATED ALWAYS AS (uom_name) STORED",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "stock_items": {
+      "category_id": {
+        "definition": "bigint REFERENCES item_categories(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      },
+      "manufacturer_id": {
+        "definition": "bigint REFERENCES item_manufacturers(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      },
+      "institute_id": {
+        "definition": "integer REFERENCES institutes(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "supplier_invoices": {
+      "contract_id": {
+        "definition": "integer REFERENCES contracts(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "ap_vouchers": {
+      "contract_id": {
+        "definition": "integer REFERENCES contracts(id) ON DELETE RESTRICT",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "warehouses": {
+      "is_active": {
+        "definition": "boolean NOT NULL DEFAULT true",
+        "source": "backend-query-derived-contract"
+      }
+    },
+    "users": {
+      "updated_at": {
+        "definition": "timestamptz",
+        "source": "backend-query-derived-contract"
+      }
+    }
+  },
+  "indexes": {
+    "contracts_reference_number_idx": {
+      "unique": true,
+      "table": "contracts",
+      "tail": "(reference_number)\n           WHERE reference_number IS NOT NULL",
+      "source": "controllers/contractsController.js:755"
+    },
+    "contract_document_versions_one_current_idx": {
+      "unique": true,
+      "table": "contract_document_versions",
+      "tail": "(document_id) WHERE is_current = TRUE",
+      "source": "controllers/contractsController.js:1135"
+    },
+    "contract_documents_contract_id_idx": {
+      "unique": false,
+      "table": "contract_documents",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:1136"
+    },
+    "contract_documents_document_type_idx": {
+      "unique": false,
+      "table": "contract_documents",
+      "tail": "(document_type)",
+      "source": "controllers/contractsController.js:1137"
+    },
+    "contract_document_versions_contract_id_idx": {
+      "unique": false,
+      "table": "contract_document_versions",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:1138"
+    },
+    "contract_document_versions_document_id_idx": {
+      "unique": false,
+      "table": "contract_document_versions",
+      "tail": "(document_id)",
+      "source": "controllers/contractsController.js:1139"
+    },
+    "contract_document_versions_uploaded_at_idx": {
+      "unique": false,
+      "table": "contract_document_versions",
+      "tail": "(uploaded_at DESC)",
+      "source": "controllers/contractsController.js:1140"
+    },
+    "contract_obligations_contract_id_idx": {
+      "unique": false,
+      "table": "contract_obligations",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:1199"
+    },
+    "contract_obligations_owner_user_id_idx": {
+      "unique": false,
+      "table": "contract_obligations",
+      "tail": "(owner_user_id)",
+      "source": "controllers/contractsController.js:1200"
+    },
+    "contract_obligations_due_date_idx": {
+      "unique": false,
+      "table": "contract_obligations",
+      "tail": "(due_date)",
+      "source": "controllers/contractsController.js:1201"
+    },
+    "contract_obligations_status_idx": {
+      "unique": false,
+      "table": "contract_obligations",
+      "tail": "(status)",
+      "source": "controllers/contractsController.js:1202"
+    },
+    "contract_obligations_next_due_date_idx": {
+      "unique": false,
+      "table": "contract_obligations",
+      "tail": "(next_due_date)",
+      "source": "controllers/contractsController.js:1203"
+    },
+    "contract_renewal_events_contract_id_idx": {
+      "unique": false,
+      "table": "contract_renewal_events",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:1204"
+    },
+    "contract_renewal_events_alert_date_idx": {
+      "unique": false,
+      "table": "contract_renewal_events",
+      "tail": "(alert_date)",
+      "source": "controllers/contractsController.js:1205"
+    },
+    "contract_renewal_events_renewal_date_idx": {
+      "unique": false,
+      "table": "contract_renewal_events",
+      "tail": "(renewal_date)",
+      "source": "controllers/contractsController.js:1206"
+    },
+    "contract_renewal_events_status_idx": {
+      "unique": false,
+      "table": "contract_renewal_events",
+      "tail": "(status)",
+      "source": "controllers/contractsController.js:1207"
+    },
+    "contract_risk_assessments_contract_id_idx": {
+      "unique": false,
+      "table": "contract_risk_assessments",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:3742"
+    },
+    "contract_risk_assessments_risk_level_idx": {
+      "unique": false,
+      "table": "contract_risk_assessments",
+      "tail": "(risk_level)",
+      "source": "controllers/contractsController.js:3742"
+    },
+    "contract_risk_assessments_assessed_at_idx": {
+      "unique": false,
+      "table": "contract_risk_assessments",
+      "tail": "(assessed_at DESC)",
+      "source": "controllers/contractsController.js:3742"
+    },
+    "contract_ai_extractions_contract_id_idx": {
+      "unique": false,
+      "table": "contract_ai_extractions",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:3743"
+    },
+    "contract_ai_extractions_status_idx": {
+      "unique": false,
+      "table": "contract_ai_extractions",
+      "tail": "(extraction_status)",
+      "source": "controllers/contractsController.js:3743"
+    },
+    "contract_invoices_contract_id_idx": {
+      "unique": false,
+      "table": "contract_invoices",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_invoices_supplier_id_idx": {
+      "unique": false,
+      "table": "contract_invoices",
+      "tail": "(supplier_id)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_invoices_invoice_number_idx": {
+      "unique": false,
+      "table": "contract_invoices",
+      "tail": "(invoice_number)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_invoices_status_idx": {
+      "unique": false,
+      "table": "contract_invoices",
+      "tail": "(status)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_invoices_matching_status_idx": {
+      "unique": false,
+      "table": "contract_invoices",
+      "tail": "(matching_status)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_payments_contract_id_idx": {
+      "unique": false,
+      "table": "contract_payments",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_payments_invoice_id_idx": {
+      "unique": false,
+      "table": "contract_payments",
+      "tail": "(invoice_id)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_payments_status_idx": {
+      "unique": false,
+      "table": "contract_payments",
+      "tail": "(status)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_consumption_contract_id_idx": {
+      "unique": false,
+      "table": "contract_consumption",
+      "tail": "(contract_id)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_consumption_invoice_id_idx": {
+      "unique": false,
+      "table": "contract_consumption",
+      "tail": "(invoice_id)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "contract_consumption_consumption_date_idx": {
+      "unique": false,
+      "table": "contract_consumption",
+      "tail": "(consumption_date)",
+      "source": "controllers/contractsController.js:3798"
+    },
+    "planning_settings_warehouse_key": {
+      "unique": true,
+      "table": "planning_settings",
+      "tail": "((COALESCE(warehouse_id, -1)))",
+      "source": "controllers/demandPlanningController.js:256"
+    },
+    "idx_requested_items_assigned_to": {
+      "unique": false,
+      "table": "requested_items",
+      "tail": "(assigned_to)",
+      "source": "controllers/requests/assignRequestController.js:17"
+    },
+    "idx_requested_items_request_assignee": {
+      "unique": false,
+      "table": "requested_items",
+      "tail": "(request_id, assigned_to)",
+      "source": "controllers/requests/assignRequestController.js:21"
+    },
+    "rfx_responses_rfx_id_idx": {
+      "unique": false,
+      "table": "rfx_responses",
+      "tail": "(rfx_id)",
+      "source": "controllers/rfxPortalController.js:59"
+    },
+    "rfx_events_request_id_idx": {
+      "unique": false,
+      "table": "rfx_events",
+      "tail": "(request_id)",
+      "source": "controllers/rfxPortalController.js:78"
+    },
+    "rfx_responses_request_id_idx": {
+      "unique": false,
+      "table": "rfx_responses",
+      "tail": "(request_id)",
+      "source": "controllers/rfxPortalController.js:82"
+    },
+    "purchase_orders_request_id_idx": {
+      "unique": false,
+      "table": "purchase_orders",
+      "tail": "(request_id)",
+      "source": "controllers/rfxPortalController.js:126"
+    },
+    "purchase_orders_rfx_id_idx": {
+      "unique": false,
+      "table": "purchase_orders",
+      "tail": "(rfx_id)",
+      "source": "controllers/rfxPortalController.js:129"
+    },
+    "supplier_evaluations_supplier_name_idx": {
+      "unique": false,
+      "table": "supplier_evaluations",
+      "tail": "(LOWER(supplier_name))",
+      "source": "controllers/supplierEvaluationsController.js:134"
+    },
+    "supplier_evaluations_supplier_id_idx": {
+      "unique": false,
+      "table": "supplier_evaluations",
+      "tail": "(supplier_id)",
+      "source": "controllers/supplierEvaluationsController.js:139"
+    },
+    "supplier_contacts_supplier_id_idx": {
+      "unique": false,
+      "table": "supplier_contacts",
+      "tail": "(supplier_id)",
+      "source": "controllers/suppliersController.js:88"
+    },
+    "supplier_contacts_name_ci_idx": {
+      "unique": false,
+      "table": "supplier_contacts",
+      "tail": "(supplier_id, LOWER(name))",
+      "source": "controllers/suppliersController.js:89"
+    },
+    "suppliers_name_ci_lookup_idx": {
+      "unique": false,
+      "table": "suppliers",
+      "tail": "(LOWER(name))",
+      "source": "controllers/suppliersController.js:333"
+    },
+    "approval_route_rules_lookup_idx": {
+      "unique": false,
+      "table": "approval_route_rules",
+      "tail": "(version_id, request_type, department_type, approval_level)",
+      "source": "sql/approval_routes.sql"
+    },
+    "idx_print_service_requests_requester": {
+      "unique": false,
+      "table": "print_service_requests",
+      "tail": "(requester_id)",
+      "source": "routes/printServiceRequests.js:14"
+    },
+    "idx_print_service_requests_status": {
+      "unique": false,
+      "table": "print_service_requests",
+      "tail": "(status)",
+      "source": "routes/printServiceRequests.js:14"
+    },
+    "idx_print_service_requests_accepted_by": {
+      "unique": false,
+      "table": "print_service_requests",
+      "tail": "(accepted_by)",
+      "source": "routes/printServiceRequests.js:14"
+    },
+    "idx_print_service_requests_created_at": {
+      "unique": false,
+      "table": "print_service_requests",
+      "tail": "(created_at DESC)",
+      "source": "routes/printServiceRequests.js:14"
+    },
+    "idx_procurement_evaluation_results_case_rank": {
+      "unique": false,
+      "table": "procurement_evaluation_results",
+      "tail": "(evaluation_case_id, rank)",
+      "source": "services/procurementEvaluationService.js:427"
+    },
+    "idx_department_item_follow_up_notes_item_id": {
+      "unique": false,
+      "table": "department_item_follow_up_notes",
+      "tail": "(requested_item_id)",
+      "source": "utils/ensureDepartmentItemFollowUpNotesTable.js:23"
+    },
+    "idx_department_item_follow_up_notes_department_id": {
+      "unique": false,
+      "table": "department_item_follow_up_notes",
+      "tail": "(department_id)",
+      "source": "utils/ensureDepartmentItemFollowUpNotesTable.js:27"
+    },
+    "idx_department_item_follow_up_notes_created_at": {
+      "unique": false,
+      "table": "department_item_follow_up_notes",
+      "tail": "(created_at)",
+      "source": "utils/ensureDepartmentItemFollowUpNotesTable.js:31"
+    },
+    "idx_budget_envelopes_dept_proj": {
+      "unique": false,
+      "table": "budget_envelopes",
+      "tail": "(department_id, project_id, fiscal_year)",
+      "source": "utils/ensureFinanceCoreTables.js:101"
+    },
+    "idx_commitment_ledger_request": {
+      "unique": false,
+      "table": "commitment_ledger",
+      "tail": "(request_id, stage)",
+      "source": "utils/ensureFinanceCoreTables.js:102"
+    },
+    "idx_commitment_ledger_budget": {
+      "unique": false,
+      "table": "commitment_ledger",
+      "tail": "(budget_envelope_id, stage)",
+      "source": "utils/ensureFinanceCoreTables.js:103"
+    },
+    "idx_journal_entries_request": {
+      "unique": false,
+      "table": "journal_entries",
+      "tail": "(request_id, posted_at)",
+      "source": "utils/ensureFinanceCoreTables.js:104"
+    },
+    "idx_journal_entries_source": {
+      "unique": false,
+      "table": "journal_entries",
+      "tail": "(source_type, source_id)",
+      "source": "utils/ensureFinanceCoreTables.js:105"
+    },
+    "idx_journal_entry_lines_entry": {
+      "unique": false,
+      "table": "journal_entry_lines",
+      "tail": "(journal_entry_id)",
+      "source": "utils/ensureFinanceCoreTables.js:106"
+    },
+    "idx_gl_postings_request": {
+      "unique": false,
+      "table": "gl_postings",
+      "tail": "(request_id, posted_at)",
+      "source": "utils/ensureFinanceCoreTables.js:107"
+    },
+    "idx_gl_posting_lines_posting": {
+      "unique": false,
+      "table": "gl_posting_lines",
+      "tail": "(gl_posting_id)",
+      "source": "utils/ensureFinanceCoreTables.js:108"
+    },
+    "idx_requests_temporary_requester_name": {
+      "unique": false,
+      "table": "requests",
+      "tail": "(temporary_requester_name)",
+      "source": "utils/ensureHistoricalRequestSchema.js:59"
+    },
+    "idx_wsi_request_id": {
+      "unique": false,
+      "table": "warehouse_supply_items",
+      "tail": "(request_id)",
+      "source": "utils/ensureWarehouseSupplyTables.js:28"
+    },
+    "idx_item_master_category": {
+      "unique": false,
+      "table": "item_master",
+      "tail": "(category_id)",
+      "source": "utils/ensureItemMasterTables.js:178"
+    },
+    "idx_item_variants_master_id": {
+      "unique": false,
+      "table": "item_variants",
+      "tail": "(item_master_id)",
+      "source": "utils/ensureItemMasterTables.js:182"
+    },
+    "idx_item_conversion_master_id": {
+      "unique": false,
+      "table": "item_conversion",
+      "tail": "(item_master_id)",
+      "source": "utils/ensureItemMasterTables.js:186"
+    },
+    "idx_item_master_items_search": {
+      "unique": false,
+      "table": "item_master_items",
+      "tail": "(LOWER(item_name), LOWER(generic_name), LOWER(brand_name), LOWER(item_code))",
+      "source": "utils/ensureItemMasterTables.js:190"
+    },
+    "item_recalls_status_idx": {
+      "unique": false,
+      "table": "item_recalls",
+      "tail": "(LOWER(status))",
+      "source": "utils/ensureItemRecallsTable.js:48"
+    },
+    "item_recalls_item_idx": {
+      "unique": false,
+      "table": "item_recalls",
+      "tail": "(item_id)",
+      "source": "utils/ensureItemRecallsTable.js:49"
+    },
+    "item_recalls_item_name_idx": {
+      "unique": false,
+      "table": "item_recalls",
+      "tail": "(LOWER(item_name))",
+      "source": "utils/ensureItemRecallsTable.js:50"
+    },
+    "idx_requests_initiated_by_technician_id": {
+      "unique": false,
+      "table": "requests",
+      "tail": "(initiated_by_technician_id)",
+      "source": "utils/ensureMaintenanceRequestSchema.js:35"
+    },
+    "idx_requests_maintenance_ref_number": {
+      "unique": false,
+      "table": "requests",
+      "tail": "(maintenance_ref_number)",
+      "source": "utils/ensureMaintenanceRequestSchema.js:39"
+    },
+    "idx_monthly_dispensing_month": {
+      "unique": false,
+      "table": "monthly_dispensing",
+      "tail": "(month_start)",
+      "source": "utils/ensureMonthlyDispensingTables.js:19"
+    },
+    "idx_monthly_dispensing_item": {
+      "unique": false,
+      "table": "monthly_dispensing",
+      "tail": "(LOWER(item_name))",
+      "source": "utils/ensureMonthlyDispensingTables.js:22"
+    },
+    "uniq_monthly_dispensing_month_item_facility": {
+      "unique": true,
+      "table": "monthly_dispensing",
+      "tail": "(month_start, item_name, COALESCE(facility_name, ''))",
+      "source": "utils/ensureMonthlyDispensingTables.js:25"
+    },
+    "idx_proc_state_history_request_id": {
+      "unique": false,
+      "table": "procurement_state_history",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_goods_receipts_request_id": {
+      "unique": false,
+      "table": "goods_receipts",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_supplier_invoices_request_id": {
+      "unique": false,
+      "table": "supplier_invoices",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_invoice_match_results_request_id": {
+      "unique": false,
+      "table": "invoice_match_results",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_ap_vouchers_request_id": {
+      "unique": false,
+      "table": "ap_vouchers",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_finance_postings_request_id": {
+      "unique": false,
+      "table": "finance_postings",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_payment_records_request_id": {
+      "unique": false,
+      "table": "payment_records",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_finance_action_history_request_id": {
+      "unique": false,
+      "table": "finance_action_history",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260312_procure_to_pay.sql"
+    },
+    "idx_purchase_orders_request_id": {
+      "unique": false,
+      "table": "purchase_orders",
+      "tail": "(request_id)",
+      "source": "sql/20260313_procure_to_pay_document_flow.sql"
+    },
+    "idx_purchase_order_items_po_id": {
+      "unique": false,
+      "table": "purchase_order_items",
+      "tail": "(purchase_order_id)",
+      "source": "sql/20260313_procure_to_pay_document_flow.sql"
+    },
+    "idx_ap_payables_request_id": {
+      "unique": false,
+      "table": "ap_payables",
+      "tail": "(request_id)",
+      "source": "sql/20260313_procure_to_pay_document_flow.sql"
+    },
+    "idx_document_flow_links_request_id": {
+      "unique": false,
+      "table": "document_flow_links",
+      "tail": "(request_id)",
+      "source": "sql/20260313_procure_to_pay_document_flow.sql"
+    },
+    "idx_non_po_receipt_approvals_receipt_id": {
+      "unique": false,
+      "table": "non_po_receipt_approvals",
+      "tail": "(goods_receipt_id)",
+      "source": "utils/ensureProcureToPayTables.js:276"
+    },
+    "idx_plan_items_plan": {
+      "unique": false,
+      "table": "procurement_plan_items",
+      "tail": "(plan_id)",
+      "source": "utils/ensureProcurementPlanTables.js:48"
+    },
+    "idx_plan_item_requests_item": {
+      "unique": false,
+      "table": "procurement_plan_item_requests",
+      "tail": "(plan_item_id)",
+      "source": "utils/ensureProcurementPlanTables.js:49"
+    },
+    "idx_plan_item_consumptions_item": {
+      "unique": false,
+      "table": "procurement_plan_item_consumptions",
+      "tail": "(plan_item_id)",
+      "source": "utils/ensureProcurementPlanTables.js:50"
+    },
+    "idx_projects_lower_name": {
+      "unique": false,
+      "table": "projects",
+      "tail": "(LOWER(name))",
+      "source": "utils/ensureProjectsTable.js:33"
+    },
+    "idx_project_department_visibility_department": {
+      "unique": false,
+      "table": "project_department_visibility",
+      "tail": "(department_id)",
+      "source": "utils/ensureProjectsTable.js:46"
+    },
+    "idx_requests_project_id": {
+      "unique": false,
+      "table": "requests",
+      "tail": "(project_id)",
+      "source": "utils/ensureProjectsTable.js:62"
+    },
+    "request_auto_assignment_rules_unique_scope": {
+      "unique": true,
+      "table": "request_auto_assignment_rules",
+      "tail": "(LOWER(request_type), COALESCE(warehouse_id, 0))",
+      "source": "utils/ensureRequestAutoAssignmentRulesTable.js:24"
+    },
+    "requests_requester_client_submission_key_unique_idx": {
+      "unique": true,
+      "table": "requests",
+      "tail": "(requester_id, client_submission_key)\n         WHERE client_submission_key IS NOT NULL",
+      "source": "utils/ensureRequestClientSubmissionKey.js:14"
+    },
+    "idx_request_edit_approvals_pending": {
+      "unique": false,
+      "table": "request_edit_approvals",
+      "tail": "(request_id, status)",
+      "source": "utils/ensureRequestEditApprovalsTable.js:17"
+    },
+    "idx_request_edit_approvals_approval_id": {
+      "unique": false,
+      "table": "request_edit_approvals",
+      "tail": "(approval_id)",
+      "source": "utils/ensureRequestEditApprovalsTable.js:22"
+    },
+    "requests_scheduled_for_idx": {
+      "unique": false,
+      "table": "requests",
+      "tail": "(scheduled_for) WHERE status = 'Scheduled'",
+      "source": "utils/ensureRequestSchedulingColumns.js:11"
+    },
+    "requested_item_financials_item_idx": {
+      "unique": false,
+      "table": "requested_item_financials",
+      "tail": "(requested_item_id)",
+      "source": "utils/ensureRequestedItemFinancialsTable.js:42"
+    },
+    "requested_item_financials_item_uniq": {
+      "unique": true,
+      "table": "requested_item_financials",
+      "tail": "(requested_item_id)",
+      "source": "utils/ensureRequestedItemFinancialsTable.js:45"
+    },
+    "requested_item_financials_request_idx": {
+      "unique": false,
+      "table": "requested_item_financials",
+      "tail": "(request_id)",
+      "source": "utils/ensureRequestedItemFinancialsTable.js:48"
+    },
+    "requested_item_financials_contract_idx": {
+      "unique": false,
+      "table": "requested_item_financials",
+      "tail": "(contract_id)",
+      "source": "utils/ensureRequestedItemFinancialsTable.js:54"
+    },
+    "requested_item_financials_contract_item_idx": {
+      "unique": false,
+      "table": "requested_item_financials",
+      "tail": "(contract_item_id)",
+      "source": "utils/ensureRequestedItemFinancialsTable.js:57"
+    },
+    "risk_register_status_idx": {
+      "unique": false,
+      "table": "risk_register",
+      "tail": "(status)",
+      "source": "utils/ensureRiskRegisterTable.js:35"
+    },
+    "risk_register_due_date_idx": {
+      "unique": false,
+      "table": "risk_register",
+      "tail": "(due_date)",
+      "source": "utils/ensureRiskRegisterTable.js:40"
+    },
+    "technical_inspections_item_name_idx": {
+      "unique": false,
+      "table": "technical_inspections",
+      "tail": "(LOWER(item_name))",
+      "source": "utils/ensureTechnicalInspectionsTable.js:41"
+    },
+    "technical_inspections_supplier_idx": {
+      "unique": false,
+      "table": "technical_inspections",
+      "tail": "(LOWER(supplier_name))",
+      "source": "utils/ensureTechnicalInspectionsTable.js:46"
+    },
+    "technical_inspections_request_idx": {
+      "unique": false,
+      "table": "technical_inspections",
+      "tail": "(request_id)",
+      "source": "utils/ensureTechnicalInspectionsTable.js:71"
+    },
+    "technical_inspections_requested_item_idx": {
+      "unique": false,
+      "table": "technical_inspections",
+      "tail": "(requested_item_id)",
+      "source": "utils/ensureTechnicalInspectionsTable.js:74"
+    },
+    "idx_wsup_request_id": {
+      "unique": false,
+      "table": "warehouse_supplied_items",
+      "tail": "(request_id)",
+      "source": "utils/ensureWarehouseSupplyTables.js:29"
+    },
+    "idx_wsi_requested_item_id": {
+      "unique": false,
+      "table": "warehouse_supply_items",
+      "tail": "(requested_item_id)",
+      "source": "utils/ensureWarehouseSupplyTables.js:36"
+    },
+    "idx_wtr_origin": {
+      "unique": false,
+      "table": "warehouse_transfer_requests",
+      "tail": "(origin_warehouse_id)",
+      "source": "utils/ensureWarehouseTransferTables.js:34"
+    },
+    "idx_wtr_destination": {
+      "unique": false,
+      "table": "warehouse_transfer_requests",
+      "tail": "(destination_warehouse_id)",
+      "source": "utils/ensureWarehouseTransferTables.js:35"
+    },
+    "idx_wtr_status": {
+      "unique": false,
+      "table": "warehouse_transfer_requests",
+      "tail": "(status)",
+      "source": "utils/ensureWarehouseTransferTables.js:36"
+    },
+    "idx_wti_transfer": {
+      "unique": false,
+      "table": "warehouse_transfer_items",
+      "tail": "(transfer_id)",
+      "source": "utils/ensureWarehouseTransferTables.js:37"
+    },
+    "evaluation_criteria_code_unique_idx": {
+      "unique": true,
+      "table": "evaluation_criteria",
+      "tail": "(code)",
+      "source": "utils/evaluationCriteriaSeeder.js:97"
+    },
+    "notifications_user_read_created_idx": {
+      "unique": false,
+      "table": "notifications",
+      "tail": "(user_id, is_read, created_at DESC)",
+      "source": "utils/notificationService.js:22"
+    },
+    "approval_routes_lookup_idx": {
+      "unique": false,
+      "table": "approval_routes",
+      "tail": "(request_type, department_type, approval_level)",
+      "source": "sql/approval_routes.sql"
+    },
+    "uq_approvals_route_step": {
+      "unique": true,
+      "table": "approvals",
+      "tail": "(request_id, approval_route_version, approval_level, approver_id)",
+      "source": "sql/manual/003_request_reclassification_and_uom.sql"
+    },
+    "idx_approvals_request_id": {
+      "unique": false,
+      "table": "approvals",
+      "tail": "(request_id)",
+      "source": "sql/manual/003_request_reclassification_and_uom.sql"
+    },
+    "idx_approvals_is_superseded": {
+      "unique": false,
+      "table": "approvals",
+      "tail": "(is_superseded)",
+      "source": "sql/manual/003_request_reclassification_and_uom.sql"
+    },
+    "idx_approvals_route_snapshot_id": {
+      "unique": false,
+      "table": "approvals",
+      "tail": "(route_snapshot_id)",
+      "source": "sql/manual/003_request_reclassification_and_uom.sql"
+    },
+    "ux_inventory_transactions_idempotency": {
+      "unique": true,
+      "table": "inventory_transactions",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ux_inventory_transactions_reversal": {
+      "unique": true,
+      "table": "inventory_transactions",
+      "tail": "(reversal_of_movement_id) WHERE reversal_of_movement_id IS NOT NULL",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ix_inventory_ledger_scope": {
+      "unique": false,
+      "table": "inventory_transactions",
+      "tail": "(institute_id, warehouse_id, stock_item_id, posted_at DESC)",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ix_inventory_allocations_movement": {
+      "unique": false,
+      "table": "inventory_transaction_allocations",
+      "tail": "(inventory_transaction_id, allocation_sequence)",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ix_inventory_allocations_balance": {
+      "unique": false,
+      "table": "inventory_transaction_allocations",
+      "tail": "(warehouse_stock_level_id)",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ix_inventory_allocations_trace": {
+      "unique": false,
+      "table": "inventory_transaction_allocations",
+      "tail": "(stock_item_id, batch_number, lot_number, serial_number, expiry_date)",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "idx_wsl_warehouse_item": {
+      "unique": false,
+      "table": "warehouse_stock_levels",
+      "tail": "(warehouse_id, stock_item_id)",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ix_inventory_balance_lock": {
+      "unique": false,
+      "table": "warehouse_stock_levels",
+      "tail": "(warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, id)",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ux_inventory_balance_identity": {
+      "unique": true,
+      "table": "warehouse_stock_levels",
+      "tail": "(warehouse_id, stock_item_id, stock_status, batch_number, lot_number, serial_number, expiry_date) NULLS NOT DISTINCT",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "ux_available_serial_location": {
+      "unique": true,
+      "table": "warehouse_stock_levels",
+      "tail": "(stock_item_id, serial_number)\n WHERE serial_number IS NOT NULL AND stock_status = 'AVAILABLE' AND quantity > 0",
+      "source": "sql/manual/004_inventory_transaction_engine.sql"
+    },
+    "inventory_transfer_links_transfer_idx": {
+      "unique": false,
+      "table": "inventory_transfer_movement_links",
+      "tail": "(transfer_id,transfer_line_id)",
+      "source": "sql/manual/005_inventory_operations.sql"
+    },
+    "inventory_transfer_allocation_links_line_idx": {
+      "unique": false,
+      "table": "inventory_transfer_allocation_links",
+      "tail": "(transfer_line_id,dispatch_allocation_id)",
+      "source": "sql/manual/005_inventory_operations.sql"
+    },
+    "inventory_reservations_available_idx": {
+      "unique": false,
+      "table": "inventory_reservations",
+      "tail": "(warehouse_id,stock_item_id,status) WHERE status='ACTIVE'",
+      "source": "sql/manual/005_inventory_operations.sql"
+    },
+    "inventory_reservation_allocations_reservation_idx": {
+      "unique": false,
+      "table": "inventory_reservation_allocations",
+      "tail": "(reservation_id,id)",
+      "source": "sql/manual/005_inventory_operations.sql"
+    },
+    "inventory_reservation_issue_operations_reservation_idx": {
+      "unique": false,
+      "table": "inventory_reservation_issue_operations",
+      "tail": "(reservation_id,created_at)",
+      "source": "sql/manual/005_inventory_operations.sql"
+    },
+    "rfx_response_items_response_idx": {
+      "unique": false,
+      "table": "rfx_response_items",
+      "tail": "(rfx_response_id)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "rfx_response_items_requested_item_idx": {
+      "unique": false,
+      "table": "rfx_response_items",
+      "tail": "(requested_item_id)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "procurement_awards_request_item_idx": {
+      "unique": false,
+      "table": "procurement_awards",
+      "tail": "(request_item_id) WHERE status='ACTIVE'",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "po_items_request_item_idx": {
+      "unique": false,
+      "table": "purchase_order_items",
+      "tail": "(request_item_id)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "po_items_award_idx": {
+      "unique": false,
+      "table": "purchase_order_items",
+      "tail": "(award_id)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "commitment_ledger_idempotency_uq": {
+      "unique": true,
+      "table": "commitment_ledger",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "one_active_po_commitment_idx": {
+      "unique": true,
+      "table": "commitment_ledger",
+      "tail": "(purchase_order_id) WHERE stage='encumbrance' AND state='ACTIVE'",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "supplier_invoice_identity_uq": {
+      "unique": true,
+      "table": "supplier_invoices",
+      "tail": "(supplier_id, normalized_invoice_number) WHERE supplier_id IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "supplier_invoice_idempotency_uq": {
+      "unique": true,
+      "table": "supplier_invoices",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "invoice_match_history_idx": {
+      "unique": false,
+      "table": "invoice_match_results",
+      "tail": "(supplier_invoice_id,matched_at DESC)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "invoice_match_override_history_idx": {
+      "unique": false,
+      "table": "invoice_match_override_decisions",
+      "tail": "(invoice_match_result_id,decided_at DESC,id DESC)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "ap_voucher_idempotency_uq": {
+      "unique": true,
+      "table": "ap_vouchers",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "ap_posting_idempotency_uq": {
+      "unique": true,
+      "table": "finance_postings",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "one_payable_per_voucher_uq": {
+      "unique": true,
+      "table": "ap_payables",
+      "tail": "(ap_voucher_id) WHERE ap_voucher_id IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "one_actualization_per_voucher_uq": {
+      "unique": true,
+      "table": "commitment_ledger",
+      "tail": "(ap_voucher_id) WHERE stage='actual' AND ap_voucher_id IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "one_active_payable_per_invoice_uq": {
+      "unique": true,
+      "table": "ap_payables",
+      "tail": "(supplier_invoice_id) WHERE payable_status IN ('OPEN','PARTIALLY_PAID')",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "payment_allocation_payable_idx": {
+      "unique": false,
+      "table": "payment_allocations",
+      "tail": "(ap_payable_id)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "payment_idempotency_uq": {
+      "unique": true,
+      "table": "payment_records",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "goods_receipt_idempotency_uq": {
+      "unique": true,
+      "table": "goods_receipts",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "goods_receipt_number_uq": {
+      "unique": true,
+      "table": "goods_receipts",
+      "tail": "(receipt_number) WHERE receipt_number IS NOT NULL",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "goods_receipt_items_po_line_idx": {
+      "unique": false,
+      "table": "goods_receipt_items",
+      "tail": "(purchase_order_item_id)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "po_items_award_quantity_idx": {
+      "unique": false,
+      "table": "purchase_order_items",
+      "tail": "(award_id, purchase_order_id)\n  INCLUDE (quantity)",
+      "source": "sql/manual/006_connected_procure_to_pay.sql"
+    },
+    "item_categories_normalized_name_idx": {
+      "unique": true,
+      "table": "item_categories",
+      "tail": "(normalized_name)",
+      "source": "sql/manual/008_phase5a1_reference_master_baseline.sql"
+    },
+    "item_uom_normalized_uom_code_idx": {
+      "unique": true,
+      "table": "item_uom",
+      "tail": "(normalized_uom_code)",
+      "source": "sql/manual/008_phase5a1_reference_master_baseline.sql"
+    },
+    "rfx_response_items_product_idx": {
+      "unique": false,
+      "table": "rfx_response_items",
+      "tail": "(approved_product_id)",
+      "source": "sql/manual/009_phase5a2_uom_authority.sql"
+    },
+    "rfx_response_items_catalog_idx": {
+      "unique": false,
+      "table": "rfx_response_items",
+      "tail": "(supplier_catalog_item_id)",
+      "source": "sql/manual/009_phase5a2_uom_authority.sql"
+    },
+    "pending_item_requests_one_active_per_item": {
+      "unique": true,
+      "table": "pending_item_requests",
+      "tail": "(requested_item_id) WHERE requested_item_id IS NOT NULL AND status IN ('submitted','review','needs_information')",
+      "source": "sql/manual/009_phase5a2_uom_authority.sql"
+    },
+    "supplier_catalog_items_purchasing_uom_id_idx": {
+      "unique": false,
+      "table": "supplier_catalog_items",
+      "tail": "(purchasing_uom_id)",
+      "source": "sql/manual/009_phase5a2_uom_authority.sql"
+    },
+    "procurement_cases_one_active_item_uq": {
+      "unique": true,
+      "table": "procurement_cases",
+      "tail": "(requested_item_id) WHERE closed_at IS NULL",
+      "source": "sql/manual/010_supply_chain_performance_foundation.sql"
+    },
+    "procurement_cases_scope_idx": {
+      "unique": false,
+      "table": "procurement_cases",
+      "tail": "(institute_id, department_id, assigned_buyer_id, opened_at)",
+      "source": "sql/manual/010_supply_chain_performance_foundation.sql"
+    },
+    "procurement_cases_pipeline_idx": {
+      "unique": false,
+      "table": "procurement_cases",
+      "tail": "(case_status, pending_root_cause) WHERE closed_at IS NULL",
+      "source": "sql/manual/010_supply_chain_performance_foundation.sql"
+    },
+    "procurement_case_activities_idempotency_uq": {
+      "unique": true,
+      "table": "procurement_case_activities",
+      "tail": "(idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "source": "sql/manual/010_supply_chain_performance_foundation.sql"
+    },
+    "procurement_case_activities_timeline_idx": {
+      "unique": false,
+      "table": "procurement_case_activities",
+      "tail": "(procurement_case_id, activity_at DESC)",
+      "source": "sql/manual/010_supply_chain_performance_foundation.sql"
+    },
+    "procurement_case_activities_supplier_idx": {
+      "unique": false,
+      "table": "procurement_case_activities",
+      "tail": "(supplier_id, activity_type) WHERE supplier_id IS NOT NULL",
+      "source": "sql/manual/010_supply_chain_performance_foundation.sql"
+    },
+    "procurement_value_events_case_currency_idx": {
+      "unique": false,
+      "table": "procurement_value_events",
+      "tail": "(procurement_case_id, value_type, currency)",
+      "source": "sql/manual/010_supply_chain_performance_foundation.sql"
+    },
+    "department_priority_one_current_case": {
+      "unique": true,
+      "table": "department_priority_rankings",
+      "tail": "(procurement_case_id) WHERE valid_until IS NULL",
+      "source": "sql/manual/012_procurement_priority_foundation.sql"
+    },
+    "priority_profiles_public_queue": {
+      "unique": false,
+      "table": "procurement_priority_profiles",
+      "tail": "(institute_id, institutional_rank) WHERE is_public",
+      "source": "sql/manual/012_procurement_priority_foundation.sql"
+    },
+    "priority_history_case_time": {
+      "unique": false,
+      "table": "procurement_priority_history",
+      "tail": "(procurement_case_id, calculated_at DESC)",
+      "source": "sql/manual/012_procurement_priority_foundation.sql"
+    },
+    "maintainable_equipment_institute_code_uq": {
+      "unique": true,
+      "table": "maintainable_equipment",
+      "tail": "(institute_id, lower(btrim(equipment_code)))",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "maintainable_equipment_institute_name_idx": {
+      "unique": false,
+      "table": "maintainable_equipment",
+      "tail": "(institute_id, name)",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "maintainable_equipment_institute_department_lifecycle_idx": {
+      "unique": false,
+      "table": "maintainable_equipment",
+      "tail": "(institute_id, department_id, lifecycle_status)",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "approved_spare_parts_institute_code_uq": {
+      "unique": true,
+      "table": "approved_spare_parts",
+      "tail": "(institute_id, lower(btrim(spare_part_code)))",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "approved_spare_parts_filters_idx": {
+      "unique": false,
+      "table": "approved_spare_parts",
+      "tail": "(institute_id,lifecycle_status,technical_approval_status,criticality)",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "approved_spare_parts_institute_updated_idx": {
+      "unique": false,
+      "table": "approved_spare_parts",
+      "tail": "(institute_id, updated_at DESC, id DESC)",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "approved_spare_parts_institute_stocking_idx": {
+      "unique": false,
+      "table": "approved_spare_parts",
+      "tail": "(institute_id, recommended_stocking_policy)",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "spare_part_equipment_active_uq": {
+      "unique": true,
+      "table": "spare_part_equipment_compatibility",
+      "tail": "(spare_part_id,equipment_id) WHERE compatibility_status IN ('PENDING','APPROVED')",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "spare_part_equipment_equipment_active_idx": {
+      "unique": false,
+      "table": "spare_part_equipment_compatibility",
+      "tail": "(equipment_id, spare_part_id) WHERE compatibility_status <> 'INACTIVE'",
+      "source": "sql/manual/013_approved_spare_parts_foundation.sql"
+    },
+    "organization_units_parent_idx": {
+      "unique": false,
+      "table": "organization_units",
+      "tail": "(parent_unit_id)",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "organization_units_institute_idx": {
+      "unique": false,
+      "table": "organization_units",
+      "tail": "(institute_id, is_active)",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "organization_units_type_active_idx": {
+      "unique": false,
+      "table": "organization_units",
+      "tail": "(unit_type, is_active)",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "organization_units_institute_code_uq": {
+      "unique": true,
+      "table": "organization_units",
+      "tail": "(institute_id, lower(code)) WHERE code IS NOT NULL",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "organization_positions_unit_idx": {
+      "unique": false,
+      "table": "organization_positions",
+      "tail": "(organization_unit_id, is_active)",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "organization_positions_user_idx": {
+      "unique": false,
+      "table": "organization_positions",
+      "tail": "(user_id)",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "organization_positions_unique_authority_uq": {
+      "unique": true,
+      "table": "organization_positions",
+      "tail": "(organization_unit_id, position_type)\n  WHERE is_active AND position_type IN ('UNIT_HEAD','EXECUTIVE_HEAD','DEPARTMENT_HEAD','SECTION_HEAD')",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "organization_positions_unit_head_uq": {
+      "unique": true,
+      "table": "organization_positions",
+      "tail": "(organization_unit_id) WHERE is_active AND is_unit_head",
+      "source": "sql/manual/014_organization_hierarchy.sql"
+    },
+    "approval_policies_institute_code_uq": {
+      "unique": true,
+      "table": "approval_policies",
+      "tail": "(institute_id,lower(code))",
+      "source": "sql/manual/015_approval_policy_engine_foundation.sql"
+    },
+    "approval_policy_versions_number_uq": {
+      "unique": true,
+      "table": "approval_policy_versions",
+      "tail": "(approval_policy_id,version_number)",
+      "source": "sql/manual/015_approval_policy_engine_foundation.sql"
+    },
+    "approval_policy_rules_priority_uq": {
+      "unique": true,
+      "table": "approval_policy_rules",
+      "tail": "(policy_version_id,priority)",
+      "source": "sql/manual/015_approval_policy_engine_foundation.sql"
+    },
+    "approval_policy_shadow_runs_lookup_idx": {
+      "unique": false,
+      "table": "approval_policy_shadow_runs",
+      "tail": "(policy_version_id,generated_at DESC)",
+      "source": "sql/manual/015_approval_policy_engine_foundation.sql"
+    },
+    "approval_policy_shadow_runs_request_idx": {
+      "unique": false,
+      "table": "approval_policy_shadow_runs",
+      "tail": "(request_id,generated_at DESC)",
+      "source": "sql/manual/015_approval_policy_engine_foundation.sql"
+    },
+    "approval_policy_shadow_differences_type_idx": {
+      "unique": false,
+      "table": "approval_policy_shadow_differences",
+      "tail": "(shadow_run_id,difference_type)",
+      "source": "sql/manual/015_approval_policy_engine_foundation.sql"
+    },
+    "organization_head_reconciliation_current_uq": {
+      "unique": true,
+      "table": "organization_head_reconciliation_decisions",
+      "tail": "(organization_unit_id) WHERE superseded_at IS NULL",
+      "source": "sql/manual/016_organization_hierarchy_cutover_readiness.sql"
+    },
+    "organization_head_reconciliation_decisions_scope_idx": {
+      "unique": false,
+      "table": "organization_head_reconciliation_decisions",
+      "tail": "(institute_id,organization_unit_id,decided_at DESC)",
+      "source": "sql/manual/016_organization_hierarchy_cutover_readiness.sql"
+    },
+    "asset_tags_active_epc_uq": {
+      "unique": true,
+      "table": "asset_tags",
+      "tail": "(institute_id,epc) WHERE epc IS NOT NULL AND tag_status='ACTIVE'",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "asset_tags_primary_uhf_uq": {
+      "unique": true,
+      "table": "asset_tags",
+      "tail": "(asset_id) WHERE is_primary AND tag_type='RFID_UHF' AND tag_status='ACTIVE'",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "rfid_read_external_event_uq": {
+      "unique": true,
+      "table": "rfid_read_events",
+      "tail": "(integration_client_id,external_event_id) WHERE external_event_id IS NOT NULL",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "rfid_read_epc_time_idx": {
+      "unique": false,
+      "table": "rfid_read_events",
+      "tail": "(epc,read_timestamp DESC)",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "rfid_read_asset_time_idx": {
+      "unique": false,
+      "table": "rfid_read_events",
+      "tail": "(asset_id,read_timestamp DESC) WHERE asset_id IS NOT NULL",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "rfid_read_reader_time_idx": {
+      "unique": false,
+      "table": "rfid_read_events",
+      "tail": "(reader_id,read_timestamp DESC)",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "rfid_read_portal_time_idx": {
+      "unique": false,
+      "table": "rfid_read_events",
+      "tail": "(portal_id,read_timestamp DESC) WHERE portal_id IS NOT NULL",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "rfid_read_processing_idx": {
+      "unique": false,
+      "table": "rfid_read_events",
+      "tail": "(processing_status,read_timestamp)",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "custody_records_asset_idx": {
+      "unique": false,
+      "table": "custody_records",
+      "tail": "(asset_id,created_at DESC) WHERE asset_id IS NOT NULL",
+      "source": "sql/manual/017_fixed_assets_rfid_core.sql"
+    },
+    "maintainable_equipment_asset_uq": {
+      "unique": true,
+      "table": "maintainable_equipment",
+      "tail": "(asset_id) WHERE asset_id IS NOT NULL",
+      "source": "sql/manual/019_asset_equipment_integration.sql"
+    },
+    "maintainable_equipment_institute_asset_idx": {
+      "unique": false,
+      "table": "maintainable_equipment",
+      "tail": "(institute_id,asset_id) WHERE asset_id IS NOT NULL",
+      "source": "sql/manual/019_asset_equipment_integration.sql"
+    },
+    "contract_equipment_coverage_equipment_dates_idx": {
+      "unique": false,
+      "table": "contract_equipment_coverage",
+      "tail": "(institute_id,equipment_id,coverage_start,coverage_end)",
+      "source": "sql/manual/021_contract_equipment_coverage.sql"
+    },
+    "contract_equipment_coverage_contract_idx": {
+      "unique": false,
+      "table": "contract_equipment_coverage",
+      "tail": "(contract_id,equipment_id)",
+      "source": "sql/manual/021_contract_equipment_coverage.sql"
+    },
+    "contract_items_generic_idx": {
+      "unique": false,
+      "table": "contract_items",
+      "tail": "(generic_item_id) WHERE generic_item_id IS NOT NULL",
+      "source": "sql/manual/022_contract_item_master_identity.sql"
+    },
+    "contract_items_product_idx": {
+      "unique": false,
+      "table": "contract_items",
+      "tail": "(approved_product_id) WHERE approved_product_id IS NOT NULL",
+      "source": "sql/manual/022_contract_item_master_identity.sql"
+    },
+    "contract_items_catalog_idx": {
+      "unique": false,
+      "table": "contract_items",
+      "tail": "(supplier_catalog_item_id) WHERE supplier_catalog_item_id IS NOT NULL",
+      "source": "sql/manual/022_contract_item_master_identity.sql"
+    },
+    "approved_spare_parts_stock_item_idx": {
+      "unique": false,
+      "table": "approved_spare_parts",
+      "tail": "(institute_id,stock_item_id) WHERE stock_item_id IS NOT NULL",
+      "source": "sql/manual/023_spare_part_stock_item_integration.sql"
+    },
+    "maintenance_work_orders_status_idx": {
+      "unique": false,
+      "table": "maintenance_work_orders",
+      "tail": "(institute_id,status,priority,requested_at DESC)",
+      "source": "sql/manual/024_maintenance_work_orders.sql"
+    },
+    "maintenance_work_orders_equipment_idx": {
+      "unique": false,
+      "table": "maintenance_work_orders",
+      "tail": "(institute_id,equipment_id,requested_at DESC)",
+      "source": "sql/manual/024_maintenance_work_orders.sql"
+    },
+    "maintenance_work_order_parts_work_order_idx": {
+      "unique": false,
+      "table": "maintenance_work_order_parts",
+      "tail": "(work_order_id,action)",
+      "source": "sql/manual/024_maintenance_work_orders.sql"
+    },
+    "maintenance_work_order_parts_reservation_uq": {
+      "unique": true,
+      "table": "maintenance_work_order_parts",
+      "tail": "(reservation_id) WHERE reservation_id IS NOT NULL",
+      "source": "sql/manual/025_maintenance_inventory_execution.sql"
+    },
+    "maintenance_work_order_parts_movement_idx": {
+      "unique": false,
+      "table": "maintenance_work_order_parts",
+      "tail": "(issued_inventory_movement_id) WHERE issued_inventory_movement_id IS NOT NULL",
+      "source": "sql/manual/025_maintenance_inventory_execution.sql"
+    },
+    "maintenance_part_inventory_operations_part_idx": {
+      "unique": false,
+      "table": "maintenance_part_inventory_operations",
+      "tail": "(work_order_part_id,created_at)",
+      "source": "sql/manual/025_maintenance_inventory_execution.sql"
+    },
+    "rfid_portal_enable_scope": {
+      "unique": false,
+      "table": "rfid_portals",
+      "tail": "(institute_id,enabled)\n    WHERE enabled",
+      "source": "sql/manual/026_rfid_portal_enable_scope_index.sql"
+    },
+    "asset_movements_one_active_uq": {
+      "unique": true,
+      "table": "asset_movements",
+      "tail": "(institute_id,asset_id)\n    WHERE status IN ('PENDING_APPROVAL','APPROVED','IN_TRANSIT')",
+      "source": "sql/manual/028_asset_movement_operational_hardening.sql"
+    },
+    "asset_movements_return_origin_uq": {
+      "unique": true,
+      "table": "asset_movements",
+      "tail": "(origin_movement_id)\n    WHERE movement_type='RETURN'",
+      "source": "sql/manual/028_asset_movement_operational_hardening.sql"
+    },
+    "assets_responsible_section_idx": {
+      "unique": false,
+      "table": "assets",
+      "tail": "(institute_id,responsible_section_id)",
+      "source": "sql/manual/029_fixed_asset_deployment_valuation.sql"
+    },
+    "asset_inventory_sessions_scope_idx": {
+      "unique": false,
+      "table": "asset_inventory_sessions",
+      "tail": "(institute_id,status,created_at DESC)",
+      "source": "sql/manual/030_fixed_asset_physical_inventory.sql"
+    },
+    "asset_inventory_expected_session_idx": {
+      "unique": false,
+      "table": "asset_inventory_expected_assets",
+      "tail": "(institute_id,session_id)",
+      "source": "sql/manual/030_fixed_asset_physical_inventory.sql"
+    },
+    "asset_inventory_observations_session_asset_idx": {
+      "unique": false,
+      "table": "asset_inventory_observations",
+      "tail": "(institute_id,session_id,asset_id,observed_at DESC)",
+      "source": "sql/manual/030_fixed_asset_physical_inventory.sql"
+    },
+    "asset_inventory_findings_filter_idx": {
+      "unique": false,
+      "table": "asset_inventory_findings",
+      "tail": "(institute_id,session_id,status,finding_type)",
+      "source": "sql/manual/030_fixed_asset_physical_inventory.sql"
+    },
+    "asset_inventory_one_open_finding_uq": {
+      "unique": true,
+      "table": "asset_inventory_findings",
+      "tail": "(session_id,finding_type,COALESCE(asset_id,0),COALESCE(discovery_id,0)) WHERE status IN('OPEN','ACKNOWLEDGED')",
+      "source": "sql/manual/030_fixed_asset_physical_inventory.sql"
+    },
+    "idx_ap_payables_supplier_id": {
+      "unique": false,
+      "table": "ap_payables",
+      "tail": "(supplier_id)",
+      "source": "sql/manual/031_p2p_batch1_authority_hardening.sql"
+    },
+    "approval_route_snapshots_request_idx": {
+      "unique": false,
+      "table": "approval_route_snapshots",
+      "tail": "(institute_id,request_id,generation_number DESC)",
+      "source": "sql/manual/032_approval_engine_operationalization_phase1.sql"
+    },
+    "approval_route_snapshot_steps_approver_idx": {
+      "unique": false,
+      "table": "approval_route_snapshot_steps",
+      "tail": "(snapshot_id,acting_approver_id)",
+      "source": "sql/manual/032_approval_engine_operationalization_phase1.sql"
+    },
+    "approval_authority_delegations_effective_idx": {
+      "unique": false,
+      "table": "approval_authority_delegations",
+      "tail": "(institute_id,scope,effective_from,effective_to) WHERE status='ACTIVE'",
+      "source": "sql/manual/032_approval_engine_operationalization_phase1.sql"
+    },
+    "approval_authority_delegations_position_idx": {
+      "unique": false,
+      "table": "approval_authority_delegations",
+      "tail": "(organization_position_id) WHERE status='ACTIVE'",
+      "source": "sql/manual/032_approval_engine_operationalization_phase1.sql"
+    },
+    "approval_authority_delegations_delegator_idx": {
+      "unique": false,
+      "table": "approval_authority_delegations",
+      "tail": "(delegator_user_id) WHERE status='ACTIVE'",
+      "source": "sql/manual/032_approval_engine_operationalization_phase1.sql"
+    },
+    "ai_interactions_user_created_idx": {
+      "unique": false,
+      "table": "ai_interactions",
+      "tail": "(user_id,created_at DESC)",
+      "source": "sql/manual/033_ai_intelligence_foundation.sql"
+    },
+    "ai_interactions_institute_created_idx": {
+      "unique": false,
+      "table": "ai_interactions",
+      "tail": "(institute_id,created_at DESC)",
+      "source": "sql/manual/033_ai_intelligence_foundation.sql"
+    },
+    "ai_interactions_session_idx": {
+      "unique": false,
+      "table": "ai_interactions",
+      "tail": "(session_id)",
+      "source": "sql/manual/033_ai_intelligence_foundation.sql"
+    },
+    "ai_tool_executions_interaction_idx": {
+      "unique": false,
+      "table": "ai_tool_executions",
+      "tail": "(interaction_id,created_at)",
+      "source": "sql/manual/033_ai_intelligence_foundation.sql"
+    },
+    "ai_tool_executions_tool_created_idx": {
+      "unique": false,
+      "table": "ai_tool_executions",
+      "tail": "(tool_name,created_at DESC)",
+      "source": "sql/manual/033_ai_intelligence_foundation.sql"
+    },
+    "idx_procurement_item_events_request_id": {
+      "unique": false,
+      "table": "procurement_item_events",
+      "tail": "(request_id)",
+      "source": "sql/migrations/20260608_procurement_item_events.sql"
+    },
+    "idx_procurement_item_events_requested_item_id": {
+      "unique": false,
+      "table": "procurement_item_events",
+      "tail": "(requested_item_id)",
+      "source": "sql/migrations/20260608_procurement_item_events.sql"
+    },
+    "idx_procurement_item_events_procurement_user_id": {
+      "unique": false,
+      "table": "procurement_item_events",
+      "tail": "(procurement_user_id)",
+      "source": "sql/migrations/20260608_procurement_item_events.sql"
+    },
+    "idx_procurement_item_events_procurement_date": {
+      "unique": false,
+      "table": "procurement_item_events",
+      "tail": "(procurement_date)",
+      "source": "sql/migrations/20260608_procurement_item_events.sql"
+    },
+    "supplier_principals_supplier_id_idx": {
+      "unique": false,
+      "table": "supplier_principals",
+      "tail": "(supplier_id)",
+      "source": "sql/migrations/20260608_supplier_classification_principals.sql"
+    },
+    "supplier_principals_principal_name_idx": {
+      "unique": false,
+      "table": "supplier_principals",
+      "tail": "(principal_name)",
+      "source": "sql/migrations/20260608_supplier_classification_principals.sql"
+    },
+    "supplier_principals_authorization_status_idx": {
+      "unique": false,
+      "table": "supplier_principals",
+      "tail": "(authorization_status)",
+      "source": "sql/migrations/20260608_supplier_classification_principals.sql"
+    },
+    "supplier_principals_authorization_expiry_date_idx": {
+      "unique": false,
+      "table": "supplier_principals",
+      "tail": "(authorization_expiry_date)",
+      "source": "sql/migrations/20260608_supplier_classification_principals.sql"
+    },
+    "suppliers_supplier_type_idx": {
+      "unique": false,
+      "table": "suppliers",
+      "tail": "(supplier_type)",
+      "source": "sql/migrations/20260608_supplier_classification_principals.sql"
+    },
+    "suppliers_regulatory_risk_level_idx": {
+      "unique": false,
+      "table": "suppliers",
+      "tail": "(regulatory_risk_level)",
+      "source": "sql/migrations/20260608_supplier_classification_principals.sql"
+    },
+    "item_manufacturers_normalized_name_idx": {
+      "unique": true,
+      "table": "item_manufacturers",
+      "tail": "(normalized_name)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "generic_items_search_idx": {
+      "unique": false,
+      "table": "generic_items",
+      "tail": "USING GIN\n  (to_tsvector('simple', item_code || ' ' || generic_name || ' ' || canonical_description))",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "generic_items_fingerprint_idx": {
+      "unique": false,
+      "table": "generic_items",
+      "tail": "(structured_fingerprint)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "generic_items_filters_idx": {
+      "unique": false,
+      "table": "generic_items",
+      "tail": "(lifecycle_status, category, item_type)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "approved_products_generic_idx": {
+      "unique": false,
+      "table": "approved_products",
+      "tail": "(generic_item_id, approval_status)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "approved_products_identifier_idx": {
+      "unique": false,
+      "table": "approved_products",
+      "tail": "(product_identifier) WHERE product_identifier IS NOT NULL",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "supplier_catalog_product_idx": {
+      "unique": false,
+      "table": "supplier_catalog_items",
+      "tail": "(approved_product_id, is_active)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "supplier_catalog_commercial_idx": {
+      "unique": false,
+      "table": "supplier_catalog_items",
+      "tail": "(supplier_id, currency, unit_price)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "pending_item_queue_idx": {
+      "unique": false,
+      "table": "pending_item_requests",
+      "tail": "(status, created_at)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "item_duplicate_review_queue_idx": {
+      "unique": false,
+      "table": "item_duplicate_reviews",
+      "tail": "(entity_type, decision)",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "legacy_item_active_mapping_idx": {
+      "unique": true,
+      "table": "legacy_item_mappings",
+      "tail": "(source_table, legacy_item_id) WHERE mapping_status='active'",
+      "source": "sql/migrations/20260727_item_master_foundation.sql"
+    },
+    "idx_procurement_item_events_overage_decided_by": {
+      "unique": false,
+      "table": "procurement_item_events",
+      "tail": "(overage_decided_by)",
+      "source": "sql/migrations/20261003_procurement_event_overage_decisions.sql"
+    },
+    "stock_item_one_active_final_mapping_idx": {
+      "unique": true,
+      "table": "stock_item_master_mappings",
+      "tail": "(stock_item_id) WHERE active AND mapping_status='approved'",
+      "source": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+    },
+    "stock_mapping_review_queue_idx": {
+      "unique": false,
+      "table": "stock_item_master_mappings",
+      "tail": "(mapping_status,confidence_score DESC)",
+      "source": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+    },
+    "stock_mapping_stock_idx": {
+      "unique": false,
+      "table": "stock_item_master_mappings",
+      "tail": "(stock_item_id,created_at DESC)",
+      "source": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+    },
+    "stock_staging_source_idx": {
+      "unique": false,
+      "table": "stock_item_migration_staging",
+      "tail": "(source_stock_item_id,imported_at DESC)",
+      "source": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+    },
+    "stock_items_generic_identity_idx": {
+      "unique": false,
+      "table": "stock_items",
+      "tail": "(generic_item_id) WHERE generic_item_id IS NOT NULL",
+      "source": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+    },
+    "stock_items_product_identity_idx": {
+      "unique": false,
+      "table": "stock_items",
+      "tail": "(approved_product_id) WHERE approved_product_id IS NOT NULL",
+      "source": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+    },
+    "idx_warehouses_lower_name": {
+      "unique": true,
+      "table": "warehouses",
+      "tail": "(LOWER(name))",
+      "source": "sql/warehouses.sql"
+    },
+    "idx_users_warehouse_id": {
+      "unique": false,
+      "table": "users",
+      "tail": "(warehouse_id)",
+      "source": "sql/warehouses.sql"
+    },
+    "idx_requests_supply_warehouse": {
+      "unique": false,
+      "table": "requests",
+      "tail": "(supply_warehouse_id)",
+      "source": "sql/warehouses.sql"
+    },
+    "notifications_outbox_event_uq": {
+      "unique": true,
+      "table": "notifications",
+      "tail": "(outbox_event_id)",
+      "source": "backend-query-derived-contract"
+    },
+    "notification_outbox_pending_idx": {
+      "unique": false,
+      "table": "notification_outbox",
+      "tail": "(next_attempt_at,id) WHERE status IN ('pending','failed')",
+      "source": "backend-query-derived-contract"
+    },
+    "evaluation_criteria_code_contract_uq": {
+      "unique": true,
+      "table": "evaluation_criteria",
+      "tail": "(code)",
+      "source": "backend-query-derived-contract"
+    },
+    "warehouse_replenishment_contract_uq": {
+      "unique": true,
+      "table": "warehouse_replenishment_policies",
+      "tail": "(warehouse_id,stock_item_id)",
+      "source": "backend-query-derived-contract"
+    },
+    "budget_envelope_contract_uq": {
+      "unique": true,
+      "table": "budget_envelopes",
+      "tail": "(department_id,project_id,fiscal_year,currency) NULLS NOT DISTINCT",
+      "source": "backend-query-derived-contract"
+    },
+    "procurement_plan_request_contract_uq": {
+      "unique": true,
+      "table": "procurement_plan_item_requests",
+      "tail": "(plan_item_id,requested_item_id)",
+      "source": "backend-query-derived-contract"
+    },
+    "procurement_plan_consumption_contract_uq": {
+      "unique": true,
+      "table": "procurement_plan_item_consumptions",
+      "tail": "(plan_item_id,warehouse_stock_movement_id,department_stock_movement_id) NULLS NOT DISTINCT",
+      "source": "backend-query-derived-contract"
+    }
+  },
+  "functions": {
+    "prevent_posted_inventory_mutation()": "sql/manual/004_inventory_transaction_engine.sql",
+    "prevent_inventory_allocation_mutation()": "sql/manual/004_inventory_transaction_engine.sql",
+    "validate_organization_unit()": "sql/manual/014_organization_hierarchy.sql",
+    "validate_organization_position_user()": "sql/manual/014_organization_hierarchy.sql",
+    "next_asset_number(integer)": "sql/manual/017_fixed_assets_rfid_core.sql",
+    "enforce_rfid_portal_antenna_scope()": "sql/manual/027_rfid_configuration_mutation_guards.sql",
+    "enforce_rfid_portal_enable_scope()": "sql/manual/027_rfid_configuration_mutation_guards.sql",
+    "next_maintenance_work_order_number(integer)": "sql/manual/024_maintenance_work_orders.sql",
+    "enforce_rfid_antenna_scope_update()": "sql/manual/027_rfid_configuration_mutation_guards.sql",
+    "enforce_rfid_reader_scope_update()": "sql/manual/027_rfid_configuration_mutation_guards.sql",
+    "next_asset_inventory_number(integer)": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "prevent_inventory_snapshot_mutation()": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "approval_route_snapshot_guard()": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "approval_route_snapshot_validate()": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "validate_stock_mapping_target()": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+  },
+  "triggers": {
+    "inventory_transactions.trg_inventory_transactions_immutable": "sql/manual/004_inventory_transaction_engine.sql",
+    "inventory_transaction_allocations.trg_inventory_transaction_allocations_immutable": "sql/manual/004_inventory_transaction_engine.sql",
+    "organization_units.organization_units_guard": "sql/manual/014_organization_hierarchy.sql",
+    "organization_positions.organization_positions_institute_guard": "sql/manual/014_organization_hierarchy.sql",
+    "rfid_portal_antennas.rfid_portal_antenna_scope_guard": "sql/manual/018_fixed_assets_rfid_post_deployment_hardening.sql",
+    "rfid_portals.rfid_portal_enable_scope_guard": "sql/manual/018_fixed_assets_rfid_post_deployment_hardening.sql",
+    "rfid_antennas.rfid_antenna_scope_update_guard": "sql/manual/027_rfid_configuration_mutation_guards.sql",
+    "rfid_readers.rfid_reader_scope_update_guard": "sql/manual/027_rfid_configuration_mutation_guards.sql",
+    "asset_inventory_expected_assets.asset_inventory_expected_immutable": "sql/manual/030_fixed_asset_physical_inventory.sql",
+    "approval_route_snapshots.approval_route_snapshots_validate_trg": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "approval_route_snapshots.approval_route_snapshots_immutable_trg": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "approval_route_snapshot_steps.approval_route_snapshot_steps_immutable_trg": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+    "stock_item_master_mappings.validate_stock_mapping_target_trigger": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql"
+  },
+  "views": {
+    "stock_item_identity_read_model": "sql/migrations/phase1b/05_reporting_views.sql",
+    "stock_item_mapping_coverage": "sql/migrations/phase1b/05_reporting_views.sql"
+  },
+  "requiredPermissions": [
+    "ai-intelligence.use",
+    "approval-authority.ceo",
+    "approval-authority.cfo",
+    "approval-authority.coo",
+    "approval-authority.medical-devices",
+    "approval-authority.supply-chain",
+    "approval-authority.warehouse",
+    "approval-policy.manage",
+    "approval-policy.publish-shadow",
+    "approval-policy.run-shadow",
+    "approval-policy.view",
+    "approval-policy.view-shadow",
+    "approvals.cross-institute",
+    "approvals.decide",
+    "approvals.manage",
+    "approvals.override",
+    "approvals.reassign",
+    "approvals.self-approve",
+    "contracts.manage",
+    "dashboard.view",
+    "departments.manage",
+    "evaluations.manage",
+    "finance.override-mismatch",
+    "finance.payment.manage",
+    "finance.post-ledger",
+    "finance.verify",
+    "finance.voucher.create",
+    "finance.voucher.verify",
+    "fixed-assets.create",
+    "fixed-assets.edit",
+    "fixed-assets.manage",
+    "fixed-assets.manage-categories",
+    "fixed-assets.manage-locations",
+    "fixed-assets.move",
+    "fixed-assets.verify",
+    "fixed-assets.view",
+    "fixed-assets.view-financial",
+    "inventory.add-from-master",
+    "inventory.adjust",
+    "inventory.cross-institute",
+    "inventory.cross-warehouse",
+    "inventory.cycle-count",
+    "inventory.legacy-create",
+    "inventory.quarantine",
+    "inventory.recall",
+    "inventory.release-quarantine",
+    "inventory.reverse",
+    "inventory.transfer",
+    "item-master.approve",
+    "item-master.create",
+    "item-master.edit",
+    "item-master.free-text-exception",
+    "item-master.legacy-maintain",
+    "item-master.manage",
+    "item-master.map",
+    "item-master.products",
+    "item-master.products.approve",
+    "item-master.references-maintain",
+    "item-master.retire",
+    "item-master.stock-map",
+    "item-master.stock-map.override",
+    "item-master.suppliers",
+    "item-master.validate",
+    "item-master.view",
+    "maintenance-requests.view-all",
+    "organization.manage",
+    "permissions.manage",
+    "procure-to-pay.invoices.manage",
+    "procure-to-pay.lifecycle.view",
+    "procure-to-pay.match.manage",
+    "procure-to-pay.payments.manage",
+    "procure-to-pay.purchase-orders.manage",
+    "procure-to-pay.receipts.manage",
+    "procure-to-pay.vouchers.manage",
+    "procurement-performance.manage",
+    "procurement-performance.verify-savings",
+    "procurement-performance.view",
+    "procurement-priority.rank-department",
+    "procurement.update-cost",
+    "procurement.update-status",
+    "projects.manage",
+    "recalls.manage",
+    "recalls.view",
+    "requests.assign",
+    "requests.cross-department",
+    "requests.cross-institute",
+    "requests.cross-section",
+    "requests.manage",
+    "requests.mark-urgent-on-submit",
+    "requests.reclassify",
+    "requests.view-all",
+    "requests.view-audit",
+    "requests.view-incomplete",
+    "rfid.manage-exceptions",
+    "rfid.manage-infrastructure",
+    "rfid.manage-integrations",
+    "rfid.manage-tags",
+    "rfid.view",
+    "rfid.view-raw-events",
+    "rfx.manage",
+    "rfx.respond",
+    "risks.manage",
+    "risks.view",
+    "roles.manage",
+    "stock-requests.create",
+    "stock-requests.review",
+    "technical-inspections.manage",
+    "users.manage",
+    "users.view",
+    "warehouse.manage-supply",
+    "warehouse.view-supply"
+  ],
+  "missingPermissions": [
+    "approval-authority.ceo",
+    "approval-authority.cfo",
+    "approval-authority.coo",
+    "approval-authority.medical-devices",
+    "approval-authority.supply-chain",
+    "approval-authority.warehouse"
+  ],
+  "uiDefaults": [
+    {
+      "resourceKey": "feature.procureToPayLifecycle",
+      "label": "Procure-to-Pay Lifecycle",
+      "description": "Controls access to the procure-to-pay lifecycle overview page.",
+      "permissions": [
+        "procure-to-pay.lifecycle.view"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procureToPayReceipts",
+      "label": "Procure-to-Pay Goods Receipts",
+      "description": "Controls access to the procure-to-pay goods receipt entry page.",
+      "permissions": [
+        "procure-to-pay.receipts.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procureToPayInvoices",
+      "label": "Procure-to-Pay Invoices",
+      "description": "Controls access to the procure-to-pay invoice entry page.",
+      "permissions": [
+        "procure-to-pay.invoices.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.stockItemRequests",
+      "label": "Stock Item Request Form",
+      "description": "Controls access to the stock item request workflow.",
+      "permissions": [
+        "stock-requests.create"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.itemRecalls",
+      "label": "Item Recalls",
+      "description": "Allows viewing and managing item recalls.",
+      "permissions": [
+        "recalls.view",
+        "recalls.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.maintenanceWarehouseSupply",
+      "label": "Maintenance Warehouse Supply Request",
+      "description": "Enables access to the maintenance warehouse supply request form.",
+      "permissions": [
+        "warehouse.manage-supply",
+        "stock-requests.create"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.custody",
+      "label": "Custody Issue & Issued Lists",
+      "description": "Controls the custody issue and issued pages.",
+      "permissions": [
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.itemMaster",
+      "label": "Item Master Data",
+      "description": "Shows the central item master catalog (read-only).",
+      "permissions": [],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.technicalInspections",
+      "label": "Technical Inspections",
+      "description": "Controls access to the technical inspection log and form.",
+      "permissions": [
+        "technical-inspections.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.riskManagement",
+      "label": "Risk Management",
+      "description": "Track and mitigate organizational risks.",
+      "permissions": [
+        "risks.view",
+        "risks.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.warehouseTemplates",
+      "label": "Warehouse Supply Templates",
+      "description": "Allows users to manage warehouse supply templates.",
+      "permissions": [
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.warehouseRequests",
+      "label": "Warehouse Supply Requests",
+      "description": "Grants access to warehouse supply request tracking.",
+      "permissions": [
+        "warehouse.view-supply",
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.adminTools",
+      "label": "Admin Tools",
+      "description": "Controls access to the admin tools re-assignment panel.",
+      "permissions": [
+        "approvals.reassign"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.management",
+      "label": "System Management",
+      "description": "Shows the system management workspace.",
+      "permissions": [
+        "users.manage",
+        "departments.manage",
+        "permissions.manage",
+        "projects.manage",
+        "roles.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.allRequests",
+      "label": "All Requests",
+      "description": "Allows viewing all purchase requests.",
+      "permissions": [
+        "requests.view-all"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procurementPlans",
+      "label": "Procurement Plans",
+      "description": "Controls access to procurement plans.",
+      "permissions": [
+        "procurement.update-status",
+        "procurement.update-cost"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.contracts",
+      "label": "Contracts Workspace",
+      "description": "Shows the contracts management page and navigation.",
+      "permissions": [
+        "contracts.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.rfxPortal",
+      "label": "RFX Collaboration Portal",
+      "description": "Publish RFQs/RFPs and review supplier responses.",
+      "permissions": [
+        "rfx.manage",
+        "rfx.respond"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.supplierEvaluations",
+      "label": "Supplier Evaluations",
+      "description": "Allows managing supplier evaluations.",
+      "permissions": [
+        "evaluations.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procurementQueues",
+      "label": "Procurement Queues",
+      "description": "Controls assigned and completed procurement queues.",
+      "permissions": [
+        "procurement.update-status"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.incompleteRequests",
+      "label": "Incomplete Requests Overview",
+      "description": "Allows viewing the incomplete request queues.",
+      "permissions": [
+        "requests.view-incomplete"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.incompleteMedical",
+      "label": "Incomplete Medical Requests",
+      "description": "Controls the medical incomplete queue.",
+      "permissions": [
+        "requests.view-incomplete"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.incompleteOperational",
+      "label": "Incomplete Operational Requests",
+      "description": "Controls the operational incomplete queue.",
+      "permissions": [
+        "requests.view-incomplete"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.auditRequests",
+      "label": "Audit Requests",
+      "description": "Allows access to the audit review workspace.",
+      "permissions": [
+        "requests.view-audit"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.warehouseDetail",
+      "label": "Warehouse Supply Detail",
+      "description": "Controls access to individual warehouse supply sheets.",
+      "permissions": [
+        "warehouse.manage-supply",
+        "warehouse.view-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.dashboard",
+      "label": "Dashboard",
+      "description": "Controls the executive dashboard visibility.",
+      "permissions": [
+        "dashboard.view"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.analytics",
+      "label": "Lifecycle Analytics",
+      "description": "Controls the lifecycle analytics view.",
+      "permissions": [
+        "dashboard.view"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.dispensing",
+      "label": "Monthly Dispensing",
+      "description": "Controls access to monthly dispensing ingestion and analytics.",
+      "permissions": [
+        "dashboard.view",
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    }
+  ],
+  "deferredSqlOnlyTables": [
+    "item_attribute_templates",
+    "stock_item_attribute_suggestions",
+    "item_uom_conversions"
+  ]
+}

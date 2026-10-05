@@ -1,0 +1,62 @@
+[
+  {
+    "source": "controllers/requestedItems/updateProcurementStatusController.js",
+    "line": 52,
+    "code": "42P01",
+    "message": "relation \"audit_log\" does not exist"
+  },
+  {
+    "source": "controllers/requests/centralSupplyChainController.js",
+    "line": 83,
+    "code": "42804",
+    "message": "column \"sent_to_central_supply_by\" is of type integer but expression is of type text"
+  },
+  {
+    "source": "services/approvalEngine.js",
+    "line": 117,
+    "code": "42P08",
+    "message": "inconsistent types deduced for parameter $1"
+  },
+  {
+    "source": "services/inventoryReservationService.js",
+    "line": 110,
+    "code": "42804",
+    "message": "column \"consumed_by\" is of type integer but expression is of type text"
+  },
+  {
+    "source": "services/itemMasterFoundationService.js",
+    "line": 378,
+    "code": "42804",
+    "message": "column \"resolved_by\" is of type integer but expression is of type text"
+  },
+  {
+    "source": "services/physicalInventoryService.js",
+    "line": 36,
+    "code": "42P08",
+    "message": "inconsistent types deduced for parameter $1"
+  },
+  {
+    "source": "services/rfidEventProcessor.js",
+    "line": 14,
+    "code": "0A000",
+    "message": "FOR UPDATE cannot be applied to the nullable side of an outer join"
+  },
+  {
+    "source": "services/rfidService.js",
+    "line": 12,
+    "code": "42P08",
+    "message": "inconsistent types deduced for parameter $7"
+  },
+  {
+    "source": "services/rfidService.js",
+    "line": 13,
+    "code": "42P08",
+    "message": "inconsistent types deduced for parameter $1"
+  },
+  {
+    "source": "utils/technicalInspectionStatus.js",
+    "line": 46,
+    "code": "42P08",
+    "message": "inconsistent types deduced for parameter $1"
+  }
+]

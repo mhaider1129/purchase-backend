@@ -55,7 +55,7 @@ describe('generateRfxController.generateRfx', () => {
       })
       .mockResolvedValueOnce({
         rowCount: 1,
-        rows: [{ item_name: 'Gloves', quantity: 10, unit: 'box', description: 'Nitrile' }],
+        rows: [{ request_mode: 'generic_item', generic_item_id:4, catalog_status:'catalogued', item_name: 'Gloves', quantity: 10, unit: 'box', description: 'Nitrile' }],
       });
 
     const res = buildResponse();

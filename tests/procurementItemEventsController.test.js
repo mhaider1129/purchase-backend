@@ -36,6 +36,7 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
       id: 20,
       request_id: 10,
       item_name: 'Gloves',
+      request_mode:'generic_item',generic_item_id:4,catalog_status:'catalogued',
       quantity: 100,
       purchased_quantity: 0,
       unit_cost: 5,
@@ -236,7 +237,7 @@ describe('procurement item events', () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it('creates a linked requested item when adding a procurement event to a warehouse supply item', async () => {
+  it('rolls back an unresolved warehouse procurement bridge instead of silently approving it', async () => {
     const client = buildClient({ requestOverrides: { request_type: 'Warehouse Supply' } });
     const state = {
       item: {
@@ -290,7 +291,7 @@ describe('procurement item events', () => {
           total_cost: params[2] ?? state.item.total_cost,
           procurement_status: params[3],
         };
-        return { rowCount: 1, rows: [state.item] };
+        return { rowCount: 1, rows: [{...state.item,request_mode:'free_text',catalog_status:'pending_mapping'}] };
       }
       if (/INSERT INTO request_logs/.test(sql)) return {};
       if (/COUNT\(\*\)::int AS total_items/.test(sql)) {
@@ -307,20 +308,13 @@ describe('procurement item events', () => {
 
     await addProcurementItemEvent(req, res, next);
 
-    expect(next).not.toHaveBeenCalled();
-    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO public.requested_items'), [10, 'Gloves', 100, 7]);
-    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE public.warehouse_supply_items'), [88, 20]);
-    expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      event: expect.objectContaining({
-        requested_item_id: 88,
-        event_quantity: 1,
-      }),
-      item: expect.objectContaining({
-        purchased_quantity: 1,
-        procurement_status: 'partially_procured',
-      }),
-    }));
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'}));
+    const [sql,values]=client.query.mock.calls.find(([sql])=>sql.includes('INSERT INTO public.requested_items'));
+    const columns=sql.match(/\(request_id,([^)]*)\)/)[1].split(',');
+    expect(values[1+columns.indexOf('request_mode')]).toBe('free_text');
+    expect(values[1+columns.indexOf('catalog_status')]).toBe('pending_mapping');
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query.mock.calls.some(([sql])=>/INSERT INTO public\.procurement_item_events/.test(sql))).toBe(false);
   });
 
   it('preserves old purchased_quantity as the starting point when no events exist', async () => {

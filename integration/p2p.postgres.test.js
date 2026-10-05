@@ -28,6 +28,13 @@ const one = async (sql, values = []) => (await pool.query(sql, values)).rows[0];
 let keySequence = 0;
 const key = label => `${label}-${++keySequence}`;
 
+async function applyDevelopmentMigration(name) {
+  const client=await pool.connect();
+  try { return await client.query(fs.readFileSync(path.join(__dirname,'../sql/development',name),'utf8')); }
+  catch(error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
 before(async () => {
   const existing = await one("SELECT COUNT(*)::int count FROM information_schema.tables WHERE table_schema='public'");
   assert.equal(existing.count, 0, 'Runner must supply a new empty database; existing schemas are never reset');
@@ -42,9 +49,10 @@ async function createCase({ inventory = false, quantity = '10', price = '100', o
   const generic = await one("INSERT INTO generic_items(base_uom_id,inventory_uom_id,lifecycle_status,is_active) VALUES(1,1,'active',TRUE) RETURNING *");
   const product = await one("INSERT INTO approved_products(generic_item_id,product_name,package_quantity,approval_status,is_active) VALUES($1,'Fixture product',1,'approved',TRUE) RETURNING *", [generic.id]);
   const catalog = await one('INSERT INTO supplier_catalog_items(supplier_id,approved_product_id,purchasing_uom_id,conversion_factor,is_active) VALUES(1,$1,1,1,TRUE) RETURNING *', [product.id]);
-  const item = await one("INSERT INTO requested_items(request_id,generic_item_id,quantity,approved_quantity,request_mode,item_name,unit_of_measure) VALUES($1,$2,$3,$3,'generic','Fixture item','EA') RETURNING *", [request.id, generic.id, quantity]);
+  const item = await one("INSERT INTO requested_items(request_id,generic_item_id,quantity,request_mode,catalog_status,item_name,unit_of_measure) VALUES($1,$2,$3,'generic_item','catalogued','Fixture item','EA') RETURNING *", [request.id, generic.id, quantity]);
   const warehouse = await one("INSERT INTO warehouses(institute_id,name) VALUES(1,'Integration warehouse') RETURNING *");
-  const stock = await one("INSERT INTO stock_items(generic_item_id,approved_product_id,inventory_uom_id,name,unit) VALUES($1,$2,1,'Fixture item','EA') RETURNING *", [generic.id, product.id]);
+  const stock = await one("INSERT INTO stock_items(generic_item_id,approved_product_id,inventory_uom_id,mapping_status,name,unit) VALUES($1,$2,1,'mapped_product','Fixture item','EA') RETURNING *", [generic.id, product.id]);
+  await pool.query("INSERT INTO warehouse_stock_levels(warehouse_id,stock_item_id,item_name,quantity,stock_status) VALUES($1,$2,'Fixture item',0,'AVAILABLE')",[warehouse.id,stock.id]);
   const actor = { id: 1, institute_id: 1, warehouse_id: warehouse.id, permissions: ['inventory.receive'] };
   const award = await createAward({ repository, requestItem: item, supplier: { id: 1 }, actor, input: {
     awarded_quantity: quantity, unit_price: price, currency: 'USD',
@@ -324,4 +332,99 @@ test('read-only baseline executes real catalog and reconciliation SQL without ch
   assert.equal(report.row_counts.contract_payments.rows[0].row_count,'4');
   assert.deepEqual(await snapshot(),beforeSnapshot);
   assert.deepEqual((await pool.query('SELECT * FROM contract_payments ORDER BY id')).rows,beforeContract.rows);
+});
+
+test('Development identity migration preserves legacy rows, permits free_text and rejects invalid enum values',async()=>{
+  const legacy=await one("INSERT INTO requested_items(item_name,quantity) VALUES('Historical demand',1) RETURNING *");
+  const before=(await pool.query('SELECT id,request_mode,catalog_status FROM requested_items ORDER BY id')).rows;
+  await pool.query("ALTER TABLE requested_items ALTER COLUMN request_mode SET DEFAULT 'approved_free_text_exception', ALTER COLUMN catalog_status SET DEFAULT 'approved_exception'");
+  await applyDevelopmentMigration('20261005_01_requested_item_identity.sql');
+  await applyDevelopmentMigration('20261005_01_requested_item_identity.sql');
+  assert.deepEqual((await pool.query('SELECT id,request_mode,catalog_status FROM requested_items ORDER BY id')).rows,before);
+  const defaults=(await pool.query("SELECT column_default,is_nullable FROM information_schema.columns WHERE table_name='requested_items' AND column_name IN ('request_mode','catalog_status')")).rows;
+  assert.ok(defaults.every(r=>r.column_default===null&&r.is_nullable==='YES'));
+  const free=await one("INSERT INTO requested_items(item_name,quantity,request_mode,catalog_status) VALUES('Unresolved',1,'free_text','pending_mapping') RETURNING *");
+  assert.equal(free.catalog_status,'pending_mapping');
+  await assert.rejects(()=>pool.query("INSERT INTO requested_items(item_name,quantity,request_mode) VALUES('Invalid',1,'generic')"),{code:'23514'});
+  assert.equal((await one('SELECT request_mode FROM requested_items WHERE id=$1',[legacy.id])).request_mode,null);
+  const {assertProcurementReady}=require('../services/procurementItemIdentityService');
+  assert.throws(()=>assertProcurementReady(legacy),{code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'});
+  assert.throws(()=>assertProcurementReady(free),{code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'});
+});
+
+test('Employee Tasks migration creates contract, preserves existing rows, repairs indexes and fails on incompatible columns',async()=>{
+  await applyDevelopmentMigration('20261005_02_employee_tasks.sql');
+  const task=await one("INSERT INTO employee_tasks(title,assigned_to,assigned_by) VALUES('Existing task',1,1) RETURNING *");
+  await pool.query('DROP INDEX idx_employee_tasks_assigned_to');
+  await applyDevelopmentMigration('20261005_02_employee_tasks.sql');
+  assert.deepEqual(await one('SELECT * FROM employee_tasks WHERE id=$1',[task.id]),task);
+  assert.equal((await one("SELECT count(*)::int count FROM pg_indexes WHERE tablename='employee_tasks' AND indexname IN ('idx_employee_tasks_assigned_to','idx_employee_tasks_assigned_by')")).count,2);
+  await assert.rejects(()=>pool.query("INSERT INTO employee_tasks(title,assigned_to,assigned_by) VALUES('Orphan',999999,1)"),{code:'23503'});
+  await pool.query('ALTER TABLE employee_tasks ALTER COLUMN title TYPE varchar');
+  await assert.rejects(()=>applyDevelopmentMigration('20261005_02_employee_tasks.sql'),/DEV_TASKS_INCOMPATIBLE_COLUMNS/);
+  assert.equal((await one('SELECT title FROM employee_tasks WHERE id=$1',[task.id])).title,'Existing task');
+  await pool.query('ALTER TABLE employee_tasks ALTER COLUMN title TYPE text');
+  await applyDevelopmentMigration('20261005_02_employee_tasks.sql');
+});
+
+test('receipt resolution distinguishes Product, UOM, warehouse and unresolved or ambiguous mappings',async()=>{
+  const {resolveReceiptStockItem}=require('../services/receiptStockIdentityService');
+  const c=await createCase({inventory:true});
+  const identity={generic_item_id:c.stock.generic_item_id,approved_product_id:c.stock.approved_product_id,
+    base_uom_id:c.stock.inventory_uom_id,warehouse_id:c.warehouse.id};
+  const product=await one("INSERT INTO approved_products(generic_item_id,approval_status,is_active) VALUES($1,'approved',TRUE) RETURNING *",[identity.generic_item_id]);
+  const uom=await one("INSERT INTO item_uom(name,uom_code) VALUES('Other','OTHER') RETURNING *");
+  const otherWarehouse=await one("INSERT INTO warehouses(institute_id,name) VALUES(99,'Other institute') RETURNING *");
+  const add=async(productId,uomId,warehouseId,status='mapped_product')=>{
+    const stock=await one('INSERT INTO stock_items(generic_item_id,approved_product_id,inventory_uom_id,mapping_status,name) VALUES($1,$2,$3,$4,\'Candidate\') RETURNING *',[identity.generic_item_id,productId,uomId,status]);
+    await pool.query("INSERT INTO warehouse_stock_levels(warehouse_id,stock_item_id,quantity,stock_status) VALUES($1,$2,0,'AVAILABLE')",[warehouseId,stock.id]);return stock;
+  };
+  await add(product.id,identity.base_uom_id,identity.warehouse_id);
+  await add(identity.approved_product_id,uom.id,identity.warehouse_id);
+  await add(identity.approved_product_id,identity.base_uom_id,otherWarehouse.id);
+  await add(identity.approved_product_id,identity.base_uom_id,identity.warehouse_id,'review_required');
+  assert.equal((await resolveReceiptStockItem(pool,identity)).id,c.stock.id);
+  await assert.rejects(()=>resolveReceiptStockItem(pool,{...identity,generic_item_id:999999}),{code:'STOCK_IDENTITY_NOT_FOUND'});
+  await assert.rejects(()=>resolveReceiptStockItem(pool,{...identity,base_uom_id:null}),{code:'STOCK_IDENTITY_UNRESOLVED'});
+  await add(identity.approved_product_id,identity.base_uom_id,identity.warehouse_id);
+  await assert.rejects(()=>resolveReceiptStockItem(pool,identity),{code:'STOCK_IDENTITY_AMBIGUOUS'});
+});
+
+test('request edits retain IDs and NULL identity and reject changes to connected procurement lines',async()=>{
+  const {applyRequestedItemEdits}=require('../services/requestedItemWriteService');
+  const request=await one("INSERT INTO requests(status) VALUES('Submitted') RETURNING *");
+  const item=await one("INSERT INTO requested_items(request_id,item_name,quantity,request_mode,catalog_status,item_name_snapshot) VALUES($1,'Historical line',1,NULL,NULL,'Original') RETURNING *",[request.id]);
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await applyRequestedItemEdits(client,request.id,[{id:item.id,item_name:'Edited description',quantity:2}],{id:1});
+    await client.query('COMMIT');
+  } catch(error) { await client.query('ROLLBACK');throw error; } finally {client.release();}
+  const edited=await one('SELECT * FROM requested_items WHERE id=$1',[item.id]);
+  assert.equal(edited.request_mode,null);assert.equal(edited.catalog_status,null);assert.equal(edited.item_name_snapshot,'Original');
+  assert.equal(edited.quantity,2);
+  const connected=await createCase();
+  const guarded=await pool.connect();
+  try {
+    await guarded.query('BEGIN');
+    await assert.rejects(()=>applyRequestedItemEdits(guarded,connected.request.id,[{id:connected.item.id,item_name:'Rewritten',quantity:10}],{id:1}),{code:'REQUEST_ITEM_ALREADY_CONSUMED'});
+    await guarded.query('ROLLBACK');
+  } finally {guarded.release();}
+  assert.equal((await one('SELECT item_name FROM requested_items WHERE id=$1',[connected.item.id])).item_name,'Fixture item');
+  assert.equal((await one('SELECT requested_item_id FROM purchase_order_items WHERE id=$1',[connected.line.id])).requested_item_id,connected.item.id);
+});
+
+test('stock provenance diagnostics handle absent and populated legacy columns without mutation',async()=>{
+  const sql=fs.readFileSync(path.join(__dirname,'../sql/verification/20261005_development_stock_catalog_provenance.sql'),'utf8');
+  const client=await pool.connect();
+  try {
+    await client.query(sql);
+    const stock=await one('SELECT id FROM stock_items ORDER BY id LIMIT 1');
+    const catalog=await one('SELECT id FROM supplier_catalog_items ORDER BY id LIMIT 1');
+    await client.query('ALTER TABLE public.stock_items ADD COLUMN supplier_catalog_item_id bigint REFERENCES public.supplier_catalog_items(id)');
+    await client.query('UPDATE public.stock_items SET supplier_catalog_item_id=$1 WHERE id=$2',[catalog.id,stock.id]);
+    const before=(await client.query('SELECT id,supplier_catalog_item_id FROM public.stock_items ORDER BY id')).rows;
+    await client.query(sql);
+    assert.deepEqual((await client.query('SELECT id,supplier_catalog_item_id FROM public.stock_items ORDER BY id')).rows,before);
+  } finally {await client.query('ROLLBACK');client.release();}
 });

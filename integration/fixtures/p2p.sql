@@ -11,19 +11,27 @@ CREATE TABLE supplier_evaluations (id BIGSERIAL PRIMARY KEY, supplier_id INTEGER
 CREATE TABLE requests (id SERIAL PRIMARY KEY, department_id INTEGER REFERENCES departments, project_id INTEGER, status TEXT);
 CREATE TABLE item_uom (id SERIAL PRIMARY KEY, name TEXT, uom_code TEXT, is_active BOOLEAN DEFAULT TRUE);
 CREATE TABLE generic_items (id BIGSERIAL PRIMARY KEY, base_uom_id INTEGER REFERENCES item_uom,
-  inventory_uom_id INTEGER REFERENCES item_uom, lifecycle_status TEXT, is_active BOOLEAN);
+  inventory_uom_id INTEGER REFERENCES item_uom, lifecycle_status TEXT, is_active BOOLEAN,
+  item_code TEXT,generic_name TEXT,canonical_description TEXT,inventory_uom TEXT,interchangeability_policy TEXT);
 CREATE TABLE approved_products (id BIGSERIAL PRIMARY KEY, generic_item_id BIGINT REFERENCES generic_items,
   product_name TEXT, product_description TEXT, package_quantity NUMERIC(18,4), approval_status TEXT, is_active BOOLEAN);
 CREATE TABLE supplier_catalog_items (id BIGSERIAL PRIMARY KEY, supplier_id INTEGER REFERENCES suppliers,
   approved_product_id BIGINT REFERENCES approved_products, purchasing_uom_id INTEGER REFERENCES item_uom,
   conversion_factor NUMERIC(18,4), is_active BOOLEAN);
 CREATE TABLE requested_items (id SERIAL PRIMARY KEY, request_id INTEGER REFERENCES requests,
-  generic_item_id BIGINT REFERENCES generic_items, quantity NUMERIC(18,4), approved_quantity NUMERIC(18,4),
-  mandatory_product_id BIGINT REFERENCES approved_products, request_mode TEXT, catalog_status TEXT,
-  canonical_description_snapshot TEXT, item_name_snapshot TEXT, item_name TEXT, unit_of_measure TEXT);
+  generic_item_id BIGINT REFERENCES generic_items, quantity INTEGER NOT NULL,
+  preferred_product_id BIGINT REFERENCES approved_products, mandatory_product_id BIGINT REFERENCES approved_products, request_mode TEXT CONSTRAINT requested_items_request_mode_check CHECK(request_mode IN ('generic_item','generic_item_with_preference','specific_approved_product','free_text','pending_item_creation','approved_free_text_exception','service')),
+  catalog_status TEXT CONSTRAINT requested_items_catalog_status_check CHECK(catalog_status IN ('catalogued','pending_mapping','approved_exception')),
+  canonical_description_snapshot TEXT, item_name_snapshot TEXT, item_name VARCHAR NOT NULL, unit_of_measure TEXT,
+  brand TEXT,unit_cost BIGINT,total_cost BIGINT,available_quantity INTEGER,intended_use TEXT,specs TEXT,
+  device_info JSONB,purchase_type TEXT,stocking_policy TEXT CHECK(stocking_policy IN ('stock','non_stock','consignment','direct_delivery','service')),
+  preferred_product_reason TEXT,restriction_justification TEXT,required_date DATE);
+CREATE TABLE item_master_audit_events(id BIGSERIAL PRIMARY KEY,entity_type TEXT,entity_id BIGINT,action TEXT,actor_id INTEGER REFERENCES users,reason TEXT,
+  previous_values JSONB,new_values JSONB,request_id INTEGER REFERENCES requests,requested_item_id INTEGER REFERENCES requested_items,source_id BIGINT,target_id BIGINT,organizational_context JSONB);
 CREATE TABLE warehouses (id SERIAL PRIMARY KEY, institute_id INTEGER, name TEXT, is_active BOOLEAN DEFAULT TRUE);
 CREATE TABLE stock_items (id SERIAL PRIMARY KEY, generic_item_id BIGINT REFERENCES generic_items,
   approved_product_id BIGINT REFERENCES approved_products, inventory_uom_id INTEGER REFERENCES item_uom,
+  mapping_status TEXT NOT NULL DEFAULT 'unmapped' CHECK(mapping_status IN ('unmapped','auto_matched','review_required','mapped_generic','mapped_product','duplicate','obsolete','excluded')),
   name TEXT, unit TEXT, available_quantity NUMERIC(18,4) DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE procurement_awards (id BIGSERIAL PRIMARY KEY, request_id INTEGER REFERENCES requests,
   request_item_id INTEGER REFERENCES requested_items, supplier_id INTEGER REFERENCES suppliers,

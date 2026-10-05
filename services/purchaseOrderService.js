@@ -5,6 +5,7 @@ const { commitPurchaseOrder } = require('./budgetCommitmentService');
 const defaultAudit = require('./auditService');
 const defaultOutbox = require('./notificationOutboxService');
 const { multiply } = require('./uomConversionService');
+const { assertProcurementReady } = require('./procurementItemIdentityService');
 const normalizePoNumber = (value) => String(value || '').trim().toUpperCase();
 const MAX_GENERATED_NUMBER_ATTEMPTS = 5;
 const isPoNumberCollision = (error) => error?.code === '23505' && (
@@ -32,6 +33,7 @@ const createPurchaseOrderFromAwards = async ({ repository, requestId: routeReque
     const governed = Boolean(award.approved_product_id && award.supplier_catalog_item_id);
     const snapshot = governed ? await tx.loadAwardUomSnapshot(award.id) : await tx.loadAwardExceptionSnapshot?.(award.id);
     if (!snapshot) throw Object.assign(new Error('Award UOM identity cannot be resolved'), { code: 'AWARD_UOM_IDENTITY_REQUIRED', statusCode: 409 });
+    assertProcurementReady(snapshot);
     if (!snapshot.source_uom || !snapshot.base_uom) throw Object.assign(new Error('Award requires a controlled UOM snapshot'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
     if (governed && (!snapshot.generic_item_id || !snapshot.source_uom_id || !snapshot.base_uom_id || Number(snapshot.inventory_uom_id) !== Number(snapshot.base_uom_id))) throw Object.assign(new Error('Award UOM identity is inconsistent'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
     if (governed && Number(snapshot.generic_base_uom_id) !== Number(snapshot.inventory_uom_id)) throw Object.assign(new Error('A governed Generic base-to-inventory UOM conversion is required'), { code: 'GENERIC_INVENTORY_UOM_CONVERSION_REQUIRED', statusCode: 409 });

@@ -1,4 +1,5 @@
 'use strict';
+const { resolveReceiptStockItem } = require('../services/receiptStockIdentityService');
 
 // Concrete Phase 4 PostgreSQL gateway.  A repository is deliberately bound to
 // one pg client so locks and the writes they protect cannot escape a transaction.
@@ -33,6 +34,7 @@ const createConnectedP2PRepository = (client) => ({
     FROM procurement_awards a LEFT JOIN purchase_order_items poi ON poi.award_id=a.id
     LEFT JOIN purchase_orders po ON po.id=poi.purchase_order_id WHERE a.id=$1 GROUP BY a.id`, [awardId]),
   loadAwardUomSnapshot: (awardId) => one(client, `SELECT g.id generic_item_id,
+    ri.request_mode,ri.catalog_status,ri.preferred_product_id,ri.mandatory_product_id,ri.restriction_justification,
     COALESCE(ri.canonical_description_snapshot,ri.item_name_snapshot,ri.item_name,p.product_name,p.product_description) item_name,
     c.purchasing_uom_id source_uom_id,su.uom_code source_uom,
     g.base_uom_id generic_base_uom_id,g.inventory_uom_id,iu.id base_uom_id,iu.uom_code base_uom,
@@ -41,13 +43,14 @@ const createConnectedP2PRepository = (client) => ({
     JOIN supplier_catalog_items c ON c.id=a.supplier_catalog_item_id AND c.approved_product_id=a.approved_product_id
     JOIN approved_products p ON p.id=a.approved_product_id JOIN generic_items g ON g.id=p.generic_item_id
     JOIN item_uom su ON su.id=c.purchasing_uom_id JOIN item_uom iu ON iu.id=g.inventory_uom_id
-    WHERE a.id=$1 AND a.supplier_id=c.supplier_id`, [awardId]),
+    WHERE a.id=$1 AND a.supplier_id=c.supplier_id AND ri.generic_item_id=g.id FOR SHARE OF ri`, [awardId]),
   loadAwardExceptionSnapshot: (awardId) => one(client, `SELECT ri.request_mode,ri.catalog_status,
+    ri.restriction_justification,
     COALESCE(ri.canonical_description_snapshot,ri.item_name_snapshot,ri.item_name) item_name,
     ri.unit_of_measure source_uom,ri.unit_of_measure base_uom,NULL::integer source_uom_id,NULL::integer base_uom_id,
     NULL::bigint generic_item_id,'1'::text conversion_factor
     FROM procurement_awards a JOIN requested_items ri ON ri.id=a.request_item_id
-    WHERE a.id=$1 AND ri.request_mode IN ('approved_free_text_exception','service')`, [awardId]),
+    WHERE a.id=$1 AND ri.request_mode IN ('approved_free_text_exception','service') FOR SHARE OF ri`, [awardId]),
 
   nextPurchaseOrderNumber: () => one(client, `SELECT 'PO-' || to_char(CURRENT_DATE, 'YYYY') || '-' ||
     lpad(nextval('public.purchase_order_number_seq')::text, 6, '0') AS po_number`),
@@ -141,7 +144,7 @@ const createConnectedP2PRepository = (client) => ({
   markPurchaseOrderPartiallyReceived: (id) => one(client,"UPDATE purchase_orders SET status='PO_PARTIAL',updated_at=NOW() WHERE id=$1 RETURNING *",[id]),
   markPurchaseOrderDelivered: (id) => one(client,"UPDATE purchase_orders SET status='PO_DELIVERED',updated_at=NOW() WHERE id=$1 RETURNING *",[id]),
   loadWarehouseScope: (id) => one(client,'SELECT * FROM warehouses WHERE id=$1',[id]),
-  resolveReceiptStockItem: (requestedItemId) => one(client,`SELECT si.* FROM requested_items ri JOIN stock_items si ON si.generic_item_id=ri.generic_item_id WHERE ri.id=$1 ORDER BY si.id LIMIT 1`,[requestedItemId]),
+  resolveReceiptStockItem: (identity) => resolveReceiptStockItem(client, identity),
 
   lockInvoiceOperation: (key) => client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`supplier-invoice-operation:${key}`]),
   lockSupplierInvoiceIdentity: (supplierId,number) => client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`supplier-invoice:${supplierId}:${String(number).trim().toLowerCase()}`]),

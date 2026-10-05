@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const validator = require('../validators/itemMasterFoundationValidator');
 const uomAuthority = require('./uomConversionService');
+const { resolveIdentity, writeResolvedIdentity } = require('./procurementItemIdentityService');
 
 const SORTS = Object.freeze({ name: 'generic_name', code: 'item_code', updated: 'updated_at', created: 'created_at' });
 const pageOptions = query => ({
@@ -325,19 +326,25 @@ class ItemMasterFoundationService {
         throw createHttpError(409, 'Pending item has already been resolved to a different governed identity');
       }
       if (actor?.institute_id && pending.institute_id && Number(actor.institute_id) !== Number(pending.institute_id)) throw createHttpError(403, 'Pending item belongs to another institute');
+      let requestedLine;
       if (pending.requested_item_id) {
-        const line = await client.query('SELECT id,request_id,item_name FROM requested_items WHERE id=$1 AND request_id=$2 FOR UPDATE', [pending.requested_item_id,pending.request_id]);
+        const line = await client.query('SELECT * FROM public.requested_items WHERE id=$1 AND request_id=$2 FOR UPDATE', [pending.requested_item_id,pending.request_id]);
         if (!line.rowCount) throw createHttpError(409, 'Related request line no longer exists');
+        requestedLine = line.rows[0];
       }
       let genericItemId = payload.generic_item_id ? Number(payload.generic_item_id) : null;
       let productId = payload.product_id ? Number(payload.product_id) : null;
-      if (['existing_generic','existing_product','supplier_catalog_only'].includes(resolutionType)) {
-        const generic = await client.query("SELECT id FROM generic_items WHERE id=$1 AND lifecycle_status='active' AND is_active=TRUE", [genericItemId]);
-        if (!generic.rowCount) throw createHttpError(400, 'Resolution requires an active Generic Item');
-      }
-      if (['existing_product','supplier_catalog_only'].includes(resolutionType)) {
-        const product = await client.query("SELECT id FROM approved_products WHERE id=$1 AND generic_item_id=$2 AND approval_status='approved' AND is_active=TRUE", [productId,genericItemId]);
-        if (!product.rowCount) throw createHttpError(400, 'Resolution product is not active, approved, or owned by the Generic Item');
+      let resolvedIdentity;
+      if (['existing_generic','existing_product','supplier_catalog_only','approved_free_text_exception'].includes(resolutionType)) {
+        resolvedIdentity = await resolveIdentity(client, requestedLine || {item_name:pending.proposed_name}, {
+          request_mode: resolutionType === 'approved_free_text_exception' ? 'approved_free_text_exception'
+            : resolutionType === 'existing_generic' ? 'generic_item' : 'generic_item_with_preference',
+          generic_item_id: resolutionType === 'approved_free_text_exception' ? null : genericItemId,
+          preferred_product_id: ['existing_product','supplier_catalog_only'].includes(resolutionType) ? productId : null,
+          restriction_justification: resolutionType === 'approved_free_text_exception' ? notes : null,
+        }, actor);
+        genericItemId = resolvedIdentity.generic_item_id;
+        productId = resolvedIdentity.preferred_product_id;
       }
       if (resolutionType === 'supplier_catalog_only') {
         const catalog = await client.query('SELECT id FROM supplier_catalog_items WHERE id=$1 AND approved_product_id=$2 AND is_active=TRUE', [payload.supplier_catalog_item_id,productId]);
@@ -357,14 +364,13 @@ class ItemMasterFoundationService {
         genericItemId = created.rows[0].id;
       }
       if (pending.requested_item_id) {
-        if (resolutionType === 'existing_generic') await client.query("UPDATE requested_items SET generic_item_id=$2,request_mode='generic_item',catalog_status='catalogued',item_name_snapshot=COALESCE(item_name_snapshot,item_name) WHERE id=$1", [pending.requested_item_id,genericItemId]);
-        if (resolutionType === 'existing_product') await client.query("UPDATE requested_items SET generic_item_id=$2,preferred_product_id=$3,request_mode='generic_item_with_preference',catalog_status='catalogued',item_name_snapshot=COALESCE(item_name_snapshot,item_name) WHERE id=$1", [pending.requested_item_id,genericItemId,productId]);
-        if (resolutionType === 'rejected') await client.query("UPDATE requested_items SET catalog_status='pending_mapping',procurement_status='rejected' WHERE id=$1", [pending.requested_item_id]);
-        if (resolutionType === 'approved_free_text_exception') await client.query("UPDATE requested_items SET request_mode='approved_free_text_exception',catalog_status='approved_exception',restriction_justification=$2 WHERE id=$1", [pending.requested_item_id,notes]);
+        if (resolvedIdentity) await writeResolvedIdentity(client,pending.requested_item_id,resolvedIdentity);
+        if (resolutionType === 'rejected') await client.query("UPDATE public.requested_items SET catalog_status='pending_mapping',procurement_status='rejected' WHERE id=$1", [pending.requested_item_id]);
       }
       const status = resolutionType === 'needs_information' ? 'needs_information' : resolutionType === 'rejected' ? 'rejected' : resolutionType === 'approved_free_text_exception' ? 'approved_exception' : resolutionType === 'new_generic_draft' ? 'review' : 'resolved';
       const result = await client.query(`UPDATE pending_item_requests SET status=$2,resolution_type=$3,resolved_generic_item_id=$4,resolved_product_id=$5,resolution_notes=$6,resolved_by=CASE WHEN $2='needs_information' THEN NULL ELSE $7 END,resolved_at=CASE WHEN $2='needs_information' THEN NULL ELSE NOW() END,updated_at=NOW() WHERE id=$1 RETURNING *`, [id,status,resolutionType,genericItemId,productId,notes||null,actorId]);
-      await client.query(`INSERT INTO item_master_audit_events (entity_type,entity_id,action,actor_id,reason,request_id,requested_item_id,new_values,organizational_context) VALUES ('pending_item_request',$1,$2,$3,$4,$5,$6,$7,$8)`, [id,`resolved.${resolutionType}`,actorId,notes||null,pending.request_id,pending.requested_item_id,result.rows[0],{institute_id:pending.institute_id,department_id:pending.department_id}]);
+      await client.query(`INSERT INTO item_master_audit_events (entity_type,entity_id,action,actor_id,reason,request_id,requested_item_id,new_values,organizational_context) VALUES ('pending_item_request',$1,$2,$3,$4,$5,$6,$7,$8)`, [id,`resolved.${resolutionType}`,actorId,notes||null,pending.request_id,pending.requested_item_id,result.rows[0],{institute_id:pending.institute_id,department_id:pending.department_id,
+        ...(resolutionType==='supplier_catalog_only' ? {supplier_catalog_item_id:payload.supplier_catalog_item_id} : {})}]);
       await client.query('COMMIT'); return result.rows[0];
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }

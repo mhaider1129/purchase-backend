@@ -64,6 +64,8 @@ describe('updateRequestBeforeApproval', () => {
       }) // request lookup
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 4 }] }) // department check
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 9 }] }) // section check
+      .mockResolvedValueOnce({ rows: [{id:11,item_name:'Filter',quantity:2,unit_cost:10,request_mode:null,catalog_status:null}] }) // preserve existing line
+      .mockResolvedValueOnce({ rows: [] }) // no optional downstream relations in this fixture
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 99 }] }) // SCM lookup
       .mockResolvedValueOnce({}) // deactivate previous edit approval rows
       .mockResolvedValueOnce({}) // supersede previous edit approval requests
@@ -78,7 +80,7 @@ describe('updateRequestBeforeApproval', () => {
         justification: 'Updated justification',
         department_id: 4,
         section_id: 9,
-        items: [{ item_name: 'Filter', quantity: 2, unit_cost: 10 }],
+        items: [{ id:11, item_name: 'Filter', quantity: 2, unit_cost: 10 }],
       },
       user: { id: 7 },
     };

@@ -6,7 +6,8 @@ const ensureRequestedItemPoIssuanceColumn = require('../utils/ensureRequestedIte
 const { ensureRequestedItemFinancialsTable } = require('../utils/ensureRequestedItemFinancialsTable');
 const { sendRequestWorkflowEmail } = require('../utils/workflowEmailNotifications');
 const { createNotifications } = require('../utils/notificationService');
-const { validateRequestItemIdentity } = require('../services/procurementItemIdentityService');
+const { insertRequestedItem } = require('../services/requestedItemWriteService');
+const { assertProcurementReady } = require('../services/procurementItemIdentityService');
 
 const parseOptionalNumber = (value, fieldLabel) => {
   if (value === undefined || value === null || value === '') {
@@ -177,30 +178,10 @@ const addRequestedItems = async (req, res, next) => {
     }
 
     for (const item of items) {
-      const governedItem = reqType === 'Non-Stock' || item.request_mode
-        ? await validateRequestItemIdentity(client,item,req.user,{requireGovernedIdentity:true})
-        : item;
-      const {
-        item_name,
-        brand = null,
-        quantity,
-        unit_cost = null,
-        available_quantity = null,
-        intended_use = null,
-        specs = null,
-        device_info = null,
-        purchase_type = null,
-        item_type = null,
-        generic_item_id=null,preferred_product_id=null,mandatory_product_id=null,request_mode=null,catalog_status=null,
-        stocking_policy=null,restriction_justification=null,item_name_snapshot=null,canonical_description_snapshot=null,
-      } = governedItem;
-
+      const { item_name, quantity } = item;
       if (!item_name || !quantity || quantity <= 0) {
-        console.warn(`⚠️ Skipping invalid item:`, item);
-        continue;
+        throw createHttpError(400, 'Each item requires a name and positive quantity');
       }
-
-      const total_cost = unit_cost && quantity ? unit_cost * quantity : null;
 
       if (reqType === 'Warehouse Supply') {
         const result = await client.query(
@@ -211,29 +192,10 @@ const addRequestedItems = async (req, res, next) => {
         );
         insertedItems.push(result.rows[0]);
       } else {
-        const result = await client.query(
-            `INSERT INTO public.requested_items
-              (request_id,item_name,brand,quantity,unit_cost,total_cost,available_quantity,intended_use,specs,device_info,purchase_type,item_type,
-               generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,stocking_policy,restriction_justification,item_name_snapshot,canonical_description_snapshot)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-             RETURNING *`,
-            [
-              request_id,
-              item_name,
-              brand,
-              quantity,
-              unit_cost,
-              total_cost,
-              isNaN(available_quantity) ? null : available_quantity,
-              intended_use,
-              specs,
-              device_info,
-              purchase_type,
-              item_type,generic_item_id,preferred_product_id,mandatory_product_id,request_mode,catalog_status,stocking_policy,
-              restriction_justification,item_name_snapshot||item_name,canonical_description_snapshot
-            ]
-          );
-        insertedItems.push(result.rows[0]);
+        const saved = await insertRequestedItem(client, request_id, { ...item,
+          total_cost: item.unit_cost != null ? Number(item.quantity) * Number(item.unit_cost) : null,
+        }, req.user);
+        insertedItems.push(saved);
       }
     }
 
@@ -270,7 +232,7 @@ const addRequestedItems = async (req, res, next) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to insert requested items:', err.message);
-    next(createHttpError(500, 'Failed to add requested items'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to add requested items'));
   } finally {
     client.release();
   }
@@ -458,7 +420,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
               r.request_type, r.initiated_by_technician_id
          FROM public.requested_items ri
          JOIN requests r ON ri.request_id = r.id
-        WHERE ri.id = $1`,
+        WHERE ri.id = $1 FOR UPDATE OF ri`,
       [item_id]
     );
 
@@ -469,6 +431,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
 
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'fulfill this order item');
+    if (['purchased','partially_procured'].includes(normalizedProcurementStatus)) assertProcurementReady(item);
 
     const closesWithoutPurchase = ['not_procured', 'canceled'].includes(normalizedProcurementStatus);
 
@@ -575,7 +538,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to update procurement status:', err.message);
-    next(createHttpError(500, 'Failed to update procurement status'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to update procurement status'));
   } finally {
     client.release();
   }
@@ -617,6 +580,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
 
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'update purchased quantity for this order item');
+    if (purchased_quantity > Number(item.purchased_quantity || 0)) assertProcurementReady(item);
 
     const currentReceivedQuantity = Number(item.received_quantity || 0);
     if (purchased_quantity < currentReceivedQuantity) {
@@ -664,7 +628,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Failed to update purchased quantity:', err.message);
-    next(createHttpError(500, 'Failed to update purchased quantity'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to update purchased quantity'));
   } finally {
     client.release();
   }

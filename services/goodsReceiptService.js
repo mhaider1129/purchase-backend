@@ -96,12 +96,13 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
       receipt.items.push(saved);
       await tx.synchronizePurchaseOrderLineReceivedQuantity(line.purchase_order_item_id);
       if (line.line_type === 'INVENTORY' && decimal(line.accepted_quantity, 'accepted_quantity') > 0n) {
-        const stockItem = await tx.resolveReceiptStockItem(line.requested_item_id);
-        if (!stockItem) throw createHttpError(409, `Inventory line ${line.id} is not mapped to a canonical stock item`);
-        if (!stockItem.inventory_uom_id || Number(stockItem.inventory_uom_id) !== Number(line.base_uom_id)) throw Object.assign(createHttpError(409, 'PO inventory UOM does not match the controlled Stock Item inventory UOM'), { code: 'STOCK_INVENTORY_UOM_MISMATCH' });
         const warehouse = await tx.loadWarehouseScope(Number(line.warehouse_id));
         if (!warehouse?.institute_id) throw createHttpError(400, `Inventory line ${line.id} requires a valid warehouse_id`);
         if (actor?.institute_id && Number(actor.institute_id) !== Number(warehouse.institute_id)) throw createHttpError(403, 'Receipt warehouse is outside the actor institute scope');
+        const stockItem = await tx.resolveReceiptStockItem({ generic_item_id: line.generic_item_id,
+          approved_product_id: line.approved_product_id, base_uom_id: line.base_uom_id, warehouse_id: warehouse.id });
+        if (!stockItem) throw Object.assign(createHttpError(409, 'Receipt Stock Item identity is unresolved'), { code: 'STOCK_IDENTITY_NOT_FOUND' });
+        if (!stockItem.inventory_uom_id || Number(stockItem.inventory_uom_id) !== Number(line.base_uom_id)) throw Object.assign(createHttpError(409, 'PO inventory UOM does not match the controlled Stock Item inventory UOM'), { code: 'STOCK_INVENTORY_UOM_MISMATCH' });
         const posted = await inventory.postAcceptedReceiptLines(receipt, [{ ...line, ...saved, stock_item_id: stockItem.id, accepted_quantity: line.accepted_quantity,
           quarantined: line.stock_status === 'QUARANTINE' }], { instituteId: warehouse.institute_id,
           warehouseId: warehouse.id, actor, correlationId }, tx.client);

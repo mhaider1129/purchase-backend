@@ -11,6 +11,7 @@ jest.mock('../utils/ensureRequestedItemUnitOfMeasureColumn', () => jest.fn(() =>
 jest.mock('../utils/ensureRequestSchedulingColumns', () => jest.fn(() => Promise.resolve()));
 jest.mock('../utils/ensureMaintenanceRequestSchema', () => jest.fn(() => Promise.resolve()));
 jest.mock('../utils/ensureFinanceCoreTables', () => ({ ensureFinanceCoreTables: jest.fn(() => Promise.resolve()) }));
+jest.mock('../utils/ensureRequestedItemFinancialsTable', () => ({ ensureRequestedItemFinancialsTable: jest.fn(() => Promise.resolve()) }));
 jest.mock('../services/financeCoreService', () => ({
   assertBudgetCanCover: jest.fn(() => Promise.resolve({ envelope: { id: 1 } })),
   evaluateBudgetCoverage: jest.fn(() => Promise.resolve({ envelope: { id: 1 }, snapshot: { available: 1000, currency: 'USD' }, isOverBudget: false, hasBudget: true, warning: null })),
@@ -21,11 +22,64 @@ const pool = require('../config/db');
 const { fetchApprovalRoutes } = require('../controllers/utils/approvalRoutes');
 const { persistRequestAttachments } = require('../controllers/requests/saveRequestAttachments');
 const { createRequest } = require('../controllers/requests/createRequestController');
+const { addRequestedItems } = require('../controllers/requestedItemsController');
+const { IDENTITY_FIELDS } = require('../services/procurementItemIdentityService');
 
 const createMockRes = () => { const res = {}; res.status = jest.fn(() => res); res.json = jest.fn(() => res); return res; };
 
 describe('createRequest controller', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  test.each([
+    {}, {request_mode:'free_text'}, {request_mode:'service'},
+    {request_mode:'generic_item',generic_item_id:4},
+    {request_mode:'generic_item_with_preference',generic_item_id:4,preferred_product_id:8,preferred_product_reason:'Preferred fit'},
+    {request_mode:'specific_approved_product',generic_item_id:4,mandatory_product_id:8,restriction_justification:'Device compatibility'},
+    {request_mode:'pending_item_creation',pending_item:{justification:'No approved master'}},
+    {request_mode:'approved_free_text_exception',restriction_justification:'Authorized exception'},
+  ])('initial creation and add-item persist equivalent identity: %j', async identity => {
+    const actor={id:1,role:'Requester',department_id:10,institute_id:1,
+      hasPermission:permission=>permission==='item-master.free-text-exception'};
+    const item={item_name:'Requested wording',quantity:2,unit_cost:5,...identity};
+    const responses=[{}, {rows:[{type:'medical',institute_id:1}]},
+      {rows:[{id:100,request_type:'Non-Stock',temporary_requester_name:null}]},
+      {rows:[{id:200}]}, {rows:[{id:2,email:'hod@example.com'}]},
+      {rowCount:0,rows:[]},{rowCount:0,rows:[]},{},{},{},
+      {rows:[{approval_level:1,approver_id:2,approver_name:'HOD',approver_role:'HOD',approver_email:'hod@example.com'}]},
+      {rows:[{id:200,item_name:item.item_name,quantity:2,purchased_quantity:0}]},{}];
+    const initial={release:jest.fn(),query:jest.fn(async sql=>{
+      if (/FROM generic_items/.test(sql)) return {rowCount:1,rows:[{id:4,generic_name:'Canonical',canonical_description:'Controlled spec',inventory_uom:'EA'}]};
+      if (/FROM approved_products/.test(sql)) return {rowCount:1,rows:[{id:8,generic_item_id:4}]};
+      if (/INSERT INTO (?:public\.)?(?:pending_item_requests|item_master_audit_events)/.test(sql)) return {rowCount:1,rows:[{id:301}]};
+      return responses.shift() || {rows:[]};
+    })};
+    pool.query.mockReset().mockResolvedValue({rowCount:0,rows:[]});
+    pool.connect.mockReset().mockResolvedValue(initial);
+    fetchApprovalRoutes.mockResolvedValueOnce([{role:'HOD',approval_level:1}]);
+    const firstRes=createMockRes(),firstNext=jest.fn();
+    await createRequest({body:{request_type:'Non-Stock',justification:'Need item',items:[item]},user:actor,files:[]},firstRes,firstNext);
+    expect(firstNext).not.toHaveBeenCalled();
+    expect(firstRes.status).toHaveBeenCalledWith(201);
+    const added={release:jest.fn(),query:jest.fn(async sql=>{
+      if (/FROM generic_items/.test(sql)) return {rowCount:1,rows:[{id:4,generic_name:'Canonical',canonical_description:'Controlled spec',inventory_uom:'EA'}]};
+      if (/FROM approved_products/.test(sql)) return {rowCount:1,rows:[{id:8,generic_item_id:4}]};
+      if (/SELECT request_type/.test(sql)) return {rows:[{request_type:'Non-Stock'}]};
+      if (/SUM\(quantity/.test(sql)) return {rows:[{total:10}]};
+      return {rowCount:1,rows:[{id:201}]};
+    })};
+    pool.connect.mockResolvedValue(added);
+    const addRes=createMockRes(),addNext=jest.fn();
+    await addRequestedItems({body:{request_id:100,items:[item]},user:actor},addRes,addNext);
+    expect(addNext).not.toHaveBeenCalled();
+    expect(addRes.status).toHaveBeenCalledWith(201);
+    const persisted=client=>{
+      const [sql,values]=client.query.mock.calls.find(([query])=>/INSERT INTO public.requested_items/.test(query));
+      const columns=sql.match(/requested_items\s*\(([\s\S]*?)\)\s*VALUES/)[1].split(',').map(value=>value.trim());
+      return Object.fromEntries(IDENTITY_FIELDS.map(field=>[field,values[columns.indexOf(field)] ?? null]));
+    };
+    expect(persisted(added)).toEqual(persisted(initial));
+    expect(persisted(initial).request_mode).toBe(identity.request_mode || 'free_text');
+  });
 
   test('rejects invalid items payload string', async () => {
     const req = { body: { request_type: 'Non-Stock', justification: 'Need item', items: 'not-json' }, user: { id: 1, role: 'Requester', department_id: 10, institute_id: 1 } };

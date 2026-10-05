@@ -1,4 +1,5 @@
 'use strict';
+const { assertProcurementReady } = require('./procurementItemIdentityService');
 const { loadAndAssertSupplierEligible } = require('./supplierEligibilityService');
 const defaultAudit = require('./auditService');
 const defaultOutbox = require('./notificationOutboxService');
@@ -19,6 +20,7 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
   return repository.withTransaction(async (tx) => {
     const locked = await tx.lockRequestItem(requestItem.id);
     if (!locked) throw Object.assign(new Error('Requested item not found'), { code: 'REQUEST_ITEM_NOT_FOUND', status: 404 });
+    assertProcurementReady(locked);
     const governedPhysical = locked.request_mode && !['service','approved_free_text_exception'].includes(locked.request_mode);
     if (governedPhysical && (!input.approved_product_id || !input.supplier_catalog_item_id)) throw Object.assign(new Error('Governed physical awards require Product and Supplier Catalog identities'), { code: 'AWARD_CATALOG_IDENTITY_REQUIRED', status: 409 });
     if (locked.request_mode === 'approved_free_text_exception' && locked.catalog_status !== 'approved_exception') throw Object.assign(new Error('Free-text procurement requires an approved exception identity state'), { code: 'FREE_TEXT_EXCEPTION_APPROVAL_REQUIRED', status: 409 });

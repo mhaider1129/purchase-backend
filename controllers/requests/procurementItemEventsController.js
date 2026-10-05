@@ -1,3 +1,5 @@
+const { insertRequestedItem } = require('../../services/requestedItemWriteService');
+const { assertProcurementReady } = require('../../services/procurementItemIdentityService');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureRequestedItemFinancialsTable');
@@ -48,7 +50,7 @@ const deriveItemStatus = (newPurchasedQuantity, requestedQuantity) => {
   return 'purchased';
 };
 
-const resolveProcurementEventItem = async (client, requestRow, requestId, itemId) => {
+const resolveProcurementEventItem = async (client, requestRow, requestId, itemId, actor) => {
   const itemRes = await client.query(
     `SELECT ri.*, r.assigned_to AS request_assigned_to
      FROM public.requested_items ri
@@ -93,22 +95,18 @@ const resolveProcurementEventItem = async (client, requestRow, requestId, itemId
     }
   }
 
-  const insertedItemRes = await client.query(
-    `INSERT INTO public.requested_items (
-       request_id, item_name, quantity, purchased_quantity, procurement_status, approval_status
-     ) VALUES ($1, $2, $3, 0, 'pending', 'Approved')
-     RETURNING *, $4::integer AS request_assigned_to`,
-    [requestId, warehouseItem.item_name, warehouseItem.quantity, requestRow.assigned_to]
-  );
+  const insertedItem = await insertRequestedItem(client, requestId, {
+    item_name: warehouseItem.item_name, quantity: warehouseItem.quantity,
+  }, actor);
 
   await client.query(
     `UPDATE public.warehouse_supply_items
      SET requested_item_id = $1
      WHERE id = $2`,
-    [insertedItemRes.rows[0].id, warehouseItem.id]
+    [insertedItem.id, warehouseItem.id]
   );
 
-  return insertedItemRes.rows[0];
+  return { ...insertedItem, request_assigned_to: requestRow.assigned_to };
 };
 
 const recalculateRequestProcurementStatus = async (client, requestId) => {
@@ -225,7 +223,7 @@ const addProcurementItemEvent = async (req, res, next) => {
       return next(createHttpError(400, 'Cannot add procurement events to a rejected, cancelled, closed, completed, or received request'));
     }
 
-    const item = await resolveProcurementEventItem(client, requestRow, requestId, itemId);
+    const item = await resolveProcurementEventItem(client, requestRow, requestId, itemId, req.user);
 
     if (!item) {
       await client.query('ROLLBACK');
@@ -241,6 +239,8 @@ const addProcurementItemEvent = async (req, res, next) => {
       await client.query('ROLLBACK');
       return next(createHttpError(400, 'Cannot register procurement for a rejected item'));
     }
+
+    assertProcurementReady(item);
 
     const requestedQuantity = Number(item.quantity || 0);
     const previousPurchasedQuantity = Number(item.purchased_quantity || 0);

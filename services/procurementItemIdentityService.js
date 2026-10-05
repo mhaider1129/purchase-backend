@@ -2,6 +2,53 @@ const createHttpError = require('../utils/httpError');
 
 const MODES = new Set(['free_text','generic_item','generic_item_with_preference','specific_approved_product','service','pending_item_creation','approved_free_text_exception']);
 const STOCKING_POLICIES = new Set(['stock','non_stock','consignment','direct_delivery','service']);
+const IDENTITY_FIELDS = Object.freeze([
+  'generic_item_id', 'preferred_product_id', 'mandatory_product_id', 'request_mode',
+  'catalog_status', 'stocking_policy', 'preferred_product_reason', 'restriction_justification',
+  'required_date', 'item_name_snapshot', 'canonical_description_snapshot',
+]);
+
+// Missing mode on new, description-only demand is unresolved, never approved.
+// Supplying catalog IDs without declaring their semantics is an input error.
+const normalizeNewRequestItem = async (client, raw, user) => {
+  const input = { ...raw };
+  if (!String(input.item_name || '').trim()) throw createHttpError(400, 'Item name is required');
+  input.item_name_snapshot = input.item_name_snapshot || String(input.item_name).trim();
+  if (!Number.isInteger(Number(input.quantity)) || Number(input.quantity) <= 0) {
+    throw createHttpError(400, 'Item quantity must be a positive whole number');
+  }
+  if (input.unit_cost != null && input.unit_cost !== '' && (!Number.isInteger(Number(input.unit_cost)) || Number(input.unit_cost)<0)) {
+    throw createHttpError(400, 'Item unit cost must be a non-negative whole number');
+  }
+  if (!String(input.request_mode || '').trim()) {
+    if (['generic_item_id','preferred_product_id','mandatory_product_id'].some(key => input[key] != null && input[key] !== '')) {
+      throw createHttpError(400, 'request_mode is required when Item Master identities are supplied');
+    }
+    input.request_mode = 'free_text';
+  }
+  return validateRequestItemIdentity(client, input, user);
+};
+
+const isProcurementReady = item => {
+  const mode = item?.request_mode;
+  if (!MODES.has(mode)) return false;
+  if (mode === 'service') return item.catalog_status === 'approved_exception';
+  if (mode === 'approved_free_text_exception') return item.catalog_status === 'approved_exception'
+    && Boolean(String(item.restriction_justification || '').trim());
+  if (mode === 'free_text' || mode === 'pending_item_creation') return false;
+  if (!item.generic_item_id || item.catalog_status !== 'catalogued') return false;
+  if (mode === 'generic_item_with_preference') return Boolean(item.preferred_product_id) && !item.mandatory_product_id;
+  if (mode === 'specific_approved_product') return Boolean(item.mandatory_product_id)
+    && Boolean(String(item.restriction_justification || '').trim());
+  return !item.mandatory_product_id && !item.preferred_product_id;
+};
+
+const assertProcurementReady = item => {
+  if (!isProcurementReady(item)) throw Object.assign(createHttpError(409,
+    'Resolve the requested item identity before active procurement'), {
+    code: 'ITEM_IDENTITY_RESOLUTION_REQUIRED', unresolved_item_ids: [item?.id],
+  });
+};
 
 const positiveId = (value, field) => {
   if (value == null || value === '') return null;
@@ -27,6 +74,14 @@ const validateRequestItemIdentity = async (client, raw, user, { requireGovernedI
   const preferredProductId = positiveId(raw.preferred_product_id, 'preferred_product_id');
   const mandatoryProductId = positiveId(raw.mandatory_product_id, 'mandatory_product_id');
   const justification = String(raw.restriction_justification || '').trim();
+  const physicalIds = genericItemId || preferredProductId || mandatoryProductId;
+  if (['free_text','pending_item_creation','approved_free_text_exception'].includes(mode) && physicalIds) {
+    throw createHttpError(400, 'Unmapped or exception lines cannot carry physical Item Master identities');
+  }
+  if (['generic_item','generic_item_with_preference'].includes(mode) && mandatoryProductId) {
+    throw createHttpError(400, 'A product preference cannot become a mandatory restriction');
+  }
+  if (mode === 'generic_item' && preferredProductId) throw createHttpError(400, 'Use generic_item_with_preference for a preferred Product');
 
   if (mode === 'service') {
     if (genericItemId || preferredProductId || mandatoryProductId) throw createHttpError(400, 'Service lines cannot reference physical item master records');
@@ -47,8 +102,10 @@ const validateRequestItemIdentity = async (client, raw, user, { requireGovernedI
     return { ...raw, request_mode: mode, stocking_policy: stockingPolicy, catalog_status: 'approved_exception', generic_item_id: null, preferred_product_id: null, mandatory_product_id: null };
   }
   if (mode === 'pending_item_creation') {
-    if (!String(raw.pending_item?.justification || raw.restriction_justification || '').trim()) throw createHttpError(400, 'Pending item justification is required');
-    return { ...raw, request_mode: mode, stocking_policy: stockingPolicy, catalog_status: 'pending_mapping', generic_item_id: null, preferred_product_id: null, mandatory_product_id: null };
+    const pendingReason = String(raw.pending_item?.justification || raw.restriction_justification || '').trim();
+    if (!pendingReason) throw createHttpError(400, 'Pending item justification is required');
+    return { ...raw, request_mode: mode, stocking_policy: stockingPolicy, catalog_status: 'pending_mapping',
+      restriction_justification: pendingReason, generic_item_id: null, preferred_product_id: null, mandatory_product_id: null };
   }
   if (requireGovernedIdentity && !genericItemId) throw createHttpError(400, 'Physical procurement lines require an active generic_item_id');
 
@@ -78,4 +135,23 @@ const validateRequestItemIdentity = async (client, raw, user, { requireGovernedI
   };
 };
 
-module.exports = { MODES, validateRequestItemIdentity, auditItemMaster };
+// Resolution is an explicit identity change. Clear obsolete restrictions and
+// use the same validator as request creation; retain the original description.
+const resolveIdentity = async (client, line, target, actor) => validateRequestItemIdentity(client, {
+  ...line, generic_item_id: null, preferred_product_id: null, mandatory_product_id: null,
+  preferred_product_reason: null, restriction_justification: null,
+  canonical_description_snapshot: null, ...target,
+}, actor);
+
+const writeResolvedIdentity = async (client, itemId, identity) => client.query(
+  `UPDATE public.requested_items SET generic_item_id=$2,preferred_product_id=$3,mandatory_product_id=$4,
+   request_mode=$5,catalog_status=$6,stocking_policy=$7,preferred_product_reason=$8,
+   restriction_justification=$9,item_name_snapshot=COALESCE(item_name_snapshot,item_name),
+   canonical_description_snapshot=$10 WHERE id=$1 RETURNING *`,
+  [itemId,...['generic_item_id','preferred_product_id','mandatory_product_id','request_mode','catalog_status',
+    'stocking_policy','preferred_product_reason','restriction_justification','canonical_description_snapshot']
+    .map(key=>identity[key] ?? null)],
+);
+
+module.exports = { MODES, IDENTITY_FIELDS, normalizeNewRequestItem, validateRequestItemIdentity,
+  resolveIdentity, writeResolvedIdentity, isProcurementReady, assertProcurementReady, auditItemMaster };

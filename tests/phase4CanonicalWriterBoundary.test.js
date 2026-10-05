@@ -15,7 +15,7 @@ const tables = [
 const productionFiles = (directory) => fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
   const candidate = path.join(directory, entry.name);
   if (entry.isDirectory()) {
-    if (['tests', 'node_modules', 'sql', 'docs'].includes(entry.name)) return [];
+    if (['tests', 'node_modules', 'sql', 'docs', 'integration'].includes(entry.name)) return [];
     return productionFiles(candidate);
   }
   return entry.isFile() && entry.name.endsWith('.js') ? [candidate] : [];

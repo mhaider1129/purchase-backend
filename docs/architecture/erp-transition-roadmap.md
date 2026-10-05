@@ -124,9 +124,22 @@ The pre-existing `assetEquipmentMigration.test.js` ended mid-statement. Its
 permission test was completed with assertions for both existing role-permission
 mappings so the complete regression suite can execute. SQL 019 is unchanged.
 
-DATABASE_URL and JWT_SECRET are now present. A read-only SELECT 1 connection check
-failed with EAI_AGAIN for the configured Supabase destination; a control lookup of
-registry.npmjs.org also failed, so this is not evidence of missing credentials or
-an invalid database hostname. Restore supported PostgreSQL network connectivity
-before live schema and lifecycle validation. Never print credential values or
-copy them into documentation. No shared database writes or migrations were run.
+The original runtime check failed during DNS resolution. Subsequent inspection
+confirmed the configured destination is the owner's approved development Supabase
+project. Its HTTPS schema API is reachable and exposes the required P2P columns,
+but native pooler PostgreSQL connections are refused from this environment. This
+does not establish constraint/migration parity. No shared database writes or
+migrations were run, and credentials are never copied into documentation.
+
+## Milestone 2: actual PostgreSQL lifecycle evidence
+
+`npm run test:p2p-postgres` now executes 16 service/repository integration checks
+against a fresh disposable PostgreSQL 16 container. They cover partial receipts,
+multiple invoices, partial payments, remainder release, concurrent retries and
+audit/outbox rollback. The checks exposed and fixed three PostgreSQL parameter
+typing failures and premature finance completion with an unposted invoice/voucher.
+
+See [test instructions and limits](p2p-postgres-integration.md). This advances the
+first delivery gate using isolated data; deployed-schema verification and controlled
+development acceptance remain open. Inventory classification, HTTP authorization,
+contract integration and full GL readiness are separate follow-up work.

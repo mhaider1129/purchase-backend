@@ -33,6 +33,12 @@ If the patch stops, keep the error and reconcile the specific live data/schema c
 
 ## Preservation and compatibility behavior
 
+### Populated test costs missing optional stability metadata (SQL 042)
+
+For `Populated partial module procurement_evaluation_offer_test_costs.onboard_stability_days`, run the complete `sql/manual/042_evaluation_stability_metadata_compatibility.sql`, then retry SQL 035 and its verification script. This repairs missing `onboard_stability_days` and `shelf_life_months` together. The route whitelist/import payload accepts these fields as nullable, and the service maps import headers for them, but current cost/utilization formulas do not consume either field.
+
+SQL 042 adds only missing fields as nullable NUMERIC(20,6), then sets zero defaults separately for future inserts to match SQL 035. Historical unknown durations remain NULL; existing duration values, custom defaults, constraints, prices and saved costs are preserved. This does not establish product stability/expiry evidence. `open_vial_stability_days` is intentionally excluded because it drives utilization/wastage calculations. All other missing financial/control fields retain SQL 035's explicit reconciliation guard. No live Supabase schema was inspected or modified.
+
 ### Populated criteria missing timestamps (SQL 041)
 
 For `Populated partial module procurement_evaluation_criteria.updated_at`, run the complete `sql/manual/041_evaluation_criteria_timestamp_compatibility.sql`, then retry SQL 035 and its verification script. SQL 038 repairs result timestamps, not criteria timestamps.

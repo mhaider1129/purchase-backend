@@ -126,6 +126,14 @@ test('nullable compatibility quantities preserve existing recurring cost semanti
   expect(service.calculateRecurringElementCost({pricing_method:'SUBSCRIPTION',unit_cost:250,quantity:2,annual_quantity:12},1200).annual_test_cost).toBe(3000);
 });
 
+test('optional onboard stability and shelf life do not change current cost formulas', () => {
+  const old={pricing_method:'KIT_OWNERSHIP',kit_price:500,tests_per_kit:100,open_vial_stability_days:30,price_per_reportable_test:12};
+  for(const metadata of [{onboard_stability_days:null,shelf_life_months:null},{onboard_stability_days:7,shelf_life_months:18}]) {
+    expect(service.calculateRecurringElementCost({...old,...metadata},1200)).toEqual(service.calculateRecurringElementCost(old,1200));
+    expect(service.calculatePracticalUtilization({...old,...metadata},10)).toEqual(service.calculatePracticalUtilization(old,10));
+  }
+});
+
 test('calculates break-even between two strategic scenarios', () => {
   const result = service.calculateBreakEven(
     { name: 'Purchase', initial_cost: 10000, fixed_annual_cost: 1000, variable_cost_per_unit: 1 },

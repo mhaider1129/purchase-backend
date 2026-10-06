@@ -193,6 +193,43 @@ async function validateEvaluationCriteriaTimestamps(client, historicalCriterion)
   console.log('SQL 041: historical timestamps, scoring controls, insert/update defaults, retries and required-weight guard PASS');
 }
 
+async function validateEvaluationStabilityMetadata(client) {
+  const table='procurement_evaluation_offer_test_costs';
+  const patch=read('sql/manual/042_evaluation_stability_metadata_compatibility.sql');
+  const metadata=['onboard_stability_days','shelf_life_months'];
+  const original=(await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
+  // Disposable fixture only: reproduce the exact reported missing-column blocker first.
+  await client.query(`ALTER TABLE ${table} DROP COLUMN onboard_stability_days`);
+  await assert.rejects(client.query(read('sql/manual/035_backend_schema_reconciliation.sql')), /Populated partial module procurement_evaluation_offer_test_costs.onboard_stability_days/);
+  await client.query('ROLLBACK');
+  // Then cover both missing fields; SQL 035 does not guarantee which missing field is reported first.
+  await client.query(`ALTER TABLE ${table} DROP COLUMN shelf_life_months`);
+  await client.query(patch);
+  await client.query(patch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  const repaired=(await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
+  assert.deepEqual(repaired,original.map(row=>({...row,onboard_stability_days:null,shelf_life_months:null})));
+  const columns=(await client.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name=ANY($2::text[]) ORDER BY column_name",[table,metadata])).rows;
+  assert.equal(columns.length,2);
+  for(const column of columns) { assert.equal(column.data_type,'numeric'); assert.equal(column.is_nullable,'YES'); assert.equal(column.column_default,'0'); }
+  await client.query(`INSERT INTO ${table}(pricing_method,unit_cost) VALUES ('SUBSCRIPTION',12)`);
+  const future=(await client.query(`SELECT onboard_stability_days,shelf_life_months FROM ${table} ORDER BY id DESC LIMIT 1`)).rows[0];
+  assert.deepEqual(future,{onboard_stability_days:'0.000000',shelf_life_months:'0.000000'});
+  await client.query(`UPDATE ${table} SET onboard_stability_days=7.123456,shelf_life_months=18.654321 WHERE id=$1`,[original[0].id]);
+  await client.query(`ALTER TABLE ${table} ALTER COLUMN shelf_life_months SET DEFAULT 24`);
+  const before=(await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
+  await client.query(patch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  assert.deepEqual((await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows,before);
+  assert.equal((await client.query("SELECT column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name='shelf_life_months'",[table])).rows[0].column_default,'24');
+  // Utilization-affecting input still requires explicit reconciliation.
+  await client.query(`BEGIN; ALTER TABLE ${table} DROP COLUMN open_vial_stability_days`);
+  await assert.rejects(client.query(read('sql/manual/035_backend_schema_reconciliation.sql')), /Populated partial module procurement_evaluation_offer_test_costs.open_vial_stability_days/);
+  await client.query('ROLLBACK');
+  assert.deepEqual((await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows,before);
+  console.log('SQL 042: populated metadata repair, cost preservation, writes, defaults, retries and utilization guard PASS');
+}
+
 async function run() {
   const name = `p2p_disposable_${crypto.randomBytes(8).toString('hex')}`;
   const password = crypto.randomBytes(24).toString('hex');
@@ -300,6 +337,7 @@ async function run() {
     await validateEvaluationOfferModels(client,historicalOffer);
     await validateEvaluationCostQuantities(client,historicalCost);
     await validateEvaluationCriteriaTimestamps(client,historicalCriterion);
+    await validateEvaluationStabilityMetadata(client);
     await validatePreservation(client);
     await verifyMissing(client);
     const postflight = (await client.query(verificationSql)).rows;

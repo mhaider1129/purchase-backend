@@ -5949,7 +5949,9 @@
     ],
     "procurement_evaluation_offer_test_costs": [
       "quantity",
-      "annual_quantity"
+      "annual_quantity",
+      "onboard_stability_days",
+      "shelf_life_months"
     ],
     "procurement_evaluation_offers": [
       "technical_model",

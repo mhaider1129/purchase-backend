@@ -33,6 +33,12 @@ If the patch stops, keep the error and reconcile the specific live data/schema c
 
 ## Preservation and compatibility behavior
 
+### Populated criteria missing timestamps (SQL 041)
+
+For `Populated partial module procurement_evaluation_criteria.updated_at`, run the complete `sql/manual/041_evaluation_criteria_timestamp_compatibility.sql`, then retry SQL 035 and its verification script. SQL 038 repairs result timestamps, not criteria timestamps.
+
+The criteria PATCH route uses the shared `updateRow` helper, which explicitly writes `updated_at = CURRENT_TIMESTAMP`. Criteria inserts omit timestamps and depend on defaults. SQL 041 adds only missing `created_at`/`updated_at` as nullable TIMESTAMPTZ, then sets future-insert defaults separately. Unknown historical dates remain NULL, while existing timestamps, custom defaults and constraints remain untouched. No weights, knockout rules, thresholds, scores or other row values are changed. The broad SQL 035 guard remains intact for other missing financial/control fields. This repair does not establish the historical audit chronology; existing audit logs remain authoritative evidence where available.
+
 ### Populated offer test costs missing quantities (SQL 040)
 
 For `Populated partial module procurement_evaluation_offer_test_costs.quantity`, run the complete `sql/manual/040_evaluation_cost_quantity_compatibility.sql`, then retry SQL 035. SQL 038 and 039 address different tables and do not repair this one.

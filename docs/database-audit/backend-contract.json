@@ -5943,6 +5943,10 @@
     ]
   },
   "nullableCompatibilityColumns": {
+    "procurement_evaluation_criteria": [
+      "created_at",
+      "updated_at"
+    ],
     "procurement_evaluation_offer_test_costs": [
       "quantity",
       "annual_quantity"

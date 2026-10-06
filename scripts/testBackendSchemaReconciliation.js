@@ -159,6 +159,40 @@ async function validateEvaluationCostQuantities(client, historicalCost) {
   console.log('SQL 040: historical costs, unknown quantities, repeat application, explicit writes, future/custom defaults and financial guard PASS');
 }
 
+async function validateEvaluationCriteriaTimestamps(client, historicalCriterion) {
+  const patch=read('sql/manual/041_evaluation_criteria_timestamp_compatibility.sql');
+  const current=async()=> (await client.query('SELECT to_jsonb(c) AS value FROM procurement_evaluation_criteria c WHERE id=$1',[historicalCriterion.id])).rows[0].value;
+  assert.deepEqual(await current(),{...historicalCriterion,updated_at:null});
+  await client.query(patch);
+  await client.query(patch);
+  assert.deepEqual(await current(),{...historicalCriterion,updated_at:null});
+  await client.query("INSERT INTO procurement_evaluation_criteria(criteria_name,weight,is_knockout) VALUES ('Future criterion',35,true)");
+  const future=(await client.query('SELECT created_at,updated_at FROM procurement_evaluation_criteria WHERE id<>$1',[historicalCriterion.id])).rows[0];
+  assert(future.created_at instanceof Date && future.updated_at instanceof Date);
+  // Exercise the same timestamp assignment as the backend criteria PATCH helper.
+  await client.query('UPDATE procurement_evaluation_criteria SET updated_at=CURRENT_TIMESTAMP WHERE id=$1',[historicalCriterion.id]);
+  assert((await client.query('SELECT updated_at FROM procurement_evaluation_criteria WHERE id=$1',[historicalCriterion.id])).rows[0].updated_at instanceof Date);
+  await client.query("ALTER TABLE procurement_evaluation_criteria ALTER COLUMN updated_at SET DEFAULT '2021-01-01T00:00:00Z'::timestamptz");
+  const before=(await client.query('SELECT * FROM procurement_evaluation_criteria ORDER BY id')).rows;
+  const defaults=async()=> (await client.query("SELECT column_name,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_criteria' AND column_name IN ('created_at','updated_at') ORDER BY column_name")).rows;
+  const originalDefaults=await defaults();
+  await client.query(patch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  assert.deepEqual((await client.query('SELECT * FROM procurement_evaluation_criteria ORDER BY id')).rows,before);
+  assert.deepEqual(await defaults(),originalDefaults);
+  // Disposable fixture only: reproduce both missing fields, then prove no historical stamping.
+  await client.query('ALTER TABLE procurement_evaluation_criteria DROP COLUMN created_at, DROP COLUMN updated_at');
+  await client.query(patch);
+  await client.query(patch);
+  const repaired=(await client.query('SELECT * FROM procurement_evaluation_criteria ORDER BY id')).rows;
+  assert.deepEqual(repaired,before.map(row=>({...row,created_at:null,updated_at:null})));
+  await client.query('BEGIN; ALTER TABLE procurement_evaluation_criteria DROP COLUMN weight');
+  await assert.rejects(client.query(read('sql/manual/035_backend_schema_reconciliation.sql')), /Populated partial module procurement_evaluation_criteria.weight/);
+  await client.query('ROLLBACK');
+  assert.deepEqual((await client.query('SELECT * FROM procurement_evaluation_criteria ORDER BY id')).rows,repaired);
+  console.log('SQL 041: historical timestamps, scoring controls, insert/update defaults, retries and required-weight guard PASS');
+}
+
 async function run() {
   const name = `p2p_disposable_${crypto.randomBytes(8).toString('hex')}`;
   const password = crypto.randomBytes(24).toString('hex');
@@ -237,6 +271,14 @@ async function run() {
     await client.query(read('sql/manual/040_evaluation_cost_quantity_compatibility.sql'));
     await client.query(read('sql/manual/040_evaluation_cost_quantity_compatibility.sql'));
 
+    const criteriaCreate=patch.match(/CREATE TABLE IF NOT EXISTS public\.procurement_evaluation_criteria \([\s\S]*?\n\);/)[0];
+    await client.query(criteriaCreate.replace(/^  updated_at timestamptz.*\n/gm,'').replace(/,\n\);$/,'\n);'));
+    await client.query("INSERT INTO procurement_evaluation_criteria(criteria_name,weight,is_required,is_knockout,required_threshold,created_at) VALUES ('Historical criterion',63.123456,true,true,75.654321,'2019-01-02T03:04:05Z')");
+    const historicalCriterion=(await client.query('SELECT to_jsonb(c) AS value FROM procurement_evaluation_criteria c')).rows[0].value;
+    await assert.rejects(client.query(patch), /Populated partial module procurement_evaluation_criteria.updated_at/);
+    await client.query('ROLLBACK');
+    await client.query(read('sql/manual/041_evaluation_criteria_timestamp_compatibility.sql'));
+
     // Prove that populated partial modules stop before inferred/default historical values.
     await client.query("BEGIN; CREATE TABLE public.generic_items(id bigint PRIMARY KEY,item_code text); INSERT INTO public.generic_items VALUES (1,'partial-existing');");
     await assert.rejects(client.query(patch), /Populated partial module generic_items/);
@@ -257,6 +299,7 @@ async function run() {
     await validateEvaluationResultTimestamps(client,historicalResult);
     await validateEvaluationOfferModels(client,historicalOffer);
     await validateEvaluationCostQuantities(client,historicalCost);
+    await validateEvaluationCriteriaTimestamps(client,historicalCriterion);
     await validatePreservation(client);
     await verifyMissing(client);
     const postflight = (await client.query(verificationSql)).rows;

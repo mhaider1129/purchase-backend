@@ -27,6 +27,37 @@ describe('updateApprovalItems warehouse supply conversion', () => {
     resolveRouteDomain.mockResolvedValue('operational');
   });
 
+  it.each([2.5, null])('saves a quantity reduction from 500 to 400 with unit cost %s', async (unitCost) => {
+    const totalCost = unitCost === null ? null : 400 * unitCost;
+    const client = { query: jest.fn(), release: jest.fn() };
+    pool.connect.mockResolvedValue(client);
+    client.query.mockImplementation(async (sql, values) => {
+      if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)) return {};
+      if (/FROM approvals[\s\S]*FOR UPDATE/.test(sql)) return { rows: [{ id: 88, request_id: 353, approver_id: 7, is_active: true, status: 'Pending' }] };
+      if (/SELECT request_type, estimated_cost FROM requests/.test(sql)) return { rowCount: 1, rows: [{ request_type: 'Stock', estimated_cost: unitCost === null ? 0 : 500 * unitCost }] };
+      if (/FROM public\.requested_items\s+WHERE id =/.test(sql)) return { rowCount: 1, rows: [{ id: 12, item_name: 'Gloves', quantity: 500, unit_cost: unitCost, total_cost: unitCost === null ? null : 500 * unitCost, approval_status: 'Pending' }] };
+      if (/UPDATE public\.requested_items[\s\S]*SET quantity/.test(sql)) {
+        expect(values).toEqual([400, 12, 353]);
+        expect(sql).toContain('quantity = $1::numeric');
+        expect(sql).toContain('unit_cost * $1::numeric');
+        return { rows: [{ quantity: 400, unit_cost: unitCost, total_cost: totalCost }] };
+      }
+      if (/UPDATE public\.requested_items[\s\S]*SET approval_status/.test(sql)) return { rows: [{ id: 12, item_name: 'Gloves', quantity: 400, unit_cost: unitCost, total_cost: totalCost, approval_status: 'Pending', approved_by: null }] };
+      if (/SELECT\s+COUNT\(\*\) FILTER/.test(sql)) return { rows: [{ approved: 0, rejected: 0, pending: 1 }] };
+      if (/SELECT COALESCE\(SUM/.test(sql)) return { rows: [{ total: totalCost ?? 0 }] };
+      if (/INSERT INTO public\.(request_logs|approval_logs)/.test(sql) || /UPDATE requests\s+SET estimated_cost/.test(sql)) return {};
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const res = buildResponse();
+    const next = jest.fn();
+    await updateApprovalItems({ params: { id: '88' }, body: { items: [{ item_id: 12, status: 'Pending', quantity: 400 }] }, user: { id: 7 } }, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ updatedItems: [expect.objectContaining({ quantity: 400, total_cost: totalCost })], updatedEstimatedCost: totalCost ?? 0 }));
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO public.approval_logs'), [88, 353, 7, '1 item(s) quantity adjusted']);
+    expect(client.query).toHaveBeenLastCalledWith('COMMIT');
+    expect(client.release).toHaveBeenCalled();
+  });
+
   it('creates converted warehouse supply requests and items as approved for immediate fulfillment', async () => {
     const client = { query: jest.fn(), release: jest.fn() };
     pool.connect.mockResolvedValue(client);

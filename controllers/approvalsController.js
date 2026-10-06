@@ -1104,6 +1104,8 @@ const updateApprovalItems = async (req, res, next) => {
       const statusChanged = finalStatus !== existingStatus;
 
       if (quantityChanged) {
+        // Quantity may be integer while unit_cost is numeric. Cast both uses of
+        // the shared parameter so PostgreSQL does not infer conflicting types.
         const quantityUpdateRes = await client.query(
           isWarehouseSupply
             ? `UPDATE public.warehouse_supply_items
@@ -1112,8 +1114,8 @@ const updateApprovalItems = async (req, res, next) => {
                WHERE id = $2 AND request_id = $3
                RETURNING quantity`
             : `UPDATE public.requested_items
-                 SET quantity = $1,
-                     total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1 ELSE NULL END,
+                 SET quantity = $1::numeric,
+                     total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1::numeric ELSE NULL END,
                      updated_at = NOW()
                WHERE id = $2 AND request_id = $3
                RETURNING quantity, unit_cost, total_cost`,

@@ -231,7 +231,33 @@ class ItemMasterFoundationService {
     const definitions={categories:['item_categories','category_name','normalized_name'],manufacturers:['item_manufacturers','manufacturer_name','normalized_name'],uom:['item_uom','uom_code','normalized_uom_code']};
     const definition=definitions[type]; if(!definition) throw createHttpError(400,'Invalid reference type');
     const [table,name]=definition; const q=String(query.q||'').trim();
+    if (query.page != null) {
+      const {page,pageSize}=pageOptions(query);
+      const count=await this.db.query(`SELECT COUNT(*)::INTEGER total FROM ${table} WHERE ($1='' OR ${name} ILIKE $2)`,[q,`%${q}%`]);
+      const result=await this.db.query(`SELECT * FROM ${table} WHERE ($1='' OR ${name} ILIKE $2) ORDER BY ${name},id LIMIT $3 OFFSET $4`,[q,`%${q}%`,pageSize,(page-1)*pageSize]);
+      return {data:result.rows,total:count.rows[0].total,page,page_size:pageSize};
+    }
     const result=await this.db.query(`SELECT * FROM ${table} WHERE ($1='' OR ${name} ILIKE $2) ORDER BY ${name} LIMIT 100`,[q,`%${q}%`]); return result.rows;
+  }
+
+  async initializeReferences(actorId) {
+    const defaults=require('./itemMasterReferenceDefaults');
+    return this.withTransaction(async client => {
+      let created=0;
+      for (const [type,entries] of Object.entries(defaults)) {
+        for (const entry of entries) {
+          const isUom=type==='uom';
+          const name=isUom?entry[1]:entry;
+          const result=isUom
+            ?await client.query(`INSERT INTO item_uom(uom_code,uom_name,normalized_uom_code,is_active,created_by,updated_by) VALUES($1,$2,$1,TRUE,$3,$3) ON CONFLICT(normalized_uom_code) DO NOTHING RETURNING *`,[entry[0],name,actorId])
+            :await client.query(`INSERT INTO item_categories(category_name,normalized_name,is_active,created_by,updated_by) VALUES($1,$2,TRUE,$3,$3) ON CONFLICT(normalized_name) DO NOTHING RETURNING *`,[name,name.toLowerCase(),actorId]);
+          if (!result.rowCount) continue;
+          created++;
+          await client.query(`INSERT INTO item_master_audit_events(entity_type,entity_id,action,actor_id,new_values) VALUES($1,$2,'REFERENCE_CREATED',$3,$4)`,[isUom?'item_uom':'item_categories',result.rows[0].id,actorId,result.rows[0]]);
+        }
+      }
+      return {created};
+    });
   }
 
   async createReference(type,payload={},actorId){

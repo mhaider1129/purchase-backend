@@ -47,10 +47,10 @@ const updateItemProcurementStatus = async (req, res, next) => {
       return next(createHttpError(404, 'Requested item not found'));
     }
 
-    // ✅ Add to audit_log
+    // Record the status change in the canonical audit table.
     await pool.query(
-      `INSERT INTO audit_log (user_id, action_type, target_type, target_id, details, timestamp)
-       VALUES ($1, 'update', 'requested_item', $2, $3, CURRENT_TIMESTAMP)`,
+      `INSERT INTO audit_logs (user_id, actor_id, action_type, target_type, target_id, details, created_at)
+       VALUES ($1, $1, 'update', 'requested_item', $2, $3, CURRENT_TIMESTAMP)`,
       [updater_id, item_id, `Status changed to ${status} with comment: ${comment}`]
     );
 

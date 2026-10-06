@@ -1,5 +1,15 @@
 # Supabase backend contract audit
 
+## Backend query repairs — 2026-10-06
+
+The ten query failures listed in the historical audit below are now repaired in backend code. CASE actor branches explicitly bind integer user IDs; reused status parameters explicitly bind text before assignment to VARCHAR columns. RFID event processing locks only the read-event relation (`FOR UPDATE OF r`) so unmapped portal/antenna rows remain supported. The unused legacy procurement controller writes to canonical `audit_logs`, using `created_at` and recording both actor/user IDs. No approval policy, authorization, institute filters, workflow transitions or historical records are changed. No database migration is required for these code fixes.
+
+The static query-planning audit now passes **1,523 queries with zero failures**. All ten repaired query statements are also executed with representative non-null bindings in the disposable database, verifying actors, timestamps, partial/final reservation states, referral decisions, inventory finding resolutions, RFID assignment/retirement, unmapped read events, request receipt protection and canonical audit storage. Query fixtures copy production column types/defaults into transaction-local temporary tables; they do not represent full FK/trigger orchestration or a live end-to-end workflow. Seven affected Jest suites pass **107 tests**, including service authorization/state/transaction checks. The known-query-failure inventory is empty; the runner rejects unexpected failures and stale allowlist entries.
+
+Latest master also updated the context export with the 14 previously reconciled existing-table columns. Its reviewed SHA-256 is now recorded in the manifest. The original normalized 100-table fixture is retained deliberately for upgrade coverage and separately hash-pinned under `historicalFixture`; `missingColumns` and the counts below describe that historical baseline. The current context export still omits module tables and contains non-executable export artifacts, including `item_uom.name text DEFAULT uom_name`. Neither export is executed as a migration. The schema patch and generated alias checks remain unchanged.
+
+## Historical audit baseline
+
 Audited against `origin/master` at `e2053f01` on 2026-10-05. This replaces the earlier lineage-only review: the comparison includes current controllers, routes, repositories, services, middleware, startup DDL helpers, capability checks, maintained SQL, and frontend UI resource consumers. No Supabase connection or SQL execution was performed.
 
 ## Findings and limits
@@ -274,7 +284,7 @@ Static, complete, single-statement query literals passed directly to `query`/`on
 
 Five relevant existing Jest suites also passed: approval policy engine, approval shadow service, non-stock identity governance, canonical asset/equipment migration and connected P2P finance repository (**32 tests**).
 
-The ten query failures cannot safely be solved by adding database tables/columns or weakening actor-ID types:
+The original ten query failures below were corrected in backend code, rather than by adding database tables/columns or weakening actor-ID types:
 
 | Source | PostgreSQL error | Follow-up |
 | --- | --- | --- |
@@ -289,6 +299,6 @@ The ten query failures cannot safely be solved by adding database tables/columns
 | `services/rfidService.js:13` | `42P08`: inconsistent types deduced for parameter $1 | Correct SQL parameter casts/types; preserve numeric actor IDs and text audit entity IDs. |
 | `utils/technicalInspectionStatus.js:46` | `42P08`: inconsistent types deduced for parameter $1 | Correct SQL parameter casts/types; preserve numeric actor IDs and text audit entity IDs. |
 
-These are follow-up backend fixes; this change supplies the database audit and manual patches only. It does not claim every ERP workflow is now operational.
+These historical diagnostics are resolved by the backend query repair described above. End-to-end ERP workflow validation remains a separate development-environment check.
 
 The machine-readable contract, snapshot hashes, object provenance and query-failure inventory are in `docs/database-audit/`. Run the integration script after changing a patch. When backend definitions or snapshots change, re-audit before updating the manifest/fixture; the saved manifest is evidence of this revision, not an automatically authoritative contract for future code.

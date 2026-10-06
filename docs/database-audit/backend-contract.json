@@ -1,7 +1,7 @@
 {
   "baselineRef": "e2053f01",
   "snapshots": {
-    "View_Supabase_SQL.sql": "7cab5846aa1ac736211206a7bad9da1af9495b35f6064aece8a6890198a04dde",
+    "View_Supabase_SQL.sql": "6b3c684573544cca043bfd72bab4563925fad1a83c867e1168ebffbeb0e6d8d2",
     "permissions_Table.sql": "09a9f3721d6e82fde33130c93ec1f51e35bc63a2d77d1673d64a322f9e3f7357",
     "UI_resource_permissions.sql": "e95fccf5585f276d845f1917804272a3778ee03bdc7697290151b3f01df10fe2"
   },
@@ -5941,6 +5941,11 @@
       "created_at",
       "updated_at"
     ]
+  },
+  "historicalFixture": {
+    "schemaSnapshotSha256": "7cab5846aa1ac736211206a7bad9da1af9495b35f6064aece8a6890198a04dde",
+    "fixtureSha256": "002b1a79f9c1e46da1ecc0a88e310d68de4c8048a0c443379bd8bbae803aba11",
+    "description": "Historical 100-table pre-reconciliation fixture retained for upgrade tests; current context export already includes the 14 reconciled columns."
   },
   "nullableCompatibilityColumns": {
     "procurement_evaluation_tests": [

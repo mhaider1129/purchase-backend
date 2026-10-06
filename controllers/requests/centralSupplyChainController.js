@@ -82,7 +82,7 @@ const updateCentralSupplyChainStatus = async (req, res, next) => {
     const result = await client.query(
       `UPDATE public.requests
           SET sent_to_central_supply_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
-              sent_to_central_supply_by = CASE WHEN $1 THEN $2 ELSE NULL END
+              sent_to_central_supply_by = CASE WHEN $1 THEN $2::integer ELSE NULL END
         WHERE id = $3
         RETURNING id, institute_id, sent_to_central_supply_at, sent_to_central_supply_by`,
       [sent, req.user.id, requestId],

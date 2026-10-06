@@ -44,7 +44,7 @@ const applyRequestStatusFromInspections = async (
 
   const updateRes = await runner.query(
     `UPDATE requests
-        SET status = $1,
+        SET status = $1::text,
             completed_at = CASE
               WHEN $1 = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
               ELSE completed_at

@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { extractBackendSqlContract } = require('./extractBackendSqlContract');
 const {disposableDatabaseUrl}=require('../integration/disposableDatabase');
+const validateBackendQueryCompatibility=require('../integration/backendQueryCompatibility');
 const root=path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const contract=JSON.parse(read('docs/database-audit/backend-contract.json'));
@@ -288,6 +289,8 @@ async function run() {
         'Snapshot changed; re-audit before updating fixture: ' + file);
     }
     const snapshot = JSON.parse(read('integration/fixtures/supabaseSchemaBaseline.json'));
+    assert.equal(crypto.createHash('sha256').update(read('integration/fixtures/supabaseSchemaBaseline.json')).digest('hex'), contract.historicalFixture.fixtureSha256,
+      'Historical fixture changed; review upgrade coverage before updating its hash');
     const context = read('sql/View_Supabase_SQL.sql');
     let baseline = '';
     for (const match of context.matchAll(/nextval\('([^']+)'/g)) {
@@ -382,6 +385,7 @@ async function run() {
       assert(rows[0].reloptions.includes('security_invoker=true'));
     }
     console.log('Preservation, authorization, contract and read-only verification checks PASS');
+    await validateBackendQueryCompatibility(client,extractBackendSqlContract(root).sql);
     const failures = [];
     const passed = [];
     for (const row of extractBackendSqlContract(root).sql) {
@@ -399,6 +403,8 @@ async function run() {
     const expected = new Set(knownFailures.map(key));
     const unexpected = failures.filter(row => !expected.has(key(row)));
     assert.equal(unexpected.length, 0, JSON.stringify(unexpected));
+    const actual = new Set(failures.map(key));
+    assert.deepEqual([...expected].filter(failure=>!actual.has(failure)), [], 'Remove resolved entries from the known-query failure inventory');
     console.log(`Known pre-existing query failures: ${failures.length}; unexpected failures: ${unexpected.length}`);
     console.log(JSON.stringify({ plansPassed: passed.length, plansFailed: failures.length }));
     for (const row of failures) console.log(`${row.source}:${row.line} ${row.code} ${row.message}`);

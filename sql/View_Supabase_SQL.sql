@@ -24,6 +24,7 @@ CREATE TABLE public.users (
   warehouse_id integer,
   institute_id integer,
   phone_number text,
+  updated_at timestamp with time zone,
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT users_section_id_fkey FOREIGN KEY (section_id) REFERENCES public.sections(id),
@@ -289,6 +290,9 @@ CREATE TABLE public.stock_items (
   mapping_notes text,
   identity_source text NOT NULL DEFAULT 'legacy_stock_item'::text CHECK (identity_source = ANY (ARRAY['normalized'::text, 'legacy_stock_item'::text, 'approved_exception'::text])),
   legacy_identity_snapshot jsonb,
+  category_id bigint,
+  manufacturer_id bigint,
+  institute_id integer,
   CONSTRAINT stock_items_pkey PRIMARY KEY (id),
   CONSTRAINT stock_items_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
   CONSTRAINT stock_items_item_master_id_fkey FOREIGN KEY (item_master_id) REFERENCES public.item_master(id),
@@ -296,7 +300,10 @@ CREATE TABLE public.stock_items (
   CONSTRAINT stock_items_generic_item_id_fkey FOREIGN KEY (generic_item_id) REFERENCES public.generic_items(id),
   CONSTRAINT stock_items_approved_product_id_fkey FOREIGN KEY (approved_product_id) REFERENCES public.approved_products(id),
   CONSTRAINT stock_items_inventory_uom_id_fkey FOREIGN KEY (inventory_uom_id) REFERENCES public.item_uom(id),
-  CONSTRAINT stock_items_mapped_by_fkey FOREIGN KEY (mapped_by) REFERENCES public.users(id)
+  CONSTRAINT stock_items_mapped_by_fkey FOREIGN KEY (mapped_by) REFERENCES public.users(id),
+  CONSTRAINT stock_items_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.item_categories(id),
+  CONSTRAINT stock_items_manufacturer_id_fkey FOREIGN KEY (manufacturer_id) REFERENCES public.item_manufacturers(id),
+  CONSTRAINT stock_items_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 CREATE TABLE public.warehouse_supply_templates (
   id bigint NOT NULL DEFAULT nextval('warehouse_supply_templates_id_seq'::regclass),
@@ -552,6 +559,7 @@ CREATE TABLE public.contract_evaluations (
   criterion_code text,
   technical_inspection_results jsonb,
   request_fulfillment_metrics jsonb,
+  total_score numeric,
   CONSTRAINT contract_evaluations_pkey PRIMARY KEY (id),
   CONSTRAINT contract_evaluations_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id),
   CONSTRAINT contract_evaluations_evaluator_id_fkey FOREIGN KEY (evaluator_id) REFERENCES public.users(id),
@@ -718,6 +726,7 @@ CREATE TABLE public.warehouses (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   institute_id integer,
+  is_active boolean NOT NULL DEFAULT true,
   CONSTRAINT warehouses_pkey PRIMARY KEY (id),
   CONSTRAINT warehouses_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id),
   CONSTRAINT warehouses_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
@@ -779,7 +788,9 @@ CREATE TABLE public.suppliers (
   regulatory_risk_level character varying DEFAULT 'medium'::character varying CHECK (regulatory_risk_level::text = ANY (ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying]::text[])),
   supplier_category character varying,
   notes text,
-  CONSTRAINT suppliers_pkey PRIMARY KEY (id)
+  institute_id integer,
+  CONSTRAINT suppliers_pkey PRIMARY KEY (id),
+  CONSTRAINT suppliers_institute_id_fkey FOREIGN KEY (institute_id) REFERENCES public.institutes(id)
 );
 CREATE TABLE public.supplier_scorecards (
   id integer NOT NULL DEFAULT nextval('supplier_scorecards_id_seq'::regclass),
@@ -998,6 +1009,7 @@ CREATE TABLE public.purchase_orders (
   amendment_reason text,
   last_amended_at timestamp with time zone,
   issued_by integer,
+  contract_id integer,
   CONSTRAINT purchase_orders_pkey PRIMARY KEY (id),
   CONSTRAINT purchase_orders_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT purchase_orders_rfx_id_fkey FOREIGN KEY (rfx_id) REFERENCES public.rfx_events(id),
@@ -1005,7 +1017,8 @@ CREATE TABLE public.purchase_orders (
   CONSTRAINT purchase_orders_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT purchase_orders_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
   CONSTRAINT purchase_orders_approved_by_fkey FOREIGN KEY (approved_by) REFERENCES public.users(id),
-  CONSTRAINT purchase_orders_issued_by_fkey FOREIGN KEY (issued_by) REFERENCES public.users(id)
+  CONSTRAINT purchase_orders_issued_by_fkey FOREIGN KEY (issued_by) REFERENCES public.users(id),
+  CONSTRAINT purchase_orders_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
 CREATE TABLE public.requested_item_financials (
   id integer NOT NULL DEFAULT nextval('requested_item_financials_id_seq'::regclass),
@@ -1134,9 +1147,11 @@ CREATE TABLE public.approval_route_rules (
   min_amount bigint DEFAULT 0,
   max_amount bigint DEFAULT 999999999,
   warehouse_id integer,
+  approver_id integer,
   CONSTRAINT approval_route_rules_pkey PRIMARY KEY (id),
   CONSTRAINT approval_route_rules_warehouse_id_fkey FOREIGN KEY (warehouse_id) REFERENCES public.warehouses(id),
-  CONSTRAINT approval_route_rules_version_id_fkey FOREIGN KEY (version_id) REFERENCES public.approval_route_versions(id)
+  CONSTRAINT approval_route_rules_version_id_fkey FOREIGN KEY (version_id) REFERENCES public.approval_route_versions(id),
+  CONSTRAINT approval_route_rules_approver_id_fkey FOREIGN KEY (approver_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.procurement_lifecycle_states (
   id integer NOT NULL DEFAULT nextval('procurement_lifecycle_states_id_seq'::regclass),
@@ -1243,12 +1258,14 @@ CREATE TABLE public.supplier_invoices (
   status text NOT NULL DEFAULT 'AP_INVOICE_SUBMITTED'::text,
   discount_amount numeric NOT NULL DEFAULT 0,
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  contract_id integer,
   CONSTRAINT supplier_invoices_pkey PRIMARY KEY (id),
   CONSTRAINT supplier_invoices_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES public.suppliers(id),
   CONSTRAINT supplier_invoices_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT supplier_invoices_receipt_id_fkey FOREIGN KEY (receipt_id) REFERENCES public.goods_receipts(id),
   CONSTRAINT supplier_invoices_submitted_by_fkey FOREIGN KEY (submitted_by) REFERENCES public.users(id),
-  CONSTRAINT supplier_invoices_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id)
+  CONSTRAINT supplier_invoices_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
+  CONSTRAINT supplier_invoices_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
 CREATE TABLE public.invoice_items (
   id bigint NOT NULL DEFAULT nextval('invoice_items_id_seq'::regclass),
@@ -1303,12 +1320,14 @@ CREATE TABLE public.ap_vouchers (
   voided_at timestamp with time zone,
   idempotency_key text,
   payload_fingerprint character,
+  contract_id integer,
   CONSTRAINT ap_vouchers_pkey PRIMARY KEY (id),
   CONSTRAINT ap_vouchers_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT ap_vouchers_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
   CONSTRAINT ap_vouchers_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
   CONSTRAINT ap_vouchers_verified_by_fkey FOREIGN KEY (verified_by) REFERENCES public.users(id),
-  CONSTRAINT ap_vouchers_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id)
+  CONSTRAINT ap_vouchers_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id),
+  CONSTRAINT ap_vouchers_contract_id_fkey FOREIGN KEY (contract_id) REFERENCES public.contracts(id)
 );
 CREATE TABLE public.ap_voucher_lines (
   id bigint NOT NULL DEFAULT nextval('ap_voucher_lines_id_seq'::regclass),
@@ -1617,6 +1636,7 @@ CREATE TABLE public.commitment_ledger (
   parent_commitment_id bigint,
   supplier_invoice_id bigint,
   ap_voucher_id bigint,
+  journal_entry_id bigint,
   CONSTRAINT commitment_ledger_pkey PRIMARY KEY (id),
   CONSTRAINT commitment_ledger_parent_commitment_id_fkey FOREIGN KEY (parent_commitment_id) REFERENCES public.commitment_ledger(id),
   CONSTRAINT commitment_ledger_supplier_invoice_id_fkey FOREIGN KEY (supplier_invoice_id) REFERENCES public.supplier_invoices(id),
@@ -1624,7 +1644,8 @@ CREATE TABLE public.commitment_ledger (
   CONSTRAINT commitment_ledger_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
   CONSTRAINT commitment_ledger_budget_envelope_id_fkey FOREIGN KEY (budget_envelope_id) REFERENCES public.budget_envelopes(id),
   CONSTRAINT commitment_ledger_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.users(id),
-  CONSTRAINT commitment_ledger_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id)
+  CONSTRAINT commitment_ledger_purchase_order_id_fkey FOREIGN KEY (purchase_order_id) REFERENCES public.purchase_orders(id),
+  CONSTRAINT commitment_ledger_journal_entry_id_fkey FOREIGN KEY (journal_entry_id) REFERENCES public.journal_entries(id)
 );
 CREATE TABLE public.gl_postings (
   id bigint NOT NULL DEFAULT nextval('gl_postings_id_seq'::regclass),
@@ -1638,9 +1659,11 @@ CREATE TABLE public.gl_postings (
   posted_by integer,
   posted_at timestamp with time zone NOT NULL DEFAULT now(),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  journal_entry_id bigint,
   CONSTRAINT gl_postings_pkey PRIMARY KEY (id),
   CONSTRAINT gl_postings_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id),
-  CONSTRAINT gl_postings_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id)
+  CONSTRAINT gl_postings_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.users(id),
+  CONSTRAINT gl_postings_journal_entry_id_fkey FOREIGN KEY (journal_entry_id) REFERENCES public.journal_entries(id)
 );
 CREATE TABLE public.gl_posting_lines (
   id bigint NOT NULL DEFAULT nextval('gl_posting_lines_id_seq'::regclass),
@@ -1785,6 +1808,7 @@ CREATE TABLE public.item_uom (
   is_active boolean NOT NULL DEFAULT true,
   created_by integer,
   updated_by integer,
+  name text DEFAULT uom_name,
   CONSTRAINT item_uom_pkey PRIMARY KEY (id),
   CONSTRAINT item_uom_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
   CONSTRAINT item_uom_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id)

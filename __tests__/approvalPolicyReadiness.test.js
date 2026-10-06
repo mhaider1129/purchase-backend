@@ -4,7 +4,7 @@ const service=require('../services/approvalPolicyService'),actor={id:1,institute
 const version=steps=>({policy:{id:1},rules:[{id:2,code:'R',priority:1,conditions:[],steps}]});
 const step=(resolverType,resolverReference,id=3)=>({id,resolverType,resolverReference,approvalLevel:1,stepOrder:1,semanticKey:`${resolverType}-${id}`});
 beforeEach(()=>jest.clearAllMocks());
-test('vacant effective POSITION is structurally valid but not currently routable',async()=>{mockQuery.mockResolvedValue({rows:[{id:8,user_id:null,is_active:true,unit_active:true}]});const result=await service.validateVersionReadiness(version([step('POSITION','9:DEPARTMENT_HEAD')]),actor);expect(result).toMatchObject({status:'WARNING',structurallyValid:true,currentlyRoutable:false,warnings:[{code:'POSITION_VACANT',stepId:3}]})});
+test('vacant effective POSITION is structurally valid but not currently routable',async()=>{mockQuery.mockImplementation(async sql=>({rows:sql.includes('FROM approval_authority_delegations')?[]:[{id:8,user_id:null,is_active:true,unit_active:true}]}));const result=await service.validateVersionReadiness(version([step('POSITION','9:DEPARTMENT_HEAD')]),actor);expect(result).toMatchObject({status:'WARNING',structurallyValid:true,currentlyRoutable:false,warnings:[{code:'POSITION_VACANT',stepId:3}]})});
 test.each([
   [[], 'POSITION_MISSING_OR_INEFFECTIVE'],
   [[{id:1,user_id:4,is_active:false,unit_active:true,holder_active:true}],'POSITION_INACTIVE'],
@@ -14,3 +14,20 @@ test('fixed users are institute scoped and active',async()=>{mockQuery.mockResol
 test('capability zero is vacancy warning and multiple is ambiguity error',async()=>{mockQuery.mockResolvedValueOnce({rows:[{count:0}]}).mockResolvedValueOnce({rows:[{count:2}]});expect((await service.validateVersionReadiness(version([step('CAPABILITY_HOLDER','approval-authority.ceo')]),actor)).warnings[0].code).toBe('CAPABILITY_VACANT');expect((await service.validateVersionReadiness(version([step('CAPABILITY_HOLDER','approval-authority.ceo')]),actor)).errors[0].code).toBe('CAPABILITY_AMBIGUOUS')});
 test('capability readiness resolves permissions through the role stored on users',async()=>{mockQuery.mockResolvedValue({rows:[{count:1}]});await service.validateVersionReadiness(version([step('CAPABILITY_HOLDER','approval-authority.ceo')]),actor);const sql=mockQuery.mock.calls[0][0];expect(sql).toContain('LOWER(BTRIM(r.name))=LOWER(BTRIM(u.role))');expect(sql).not.toContain('user_roles');expect(mockQuery.mock.calls[0][1]).toEqual(['approval-authority.ceo',7])});
 test('malformed amounts and incoherent parallel groups are categorized errors',async()=>{const v=version([{...step('REQUESTER',null,4),parallelGroup:'G',approvalLevel:1},{...step('REQUESTER',null,5),parallelGroup:'G',approvalLevel:2}]);v.rules[0].conditions=[{type:'AMOUNT_GTE',value:'1e9'}];const result=await service.validateVersionReadiness(v,actor);expect(result.errors.map(x=>x.code)).toEqual(expect.arrayContaining(['MALFORMED_AMOUNT','PARALLEL_GROUP_LEVEL_MISMATCH']))});
+test('vacant POSITION with effective delegation is currently routable',async()=>{
+  mockQuery.mockResolvedValueOnce({rows:[{id:8,user_id:null,is_active:true,unit_active:true}]}).mockResolvedValueOnce({rows:[{id:90,delegateUserId:11,delegateUserName:'Delegate'}]});
+  expect(await service.validateVersionReadiness(version([step('POSITION','9:EXECUTIVE_HEAD')]),actor)).toMatchObject({status:'READY',currentlyRoutable:true});
+  expect(mockQuery.mock.calls[1][1].slice(0,4)).toEqual([7,'PURCHASE_REQUEST_APPROVAL',8,null]);
+});
+test.each(['expired','future','revoked'])('%s delegation leaves vacant position not routable',async()=>{
+  mockQuery.mockResolvedValueOnce({rows:[{id:8,user_id:null,is_active:true,unit_active:true}]}).mockResolvedValueOnce({rows:[]});
+  expect(await service.validateVersionReadiness(version([step('POSITION','9:EXECUTIVE_HEAD')]),actor)).toMatchObject({status:'WARNING',currentlyRoutable:false});
+  expect(mockQuery.mock.calls[1][0]).toContain("d.status='ACTIVE'");
+  expect(mockQuery.mock.calls[1][0]).toContain('d.effective_from<=$5');
+  expect(mockQuery.mock.calls[1][0]).toContain('d.effective_to>$5');
+});
+test('ambiguous POSITION never consults delegations',async()=>{
+  mockQuery.mockResolvedValue({rows:[{id:8,user_id:null,is_active:true,unit_active:true},{id:9,user_id:null,is_active:true,unit_active:true}]});
+  expect((await service.validateVersionReadiness(version([step('POSITION','9:EXECUTIVE_HEAD')]),actor)).currentlyRoutable).toBe(false);
+  expect(mockQuery).toHaveBeenCalledTimes(1);
+});

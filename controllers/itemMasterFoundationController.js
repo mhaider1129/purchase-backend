@@ -46,6 +46,7 @@ module.exports = {
   resolvePending: action(async (req,res)=>res.json(await service.resolvePending(id(req),req.body||{},req.user))),
   resolveDuplicate: action(async (req,res)=>res.json(await service.resolveDuplicate(id(req),req.body||{},req.user.id))),
   referenceData: action(async (_req,res)=>res.json(await service.referenceData())),
+  initializeReferences: action(async (req,res)=>res.json(await service.initializeReferences(req.user.id))),
   searchReferences: action(async (req,res)=>res.json(await service.searchReferences(req.params.type,req.query))),
   createReference: action(async (req,res)=>res.status(201).json(await service.createReference(req.params.type,req.body||{},req.user.id))),
   deactivateReference: action(async (req,res)=>res.json(await service.deactivateReference(req.params.type,id(req),req.user.id))),

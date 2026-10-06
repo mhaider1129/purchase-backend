@@ -20,6 +20,7 @@ router.put('/procurement-policy', foundation.requirePermission('permissions.mana
 // interpret "foundation" or "reference" as a legacy numeric identifier.
 router.get('/foundation/generic-items', foundation.requirePermission('item-master.view'), foundation.searchGeneric);
 router.get('/foundation/references', foundation.requirePermission('item-master.view'), foundation.referenceData);
+router.post('/foundation/references/initialize', foundation.requirePermission('item-master.references-maintain'), foundation.initializeReferences);
 router.get('/foundation/references/:type', foundation.requirePermission('item-master.view'), foundation.searchReferences);
 router.post('/foundation/references/:type', foundation.requirePermission('item-master.references-maintain'), foundation.createReference);
 router.delete('/foundation/references/:type/:id', foundation.requirePermission('item-master.references-maintain'), foundation.deactivateReference);

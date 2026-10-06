@@ -1,6 +1,44 @@
 const { ItemMasterFoundationService, pageOptions } = require('../services/itemMasterFoundationService');
 
 describe('ItemMasterFoundationService', () => {
+  test('initializes standard lists once, auditing new records and preserving existing references', async () => {
+    const existing = new Set(['EA']);
+    let id = 10;
+    const client = { query: jest.fn(async (sql, values) => {
+      if (!sql.startsWith('INSERT INTO item_uom') && !sql.startsWith('INSERT INTO item_categories')) return {};
+      const key = values[0];
+      if (existing.has(key)) return { rowCount: 0, rows: [] };
+      existing.add(key);
+      return { rowCount: 1, rows: [{ id: id++, is_active: true }] };
+    }), release: jest.fn() };
+    const service = new ItemMasterFoundationService({ connect: jest.fn(async () => client) });
+    expect(await service.initializeReferences(9)).toEqual({ created: 26 });
+    expect(await service.initializeReferences(9)).toEqual({ created: 0 });
+    const auditCalls = client.query.mock.calls.filter(([sql]) => sql.startsWith('INSERT INTO item_master_audit_events'));
+    expect(auditCalls).toHaveLength(26);
+    expect(auditCalls.every(([, values]) => values[2] === 9)).toBe(true);
+    expect(client.query.mock.calls.some(([sql]) => sql.includes('DO UPDATE') || sql.startsWith('UPDATE'))).toBe(false);
+    expect(client.query).toHaveBeenLastCalledWith('COMMIT');
+  });
+
+  test('rolls reference initialization back if auditing fails', async () => {
+    const client = { query: jest.fn(async sql => {
+      if (sql.startsWith('INSERT INTO item_master_audit_events')) throw new Error('audit unavailable');
+      return { rowCount: 1, rows: [{ id: 1 }] };
+    }), release: jest.fn() };
+    const service = new ItemMasterFoundationService({ connect: jest.fn(async () => client) });
+    await expect(service.initializeReferences(9)).rejects.toThrow('audit unavailable');
+    expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(client.release).toHaveBeenCalled();
+  });
+
+  test('pages reference lists with an independent total and retains the array contract for older callers', async () => {
+    const db = { query: jest.fn(async sql => sql.includes('COUNT(*)') ? { rows: [{ total: 51 }] } : { rows: [{ id: 3 }] }) };
+    const service = new ItemMasterFoundationService(db);
+    expect(await service.searchReferences('categories', { page: 2, page_size: 25 })).toEqual({ data: [{ id: 3 }], total: 51, page: 2, page_size: 25 });
+    expect(db.query).toHaveBeenLastCalledWith(expect.stringContaining('OFFSET $4'), ['', '%%', 25, 25]);
+    expect(await service.searchReferences('categories')).toEqual([{ id: 3 }]);
+  });
   test('caps pagination and only allows known sort expressions', () => {
     expect(pageOptions({ page: '-2', page_size: '500', sort: 'id; DROP TABLE users', direction: 'desc' }))
       .toEqual({ page: 1, pageSize: 100, sort: 'generic_name', direction: 'DESC' });

@@ -1046,10 +1046,12 @@ const updateApprovalItems = async (req, res, next) => {
         isWarehouseSupply
           ? `SELECT id, item_name, quantity, approval_status, approval_comments, approved_by, NULL::numeric AS unit_cost, NULL::numeric AS total_cost
                FROM public.warehouse_supply_items
-              WHERE id = $1 AND request_id = $2`
+              WHERE id = $1 AND request_id = $2
+              FOR UPDATE`
           : `SELECT id, item_name, quantity, unit_cost, total_cost, approval_status, approval_comments, approved_by
                FROM public.requested_items
-              WHERE id = $1 AND request_id = $2`,
+              WHERE id = $1 AND request_id = $2
+              FOR UPDATE`,
         [itemId, approval.request_id]
       );
 
@@ -1361,7 +1363,9 @@ const updateApprovalItems = async (req, res, next) => {
 
     if (quantityChanges.length > 0) {
       commentFragments.push(
-        `${quantityChanges.length} item(s) quantity adjusted`,
+        `${quantityChanges.length} item(s) quantity adjusted: ${quantityChanges
+          .map((change) => `${change.item_name || 'Item'} (#${change.id}): ${change.previous_quantity} → ${change.updated_quantity}`)
+          .join('; ')}`,
       );
     }
 

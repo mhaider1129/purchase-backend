@@ -12,10 +12,18 @@ function decimalCompare(a, b) {
   return Math.sign(magnitude)*x.sign;
 }
 
+// Only these two controlled classifications have established case variants in
+// the policy editor and organization data. Other strings retain exact equality.
+function canonicalClassification(value) {
+  const text=String(value);
+  const key=text.trim().toLowerCase();
+  return ['medical','operational'].includes(key)?key:text;
+}
+
 function evaluateCondition(condition, facts) {
   const value=condition.value; let actual;
   const fields={REQUEST_TYPE_EQUALS:'requestType',DEPARTMENT_EQUALS:'departmentId',SECTION_EQUALS:'sectionId',DEPARTMENT_CLASSIFICATION_EQUALS:'departmentClassification'};
-  if(fields[condition.type]) { actual=facts[fields[condition.type]]; return actual==null?'UNKNOWN':String(actual)===String(value); }
+  if(fields[condition.type]) { actual=facts[fields[condition.type]]; return actual==null?'UNKNOWN':condition.type==='DEPARTMENT_CLASSIFICATION_EQUALS'?canonicalClassification(actual)===canonicalClassification(value):String(actual)===String(value); }
   if(condition.type==='ORGANIZATION_ANCESTOR_EQUALS') return facts.organizationAncestorIds==null?'UNKNOWN':facts.organizationAncestorIds.map(String).includes(String(value));
   if(condition.type==='AMOUNT_GTE'||condition.type==='AMOUNT_LT') return facts.estimatedAmount==null?'UNKNOWN':condition.type==='AMOUNT_GTE'?decimalCompare(facts.estimatedAmount,value)>=0:decimalCompare(facts.estimatedAmount,value)<0;
   const booleans={IS_STOCK_REQUEST:['isStockRequest',true],IS_NON_STOCK_REQUEST:['isStockRequest',false],IS_MAINTENANCE_REQUEST:['isMaintenanceRequest',true],IS_MEDICAL_DEVICE_REQUEST:['isMedicalDeviceRequest',true],IS_MEDICAL_REQUEST:['isMedicalRequest',true],WAREHOUSE_REQUIRED:['warehouseRequired',true]};
@@ -67,14 +75,33 @@ async function resolveStep(step, facts, dependencies) {
 }
 
 async function composeShadowRoute(version, facts, dependencies) {
-  const matchedRules=[]; for(const rule of [...version.rules].filter(r=>r.isActive!==false).sort((a,b)=>a.priority-b.priority)) { const results=(rule.conditions||[]).map(c=>evaluateCondition(c,facts)); if(results.every(Boolean)&&!results.includes('UNKNOWN')) { matchedRules.push(rule); if(rule.stopProcessing) break; } }
+  const matchedRules=[], ruleDiagnostics=[];
+  let stoppedBy=null;
+  for(const rule of [...version.rules].filter(r=>r.isActive!==false).sort((a,b)=>a.priority-b.priority)) {
+    const conditions=(rule.conditions||[]).map(condition=>diagnoseCondition(condition,facts));
+    const outcome=conditions.some(c=>c.result==='FAIL')?'NO MATCH':conditions.some(c=>c.result==='UNKNOWN')?'UNKNOWN':'MATCH';
+    const selected=!stoppedBy && outcome==='MATCH';
+    ruleDiagnostics.push({code:rule.code,priority:rule.priority,conditions,result:outcome,selected,stopProcessing:!!rule.stopProcessing,skippedBy:stoppedBy});
+    if(selected) { matchedRules.push(rule); if(rule.stopProcessing) stoppedBy=rule.code; }
+  }
   const candidates=matchedRules.flatMap(rule=>(rule.steps||[]).map(step=>({...step,ruleCode:rule.code}))).sort((a,b)=>a.approvalLevel-b.approvalLevel||a.stepOrder-b.stepOrder||a.ruleCode.localeCompare(b.ruleCode));
   const resolved=[]; for(const candidate of candidates) resolved.push(await resolveStep(candidate,facts,dependencies));
   const seen=new Set(), principals=new Map(), steps=[]; for(const step of resolved) { const routable=['RESOLVED','DELEGATED'].includes(step.resolutionStatus);const key=routable?`${step.userId}|${step.semanticKey}`:null; if(key&&seen.has(key)) steps.push({...step,resolutionStatus:'DEDUPLICATED',resolutionType:'DEDUPLICATED',resolutionReason:'Same principal and semantic key'}); else { if(key) seen.add(key); const previous=routable?principals.get(String(step.userId)):null;if(routable)principals.set(String(step.userId),step.semanticKey);steps.push(previous&&previous!==step.semanticKey?{...step,duplicatePrincipal:true,resolutionReason:'Same principal resolves for a different business purpose'}:step); } }
-  return {facts,matchedRules:matchedRules.map(r=>({code:r.code,priority:r.priority})),steps,warnings:[],errors:[]};
+  return {facts,policy:{id:version.policy?.id,code:version.policy?.code,name:version.policy?.name,versionId:version.id,versionNumber:version.version_number,status:version.status,ruleCount:version.rules.length,activeRuleCount:ruleDiagnostics.length},ruleDiagnostics,matchedRules:matchedRules.map(r=>({code:r.code,priority:r.priority})),steps,warnings:[],errors:[]};
 }
 
-function normalizeCurrentRoute(rows) { return rows.map((r,index)=>({sequence:r.sequence??index+1,approvalLevel:r.approval_level??r.approvalLevel,userId:r.approver_id??r.userId,userName:r.approver_name??r.userName,status:r.status,semanticKey:'LEGACY_SEMANTIC_UNKNOWN',routeVersion:r.route_version??null})); }
+// Explain exactly the predicate used by matching. The stored value is retained
+// separately because unary boolean conditions historically ignore that value.
+function diagnoseCondition(condition,facts) {
+  const fields={REQUEST_TYPE_EQUALS:'requestType',DEPARTMENT_EQUALS:'departmentId',SECTION_EQUALS:'sectionId',DEPARTMENT_CLASSIFICATION_EQUALS:'departmentClassification',ORGANIZATION_ANCESTOR_EQUALS:'organizationAncestorIds',AMOUNT_GTE:'estimatedAmount',AMOUNT_LT:'estimatedAmount',IS_STOCK_REQUEST:'isStockRequest',IS_NON_STOCK_REQUEST:'isStockRequest',IS_MAINTENANCE_REQUEST:'isMaintenanceRequest',IS_MEDICAL_DEVICE_REQUEST:'isMedicalDeviceRequest',IS_MEDICAL_REQUEST:'isMedicalRequest',WAREHOUSE_REQUIRED:'warehouseRequired'};
+  const unary=condition.type.startsWith('IS_')||condition.type==='WAREHOUSE_REQUIRED';
+  const sourceActual=facts[fields[condition.type]]??null;
+  const actual=condition.type==='IS_NON_STOCK_REQUEST'&&sourceActual!=null?!sourceActual:sourceActual;
+  const evaluated=evaluateCondition(condition,facts);
+  return {type:condition.type,configuredValue:condition.value,expected:unary?true:condition.value,actual,sourceField:fields[condition.type],sourceActual,result:evaluated==='UNKNOWN'?'UNKNOWN':evaluated?'PASS':'FAIL',reason:evaluated==='UNKNOWN'?'Required fact is unavailable':condition.type==='DEPARTMENT_CLASSIFICATION_EQUALS'?'Medical/Operational case variants use the same controlled classification; raw values are shown':condition.type==='IS_NON_STOCK_REQUEST'?'Legacy predicate: isStockRequest === false; REQUEST_TYPE_EQUALS must constrain Non-Stock scope':unary?'Unary predicate; stored condition value is not an operand':null};
+}
+
+function normalizeCurrentRoute(rows) { return rows.map((r,index)=>({sequence:r.sequence??index+1,approvalLevel:r.approval_level??r.approvalLevel,userId:r.approver_id??r.userId,userName:r.approver_name??r.userName,status:r.status,semanticKey:r.semantic_key||r.semanticKey||'LEGACY_SEMANTIC_UNKNOWN',routeVersion:r.route_version??null})); }
 function compareApprovalRoutes(current, shadow) {
   const differences=[], usedCurrent=new Set(), usedShadow=new Set();
   const comparable=shadow.map((step,index)=>({step,index})).filter(({step})=>['RESOLVED','DELEGATED'].includes(step.resolutionStatus));
@@ -115,4 +142,4 @@ function compareApprovalRoutes(current, shadow) {
   return {result,differences,metrics};
 }
 
-module.exports={LIVE_ROUTING_ENABLED,CONDITION_TYPES,RESOLVER_TYPES,CAPABILITY_ALIASES:capabilityAliases,decimalCompare,evaluateCondition,validateVersionStructure,validateVersion,composeShadowRoute,normalizeCurrentRoute,compareApprovalRoutes};
+module.exports={LIVE_ROUTING_ENABLED,CONDITION_TYPES,RESOLVER_TYPES,CAPABILITY_ALIASES:capabilityAliases,decimalCompare,evaluateCondition,diagnoseCondition,validateVersionStructure,validateVersion,composeShadowRoute,normalizeCurrentRoute,compareApprovalRoutes};

@@ -117,6 +117,15 @@ test('supports strategic commercial model catalog and generic recurring elements
   expect(result.calculated_effective_cost_per_reported_test).toBe(2.5);
 });
 
+test('nullable compatibility quantities preserve existing recurring cost semantics', () => {
+  for (const pricing_method of ['KIT_OWNERSHIP','REAGENT_RENTAL','HYBRID','PAY_PER_REPORTABLE','SUBSCRIPTION','PURCHASE']) {
+    const old = { pricing_method, kit_price: 250, tests_per_kit: 100, price_per_reportable_test: 3, unit_cost: 25 };
+    expect(service.calculateRecurringElementCost({ ...old, quantity: null, annual_quantity: null },1200))
+      .toEqual(service.calculateRecurringElementCost(old,1200));
+  }
+  expect(service.calculateRecurringElementCost({pricing_method:'SUBSCRIPTION',unit_cost:250,quantity:2,annual_quantity:12},1200).annual_test_cost).toBe(3000);
+});
+
 test('calculates break-even between two strategic scenarios', () => {
   const result = service.calculateBreakEven(
     { name: 'Purchase', initial_cost: 10000, fixed_annual_cost: 1000, variable_cost_per_unit: 1 },

@@ -33,6 +33,14 @@ If the patch stops, keep the error and reconcile the specific live data/schema c
 
 ## Preservation and compatibility behavior
 
+### Populated offer test costs missing quantities (SQL 040)
+
+For `Populated partial module procurement_evaluation_offer_test_costs.quantity`, run the complete `sql/manual/040_evaluation_cost_quantity_compatibility.sql`, then retry SQL 035. SQL 038 and 039 address different tables and do not repair this one.
+
+SQL 040 adds only missing `quantity` and `annual_quantity` as nullable NUMERIC(20,6), with a separate future-insert default of zero matching SQL 035. Existing rows remain NULL, representing unknown quantities. It does not infer quantities, update rows, recalculate saved results, or change existing columns/defaults/constraints. The route accepts nullable quantities. Kit/rental/hybrid and reportable-test formulas do not consume them; other methods already use `annual_quantity || quantity || 1`. That legacy fallback is unchanged, not evidence that a historical quantity was one. Review and enter verified quantities before relying on future recalculations of non-kit/non-reportable evaluations.
+
+This standalone patch deliberately leaves the broad SQL 035 populated-data guard intact: any other missing defaulted financial field still stops for explicit reconciliation. Run the verification SQL after SQL 035; another guard failure identifies a separate missing field, not a failed application of SQL 040.
+
 The schema patch creates missing relations and adds missing columns; it does not drop populated tables, replace legacy master data, activate drafts, infer item mappings, fabricate acceptance evidence, backfill institute ownership, or change accounting/approval history. New `generic_items` remain draft/inactive. Existing Management `enforce_item_identity` choices are retained; a completely absent policy starts with strict enforcement.
 
 Foreign keys and checks added to existing relations use `NOT VALID` where supported: they enforce new writes while preserving old rows for explicit reconciliation and later validation. Unique/exclusion indexes still validate existing data immediately and can stop the transaction. A preflight stops populated partial module installations when a missing column requires NOT NULL, a primary key or a default, so those historical values cannot be inferred by ADD COLUMN. Nullable additions without defaults remain additive. These are deliberate stops rather than guessed historical values.

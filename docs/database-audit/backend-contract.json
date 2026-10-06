@@ -5943,6 +5943,10 @@
     ]
   },
   "nullableCompatibilityColumns": {
+    "procurement_evaluation_offer_test_costs": [
+      "quantity",
+      "annual_quantity"
+    ],
     "procurement_evaluation_offers": [
       "technical_model",
       "contract_model",

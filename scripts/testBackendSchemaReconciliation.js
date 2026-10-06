@@ -133,6 +133,32 @@ async function validateEvaluationOfferModels(client, historicalOffer) {
   console.log('Populated offers: JSON compatibility, preservation, writes, defaults and financial guard checks PASS');
 }
 
+async function validateEvaluationCostQuantities(client, historicalCost) {
+  const patch=read('sql/manual/040_evaluation_cost_quantity_compatibility.sql');
+  const values=async()=> (await client.query("SELECT to_jsonb(c)-'quantity'-'annual_quantity' AS value FROM procurement_evaluation_offer_test_costs c ORDER BY id")).rows.map(row=>row.value);
+  assert.deepEqual((await values())[0],historicalCost);
+  assert.deepEqual((await client.query('SELECT quantity,annual_quantity FROM procurement_evaluation_offer_test_costs WHERE id=$1',[historicalCost.id])).rows[0],{quantity:null,annual_quantity:null});
+  await client.query(patch);
+  await client.query(patch);
+  assert.deepEqual((await values())[0],historicalCost);
+  await client.query("INSERT INTO procurement_evaluation_offer_test_costs(pricing_method,unit_cost) VALUES ('SUBSCRIPTION',250)");
+  const future=(await client.query('SELECT quantity,annual_quantity FROM procurement_evaluation_offer_test_costs WHERE id<>$1',[historicalCost.id])).rows[0];
+  assert.deepEqual(future,{quantity:'0.000000',annual_quantity:'0.000000'});
+  await client.query('UPDATE procurement_evaluation_offer_test_costs SET quantity=2.123456,annual_quantity=12.345678 WHERE id=$1',[historicalCost.id]);
+  await client.query('ALTER TABLE procurement_evaluation_offer_test_costs ALTER COLUMN quantity SET DEFAULT 7');
+  const before=(await client.query('SELECT * FROM procurement_evaluation_offer_test_costs ORDER BY id')).rows;
+  await client.query(patch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  assert.deepEqual((await client.query('SELECT * FROM procurement_evaluation_offer_test_costs ORDER BY id')).rows,before);
+  assert.equal((await client.query("SELECT column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='procurement_evaluation_offer_test_costs' AND column_name='quantity'")).rows[0].column_default,'7');
+  // Disposable fixture only: prove a different missing financial input still fails closed.
+  await client.query('BEGIN; ALTER TABLE procurement_evaluation_offer_test_costs DROP COLUMN unit_cost');
+  await assert.rejects(client.query(read('sql/manual/035_backend_schema_reconciliation.sql')), /Populated partial module procurement_evaluation_offer_test_costs.unit_cost/);
+  await client.query('ROLLBACK');
+  assert.deepEqual((await client.query('SELECT * FROM procurement_evaluation_offer_test_costs ORDER BY id')).rows,before);
+  console.log('SQL 040: historical costs, unknown quantities, repeat application, explicit writes, future/custom defaults and financial guard PASS');
+}
+
 async function run() {
   const name = `p2p_disposable_${crypto.randomBytes(8).toString('hex')}`;
   const password = crypto.randomBytes(24).toString('hex');
@@ -202,6 +228,15 @@ async function run() {
     await client.query("INSERT INTO procurement_evaluation_offers(offer_name,pricing_model,device_price,minimum_annual_commitment_amount,is_compliant,is_disqualified,created_at,updated_at) VALUES ('Historical offer','PURCHASE',24680.12,10000,false,true,'2019-01-02T03:04:05Z','2020-02-03T04:05:06Z')");
     const historicalOffer=(await client.query('SELECT to_jsonb(o) AS value FROM procurement_evaluation_offers o')).rows[0].value;
 
+    const costsCreate=patch.match(/CREATE TABLE IF NOT EXISTS public\.procurement_evaluation_offer_test_costs \([\s\S]*?\n\);/)[0];
+    await client.query(costsCreate.replace(/^  (?:quantity|annual_quantity) numeric.*\n/gm,''));
+    await client.query("INSERT INTO procurement_evaluation_offer_test_costs(pricing_method,kit_price,tests_per_kit,annual_test_cost,calculated_effective_cost_per_reported_test,notes) VALUES ('KIT_OWNERSHIP',250.123456,100,12345.678901,2.123456,'Preserve historical cost')");
+    const historicalCost=(await client.query('SELECT to_jsonb(c) AS value FROM procurement_evaluation_offer_test_costs c')).rows[0].value;
+    await assert.rejects(client.query(patch), /Populated partial module procurement_evaluation_offer_test_costs.quantity/);
+    await client.query('ROLLBACK');
+    await client.query(read('sql/manual/040_evaluation_cost_quantity_compatibility.sql'));
+    await client.query(read('sql/manual/040_evaluation_cost_quantity_compatibility.sql'));
+
     // Prove that populated partial modules stop before inferred/default historical values.
     await client.query("BEGIN; CREATE TABLE public.generic_items(id bigint PRIMARY KEY,item_code text); INSERT INTO public.generic_items VALUES (1,'partial-existing');");
     await assert.rejects(client.query(patch), /Populated partial module generic_items/);
@@ -221,6 +256,7 @@ async function run() {
     console.log('Schema patch repeat application PASS');
     await validateEvaluationResultTimestamps(client,historicalResult);
     await validateEvaluationOfferModels(client,historicalOffer);
+    await validateEvaluationCostQuantities(client,historicalCost);
     await validatePreservation(client);
     await verifyMissing(client);
     const postflight = (await client.query(verificationSql)).rows;

@@ -38,14 +38,20 @@ async function validateVersionReadiness(version,actor,client=pool){
       if(step.parallelGroup){const level=parallel.get(step.parallelGroup);if(level!==undefined&&level!==step.approvalLevel)diagnostic('ERROR','PARALLEL_GROUP_LEVEL_MISMATCH','Parallel group spans approval levels',{stepId:step.id});parallel.set(step.parallelGroup,step.approvalLevel);}
       if(step.resolverType==='POSITION'){
         const [unitId,type]=String(step.resolverReference||'').split(':');
-        const rows=(await client.query(`SELECT op.id,op.user_id,op.is_active,ou.is_active unit_active,u.is_active holder_active
+        const rows=(await client.query(`SELECT op.id,op.user_id,op.is_active,ou.is_active unit_active,u.is_active holder_active,u.institute_id holder_institute_id
           FROM organization_positions op JOIN organization_units ou ON ou.id=op.organization_unit_id LEFT JOIN users u ON u.id=op.user_id
           WHERE op.organization_unit_id=$1 AND op.position_type=$2 AND ou.institute_id=$3
           AND CURRENT_DATE BETWEEN COALESCE(op.effective_from,CURRENT_DATE) AND COALESCE(op.effective_to,CURRENT_DATE)`,[unitId,type,actor.instituteId])).rows;
         if(!rows.length)diagnostic('ERROR','POSITION_MISSING_OR_INEFFECTIVE','Position is missing, foreign, or not effective',{stepId:step.id});
         else if(rows.length>1)diagnostic('ERROR','POSITION_AMBIGUOUS','Multiple effective positions match',{stepId:step.id});
         else if(!rows[0].is_active||!rows[0].unit_active)diagnostic('ERROR','POSITION_INACTIVE','Position or organization unit is inactive',{stepId:step.id});
-        else if(!rows[0].user_id||!rows[0].holder_active)diagnostic('WARNING','POSITION_VACANT','Position currently has no active holder; structurally valid but not currently routable',{stepId:step.id});
+        else if(rows[0].user_id&&(!rows[0].holder_active||String(rows[0].holder_institute_id)!==String(actor.instituteId)))diagnostic('WARNING','POSITION_VACANT','Position holder is inactive or outside this institute; not currently routable',{stepId:step.id});
+        else {
+          const position=rows[0];
+          const delegation=await require('./approvalDelegationService').resolve({instituteId:actor.instituteId,positionId:position.id,delegatorUserId:position.user_id,scope:'PURCHASE_REQUEST_APPROVAL'},client);
+          if(delegation?.ambiguous)diagnostic('ERROR','DELEGATION_AMBIGUOUS','Multiple effective delegations match',{stepId:step.id});
+          else if(!delegation&&(!position.user_id||!position.holder_active||String(position.holder_institute_id)!==String(actor.instituteId)))diagnostic('WARNING','POSITION_VACANT','Position currently has no active holder or effective delegation; not currently routable',{stepId:step.id});
+        }
       }else if(['FIXED_USER','FIXED_AUTHORITY'].includes(step.resolverType)){
         const user=(await client.query('SELECT institute_id,COALESCE(is_active,true) is_active FROM users WHERE id=$1',[step.resolverReference])).rows[0];
         if(!user||String(user.institute_id)!==String(actor.instituteId))diagnostic('ERROR','FIXED_USER_INVALID','Fixed user is missing or belongs to another institute',{stepId:step.id});else if(!user.is_active)diagnostic('ERROR','FIXED_USER_INACTIVE','Fixed user is inactive',{stepId:step.id});

@@ -1046,10 +1046,12 @@ const updateApprovalItems = async (req, res, next) => {
         isWarehouseSupply
           ? `SELECT id, item_name, quantity, approval_status, approval_comments, approved_by, NULL::numeric AS unit_cost, NULL::numeric AS total_cost
                FROM public.warehouse_supply_items
-              WHERE id = $1 AND request_id = $2`
+              WHERE id = $1 AND request_id = $2
+              FOR UPDATE`
           : `SELECT id, item_name, quantity, unit_cost, total_cost, approval_status, approval_comments, approved_by
                FROM public.requested_items
-              WHERE id = $1 AND request_id = $2`,
+              WHERE id = $1 AND request_id = $2
+              FOR UPDATE`,
         [itemId, approval.request_id]
       );
 
@@ -1104,6 +1106,8 @@ const updateApprovalItems = async (req, res, next) => {
       const statusChanged = finalStatus !== existingStatus;
 
       if (quantityChanged) {
+        // Quantity may be integer while unit_cost is numeric. Cast both uses of
+        // the shared parameter so PostgreSQL does not infer conflicting types.
         const quantityUpdateRes = await client.query(
           isWarehouseSupply
             ? `UPDATE public.warehouse_supply_items
@@ -1112,9 +1116,8 @@ const updateApprovalItems = async (req, res, next) => {
                WHERE id = $2 AND request_id = $3
                RETURNING quantity`
             : `UPDATE public.requested_items
-                 SET quantity = $1,
-                     total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1 ELSE NULL END,
-                     updated_at = NOW()
+                 SET quantity = $1::numeric,
+                     total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1::numeric ELSE NULL END
                WHERE id = $2 AND request_id = $3
                RETURNING quantity, unit_cost, total_cost`,
           [parsedQuantity, itemId, approval.request_id],
@@ -1360,7 +1363,9 @@ const updateApprovalItems = async (req, res, next) => {
 
     if (quantityChanges.length > 0) {
       commentFragments.push(
-        `${quantityChanges.length} item(s) quantity adjusted`,
+        `${quantityChanges.length} item(s) quantity adjusted: ${quantityChanges
+          .map((change) => `${change.item_name || 'Item'} (#${change.id}): ${change.previous_quantity} → ${change.updated_quantity}`)
+          .join('; ')}`,
       );
     }
 

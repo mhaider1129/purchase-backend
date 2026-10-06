@@ -40,6 +40,7 @@ describe('updateApprovalItems warehouse supply conversion', () => {
         expect(values).toEqual([400, 12, 353]);
         expect(sql).toContain('quantity = $1::numeric');
         expect(sql).toContain('unit_cost * $1::numeric');
+        expect(sql).not.toContain('updated_at');
         return { rows: [{ quantity: 400, unit_cost: unitCost, total_cost: totalCost }] };
       }
       if (/UPDATE public\.requested_items[\s\S]*SET approval_status/.test(sql)) return { rows: [{ id: 12, item_name: 'Gloves', quantity: 400, unit_cost: unitCost, total_cost: totalCost, approval_status: 'Pending', approved_by: null }] };

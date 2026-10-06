@@ -1115,8 +1115,7 @@ const updateApprovalItems = async (req, res, next) => {
                RETURNING quantity`
             : `UPDATE public.requested_items
                  SET quantity = $1::numeric,
-                     total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1::numeric ELSE NULL END,
-                     updated_at = NOW()
+                     total_cost = CASE WHEN unit_cost IS NOT NULL THEN unit_cost * $1::numeric ELSE NULL END
                WHERE id = $2 AND request_id = $3
                RETURNING quantity, unit_cost, total_cost`,
           [parsedQuantity, itemId, approval.request_id],

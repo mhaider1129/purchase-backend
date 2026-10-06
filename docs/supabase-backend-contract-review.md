@@ -33,6 +33,10 @@ If the patch stops, keep the error and reconcile the specific live data/schema c
 
 ## Preservation and compatibility behavior
 
+### Populated evaluation tests missing alternative metadata (SQL 043)
+
+For `Populated partial module procurement_evaluation_tests.is_alternative`, run the complete `sql/manual/043_evaluation_alternative_metadata_compatibility.sql`, then retry SQL 035 and its verification script. The test route accepts nullable `is_alternative`, but the current calculation service does not read the field. SQL 043 adds it as nullable BOOLEAN without an initial default, then sets a separate future-insert default of false to match SQL 035. Historical rows remain NULL rather than being classified without evidence. Existing true/false/NULL values, custom defaults and constraints remain untouched. No volume, growth, required-item decision or result is changed; the broader SQL 035 populated-data guard remains intact.
+
 ### Populated test costs missing optional stability metadata (SQL 042)
 
 For `Populated partial module procurement_evaluation_offer_test_costs.onboard_stability_days`, run the complete `sql/manual/042_evaluation_stability_metadata_compatibility.sql`, then retry SQL 035 and its verification script. This repairs missing `onboard_stability_days` and `shelf_life_months` together. The route whitelist/import payload accepts these fields as nullable, and the service maps import headers for them, but current cost/utilization formulas do not consume either field.

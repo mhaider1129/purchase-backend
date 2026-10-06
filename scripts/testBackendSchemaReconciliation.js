@@ -230,6 +230,38 @@ async function validateEvaluationStabilityMetadata(client) {
   console.log('SQL 042: populated metadata repair, cost preservation, writes, defaults, retries and utilization guard PASS');
 }
 
+async function validateEvaluationAlternativeMetadata(client) {
+  const table='procurement_evaluation_tests';
+  const patch=read('sql/manual/043_evaluation_alternative_metadata_compatibility.sql');
+  await client.query(`INSERT INTO ${table}(test_name,expected_monthly_volume,growth_rate,is_required,dependency_risk,created_at,updated_at) VALUES ('Historical test',123.456789,0.123456,true,'retain risk','2019-01-02T03:04:05Z','2020-02-03T04:05:06Z')`);
+  const before=(await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
+  // Disposable fixture only: reproduce the reported populated legacy table.
+  await client.query(`ALTER TABLE ${table} DROP COLUMN is_alternative`);
+  await assert.rejects(client.query(read('sql/manual/035_backend_schema_reconciliation.sql')), /Populated partial module procurement_evaluation_tests.is_alternative/);
+  await client.query('ROLLBACK');
+  await client.query(patch);
+  await client.query(patch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  assert.deepEqual((await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows,before.map(row=>({...row,is_alternative:null})));
+  const column=(await client.query("SELECT data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name='is_alternative'",[table])).rows[0];
+  assert.deepEqual(column,{data_type:'boolean',is_nullable:'YES',column_default:'false'});
+  await client.query(`INSERT INTO ${table}(test_name) VALUES ('Future test')`);
+  assert.equal((await client.query(`SELECT is_alternative FROM ${table} ORDER BY id DESC LIMIT 1`)).rows[0].is_alternative,false);
+  await client.query(`INSERT INTO ${table}(test_name,is_alternative) VALUES ('Explicit alternative',true),('Explicit unknown',NULL)`);
+  await client.query(`UPDATE ${table} SET is_alternative=true WHERE id=$1`,[before[0].id]);
+  await client.query(`ALTER TABLE ${table} ALTER COLUMN is_alternative SET DEFAULT true`);
+  const snapshot=(await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
+  await client.query(patch);
+  await client.query(read('sql/manual/035_backend_schema_reconciliation.sql'));
+  assert.deepEqual((await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows,snapshot);
+  assert.equal((await client.query("SELECT column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name='is_alternative'",[table])).rows[0].column_default,'true');
+  await client.query(`BEGIN; ALTER TABLE ${table} DROP COLUMN expected_monthly_volume`);
+  await assert.rejects(client.query(read('sql/manual/035_backend_schema_reconciliation.sql')), /Populated partial module procurement_evaluation_tests.expected_monthly_volume/);
+  await client.query('ROLLBACK');
+  assert.deepEqual((await client.query(`SELECT * FROM ${table} ORDER BY id`)).rows,snapshot);
+  console.log('SQL 043: alternative metadata repair, preservation, explicit writes, future/custom defaults, retries and volume guard PASS');
+}
+
 async function run() {
   const name = `p2p_disposable_${crypto.randomBytes(8).toString('hex')}`;
   const password = crypto.randomBytes(24).toString('hex');
@@ -338,6 +370,7 @@ async function run() {
     await validateEvaluationCostQuantities(client,historicalCost);
     await validateEvaluationCriteriaTimestamps(client,historicalCriterion);
     await validateEvaluationStabilityMetadata(client);
+    await validateEvaluationAlternativeMetadata(client);
     await validatePreservation(client);
     await verifyMissing(client);
     const postflight = (await client.query(verificationSql)).rows;

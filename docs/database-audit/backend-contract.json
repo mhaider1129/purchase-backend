@@ -5943,6 +5943,9 @@
     ]
   },
   "nullableCompatibilityColumns": {
+    "procurement_evaluation_tests": [
+      "is_alternative"
+    ],
     "procurement_evaluation_criteria": [
       "created_at",
       "updated_at"

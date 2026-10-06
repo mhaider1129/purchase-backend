@@ -36,33 +36,41 @@ async function resolveStep(step, facts, dependencies) {
   let result;
   try {
     if(step.resolverType==='REQUESTER') result={userId:facts.requesterId,userName:facts.requesterName,source:'REQUEST'};
-    else if(step.resolverType==='DEPARTMENT_HEAD') result=await dependencies.organization.resolveDepartmentHead(facts.departmentId,facts.instituteId);
-    else if(step.resolverType==='SECTION_HEAD') result=await dependencies.organization.resolveSectionHead(facts.sectionId,facts.instituteId);
-    else if(step.resolverType==='EXECUTIVE_OWNER') result=await dependencies.organization.resolveExecutiveOwner(facts.departmentId,facts.instituteId);
-    else if(step.resolverType==='POSITION') result=await dependencies.organization.resolvePosition(step.resolverReference,facts.instituteId);
+    else if(step.resolverType==='DEPARTMENT_HEAD') result=await dependencies.organization.resolveDepartmentHead(facts.departmentId,facts.instituteId,facts.evaluationTime);
+    else if(step.resolverType==='SECTION_HEAD') result=await dependencies.organization.resolveSectionHead(facts.sectionId,facts.instituteId,facts.evaluationTime);
+    else if(step.resolverType==='EXECUTIVE_OWNER') result=await dependencies.organization.resolveExecutiveOwner(facts.departmentId,facts.instituteId,facts.evaluationTime);
+    else if(step.resolverType==='POSITION') result=await dependencies.organization.resolvePosition(step.resolverReference,facts.instituteId,facts.evaluationTime);
     else if(step.resolverType==='FIXED_USER'||step.resolverType==='FIXED_AUTHORITY') result=await dependencies.resolveFixedUser(step.resolverReference,facts.instituteId);
     else result=await dependencies.resolveCapability(capabilityAliases[step.resolverType]||step.resolverReference,facts.instituteId);
   } catch(error) { if(error.statusCode===409) return {...step,resolutionStatus:'AMBIGUOUS',resolutionReason:error.message}; throw error; }
   if(Array.isArray(result)) result=result.length===1?result[0]:result.length>1?{ambiguous:true}:null;
-  if(result?.ambiguous)return {...step,resolutionStatus:'AMBIGUOUS',resolutionReason:'Multiple active authority holders'};
-  if(!result?.userId&&!result?.user_id)return {...step,resolutionStatus:'UNRESOLVED',resolutionReason:'No active authority holder'};
-  const structuralHolderId=result.userId||result.user_id;
-  const base={...step,userId:structuralHolderId,userName:result.userName||result.user_name,unitId:result.unitId||result.unit_id,
-    positionId:result.positionId||result.position_id,positionHolderId:structuralHolderId,positionHolderName:result.userName||result.user_name,
-    requestedAuthority:result.position||step.displayName,resolutionSource:result.source||step.resolverType,resolutionStatus:'RESOLVED'};
+  if(result?.ambiguous||result?.status==='AMBIGUOUS')return {...step,resolutionStatus:'AMBIGUOUS',resolutionReason:'Multiple active authority positions or holders'};
+  const unstaffed=result?.status==='POSITION_UNSTAFFED';
+  const structuralHolderId=unstaffed?null:(result?.userId??result?.user_id??null);
+  const positionId=result?.positionId??result?.position_id??null;
+  if(!structuralHolderId&&!(unstaffed&&positionId))return {...step,resolutionStatus:'UNRESOLVED',resolutionReason:'No active authority holder'};
+  const unitId=result.unitId??result.unit_id??result.organizationUnitId??null;
+  const requiredAuthority=result.positionName||result.position||step.displayName||step.resolverType;
+  const base={...step,userId:structuralHolderId,userName:result.userName||result.user_name||null,unitId,
+    positionId,positionType:result.positionType||result.position_type||null,positionHolderId:structuralHolderId,positionHolderName:result.userName||result.user_name||null,
+    structuralHolderId,resolvedUnitId:unitId,resolvedPositionId:positionId,requiredAuthority,
+    actingApproverId:structuralHolderId,requestedAuthority:requiredAuthority,
+    resolutionSource:result.source||step.resolverType,resolutionStatus:structuralHolderId?'RESOLVED':'UNRESOLVED',
+    resolutionType:structuralHolderId?'RESOLVED':'UNRESOLVED',
+    ...(!structuralHolderId?{resolutionReason:'Structural position has no system user or effective delegation'}:{})};
   if(!dependencies.resolveDelegation)return base;
   const delegation=await dependencies.resolveDelegation({instituteId:facts.instituteId,delegatorUserId:structuralHolderId,
-    positionId:base.positionId,scope:'PURCHASE_REQUEST_APPROVAL',at:facts.evaluationTime});
-  if(delegation?.ambiguous)return {...base,resolutionStatus:'AMBIGUOUS',resolutionReason:'Multiple effective delegations'};
+    positionId,scope:'PURCHASE_REQUEST_APPROVAL',at:facts.evaluationTime});
+  if(delegation?.ambiguous)return {...base,userId:null,actingApproverId:null,resolutionStatus:'AMBIGUOUS',resolutionType:'AMBIGUOUS',resolutionReason:'Multiple effective delegations'};
   return delegation?{...base,userId:delegation.delegateUserId,userName:delegation.delegateUserName,actingApproverId:delegation.delegateUserId,
-    actingApproverName:delegation.delegateUserName,delegationId:delegation.id,resolutionStatus:'DELEGATED',resolutionReason:'Effective approval-authority delegation'}:base;
+    actingApproverName:delegation.delegateUserName,delegationId:delegation.id,resolutionStatus:'DELEGATED',resolutionType:'DELEGATED',resolutionReason:'Effective approval-authority delegation'}:base;
 }
 
 async function composeShadowRoute(version, facts, dependencies) {
   const matchedRules=[]; for(const rule of [...version.rules].filter(r=>r.isActive!==false).sort((a,b)=>a.priority-b.priority)) { const results=(rule.conditions||[]).map(c=>evaluateCondition(c,facts)); if(results.every(Boolean)&&!results.includes('UNKNOWN')) { matchedRules.push(rule); if(rule.stopProcessing) break; } }
   const candidates=matchedRules.flatMap(rule=>(rule.steps||[]).map(step=>({...step,ruleCode:rule.code}))).sort((a,b)=>a.approvalLevel-b.approvalLevel||a.stepOrder-b.stepOrder||a.ruleCode.localeCompare(b.ruleCode));
   const resolved=[]; for(const candidate of candidates) resolved.push(await resolveStep(candidate,facts,dependencies));
-  const seen=new Set(), principals=new Map(), steps=[]; for(const step of resolved) { const routable=['RESOLVED','DELEGATED'].includes(step.resolutionStatus);const key=routable?`${step.userId}|${step.semanticKey}`:null; if(key&&seen.has(key)) steps.push({...step,resolutionStatus:'DEDUPLICATED',resolutionReason:'Same principal and semantic key'}); else { if(key) seen.add(key); const previous=routable?principals.get(String(step.userId)):null;if(routable)principals.set(String(step.userId),step.semanticKey);steps.push(previous&&previous!==step.semanticKey?{...step,duplicatePrincipal:true,resolutionReason:'Same principal resolves for a different business purpose'}:step); } }
+  const seen=new Set(), principals=new Map(), steps=[]; for(const step of resolved) { const routable=['RESOLVED','DELEGATED'].includes(step.resolutionStatus);const key=routable?`${step.userId}|${step.semanticKey}`:null; if(key&&seen.has(key)) steps.push({...step,resolutionStatus:'DEDUPLICATED',resolutionType:'DEDUPLICATED',resolutionReason:'Same principal and semantic key'}); else { if(key) seen.add(key); const previous=routable?principals.get(String(step.userId)):null;if(routable)principals.set(String(step.userId),step.semanticKey);steps.push(previous&&previous!==step.semanticKey?{...step,duplicatePrincipal:true,resolutionReason:'Same principal resolves for a different business purpose'}:step); } }
   return {facts,matchedRules:matchedRules.map(r=>({code:r.code,priority:r.priority})),steps,warnings:[],errors:[]};
 }
 

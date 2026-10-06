@@ -1,3 +1,4 @@
+const { insertRequestedItem } = require('../../services/requestedItemWriteService');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const ensureHistoricalRequestSchema = require('../../utils/ensureHistoricalRequestSchema');
@@ -351,23 +352,7 @@ const insertHistoricalRequest = async (req, res, next) => {
         continue;
       }
 
-      await client.query(
-        `INSERT INTO public.requested_items (
-            request_id, item_name, brand, quantity, unit_cost, total_cost,
-            available_quantity, intended_use, specs
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          requestId,
-          item.item_name,
-          item.brand,
-          item.quantity,
-          item.unit_cost,
-          item.total_cost,
-          item.available_quantity,
-          item.intended_use,
-          item.specs,
-        ],
-      );
+      await insertRequestedItem(client, requestId, item, req.user, { historical: true });
     }
 
     await client.query(

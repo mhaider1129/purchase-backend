@@ -114,7 +114,7 @@ function createApprovalEngine(dependencies = {}) {
       if (approval.status !== 'Pending' || !approval.is_active) throw new ApprovalEngineError('Approval is inactive or already decided', 'APPROVAL_NOT_ACTIVE');
       await policy({ actor: input.actor, request, approval, allowSelfApproval: input.allowSelfApproval });
       const updated = await client.query(
-        `UPDATE approvals SET status=$1,comments=$2,approved_at=CASE WHEN $1='Approved' THEN NOW() ELSE NULL END,
+        `UPDATE approvals SET status=$1::text,comments=$2,approved_at=CASE WHEN $1='Approved' THEN NOW() ELSE NULL END,
             decided_at=NOW(),rejected_at=CASE WHEN $1='Rejected' THEN NOW() ELSE NULL END,is_active=FALSE
          WHERE id=$3 AND status='Pending' AND is_active=TRUE AND COALESCE(is_superseded,FALSE)=FALSE RETURNING *`,
         [input.decision, input.reason, approval.id]);

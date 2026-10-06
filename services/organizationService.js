@@ -95,9 +95,9 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     if(unit.is_active===false)reasons.push('INACTIVE_UNIT');
     if(unit.unit_type==='DEPARTMENT'){
       if(!unit.parent_unit_id)reasons.push('MISSING_PARENT');
-      if(unitHead.status==='UNASSIGNED')reasons.push('MISSING_DEPARTMENT_HEAD');
+      if(['UNASSIGNED','POSITION_UNSTAFFED'].includes(unitHead.status))reasons.push('MISSING_DEPARTMENT_HEAD');
       if(unitHead.status==='AMBIGUOUS')reasons.push('AMBIGUOUS_HEAD');
-      if(executiveOwner.status==='UNASSIGNED')reasons.push('MISSING_EXECUTIVE_OWNER');
+      if(['UNASSIGNED','POSITION_UNSTAFFED'].includes(executiveOwner.status))reasons.push('MISSING_EXECUTIVE_OWNER');
       if(executiveOwner.status==='AMBIGUOUS')reasons.push('AMBIGUOUS_EXECUTIVE_OWNER');
     }
     return { ...unit, children, positions, path: path.map(item => item.name), ancestors: path.slice(0, -1),
@@ -210,6 +210,10 @@ function createOrganizationService(repo = defaultRepository, audit = defaultAudi
     createUnit, create: createUnit, updateUnit, update: updateUnit, moveUnit, archiveUnit, archive: archiveUnit,
     createPosition: (unitId, payload) => savePosition(unitId, payload), updatePosition: (id, payload) => savePosition(null, payload, id),
     archivePosition: (id, actorId) => savePosition(null, { isActive: false, actorId }, id), savePosition,
+    // V2 uses structural identity; legacy holder-only adapters above stay unchanged.
+    resolveStructuralDepartmentHead: async (id,instituteId,at) => { if(!instituteId)return null; const unit=await linkedUnit('department_id',id,instituteId);return unit?authority.resolveUnitHead(unit.id,instituteId,null,at):null; },
+    resolveStructuralSectionHead: async (id,instituteId,at) => { if(!instituteId)return null; const unit=await linkedUnit('section_id',id,instituteId);return unit?authority.resolveUnitHead(unit.id,instituteId,null,at):null; },
+    resolveStructuralExecutiveOwner: async (id,instituteId,at) => { if(!instituteId)return null; const unit=await linkedUnit('department_id',id,instituteId);return unit?authority.resolveExecutiveOwner(unit.id,instituteId,null,at):null; },
     resolvePositionHolder, authority, assignHead, assignHeadWithClient, transaction,
     resolveDepartmentHead: async (id,instituteId) => { const unit = await linkedUnit('department_id',id,instituteId); return unit ? legacyAuthority(await authority.resolveUnitHead(unit.id,unit.institute_id)) : null; },
     resolveSectionHead: async (id,instituteId) => { const unit = await linkedUnit('section_id',id,instituteId); return unit ? legacyAuthority(await authority.resolveUnitHead(unit.id,unit.institute_id)) : null; },

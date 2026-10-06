@@ -19,7 +19,8 @@ const ensureRequestedItemUnitOfMeasureColumn = require("../../utils/ensureReques
 const {
   evaluateBudgetCoverage,
 } = require("../../services/financeCoreService");
-const { validateRequestItemIdentity, auditItemMaster } = require('../../services/procurementItemIdentityService');
+const { normalizeNewRequestItem } = require('../../services/procurementItemIdentityService');
+const { recordNewIdentity } = require('../../services/requestedItemWriteService');
 
 const URGENT_REQUEST_PERMISSION = 'requests.mark-urgent-on-submit';
 const MAX_UNIT_OF_MEASURE_LENGTH = 80;
@@ -820,11 +821,9 @@ const createRequest = async (req, res, next) => {
 
     const itemIdMap = [];
     for (let idx = 0; idx < items.length; idx++) {
-      const governedItem = request_type === 'Warehouse Supply' || !items[idx].request_mode
+      const governedItem = request_type === 'Warehouse Supply'
         ? items[idx]
-        : await validateRequestItemIdentity(client, items[idx], req.user, {
-            requireGovernedIdentity: true,
-          });
+        : await normalizeNewRequestItem(client, items[idx], req.user);
       items[idx] = governedItem;
       const {
         item_name,
@@ -919,24 +918,8 @@ const createRequest = async (req, res, next) => {
           );
         }
         requestedItemId = insertedReq.rows[0].id;
-        if (request_mode === 'pending_item_creation') {
-          const proposed = pending_item || {};
-          await client.query(
-            `INSERT INTO pending_item_requests
-             (request_id,requested_item_id,proposed_name,item_type,category,required_specifications,intended_use,
-              requested_quantity,requested_uom,justification,requester_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-            [request.id,requestedItemId,String(proposed.proposed_name||item_name).trim(),String(proposed.item_type||'general_item').trim(),
-              proposed.category||null,proposed.required_specifications||{},intended_use||proposed.intended_use||'',quantity,
-              unit_of_measure||proposed.requested_uom||null,String(proposed.justification||restriction_justification).trim(),req.user.id],
-          );
-          await auditItemMaster(client,{entityType:'pending_item_request',action:'submitted',actorId:req.user.id,
-            reason:proposed.justification||restriction_justification,requestId:request.id,requestedItemId,
-            context:{institute_id:req.user.institute_id,department_id},next:{proposed_name:proposed.proposed_name||item_name}});
-        } else if (request_mode === 'approved_free_text_exception') {
-          await auditItemMaster(client,{entityType:'requested_item',entityId:requestedItemId,action:'free_text_exception',actorId:req.user.id,
-            reason:restriction_justification,requestId:request.id,requestedItemId,context:{institute_id:req.user.institute_id,department_id},next:governedItem});
-        }
+        await recordNewIdentity(client,request.id,requestedItemId,governedItem,req.user,
+          {institute_id:req.user.institute_id,department_id});
         if (request_type === "Stock" && requestedItemId && contract_id && contract_item_id) {
           await ensureRequestedItemFinancialsTable(client);
           await client.query(

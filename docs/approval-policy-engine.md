@@ -112,3 +112,42 @@ Shadow generation may write only shadow tables (and coarse audit events when add
 5. In a future phase, provide versioned live activation and rollback.
 
 Stages 4 and 5 are deliberately not implemented.
+
+### Delegating an unstaffed structural position
+
+An active, effective position can represent an authority even when `user_id` is
+NULL. The organization authority service exposes this as `POSITION_UNSTAFFED`
+with the position and unit identity intact. This status is structural context,
+not a resolved user approver. The legacy holder-only adapters remain holder-only.
+
+V2 shadow routing and simulation check an effective position delegation before
+returning `UNRESOLVED`. A valid `PURCHASE_REQUEST_APPROVAL` delegation produces
+`DELEGATED`, preserves the required position, and leaves the structural holder
+NULL. Without an effective delegation the position is not routable. Ambiguous
+positions fail closed before any delegation lookup; there is no executive
+hierarchy fallback. Simulation evaluates both position dates and delegation
+periods at its evaluation time. Delegation ranges are half-open (`from <= at < to`).
+
+At `/admin/approval-delegations`, users with `approval-delegation.view` can view
+institute delegations. Users who also have `approval-delegation.manage` can select
+structural positions including those with no system user, create bounded
+approval delegations, and revoke them with a reason. The server supplies selector
+options from the authenticated institute; a position delegation needs no
+frontend delegator user. Staffed positions retain their actual holder as context.
+Existing holder validation, self-delegation, scope, overlap, audit and revocation
+controls remain. Creation serializes delegation checks within an institute and
+rejects one-hop chains regardless of edge creation order.
+
+POSITION version readiness accepts an unstaffed position with an effective
+delegation. Context-dependent resolvers such as EXECUTIVE_OWNER must be verified
+with a department-specific simulation or shadow run; static version readiness
+does not resolve request-specific ancestry. Organization holder health continues
+to describe structural staffing rather than delegated acting approvers.
+
+No new migration is required. Migration 032 already supports nullable
+`delegator_user_id` and snapshot `structural_holder_id`. Route steps expose the
+snapshot field names (`requiredAuthority`, `resolvedUnitId`,
+`resolvedPositionId`, `structuralHolderId`, `actingApproverId`, `delegationId`,
+`resolutionType`) so the internal snapshot append API preserves this provenance
+without substituting the delegate as holder. No live routing or snapshot writes
+are connected to request submission by this change.

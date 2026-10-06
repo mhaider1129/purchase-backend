@@ -107,7 +107,7 @@ async function issue(input, suppliedClient = null) {
       await client.query('UPDATE inventory_reservation_allocations SET consumed_quantity=consumed_quantity+$2,updated_at=CURRENT_TIMESTAMP WHERE id=$1', [allocation.id, amount]);
     }
     const totalConsumed = Number(reservation.consumed_quantity)+quantity; const complete = totalConsumed === Number(reservation.quantity);
-    await client.query(`UPDATE inventory_reservations SET consumed_quantity=$2,status=CASE WHEN $3 THEN 'CONSUMED' ELSE 'ACTIVE' END,consumed_at=CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END,consumed_by=CASE WHEN $3 THEN $4 ELSE NULL END WHERE id=$1`, [reservation.id,totalConsumed,complete,input.actor.id]);
+    await client.query(`UPDATE inventory_reservations SET consumed_quantity=$2,status=CASE WHEN $3 THEN 'CONSUMED' ELSE 'ACTIVE' END,consumed_at=CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END,consumed_by=CASE WHEN $3 THEN $4::integer ELSE NULL END WHERE id=$1`, [reservation.id,totalConsumed,complete,input.actor.id]);
     await client.query(`INSERT INTO inventory_reservation_issue_operations
       (reservation_id,idempotency_key,requested_quantity,inventory_movement_id,created_by)
       VALUES($1,$2,$3,$4,$5)`, [reservation.id,idempotencyKey,quantity,posted.movement.id,input.actor.id]);

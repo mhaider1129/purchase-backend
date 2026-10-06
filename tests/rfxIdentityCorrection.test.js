@@ -9,7 +9,7 @@ const poRepository = () => {
   let sequence = 0;
   const numbers = new Set();
   const tx = {
-    lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ generic_item_id: 3, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
+    lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ request_mode:'generic_item',catalog_status:'catalogued',generic_item_id: 3, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
     nextPurchaseOrderNumber: async () => ({ po_number: `PO-2026-${String(++sequence).padStart(6, '0')}` }),
     findPurchaseOrderByNumber: async number => numbers.has(number) ? { id: 1 } : null,
     insertHeader: async row => { if (numbers.has(row.po_number)) throw Object.assign(new Error('duplicate'), { code: '23505' }); numbers.add(row.po_number); return { id: numbers.size, ...row }; },
@@ -54,7 +54,7 @@ describe('final RFx and PO identity correction', () => {
   });
 
   test('linked lines require real requested-item identity and reject foreign/duplicate items', () => {
-    const items = [{ id: 11, approved_quantity: '1' }, { id: 12, approved_quantity: '1' }];
+    const items = [{ id: 11, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '1' }, { id: 12, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '1' }];
     expect(() => normalizeQuotationLines([{ quantity: '1', unit_cost: '2' }], items)).toThrow(expect.objectContaining({ code: 'RFX_REQUESTED_ITEM_REQUIRED' }));
     expect(() => normalizeQuotationLines([{ requested_item_id: 99, quantity: '1', unit_cost: '2' }], items)).toThrow(expect.objectContaining({ code: 'RFX_REQUESTED_ITEM_MISMATCH' }));
     expect(() => normalizeQuotationLines([{ requested_item_id: 11, quantity: '1', unit_cost: '2' }, { requested_item_id: 11, quantity: '1', unit_cost: '3' }], items)).toThrow(expect.objectContaining({ code: 'RFX_DUPLICATE_RESPONSE_ITEM' }));
@@ -64,26 +64,26 @@ describe('final RFx and PO identity correction', () => {
     const result = normalizeQuotationLines([
       { requested_item_id: 11, quoted_quantity: '2.0000', unit_price: '1.2345', free_quantity: '100', currency: 'usd' },
       { requested_item_id: 12, quoted_quantity: '3', unit_price: '7.0001', free_quantity: '0', currency: 'USD' },
-    ], [{ id: 11, approved_quantity: '2' }, { id: 12, approved_quantity: '3' }]);
+    ], [{ id: 11, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '2' }, { id: 12, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '3' }]);
     expect(result.lines.map(line => line.unit_price)).toEqual(['1.2345', '7.0001']);
     expect(result.total).toBe('23.46930000');
     expect(result.currency).toBe('USD');
   });
 
   test('whole-request quotations require every line and the full payable quantity', () => {
-    const items = [{ id: 11, approved_quantity: '100' }, { id: 12, quantity: '2' }];
+    const items = [{ id: 11, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '100' }, { id: 12, request_mode: 'service', catalog_status: 'approved_exception', quantity: '2' }];
     expect(() => normalizeQuotationLines([{ requested_item_id: 11, quoted_quantity: '100', unit_price: '1' }], items)).toThrow(expect.objectContaining({ code: 'RFX_INCOMPLETE_QUOTATION' }));
     expect(() => normalizeQuotationLines([{ requested_item_id: 11, quoted_quantity: '60', free_quantity: '40', unit_price: '1' }, { requested_item_id: 12, quoted_quantity: '2', unit_price: '1' }], items)).toThrow(expect.objectContaining({ code: 'RFX_QUOTATION_QUANTITY_MISMATCH' }));
     expect(normalizeQuotationLines([{ requested_item_id: 11, quoted_quantity: '100', free_quantity: '10', unit_price: '1' }, { requested_item_id: 12, quoted_quantity: '2', unit_price: '1' }], items).lines).toHaveLength(2);
   });
 
   test('quotation lines must use one currency', () => {
-    const items = [{ id: 11, quantity: '1' }, { id: 12, quantity: '1' }];
+    const items = [{ id: 11, request_mode: 'service', catalog_status: 'approved_exception', quantity: '1' }, { id: 12, request_mode: 'service', catalog_status: 'approved_exception', quantity: '1' }];
     expect(() => normalizeQuotationLines([{ requested_item_id: 11, quantity: '1', unit_price: '1', currency: 'USD' }, { requested_item_id: 12, quantity: '1', unit_price: '1', currency: 'EUR' }], items)).toThrow(expect.objectContaining({ code: 'RFX_MIXED_CURRENCY_NOT_SUPPORTED' }));
   });
 
   test('award-time normalization fails before awards for incomplete/changed responses', () => {
-    const items = [{ id: 11, approved_quantity: '100' }, { id: 12, approved_quantity: '2' }];
+    const items = [{ id: 11, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '100' }, { id: 12, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '2' }];
     expect(() => priceNormalizedRfxResponse({ responseItems: [{ requested_item_id: 11, quoted_quantity: '100', unit_price: '1', currency: 'USD' }], requestItems: items })).toThrow(expect.objectContaining({ code: 'RFX_INCOMPLETE_QUOTATION' }));
     expect(() => priceNormalizedRfxResponse({ responseItems: [{ requested_item_id: 11, quoted_quantity: '60', unit_price: '1', currency: 'USD' }, { requested_item_id: 12, quoted_quantity: '2', unit_price: '1', currency: 'USD' }], requestItems: items })).toThrow(expect.objectContaining({ code: 'RFX_QUOTATION_QUANTITY_MISMATCH' }));
     expect(priceNormalizedRfxResponse({ responseItems: [{ id: 1, requested_item_id: 11, quoted_quantity: '100', unit_price: '1', currency: 'USD' }, { id: 2, requested_item_id: 12, quoted_quantity: '2', unit_price: '3', currency: 'USD' }], requestItems: items })).toHaveLength(2);
@@ -91,7 +91,7 @@ describe('final RFx and PO identity correction', () => {
 
   test('submission persists governed lines and rejects a mismatched header total', async () => {
     const saved = [];
-    const repository = { loadRequestedItems: async () => [{ id: 11, approved_quantity: '2' }], insertResponse: async row => ({ id: 5, ...row }), insertResponseItem: async row => { saved.push(row); return { id: 20, ...row }; } };
+    const repository = { loadRequestedItems: async () => [{ id: 11, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '2' }], insertResponse: async row => ({ id: 5, ...row }), insertResponseItem: async row => { saved.push(row); return { id: 20, ...row }; } };
     await expect(submitLinkedRfxResponse({ repository, event: { id: 1, request_id: 2 }, supplierId: 3, bidAmount: '9', lines: [{ requested_item_id: 11, quoted_quantity: '2', unit_price: '5' }] })).rejects.toMatchObject({ code: 'RFX_QUOTATION_TOTAL_MISMATCH' });
     const response = await submitLinkedRfxResponse({ repository, event: { id: 1, request_id: 2 }, supplierId: 3, bidAmount: '10.00000000', lines: [{ requested_item_id: 11, quoted_quantity: '2', unit_price: '5', free_quantity: '9' }] });
     expect(response.quotation_total).toBe('10.00000000');

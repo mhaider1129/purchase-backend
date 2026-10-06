@@ -3,7 +3,7 @@ class ItemMasterRepository {
   async findGeneric(id) {
     const result = await this.client.query(`SELECT gi.*, c.category_name
       FROM generic_items gi LEFT JOIN item_categories c ON c.id = gi.category_id
-      WHERE gi.id = $1 FOR SHARE`, [id]);
+      WHERE gi.id = $1 FOR SHARE OF gi`, [id]);
     return result.rows[0] || null;
   }
   async findUom(id) {
@@ -15,7 +15,7 @@ class ItemMasterRepository {
       FROM approved_products ap
       LEFT JOIN item_manufacturers m ON m.id = ap.manufacturer_id
       LEFT JOIN item_uom u ON u.id = ap.product_uom_id
-      WHERE ap.id = $1 FOR SHARE`, [id]);
+      WHERE ap.id = $1 FOR SHARE OF ap`, [id]);
     return result.rows[0] || null;
   }
 }

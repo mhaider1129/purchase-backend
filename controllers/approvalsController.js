@@ -1,3 +1,4 @@
+const { applyRequestedItemEdits } = require('../services/requestedItemWriteService');
 // src/controllers/approvalsController.js
 const pool = require('../config/db');
 const { sendEmail, buildApprovalActionLinks, verifyApprovalActionToken } = require('../utils/emailService');
@@ -402,35 +403,7 @@ const handleApprovalDecision = async (req, res, next) => {
             );
           }
         } else {
-          await client.query(`UPDATE attachments SET item_id = NULL WHERE request_id = $1`, [approval.request_id]);
-          await client.query(`DELETE FROM requested_items WHERE request_id = $1`, [approval.request_id]);
-
-          for (const item of editedItems) {
-            await client.query(
-              `INSERT INTO public.requested_items (
-                  request_id,
-                  item_name,
-                  brand,
-                  quantity,
-                  unit_cost,
-                  total_cost,
-                  available_quantity,
-                  intended_use,
-                  specs
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-              [
-                approval.request_id,
-                item.item_name,
-                item.brand || null,
-                item.quantity,
-                item.unit_cost,
-                item.total_cost,
-                item.available_quantity,
-                item.intended_use,
-                item.specs,
-              ],
-            );
-          }
+          await applyRequestedItemEdits(client, approval.request_id, editedItems, req.user);
         }
 
         await client.query(

@@ -319,13 +319,14 @@ const createRfxEvent = async (req, res, next) => {
       if (rowCount === 0) {
         return next(createHttpError(404, 'Linked request not found'));
       }
-      await assertRequestItemsReadyForSourcing(pool, requestId);
+
       const requestItems = await pool.query('SELECT id AS requested_item_id, item_name, specs, quantity, approval_comments AS notes FROM requested_items WHERE request_id=$1 ORDER BY id', [requestId]);
       incomingDetails = { ...(incomingDetails || {}), items: requestItems.rows };
     }
 
     const client=await pool.connect(); let created;
     try { await client.query('BEGIN');
+      if(requestId) await assertRequestItemsReadyForSourcing(client,requestId,undefined,req.user);
       const { rows } = await client.query(
        `INSERT INTO rfx_events (title, rfx_type, description, details, request_id, due_date, status, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, 'open', $7)
@@ -403,7 +404,8 @@ const submitRfxResponse = async (req, res, next) => {
     try {
       await client.query('BEGIN');
       const repository = {
-        loadRequestedItems: async (requestId) => (await client.query('SELECT * FROM requested_items WHERE request_id=$1 ORDER BY id', [requestId])).rows,
+        client,
+        loadRequestedItems: async (requestId) => (await client.query('SELECT * FROM requested_items WHERE request_id=$1 ORDER BY id FOR SHARE', [requestId])).rows,
         assertOfferIdentity: async (line,supplierId) => {
           const result=await client.query(`SELECT c.supplier_id,c.approved_product_id,c.is_active catalog_active,c.purchasing_uom_id,c.conversion_factor,p.generic_item_id,p.approval_status,p.is_active product_active,p.package_quantity,g.lifecycle_status,g.is_active generic_active,ri.generic_item_id requested_generic_id,ri.mandatory_product_id,ri.request_mode,u.is_active uom_active
             FROM requested_items ri JOIN approved_products p ON p.id=$2 JOIN generic_items g ON g.id=p.generic_item_id JOIN supplier_catalog_items c ON c.id=$3 LEFT JOIN item_uom u ON u.id=c.purchasing_uom_id

@@ -1,3 +1,5 @@
+const { IDENTITY_FIELDS } = require('../../services/procurementItemIdentityService');
+const { prepareRequestedItemEdits, applyRequestedItemEdits } = require('../../services/requestedItemWriteService');
 const pool = require('../../config/db');
 const ensureRequesterSectionAssignments = require('../../utils/ensureRequesterSectionAssignments');
 const createHttpError = require('../../utils/httpError');
@@ -1184,6 +1186,7 @@ const updateRequestBeforeApproval = async (req, res, next) => {
     }
 
     sanitizedItems.push({
+      ...Object.fromEntries([...IDENTITY_FIELDS, 'pending_item', 'unit_of_measure', 'id', 'item_id'].filter(key => Object.hasOwn(item, key)).map(key => [key, item[key]])),
       item_name: itemName,
       brand: item.brand || null,
       quantity: parsedQuantity,
@@ -1352,6 +1355,11 @@ const updateRequestBeforeApproval = async (req, res, next) => {
       }
     }
 
+    if (requestRow.request_type !== 'Warehouse Supply') {
+      const prepared = await prepareRequestedItemEdits(client, requestId, sanitizedItems, req.user);
+      sanitizedItems.splice(0, sanitizedItems.length, ...prepared);
+    }
+
     const estimatedCost =
       requestRow.request_type === 'Stock'
         ? 0
@@ -1491,6 +1499,7 @@ const updateRequestBeforeApproval = async (req, res, next) => {
       ],
     );
 
+    let persistedItems;
     if (requestRow.request_type === 'Warehouse Supply') {
       await client.query(`DELETE FROM warehouse_supply_items WHERE request_id = $1`, [requestId]);
 
@@ -1502,35 +1511,7 @@ const updateRequestBeforeApproval = async (req, res, next) => {
         );
       }
     } else {
-      await client.query(`UPDATE attachments SET item_id = NULL WHERE request_id = $1`, [requestId]);
-      await client.query(`DELETE FROM requested_items WHERE request_id = $1`, [requestId]);
-
-      for (const item of sanitizedItems) {
-        await client.query(
-          `INSERT INTO public.requested_items (
-              request_id,
-              item_name,
-              brand,
-              quantity,
-              unit_cost,
-              total_cost,
-              available_quantity,
-              intended_use,
-              specs
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [
-            requestId,
-            item.item_name,
-            item.brand || null,
-            item.quantity,
-            item.unit_cost,
-            item.total_cost,
-            item.available_quantity,
-            item.intended_use,
-            item.specs,
-          ],
-        );
-      }
+      persistedItems = await applyRequestedItemEdits(client, requestId, sanitizedItems, req.user);
     }
 
     await client.query(
@@ -1551,6 +1532,7 @@ const updateRequestBeforeApproval = async (req, res, next) => {
       message: '✅ Request updated successfully',
       request_id: requestId,
       estimated_cost: estimatedCost,
+      ...(persistedItems ? {items: persistedItems} : {}),
     });
   } catch (err) {
     if (transactionActive) {

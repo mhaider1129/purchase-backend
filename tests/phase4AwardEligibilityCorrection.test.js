@@ -12,7 +12,7 @@ const awardHarness = ({ blocked = false } = {}) => {
   let tail = Promise.resolve();
   const tx = {
     client: {},
-    lockRequestItem: async () => ({ id: 2, request_id: 1, approved_quantity: '100' }),
+    lockRequestItem: async () => ({ id: 2, request_id: 1, request_mode: 'service', catalog_status: 'approved_exception', approved_quantity: '100' }),
     loadSupplierEligibilityFacts: async id => ({ supplier: { id, status: 'active' }, complianceBlocked: blocked, evaluationFacts: [{ overall_score: 90 }], deferredChecks: ['CATEGORY_QUALIFICATION_NOT_AVAILABLE', 'BLACKLIST_REGISTRY_NOT_AVAILABLE'] }),
     findByIdempotencyKey: async key => rows.get(key),
     sumActiveAwards: async () => String(awarded),

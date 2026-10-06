@@ -6,31 +6,20 @@ const router = express.Router();
 const TASK_STATUSES = new Set(['pending', 'in_progress', 'completed', 'blocked']);
 const ASSIGNER_ROLES = new Set(['SCM', 'COO']);
 
-let ensureTasksTablePromise;
-
-const ensureTasksTable = async () => {
-  if (!ensureTasksTablePromise) {
-    ensureTasksTablePromise = pool.query(`
-      CREATE TABLE IF NOT EXISTS employee_tasks (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        assigned_to INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-        assigned_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-        status TEXT NOT NULL DEFAULT 'pending',
-        employee_update TEXT,
-        assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        completed_at TIMESTAMPTZ
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_employee_tasks_assigned_to ON employee_tasks (assigned_to);
-      CREATE INDEX IF NOT EXISTS idx_employee_tasks_assigned_by ON employee_tasks (assigned_by);
-    `);
+// Schema deployment belongs to sql/development/20261005_02_employee_tasks.sql.
+// Request handlers perform DML only. Missing deployment is an actionable error.
+const checkTasksTable = async () => {
+  const result = await pool.query("SELECT to_regclass('public.employee_tasks') AS relation");
+  if (!result.rows[0]?.relation) {
+    const error = new Error('Employee Tasks schema is not deployed; manually apply the Development employee_tasks migration');
+    error.code = 'EMPLOYEE_TASKS_SCHEMA_MISSING';
+    throw error;
   }
-
-  return ensureTasksTablePromise;
 };
+
+const taskFailure = (res,err,message) => res.status(err.code === 'EMPLOYEE_TASKS_SCHEMA_MISSING' ? 503 : 500)
+  .json({success:false,message:err.code === 'EMPLOYEE_TASKS_SCHEMA_MISSING' ? 'Employee Tasks is temporarily unavailable pending deployment.' : message,
+    ...(err.code === 'EMPLOYEE_TASKS_SCHEMA_MISSING' ? {code:err.code} : {})});
 
 const canAssignTasks = (user) => ASSIGNER_ROLES.has(user?.role);
 
@@ -48,14 +37,14 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    await ensureTasksTable();
+    await checkTasksTable();
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1 AND is_active = TRUE', [assignedTo]);
     if (!userCheck.rowCount) {
       return res.status(404).json({ success: false, message: 'Assigned employee not found or inactive.' });
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO employee_tasks (title, description, assigned_to, assigned_by)
+      `INSERT INTO public.employee_tasks (title, description, assigned_to, assigned_by)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [title, description, assignedTo, req.user.id]
@@ -64,7 +53,7 @@ router.post('/', async (req, res) => {
     return res.status(201).json({ success: true, task: rows[0] });
   } catch (err) {
     console.error('❌ create task error:', err);
-    return res.status(500).json({ success: false, message: 'Failed to assign task.' });
+    return taskFailure(res,err,'Failed to assign task.');
   }
 });
 
@@ -86,7 +75,7 @@ router.get('/assignable-users', async (req, res) => {
     return res.json({ success: true, users: rows });
   } catch (err) {
     console.error('❌ load assignable users error:', err);
-    return res.status(500).json({ success: false, message: 'Failed to load assignable users.' });
+    return taskFailure(res,err,'Failed to load assignable users.');
   }
 });
 
@@ -98,7 +87,7 @@ router.get('/assigned-by-me', async (req, res) => {
   const statusFilter = typeof req.query?.status === 'string' ? req.query.status.trim().toLowerCase() : '';
 
   try {
-    await ensureTasksTable();
+    await checkTasksTable();
 
     const params = [req.user.id];
     let whereClause = 'WHERE t.assigned_by = $1';
@@ -111,7 +100,7 @@ router.get('/assigned-by-me', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT t.id, t.title, t.description, t.status, t.employee_update, t.assigned_at, t.updated_at, t.completed_at,
               assignee.name AS assigned_to_name, assignee.id AS assigned_to
-       FROM employee_tasks t
+       FROM public.employee_tasks t
        JOIN users assignee ON assignee.id = t.assigned_to
        ${whereClause}
        ORDER BY t.updated_at DESC, t.assigned_at DESC`,
@@ -121,7 +110,7 @@ router.get('/assigned-by-me', async (req, res) => {
     return res.json({ success: true, tasks: rows });
   } catch (err) {
     console.error('❌ list assigned-by-me tasks error:', err);
-    return res.status(500).json({ success: false, message: 'Failed to load assigned tasks.' });
+    return taskFailure(res,err,'Failed to load assigned tasks.');
   }
 });
 
@@ -145,9 +134,9 @@ router.patch('/:id/manage', async (req, res) => {
   }
 
   try {
-    await ensureTasksTable();
+    await checkTasksTable();
 
-    const existingRes = await pool.query('SELECT * FROM employee_tasks WHERE id = $1 AND assigned_by = $2', [taskId, req.user.id]);
+    const existingRes = await pool.query('SELECT * FROM public.employee_tasks WHERE id = $1 AND assigned_by = $2', [taskId, req.user.id]);
     if (!existingRes.rowCount) {
       return res.status(404).json({ success: false, message: 'Task not found under your assignments.' });
     }
@@ -169,7 +158,7 @@ router.patch('/:id/manage', async (req, res) => {
     const finalStatus = nextStatus || existing.status;
 
     const { rows } = await pool.query(
-      `UPDATE employee_tasks
+      `UPDATE public.employee_tasks
        SET title = COALESCE($1, title),
            description = COALESCE($2, description),
            assigned_to = $3,
@@ -184,7 +173,7 @@ router.patch('/:id/manage', async (req, res) => {
     return res.json({ success: true, task: rows[0] });
   } catch (err) {
     console.error('❌ manage task error:', err);
-    return res.status(500).json({ success: false, message: 'Failed to manage task.' });
+    return taskFailure(res,err,'Failed to manage task.');
   }
 });
 
@@ -199,25 +188,25 @@ router.delete('/:id', async (req, res) => {
   }
 
   try {
-    await ensureTasksTable();
-    const result = await pool.query('DELETE FROM employee_tasks WHERE id = $1 AND assigned_by = $2 RETURNING id', [taskId, req.user.id]);
+    await checkTasksTable();
+    const result = await pool.query('DELETE FROM public.employee_tasks WHERE id = $1 AND assigned_by = $2 RETURNING id', [taskId, req.user.id]);
     if (!result.rowCount) {
       return res.status(404).json({ success: false, message: 'Task not found under your assignments.' });
     }
     return res.json({ success: true, message: 'Task deleted successfully.' });
   } catch (err) {
     console.error('❌ delete task error:', err);
-    return res.status(500).json({ success: false, message: 'Failed to delete task.' });
+    return taskFailure(res,err,'Failed to delete task.');
   }
 });
 
 router.get('/my', async (req, res) => {
   try {
-    await ensureTasksTable();
+    await checkTasksTable();
     const { rows } = await pool.query(
       `SELECT t.id, t.title, t.description, t.status, t.employee_update, t.assigned_at, t.updated_at, t.completed_at,
               assigner.name AS assigned_by_name
-       FROM employee_tasks t
+       FROM public.employee_tasks t
        JOIN users assigner ON assigner.id = t.assigned_by
        WHERE t.assigned_to = $1
        ORDER BY t.assigned_at DESC`,
@@ -227,7 +216,7 @@ router.get('/my', async (req, res) => {
     return res.json({ success: true, tasks: rows });
   } catch (err) {
     console.error('❌ list my tasks error:', err);
-    return res.status(500).json({ success: false, message: 'Failed to load tasks.' });
+    return taskFailure(res,err,'Failed to load tasks.');
   }
 });
 
@@ -245,9 +234,9 @@ router.patch('/:id/status', async (req, res) => {
   }
 
   try {
-    await ensureTasksTable();
+    await checkTasksTable();
 
-    const existing = await pool.query('SELECT assigned_to FROM employee_tasks WHERE id = $1', [taskId]);
+    const existing = await pool.query('SELECT assigned_to FROM public.employee_tasks WHERE id = $1', [taskId]);
     if (!existing.rowCount) {
       return res.status(404).json({ success: false, message: 'Task not found.' });
     }
@@ -257,7 +246,7 @@ router.patch('/:id/status', async (req, res) => {
     }
 
     const { rows } = await pool.query(
-      `UPDATE employee_tasks
+      `UPDATE public.employee_tasks
        SET status = $1,
            employee_update = COALESCE($2, employee_update),
            updated_at = NOW(),
@@ -270,7 +259,7 @@ router.patch('/:id/status', async (req, res) => {
     return res.json({ success: true, task: rows[0] });
   } catch (err) {
     console.error('❌ update task status error:', err);
-    return res.status(500).json({ success: false, message: 'Failed to update task status.' });
+    return taskFailure(res,err,'Failed to update task status.');
   }
 });
 

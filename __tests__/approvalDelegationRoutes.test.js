@@ -1,0 +1,16 @@
+const mockOptions=jest.fn(),mockCreate=jest.fn();
+jest.mock('../services/approvalDelegationService',()=>({options:(...args)=>mockOptions(...args),create:(...args)=>mockCreate(...args)}));
+const express=require('express');
+const request=require('supertest');
+const router=require('../routes/approvalDelegations');
+let user;
+const app=express();
+app.use(express.json());
+app.use((req,_res,next)=>{req.user=user;next();});
+app.use(router);
+app.use((err,_req,res,_next)=>res.status(err.statusCode||500).json({error:err.message}));
+beforeEach(()=>{jest.clearAllMocks();user={id:7,institute_id:17,permissions:['approval-delegation.view','approval-delegation.manage']};mockOptions.mockResolvedValue({positions:[{id:501,user_id:null}],users:[]});mockCreate.mockResolvedValue({id:801})});
+test('options endpoint requires authentication',async()=>{user=null;expect((await request(app).get('/approval-authority-delegations/options')).status).toBe(401);expect(mockOptions).not.toHaveBeenCalled()});
+test('view permission does not grant management or selector access',async()=>{user.permissions=['approval-delegation.view'];expect((await request(app).get('/approval-authority-delegations/options')).status).toBe(403);expect((await request(app).post('/approval-authority-delegations').send({organizationPositionId:501})).status).toBe(403);expect(mockOptions).not.toHaveBeenCalled();expect(mockCreate).not.toHaveBeenCalled()});
+test('options always use authenticated institute rather than frontend query',async()=>{const response=await request(app).get('/approval-authority-delegations/options?instituteId=999');expect(response.status).toBe(200);expect(response.body.positions[0].user_id).toBeNull();expect(mockOptions).toHaveBeenCalledWith({id:7,instituteId:17})});
+test('creation passes authenticated scope independently of frontend body',async()=>{const body={organizationPositionId:501,delegateUserId:702,instituteId:999};expect((await request(app).post('/approval-authority-delegations').send(body)).status).toBe(201);expect(mockCreate).toHaveBeenCalledWith(body,{id:7,instituteId:17})});

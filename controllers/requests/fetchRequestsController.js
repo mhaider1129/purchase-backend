@@ -1,3 +1,4 @@
+const { IDENTITY_FIELDS } = require('../../services/procurementItemIdentityService');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
@@ -84,6 +85,7 @@ const getRequestDetails = async (req, res, next) => {
       itemsRes = await pool.query(
         `SELECT
            ri.id,
+           ${IDENTITY_FIELDS.map(name => `ri.${name}`).join(',')},
            ri.request_id,
            ri.item_name,
            ri.brand,
@@ -284,6 +286,7 @@ const getRequestItemsOnly = async (req, res, next) => {
         `
       SELECT
         ri.id,
+        ${IDENTITY_FIELDS.map(name => `ri.${name}`).join(',')},
         ri.request_id,
         TRUE AS supports_procurement_events,
         ri.item_name,

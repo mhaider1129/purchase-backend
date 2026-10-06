@@ -36,6 +36,7 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
       id: 20,
       request_id: 10,
       item_name: 'Gloves',
+      request_mode:'generic_item',generic_item_id:4,catalog_status:'catalogued',
       quantity: 100,
       purchased_quantity: 0,
       unit_cost: 5,
@@ -97,7 +98,8 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
       };
     }
     if (/UPDATE requests/.test(sql)) return {};
-    throw new Error(`Unexpected SQL: ${sql}`);
+    if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
+      throw new Error(`Unexpected SQL: ${sql}`);
   });
   return client;
 };
@@ -236,7 +238,7 @@ describe('procurement item events', () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it('creates a linked requested item when adding a procurement event to a warehouse supply item', async () => {
+  it('rolls back an unresolved warehouse procurement bridge instead of silently approving it', async () => {
     const client = buildClient({ requestOverrides: { request_type: 'Warehouse Supply' } });
     const state = {
       item: {
@@ -290,13 +292,14 @@ describe('procurement item events', () => {
           total_cost: params[2] ?? state.item.total_cost,
           procurement_status: params[3],
         };
-        return { rowCount: 1, rows: [state.item] };
+        return { rowCount: 1, rows: [{...state.item,request_mode:'free_text',catalog_status:'pending_mapping'}] };
       }
       if (/INSERT INTO request_logs/.test(sql)) return {};
       if (/COUNT\(\*\)::int AS total_items/.test(sql)) {
         return { rows: [{ total_items: 1, fully_procured_items: 0, started_items: 1 }] };
       }
       if (/UPDATE requests/.test(sql)) return {};
+      if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
       throw new Error(`Unexpected SQL: ${sql}`);
     });
 
@@ -307,20 +310,13 @@ describe('procurement item events', () => {
 
     await addProcurementItemEvent(req, res, next);
 
-    expect(next).not.toHaveBeenCalled();
-    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO public.requested_items'), [10, 'Gloves', 100, 7]);
-    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE public.warehouse_supply_items'), [88, 20]);
-    expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      event: expect.objectContaining({
-        requested_item_id: 88,
-        event_quantity: 1,
-      }),
-      item: expect.objectContaining({
-        purchased_quantity: 1,
-        procurement_status: 'partially_procured',
-      }),
-    }));
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'}));
+    const [sql,values]=client.query.mock.calls.find(([sql])=>sql.includes('INSERT INTO public.requested_items'));
+    const columns=sql.match(/\(request_id,([^)]*)\)/)[1].split(',');
+    expect(values[1+columns.indexOf('request_mode')]).toBe('free_text');
+    expect(values[1+columns.indexOf('catalog_status')]).toBe('pending_mapping');
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    expect(client.query.mock.calls.some(([sql])=>/INSERT INTO public\.procurement_item_events/.test(sql))).toBe(false);
   });
 
   it('preserves old purchased_quantity as the starting point when no events exist', async () => {
@@ -350,6 +346,11 @@ describe('procurement item events', () => {
     const client = { query: jest.fn(), release: jest.fn() };
     client.query.mockImplementation(async (sql, params) => {
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (/FROM information_schema\.columns/.test(sql)) return { rows: [
+        { column_name: 'overage_decided_by' },
+        { column_name: 'overage_decided_at' },
+        { column_name: 'overage_decision_note' },
+      ] };
       if (/FROM public\.procurement_item_events pie/.test(sql)) {
         return { rowCount: 1, rows: [{
           id: 31, request_id: 10, requested_item_id: 20, item_name: 'Gloves',
@@ -365,6 +366,7 @@ describe('procurement item events', () => {
         return { rows: [{ total_items: 1, fully_procured_items: 1, started_items: 1 }] };
       }
       if (/UPDATE requests/.test(sql) || /INSERT INTO request_logs/.test(sql)) return { rowCount: 1 };
+      if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
       throw new Error(`Unexpected SQL: ${sql}`);
     });
     pool.connect.mockResolvedValue(client);
@@ -379,6 +381,39 @@ describe('procurement item events', () => {
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('overage_decided_by = $3'), [100, 103, 7, 'MOQ accepted', 31]);
     expect(client.query).toHaveBeenCalledWith('COMMIT');
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Over-quantity request approved.' }));
+  });
+
+  it('decides a pending overage when legacy tables lack decision metadata columns', async () => {
+    const client = { query: jest.fn(), release: jest.fn() };
+    client.query.mockImplementation(async (sql, params) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
+      if (/FROM information_schema\.columns/.test(sql)) return { rows: [] };
+      if (/FROM public\.procurement_item_events pie/.test(sql)) return { rowCount: 1, rows: [{
+        id: 32, request_id: 10, requested_item_id: 20, item_name: 'Gloves', event_quantity: 3,
+        purchased_quantity: 100, overage_approval_status: 'pending',
+      }] };
+      if (/UPDATE public\.procurement_item_events/.test(sql)) return { rowCount: 1 };
+      if (/INSERT INTO request_logs/.test(sql)) return { rowCount: 1 };
+      if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ decision: 'rejected' }, { role: 'SCM' });
+    req.params.eventId = '32';
+    const res = buildResponse();
+    const next = jest.fn();
+
+    await decideProcurementOverage(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringMatching(/overage_approval_status = 'rejected' WHERE id = \$1/),
+      [32]
+    );
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Over-quantity request rejected.' }));
+    const logCall = client.query.mock.calls.find(([sql]) => /INSERT INTO request_logs/.test(sql));
+    expect(logCall[1][1]).toBe('Procurement Overage Rejected');
   });
 
   it('ships the decision audit columns required by the overage endpoint', () => {

@@ -354,7 +354,7 @@ describe('procurement item events', () => {
       if (/FROM public\.procurement_item_events pie/.test(sql)) {
         return { rowCount: 1, rows: [{
           id: 31, request_id: 10, requested_item_id: 20, item_name: 'Gloves',
-          event_quantity: 3, purchased_quantity: 100, unit_cost: 5,
+          event_quantity: 3, purchased_quantity: 100, unit_cost: '310000.00',
           current_unit_cost: 5, current_total_cost: 500, overage_approval_status: 'pending',
         }] };
       }
@@ -379,6 +379,7 @@ describe('procurement item events', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(client.query).toHaveBeenCalledWith(expect.stringContaining('overage_decided_by = $3'), [100, 103, 7, 'MOQ accepted', 31]);
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('unit_cost = COALESCE($2::numeric, unit_cost)'), [103, '310000.00', 31930000, 7, 20]);
     expect(client.query).toHaveBeenCalledWith('COMMIT');
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Over-quantity request approved.' }));
   });
@@ -426,5 +427,71 @@ describe('procurement item events', () => {
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS overage_decided_at TIMESTAMP');
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS overage_decision_note TEXT');
     expect(migration).toContain('procurement_item_events_overage_decided_by_fkey');
+  });
+});
+
+describe('overage decision transaction safeguards', () => {
+  const setup = ({ columns = [], auditFailure = false } = {}) => {
+    let status = 'pending';
+    const client = { release: jest.fn(), query: jest.fn(async (sql, params) => {
+      if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)) return {};
+      if (sql.includes('information_schema.columns')) return { rows: columns.map(column_name => ({ column_name })) };
+      if (sql.includes('FROM public.procurement_item_events pie')) return { rowCount: 1, rows: [{ id: 31, requested_item_id: 20, item_name: 'Gloves', event_quantity: 3, purchased_quantity: 100, unit_cost: '310000.00', overage_approval_status: status }] };
+      if (sql.startsWith('UPDATE public.requested_items')) return { rows: [{ id: 20, purchased_quantity: params[0] }] };
+      if (sql.startsWith('UPDATE public.procurement_item_events')) { status = sql.includes("'approved'") ? 'approved' : 'rejected'; return { rowCount: 1 }; }
+      if (sql.includes('COUNT(*)::int AS total_items')) return { rows: [{ total_items: 1, fully_procured_items: 1, started_items: 1 }] };
+      if (sql.startsWith('UPDATE requests')) return {};
+      if (sql.includes('INSERT INTO request_logs')) { if (auditFailure) throw new Error('audit write failed'); return {}; }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    }) };
+    pool.connect.mockResolvedValue(client);
+    const req = buildRequest({ decision: 'approved' }, { role: 'SCM' });
+    req.params.eventId = '31';
+    return { client, req };
+  };
+  beforeEach(() => jest.clearAllMocks());
+  it.each([[[]], [['overage_decided_by']]])('approves decimal-string costs with absent or partial metadata: %j', async columns => {
+    const { client, req } = setup({ columns });
+    const next = jest.fn();
+    await decideProcurementOverage(req, buildResponse(), next);
+    expect(next).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('unit_cost = COALESCE($2::numeric, unit_cost)'), [103, '310000.00', 31930000, 7, 20]);
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining("overage_approval_status = 'approved' WHERE id = $3"), [100, 103, 31]);
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO request_logs'), expect.arrayContaining(['Procurement Overage Approved', 7]));
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+  });
+  it('does not apply an approved event twice', async () => {
+    const { client, req } = setup();
+    await decideProcurementOverage(req, buildResponse(), jest.fn());
+    const next = jest.fn();
+    await decideProcurementOverage(req, buildResponse(), next);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409 }));
+    expect(client.query.mock.calls.filter(([sql]) => sql.startsWith('UPDATE public.requested_items'))).toHaveLength(1);
+    expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+  });
+  it('rejects without changing quantities or costs', async () => {
+    const { client, req } = setup(); req.body.decision = 'rejected';
+    const next = jest.fn();
+    await decideProcurementOverage(req, buildResponse(), next);
+    expect(next).not.toHaveBeenCalled();
+    expect(client.query.mock.calls.some(([sql]) => sql.startsWith('UPDATE public.requested_items'))).toBe(false);
+    expect(client.query).toHaveBeenCalledWith('COMMIT');
+  });
+  it('rolls back approval when its audit write fails', async () => {
+    const { client, req } = setup({ auditFailure: true });
+    const next = jest.fn();
+    const log = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try { await decideProcurementOverage(req, buildResponse(), next); } finally { log.mockRestore(); }
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 500 }));
+    expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(client.query).not.toHaveBeenCalledWith('COMMIT');
+    expect(client.release).toHaveBeenCalled();
+  });
+  it('refuses unauthorized decisions before connecting to the database', async () => {
+    const req = buildRequest({ decision: 'approved' }); req.params.eventId = '31';
+    const next = jest.fn();
+    await decideProcurementOverage(req, buildResponse(), next);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    expect(pool.connect).not.toHaveBeenCalled();
   });
 });

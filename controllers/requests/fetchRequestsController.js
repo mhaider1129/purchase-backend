@@ -1287,7 +1287,23 @@ const getMyMaintenanceRequests = async (req, res, next) => {
            FROM approvals ap
            WHERE ap.request_id = r.id
              AND ap.status = 'Pending'
+             AND ap.is_active = TRUE
+             AND COALESCE(ap.is_superseded, FALSE) = FALSE
          ) AS current_approval_step,
+         COALESCE((
+           SELECT JSON_AGG(JSON_BUILD_OBJECT(
+             'approval_id', ap.id,
+             'approval_level', ap.approval_level,
+             'approver_name', approver.name,
+             'approver_role', approver.role
+           ) ORDER BY ap.approval_level, ap.id)
+           FROM approvals ap
+           LEFT JOIN users approver ON approver.id = ap.approver_id
+           WHERE ap.request_id = r.id
+             AND ap.status = 'Pending'
+             AND ap.is_active = TRUE
+             AND COALESCE(ap.is_superseded, FALSE) = FALSE
+         ), '[]'::json) AS current_pending_approvals,
          (
            SELECT u.name
            FROM approvals ap

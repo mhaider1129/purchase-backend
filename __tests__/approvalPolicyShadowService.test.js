@@ -2,6 +2,23 @@ const mockQuery=jest.fn(),mockConnect=jest.fn();jest.mock('../config/db',()=>({q
 const version={id:4,status:'SHADOW',policy:{instituteId:10},rules:[]},facts={requestId:7,instituteId:10,estimatedAmount:null};
 const setup=failure=>{const client={release:jest.fn(),query:jest.fn(async(sql)=>{if(failure==='step'&&String(sql).includes('shadow_steps'))throw new Error('step persistence');if(failure==='difference'&&String(sql).includes('shadow_differences'))throw new Error('difference persistence');if(String(sql).includes('shadow_runs'))return {rows:[{id:30}]};return {rows:[]}})};mockConnect.mockResolvedValue(client);mockQuery.mockResolvedValue({rows:[{approval_level:1,approver_id:1}]});engine.composeShadowRoute.mockResolvedValue({steps:[{approvalLevel:1,stepOrder:1,semanticKey:'X',resolverType:'REQUESTER',userId:2,resolutionStatus:'RESOLVED'}],matchedRules:[{code:'R'}]});return client};
 beforeEach(()=>jest.clearAllMocks());
+test('new run summary stores condition diagnostics and exact evaluated policy identity',async()=>{
+  const client=setup();
+  const policy={id:8,versionId:4,versionNumber:1,status:'SHADOW',ruleCount:1,activeRuleCount:1};
+  const ruleDiagnostics=[{code:'NONSTOCK_MED_HIGH',result:'NO MATCH',selected:false,conditions:[{type:'AMOUNT_GTE',expected:'5000001',actual:'0',result:'FAIL'}]}];
+  engine.composeShadowRoute.mockResolvedValue({steps:[],matchedRules:[],policy,ruleDiagnostics});
+  await service.generateShadowApprovalRoute(7,4,1,{version,facts,db:{query:mockQuery,connect:mockConnect}});
+  const insert=client.query.mock.calls.find(([sql])=>sql.startsWith('INSERT INTO approval_policy_shadow_runs'));
+  expect(JSON.parse(insert[1][6])).toMatchObject({policy,ruleDiagnostics});
+  expect(client.query.mock.calls.every(([sql])=>!sql.startsWith('UPDATE approvals')&&!sql.startsWith('UPDATE requests'))).toBe(true);
+});
+test('facts preserve numeric zero and raw classification and request type',async()=>{
+  service.dependencies.organization.repo.list.mockResolvedValue([{id:90,department_id:5}]);
+  service.dependencies.organization.getAncestorUnits.mockResolvedValue([{id:90},{id:91}]);
+  const db={query:jest.fn(async()=>({rows:[{request_id:1147,institute_id:1,department_id:5,request_type:'Non-Stock',department_classification:'Operational',estimated_amount:'0'}]}))};
+  const actual=await service.buildApprovalPolicyFacts(1147,db,1);
+  expect(actual).toMatchObject({requestType:'Non-Stock',departmentClassification:'Operational',estimatedAmount:'0',isStockRequest:false,organizationAncestorIds:[90,91]});
+});
 test('capability resolution uses the role stored on users',async()=>{mockQuery.mockResolvedValue({rows:[{userId:5,userName:'Head'}]});await expect(service.dependencies.resolveCapability('approval-authority.department-head',10)).resolves.toEqual([{userId:5,userName:'Head'}]);const sql=mockQuery.mock.calls[0][0];expect(sql).toContain('LOWER(BTRIM(r.name))=LOWER(BTRIM(u.role))');expect(sql).not.toContain('user_roles');expect(mockQuery.mock.calls[0][1]).toEqual(['approval-authority.department-head',10])});
 test.each(['step','difference'])('shadow %s persistence failure rolls back with no committed orphan',async failure=>{const client=setup(failure);await expect(service.generateShadowApprovalRoute(7,4,1,{version,facts,db:{query:mockQuery,connect:mockConnect}})).rejects.toThrow();expect(client.query).toHaveBeenCalledWith('ROLLBACK');expect(client.query).not.toHaveBeenCalledWith('COMMIT')});
 test('shadow behavior only reads approvals and atomically writes snapshot, route, differences and summary',async()=>{const client=setup();const forbidden={createApproval:jest.fn(),activateApproval:jest.fn(),continueApproval:jest.fn(),updateRequestStatus:jest.fn(),sendEmail:jest.fn(),notify:jest.fn()};const result=await service.generateShadowApprovalRoute(7,4,1,{version,facts,db:{query:mockQuery,connect:mockConnect},...forbidden});expect(mockQuery).toHaveBeenCalledWith(expect.stringMatching(/^SELECT a\.\*/s),[7,10]);Object.values(forbidden).forEach(spy=>expect(spy).not.toHaveBeenCalled());expect(client.query).toHaveBeenCalledWith('BEGIN');expect(client.query).toHaveBeenCalledWith('COMMIT');expect(result.run.id).toBe(30);expect(client.query.mock.calls.some(x=>String(x[0]).includes('facts_snapshot'))).toBe(true)});

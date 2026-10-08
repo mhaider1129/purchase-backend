@@ -18,6 +18,24 @@ module.exports = async function validateBackendQueryCompatibility(client, litera
       await client.query(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS)`);
     }
     await client.query("INSERT INTO public.requests(id,request_type,status) VALUES (991,'Non-Stock','Approved')");
+    await client.query("INSERT INTO public.requested_items(id,request_id,item_name,quantity,purchased_quantity,unit_cost,total_cost) VALUES (991,991,'Overage parameter test',1,1,511766,511766)");
+    const overageSql=sql('controllers/requests/procurementItemEventsController.js','UPDATE public.requested_items SET purchased_quantity = $1, unit_cost');
+    await client.query('SAVEPOINT overage_reproduction');
+    const legacyOverageSql=overageSql.replace('$2::numeric','$2').replace('$3::numeric','$3');
+    await assert.rejects(client.query(legacyOverageSql,[2,'310000.00','620000.00',1,991]),error=>error.code==='22P02');
+    await client.query('ROLLBACK TO SAVEPOINT overage_reproduction');
+    const repaired=(await client.query(overageSql,[2,'310000.00','620000.00',1,991])).rows[0];
+    assert.equal(repaired.purchased_quantity,2);
+    assert.equal(repaired.unit_cost,'310000');
+    assert.equal(repaired.total_cost,'620000');
+    // Also preserve cents on installations with decimal item-cost columns.
+    await client.query('CREATE TEMP TABLE overage_decimal_items (LIKE public.requested_items INCLUDING DEFAULTS)');
+    await client.query('ALTER TABLE overage_decimal_items ALTER COLUMN unit_cost TYPE numeric(14,2), ALTER COLUMN total_cost TYPE numeric(14,2)');
+    await client.query("INSERT INTO overage_decimal_items(id,request_id,item_name,quantity,purchased_quantity) VALUES (991,991,'Decimal cost test',1,1)");
+    const decimal=(await client.query(overageSql.replace('public.requested_items','pg_temp.overage_decimal_items'),[2,'511765.76','1023531.52',1,991])).rows[0];
+    assert.equal(decimal.unit_cost,'511765.76');
+    assert.equal(decimal.total_cost,'1023531.52');
+    console.log('Reproduced overage decimal-string/bigint failure (22P02); explicit numeric casts PASS');
     for (const sent of [true,false]) {
       const row=(await run('controllers/requests/centralSupplyChainController.js','SET sent_to_central_supply_at',[sent,1,991])).rows[0];
       assert.equal(row.sent_to_central_supply_by,sent?1:null);

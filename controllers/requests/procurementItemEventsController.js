@@ -428,8 +428,8 @@ const decideProcurementOverage = async (req, res, next) => {
       const effectiveUnitCost = event.unit_cost ?? event.current_unit_cost;
       const totalCost = effectiveUnitCost === null ? event.current_total_cost : Number((newPurchased * Number(effectiveUnitCost)).toFixed(2));
       const itemRes = await client.query(
-        `UPDATE public.requested_items SET purchased_quantity = $1, unit_cost = COALESCE($2, unit_cost),
-           total_cost = COALESCE($3, total_cost), procurement_status = 'purchased',
+        `UPDATE public.requested_items SET purchased_quantity = $1, unit_cost = COALESCE($2::numeric, unit_cost),
+           total_cost = COALESCE($3::numeric, total_cost), procurement_status = 'purchased',
            procurement_updated_by = $4, procurement_updated_at = CURRENT_TIMESTAMP
          WHERE id = $5 RETURNING *`,
         [newPurchased, event.unit_cost, totalCost, req.user.id, event.requested_item_id]

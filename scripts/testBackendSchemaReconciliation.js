@@ -409,6 +409,7 @@ async function run() {
     console.log(JSON.stringify({ plansPassed: passed.length, plansFailed: failures.length }));
     for (const row of failures) console.log(`${row.source}:${row.line} ${row.code} ${row.message}`);
     await require('../integration/itemReferenceStarterData')(client);
+    await require('../integration/maintenanceApprovalScorecards')(client);
   } finally {
     if (client) await client.end();
     if (container) execFileSync('docker', ['rm', '--force', container], { stdio: 'ignore' });

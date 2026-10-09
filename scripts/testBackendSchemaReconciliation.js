@@ -385,6 +385,7 @@ async function run() {
       assert(rows[0].reloptions.includes('security_invoker=true'));
     }
     console.log('Preservation, authorization, contract and read-only verification checks PASS');
+    await require('../integration/maintenanceApprovalReportingPolicy')(client);
     await validateBackendQueryCompatibility(client,extractBackendSqlContract(root).sql);
     const failures = [];
     const passed = [];

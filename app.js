@@ -307,6 +307,7 @@ const authLimiter = (req, res, next) => {
 // =========================
 const authRoutes = require('./routes/auth');
 const requestsRoutes = require('./routes/requests');
+const maintenanceApprovalReportingPolicyRoutes = require('./routes/maintenanceApprovalReportingPolicy');
 const requestedItemsRoutes = require('./routes/requestedItems');
 const approvalsRoutes = require('./routes/approvals');
 const auditLogRoutes = require('./routes/auditLog');
@@ -386,6 +387,7 @@ app.use('/api/rfid', rfidIngestionRoutes);
 const protectedApiRoutes = [
   { path: '/files', router: filesRoutes },
   { path: '/requests', router: requestsRoutes },
+  { path: '/maintenance-approval-reporting-policy', router: maintenanceApprovalReportingPolicyRoutes },
   { path: '/requested-items', router: requestedItemsRoutes },
   { path: '/approvals', router: approvalsRoutes },
   { path: '/audit-log', router: auditLogRoutes },

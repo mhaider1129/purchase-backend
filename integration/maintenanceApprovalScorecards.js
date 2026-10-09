@@ -26,6 +26,7 @@ module.exports = async (client) => {
     const { rows } = await client.query(`SELECT r.id, ${expression} AS pending FROM (VALUES (1),(2)) r(id) ORDER BY r.id`);
     assert.deepEqual(rows[0].pending.map((row) => row.approval_id), [1, 2, 6]);
     assert.deepEqual(rows[0].pending.map((row) => row.approver_role), ['CMO', 'COO', null]);
+    assert.deepEqual(rows[0].pending.map((row) => row.approver_id), [1, 2, null]);
     assert.deepEqual(rows[1].pending, []);
     console.log('Maintenance pending scorecards: actual SQL excludes future/superseded/approved steps; parallel and missing-holder rows retained PASS');
   } finally {

@@ -1293,6 +1293,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          COALESCE((
            SELECT JSON_AGG(JSON_BUILD_OBJECT(
              'approval_id', ap.id,
+             'approver_id', ap.approver_id,
              'approval_level', ap.approval_level,
              'activated_at', to_jsonb(ap)->>'activated_at',
              'approver_name', approver.name,

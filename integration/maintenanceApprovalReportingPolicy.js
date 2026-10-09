@@ -1,0 +1,27 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { loadPolicy, updatePolicy } = require('../services/maintenanceApprovalReportingPolicyService');
+module.exports = async (client) => {
+  const patch = fs.readFileSync(path.join(__dirname, '../sql/manual/046_maintenance_approval_reporting_policy.sql'), 'utf8');
+  assert.deepEqual(await loadPolicy(client), { configured: false, overdue_target_days: null });
+  await client.query(patch);
+  assert.equal((await loadPolicy(client)).overdue_target_days, null);
+  const actor = (await client.query('SELECT id FROM public.users ORDER BY id LIMIT 1')).rows[0];
+  assert(actor, 'Disposable fixture must provide an actor');
+  await client.query('BEGIN');
+  const saved = await updatePolicy(client, { overdue_target_days: 3, reason: 'Reporting target' }, actor);
+  await client.query('COMMIT');
+  assert.equal(saved.overdue_target_days, 3);
+  const audit = (await client.query("SELECT details FROM public.audit_logs WHERE action = 'maintenance_approval_reporting_policy.updated' ORDER BY id DESC LIMIT 1")).rows[0];
+  const details = typeof audit.details === 'string' ? JSON.parse(audit.details) : audit.details;
+  assert.equal(details.afterData.overdue_target_days, 3);
+  await client.query(patch);
+  assert.equal((await loadPolicy(client)).overdue_target_days, 3);
+  await assert.rejects(client.query('UPDATE public.maintenance_approval_reporting_policy SET overdue_target_days = 0'), { code: '23514' });
+  await client.query('BEGIN');
+  await updatePolicy(client, { overdue_target_days: null, reason: 'Disable reporting target' }, actor);
+  await client.query('COMMIT');
+  assert.equal((await loadPolicy(client)).overdue_target_days, null);
+  console.log('SQL 046 reporting target: default unset, audited persistence, clearing, constraints and repeat preservation PASS');
+};

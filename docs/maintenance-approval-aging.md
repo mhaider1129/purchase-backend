@@ -14,10 +14,34 @@ step scopes waiting times and current owners to that step.
 Set an overdue target from 1 to 365 whole days in the view. A recorded wait must
 strictly exceed that target to be overdue. This setting lasts for the mounted
 page only; it does not change workflow rules, deadlines, permissions or reminders.
+The initial target now comes from Management → Approval reporting when configured.
 No overdue classification is made until a target is set. Unknown waiting times
 can be filtered separately and sort after known times in oldest-first order.
 
 ## Deployment
+
+The approver bottleneck enhancement additionally requires manual application of
+`purchase-backend/sql/manual/046_maintenance_approval_reporting_policy.sql`.
+It stores one organization reporting target, initially unset. Reapplying it
+preserves a saved target. Administrators with `permissions.manage` can save or
+clear the target with a mandatory reason; the write and canonical audit entry
+commit in one transaction. No changes are made to approval workflows/history.
+
+The dashboard groups pending requests by approver ID, with name/role fallback for
+older backend deployments. Missing holders appear as unavailable. Owner and
+waiting-band filters constrain queue counts and export using the same active
+approval rows, including selected step. Bands are under 48 hours, 48 to under
+168 hours, and 168 hours or more. A request's oldest known wait for that owner
+determines its band. Unknown-start counts can overlap a known band when parallel
+steps include both recorded and missing starts. Counts deduplicate requests per
+owner; the same request may appear under several owners.
+
+The bottleneck table responds to dates/search/status/step and retains all owners
+before its own owner/band/overdue filters so users can compare and switch owners.
+Each owner's oldest known request links to its request workspace. Reload after
+saving the Management target. A local target override is not persisted and
+cannot overwrite the organization policy. If the policy cannot load, an error
+is shown and a temporary view target remains available.
 
 MANUAL DATABASE MIGRATION REQUIRED:
 `purchase-backend/sql/manual/045_approval_activation_timestamps.sql`

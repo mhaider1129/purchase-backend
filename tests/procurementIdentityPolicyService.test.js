@@ -119,6 +119,25 @@ test("strict policy blocks commands; changes require boolean, reason and a row l
   ).toBe(true);
 });
 
+test.each([null, "", "  "])("legacy exception without justification %j is audited only with enforcement off", async (reason) => {
+  const item = { ...line, request_mode: "approved_free_text_exception", catalog_status: "approved_exception", restriction_justification: reason };
+  const before = { ...item };
+  const db = client(false);
+  expect(isCompatibilityCandidate(item)).toBe(true);
+  await assertReadyForCommand(db, item, { id: 3 }, "register_procurement");
+  expect(db.query).toHaveBeenCalledWith(expect.stringContaining("FOR SHARE"));
+  expect(db.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO item_master_audit_events"), expect.arrayContaining(["procurement.compatibility_used", 3]));
+  expect(item).toEqual(before);
+  await expect(assertReadyForCommand(client(true), item, { id: 3 })).rejects.toMatchObject({ code: "ITEM_IDENTITY_RESOLUTION_REQUIRED" });
+  const missing = { query: jest.fn().mockResolvedValue({ rows: [{ available: false }] }) };
+  await expect(assertReadyForCommand(missing, item, { id: 3 })).rejects.toMatchObject({ code: "ITEM_IDENTITY_RESOLUTION_REQUIRED" });
+});
+
+test.each([{ stocking_policy: "stock" }, { stocking_policy: "service" }, { generic_item_id: 9 }, { preferred_product_id: 9 }, { mandatory_product_id: 9 }, { approval_status: "Rejected" }, { catalog_status: "pending_mapping" }])("legacy compatibility does not accept guarded metadata %j", async (patch) => {
+  const item = { ...line, request_mode: "approved_free_text_exception", catalog_status: "approved_exception", restriction_justification: null, ...patch };
+  await expect(assertReadyForCommand(client(false), item, { id: 3 })).rejects.toMatchObject({ code: "ITEM_IDENTITY_RESOLUTION_REQUIRED" });
+});
+
 test.each([{stocking_policy:'unknown'},{catalog_status:'catalogued'},{catalog_status:'approved_exception'}])('compatibility fails closed for inconsistent metadata %j',async patch=>{
   await expect(assertReadyForCommand(client(),{...line,...patch},{id:1})).rejects.toMatchObject({code:'ITEM_IDENTITY_RESOLUTION_REQUIRED'});
 });

@@ -6,11 +6,19 @@ const {
   assertProcurementReady,
 } = require("./procurementItemIdentityService");
 
+// The original foundation migration also labelled legacy description-only demand
+// as an approved exception without a justification. It is compatibility demand,
+// not evidence of a steward-approved exception, while enforcement is disabled.
+const isLegacyExceptionCandidate = (item) =>
+  item?.request_mode === "approved_free_text_exception" &&
+  item.catalog_status === "approved_exception" &&
+  !String(item.restriction_justification || "").trim();
+
 // Only description-only demand participates in the temporary rollout allowance.
 // Pending referrals, invalid modes, product restrictions and stocked lines stay governed.
 const isCompatibilityCandidate = (item) =>
   Boolean(item) &&
-  (item.request_mode == null || item.request_mode === "free_text") &&
+  (item.request_mode == null || item.request_mode === "free_text" || isLegacyExceptionCandidate(item)) &&
   !item.generic_item_id &&
   !item.preferred_product_id &&
   !item.mandatory_product_id &&
@@ -18,7 +26,7 @@ const isCompatibilityCandidate = (item) =>
     ["non_stock", "direct_delivery", "consignment"].includes(
       item.stocking_policy,
     )) &&
-  (item.catalog_status == null || item.catalog_status === "pending_mapping") &&
+  (item.catalog_status == null || item.catalog_status === "pending_mapping" || isLegacyExceptionCandidate(item)) &&
   String(item.approval_status || "")
     .trim()
     .toLowerCase() !== "rejected";

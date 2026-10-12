@@ -29,7 +29,7 @@ const buildRequest = (body = {}, user = {}) => ({
   },
 });
 
-const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = false } = {}) => {
+const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = false, identityPolicy } = {}) => {
   const client = { query: jest.fn(), release: jest.fn() };
   const state = {
     item: {
@@ -98,7 +98,9 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
       };
     }
     if (/UPDATE requests/.test(sql)) return {};
-    if(sql.includes('procurement_identity_policy')) return {rows:[{available:false}]};
+    if (sql.includes("to_regclass('public.procurement_identity_policy')")) return { rows: [{ available: identityPolicy !== undefined }] };
+    if (sql.includes('SELECT enforce_item_identity')) return { rows: [{ enforce_item_identity: identityPolicy, reason: 'Catalog setup' }] };
+    if (sql.includes('INSERT INTO item_master_audit_events')) return {};
       throw new Error(`Unexpected SQL: ${sql}`);
   });
   return client;
@@ -107,6 +109,28 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
 describe('procurement item events', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it.each([false, true, undefined])('legacy approved-exception procurement respects saved enforcement %s', async (identityPolicy) => {
+    const client = buildClient({ identityPolicy, itemOverrides: {
+      item_name: 'Hook', request_mode: 'approved_free_text_exception', catalog_status: 'approved_exception',
+      stocking_policy: 'non_stock', generic_item_id: null, preferred_product_id: null, mandatory_product_id: null,
+      approval_status: 'Approved', restriction_justification: null,
+    } });
+    pool.connect.mockResolvedValue(client);
+    const res = buildResponse();
+    const next = jest.fn();
+    await addProcurementItemEvent(buildRequest({ event_quantity: 1, unit_cost: 5 }), res, next);
+    if (identityPolicy === false) {
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(client.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO item_master_audit_events'), expect.arrayContaining(['procurement.compatibility_used']));
+    } else {
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409, code: 'ITEM_IDENTITY_RESOLUTION_REQUIRED' }));
+      expect(res.json).not.toHaveBeenCalled();
+      expect(client.query.mock.calls.some(([sql]) => sql.includes('INSERT INTO public.procurement_item_events'))).toBe(false);
+      expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+    }
   });
 
   it('adds the first procurement event and updates the item to Partially Procured', async () => {

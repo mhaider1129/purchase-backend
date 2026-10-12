@@ -1,4 +1,5 @@
 'use strict';
+const { requestActiveSql, itemActiveSql, activePriorityCaseSql, priorityCaseJoins } = require('./activePrioritySql');
 
 // Department ranking starts at HOD approval, before the request necessarily
 // reaches its final Approved state.  Procurement-performance normally creates
@@ -16,7 +17,7 @@ async function ensureRequestPriorityCoverage({ client, requestId, instituteId, d
        FROM requests r
        JOIN requested_items ri ON ri.request_id=r.id
       WHERE r.id=$1 AND r.institute_id=$2 AND r.department_id=$3
-        AND COALESCE(UPPER(ri.approval_status),'PENDING') <> 'REJECTED'
+        AND ${requestActiveSql} AND ${itemActiveSql}
      ON CONFLICT(requested_item_id) WHERE closed_at IS NULL DO NOTHING
      RETURNING id`,
     [requestId, instituteId, departmentId, actorId || null],
@@ -26,8 +27,9 @@ async function ensureRequestPriorityCoverage({ client, requestId, instituteId, d
        (procurement_case_id,institute_id,department_id,coverage_status)
      SELECT pc.id,pc.institute_id,pc.department_id,'NEEDS_ASSESSMENT'
        FROM procurement_cases pc
+       ${priorityCaseJoins}
       WHERE pc.request_id=$1 AND pc.institute_id=$2 AND pc.department_id=$3
-        AND pc.closed_at IS NULL
+        AND ${activePriorityCaseSql}
      ON CONFLICT(procurement_case_id) DO NOTHING`,
     [requestId, instituteId, departmentId],
   );
@@ -42,7 +44,7 @@ async function ensureApprovedDepartmentPriorityCoverage({ client, instituteId, d
        JOIN users approver ON approver.id=a.approver_id
       WHERE r.institute_id=$1 AND r.department_id=$2
         AND UPPER(approver.role)='HOD'
-        AND UPPER(r.status) NOT IN ('REJECTED','CANCELLED','CANCELED','COMPLETED')
+        AND ${requestActiveSql}
         AND EXISTS (SELECT 1 FROM requested_items ri WHERE ri.request_id=r.id)`,
     [instituteId, departmentId],
   );

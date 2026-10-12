@@ -386,6 +386,7 @@ async function run() {
     }
     console.log('Preservation, authorization, contract and read-only verification checks PASS');
     await require('../integration/maintenanceApprovalReportingPolicy')(client);
+    await require('../integration/activePriorityQueues')(client);
     await validateBackendQueryCompatibility(client,extractBackendSqlContract(root).sql);
     const failures = [];
     const passed = [];

@@ -5,6 +5,7 @@ const { provisionNeutralPriorityProfile } = require('./priorityProfileProvisioni
 const { ensureRequestPriorityCoverage } = require('./departmentPriorityCoverageService');
 
 const STATE = 'HOD_RANKING_REQUIRED';
+const { activePriorityCaseSql, priorityCaseJoins, activeDepartmentRankingSql } = require('./activePrioritySql');
 const INSTRUCTION = "Place this requirement relative to your department's other active procurement requirements.";
 
 async function findGate({ client, request, approvalLevel, actorId }) {
@@ -14,11 +15,12 @@ async function findGate({ client, request, approvalLevel, actorId }) {
     `SELECT pc.id AS procurement_case_id,pc.institute_id,pc.department_id,p.public_title, p.row_version,
             d.department_rank, d.department_rank_total
        FROM procurement_cases pc
+       ${priorityCaseJoins}
        LEFT JOIN procurement_priority_profiles p ON p.procurement_case_id=pc.id
        LEFT JOIN department_priority_rankings d
          ON d.procurement_case_id=pc.id AND d.valid_until IS NULL
       WHERE pc.request_id=$1 AND pc.institute_id=$2 AND pc.department_id=$3
-        AND pc.closed_at IS NULL
+        AND ${activePriorityCaseSql}
       ORDER BY pc.id
       FOR UPDATE OF pc`,
     [request.id, request.institute_id, request.department_id],
@@ -32,8 +34,9 @@ async function findGate({ client, request, approvalLevel, actorId }) {
   const queue = await client.query(
     `SELECT pc.id AS procurement_case_id,p.public_title,p.row_version,d.department_rank,d.department_rank_total
        FROM procurement_cases pc JOIN procurement_priority_profiles p ON p.procurement_case_id=pc.id
-       LEFT JOIN department_priority_rankings d ON d.procurement_case_id=pc.id AND d.valid_until IS NULL
-      WHERE pc.institute_id=$1 AND pc.department_id=$2 AND pc.closed_at IS NULL
+       ${priorityCaseJoins}
+       LEFT JOIN (${activeDepartmentRankingSql}) d ON d.procurement_case_id=pc.id
+      WHERE pc.institute_id=$1 AND pc.department_id=$2 AND ${activePriorityCaseSql}
       ORDER BY d.department_rank NULLS LAST,pc.id FOR UPDATE OF pc,p`,
     [request.institute_id, request.department_id],
   );

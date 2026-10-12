@@ -1,6 +1,7 @@
 "use strict";
 const { calculatePriority } = require("./procurementPriorityService");
 const { writeAuditEvent } = require("../auditService");
+const { activeDepartmentRankingSql } = require('./activePrioritySql');
 const FACTOR_FIELDS = [
   "impact_level",
   "impact_reason",
@@ -79,7 +80,7 @@ async function recalculate({
   reason = null,
 }) {
   const locked = await client.query(
-    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN department_priority_rankings d ON d.procurement_case_id=p.procurement_case_id AND d.valid_until IS NULL WHERE p.procurement_case_id=$1 FOR UPDATE OF p`,
+    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN (${activeDepartmentRankingSql}) d ON d.procurement_case_id=p.procurement_case_id WHERE p.procurement_case_id=$1 FOR UPDATE OF p`,
     [caseId],
   );
   if (!locked.rowCount)
@@ -157,7 +158,7 @@ async function updateFactors({ client, caseId, instituteId, input, actorId }) {
 async function previewFactors({ client, caseId, instituteId, input }) {
   validateFactorInput(input);
   const result = await client.query(
-    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN department_priority_rankings d ON d.procurement_case_id=p.procurement_case_id AND d.valid_until IS NULL WHERE p.procurement_case_id=$1 AND p.institute_id=$2`,
+    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN (${activeDepartmentRankingSql}) d ON d.procurement_case_id=p.procurement_case_id WHERE p.procurement_case_id=$1 AND p.institute_id=$2`,
     [caseId, instituteId],
   );
   if (!result.rowCount)

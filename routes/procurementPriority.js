@@ -10,6 +10,7 @@ const {
 const { writeAuditEvent } = require("../services/auditService");
 const { ensureApprovedDepartmentPriorityCoverage } = require("../services/procurementPriority/departmentPriorityCoverageService");
 const router = express.Router();
+const { activePriorityCaseSql, priorityCaseJoins } = require('../services/procurementPriority/activePrioritySql');
 const repo = createProcurementPriorityRepository();
 const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
@@ -202,7 +203,7 @@ router.put(
         .json({ message: "Complete institutional order is required" });
     const data = await tx(async (client) => {
       const current = await client.query(
-        `SELECT p.procurement_case_id,p.system_suggested_rank FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id WHERE p.institute_id=$1 AND pc.closed_at IS NULL ORDER BY p.procurement_case_id FOR UPDATE OF p,pc`,
+        `SELECT p.procurement_case_id,p.system_suggested_rank FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id ${priorityCaseJoins} WHERE p.institute_id=$1 AND ${activePriorityCaseSql} ORDER BY p.procurement_case_id FOR UPDATE OF p,pc,r,ri`,
         [req.user.institute_id],
       );
       const supplied = entries.map((e) => String(e.procurement_case_id));

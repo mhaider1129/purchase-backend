@@ -31,6 +31,25 @@ only a read projection (maximum active line score). Canonical active eligibility
 `procurementPriorityService.isActivePriorityCase`; terminal status vocabulary includes completed,
 received/delivered, rejected, cancelled, closed, and available in stock.
 
+Active database queues additionally enforce the parent request and requested-line
+states through `services/procurementPriority/activePrioritySql.js`. A Completed
+request disappears on the next queue read even if `procurement_cases.closed_at`
+has not yet been updated. The same predicate applies to organizational and
+departmental queues, public group membership/counts, reorder validation, HOD gate
+queues, coverage provisioning and the aging batch. Terminal lines/cases are also
+excluded. Approved and Partially Procured requests remain eligible.
+
+Department positions and totals are projected over current active members without
+rewriting effective-dated ranking history. Profile reads and subsequent score
+calculations use these active positions/totals; stored score snapshots remain
+historical facts until recalculated. Public groups with no active members are
+omitted, while group administration retains their records with zero active count.
+
+Open priority views refresh every 30 seconds while visible and when returning to
+the tab. Editing an order or assessment pauses background replacement; a stale
+reorder containing a completed case returns a conflict and requires reloading.
+This is periodic refresh, not a push subscription. No database migration is needed.
+
 ## HOD departmental ranking
 
 `department_priority_rankings` is an effective-dated history. Its current row contains rank, active

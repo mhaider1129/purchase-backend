@@ -417,10 +417,10 @@ const updateItemProcurementStatus = async (req, res, next) => {
 
     const itemRes = await client.query(
       `SELECT ri.*, r.assigned_to, r.estimated_cost AS request_estimated_cost,
-              r.request_type, r.initiated_by_technician_id
+              r.request_type, r.initiated_by_technician_id, r.status AS request_status
          FROM public.requested_items ri
          JOIN requests r ON ri.request_id = r.id
-        WHERE ri.id = $1 FOR UPDATE OF ri`,
+        WHERE ri.id = $1 FOR UPDATE OF ri,r`,
       [item_id]
     );
 
@@ -431,6 +431,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
 
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'fulfill this order item');
+    if (String(item.request_status || '').trim().toLowerCase() === 'rejected') throw createHttpError(409, 'This request has been rejected and procurement is stopped');
     if (['purchased','partially_procured'].includes(normalizedProcurementStatus)) await assertReadyForCommand(client, item, req.user, 'register_procurement');
 
     const closesWithoutPurchase = ['not_procured', 'canceled'].includes(normalizedProcurementStatus);
@@ -565,7 +566,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
     await ensureRequestedItemFinancialsTable(client);
 
     const itemRes = await client.query(
-      `SELECT ri.*, r.assigned_to
+      `SELECT ri.*, r.assigned_to, r.status AS request_status
        FROM public.requested_items ri
        JOIN requests r ON ri.request_id = r.id
        WHERE ri.id = $1
@@ -580,6 +581,7 @@ const updateItemPurchasedQuantity = async (req, res, next) => {
 
     const item = itemRes.rows[0];
     assertProcurementAssignmentAccess(req, item.assigned_to, 'update purchased quantity for this order item');
+    if (String(item.request_status || '').trim().toLowerCase() === 'rejected') throw createHttpError(409, 'This request has been rejected and procurement is stopped');
     if (purchased_quantity > Number(item.purchased_quantity || 0)) await assertReadyForCommand(client, item, req.user, 'register_procurement');
 
     const currentReceivedQuantity = Number(item.received_quantity || 0);

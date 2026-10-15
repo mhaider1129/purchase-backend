@@ -51,6 +51,7 @@ router.post('/:id/department-ranking', authenticateUser, async (req, res, next) 
         WHERE a.id=$1 FOR UPDATE OF a,r`, [req.params.id]);
     const approval = found.rows[0];
     if (!approval) throw Object.assign(new Error('Approval not found'), { statusCode: 404 });
+    if (String(approval.request_status || '').trim().toLowerCase() === 'rejected') throw Object.assign(new Error('This request has been rejected and its approval workflow is stopped'), { statusCode: 409 });
     const routeDomain = await resolveRouteDomain({ client, departmentId: approval.department_id, explicitDomain: approval.request_domain, requestType: approval.request_type });
     const routeDefinitions = await fetchApprovalRoutes({ client, requestType: approval.request_type, departmentType: routeDomain, amount: Number(approval.estimated_cost) || 0 });
     const canonicalStep = routeDefinitions.find(step => Number(step.approval_level) === Number(approval.approval_level));

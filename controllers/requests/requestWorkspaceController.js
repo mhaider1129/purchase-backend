@@ -5,6 +5,7 @@ const { ensureRequestedItemFinancialsTable } = require('../../utils/ensureReques
 const ensureRequestedItemApprovalColumns = require('../../utils/ensureRequestedItemApprovalColumns');
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
 const { ensureRequestedItemAssignmentColumns } = require('./assignRequestController');
+const { canIntervene } = require('../../services/scmRequestInterventionService');
 
 const PRIVILEGED_ROLES = new Set(['admin', 'scm', 'procurementsupervisor', 'procurement supervisor']);
 const PROCUREMENT_ROLES = new Set(['scm', 'procurementsupervisor', 'procurement supervisor', 'procurementspecialist', 'procurement specialist', 'procurementmanager', 'procurement manager']);
@@ -86,7 +87,10 @@ const buildRequestSummary = (request, approvals, items) => {
   let currentBottleneck = 'Request review';
   let nextRequiredAction = 'Review request status';
 
-  if (activeApproval) {
+  if (normalize(request.status) === 'rejected') {
+    currentBottleneck = 'Request rejected';
+    nextRequiredAction = 'Request stopped; review the rejection reason in history';
+  } else if (activeApproval) {
     currentBottleneck = `Approval level ${activeApproval.approval_level}`;
     nextRequiredAction = `Awaiting ${activeApproval.approver_name || 'approver'} approval`;
   } else if (!request.assigned_to) {
@@ -108,8 +112,8 @@ const buildRequestSummary = (request, approvals, items) => {
     request_type: request.request_type,
     request_status: request.status,
     status: request.status,
-    approval_status: pendingApprovals.length > 0 ? 'Pending' : approvals.some((approval) => normalize(approval.status) === 'rejected') ? 'Rejected' : 'Approved',
-    procurement_status: procurementStatus,
+    approval_status: normalize(request.status) === 'rejected' ? 'Rejected' : pendingApprovals.length > 0 ? 'Pending' : approvals.some((approval) => normalize(approval.status) === 'rejected') ? 'Rejected' : 'Approved',
+    procurement_status: normalize(request.status) === 'rejected' ? 'Rejected' : procurementStatus,
     department_id: request.department_id,
     department_name: request.department_name,
     section_id: request.section_id,
@@ -140,6 +144,7 @@ const getApprovals = async (requestId) => safeQuery(
           u.role AS approver_role,
           a.status,
           a.is_active,
+          a.is_superseded,
           a.approved_at,
           a.comments,
           ROUND(EXTRACT(EPOCH FROM (COALESCE(a.approved_at, NOW()) - COALESCE(a.updated_at, a.approved_at, NOW()))) / 3600.0, 2) AS waiting_time_hours
@@ -417,6 +422,8 @@ const buildTimeline = (request, approvals, procurementEvents, linkedRecords, att
 const buildAvailableActions = (user, request, approvals, items) => {
   const role = normalize(user?.role);
   const actions = new Set(['upload_attachment', 'add_note', 'export_pdf']);
+  if (normalize(request.status) === 'rejected') return Array.from(actions);
+  if (canIntervene(user, request) && approvals.some(approval => !approval.is_superseded && ['pending','on hold'].includes(normalize(approval.status)))) actions.add('scm_reject_request');
   if (hasPermission(user, 'item-master.map') && ['approved','assigned','completed'].includes(normalize(request.status))) actions.add('resolve_item_identity');
   const assignedToUser = Number(request.assigned_to) === Number(user.id) || items.some((item) => Number(item.assigned_to) === Number(user.id));
   const isPrivileged = hasPermission(user, 'requests.manage') || PRIVILEGED_ROLES.has(role);
@@ -538,6 +545,7 @@ const addRequestNote = async (req, res, next) => {
 };
 
 module.exports = {
+  buildRequestSummary,
   getFullRequestDetails,
   addRequestNote,
   buildTimeline,

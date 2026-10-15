@@ -17,6 +17,7 @@ async function continueApprovalWorkflowAfterLevel({
   technicianEmail = null, enqueueNotification = () => {},
 }) {
   if (!client) throw new TypeError('An existing database client is required');
+  if (String(request.request_status || request.status || '').trim().toLowerCase() === 'rejected') throw Object.assign(new Error('This request has been rejected and its approval workflow is stopped'), { statusCode: 409 });
 
   const pending = await client.query(
     `SELECT COUNT(*) AS pending_count FROM approvals

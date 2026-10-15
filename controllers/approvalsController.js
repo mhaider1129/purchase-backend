@@ -93,11 +93,12 @@ const handleApprovalDecision = async (req, res, next) => {
        FROM requests r
        LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
-       WHERE r.id = $1`,
+       WHERE r.id = $1 FOR UPDATE OF r`,
       [approval.request_id]
     );
     const request = requestRes.rows[0];
     if (!request) return rollbackWithError(client, res, next, 404, 'Request not found');
+    if (String(request.status || '').trim().toLowerCase() === 'rejected') return rollbackWithError(client, res, next, 409, 'This request has been rejected and its approval workflow is stopped');
 
     if (request.request_type === 'Warehouse Supply') {
       await ensureWarehouseSupplyApprovalColumns(client);

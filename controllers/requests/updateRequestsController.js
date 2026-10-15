@@ -195,6 +195,7 @@ const updateApprovalStatus = async (req, res, next) => {
       transactionOpen = false;
       return next(createHttpError(404, 'Request not found'));
     }
+    if (String(requestInfoRes.rows[0].status || '').trim().toLowerCase() === 'rejected') throw createHttpError(409, 'This request has been rejected and its approval workflow is stopped');
 
     const requestRow = requestInfoRes.rows[0];
     const wasAlreadyUrgent = requestRow.is_urgent === true;
@@ -1564,8 +1565,9 @@ const approveMaintenanceRequest = async (req, res, next) => {
   try {
     await client.query('BEGIN');
 
-    const reqRes = await client.query(`SELECT * FROM requests WHERE id = $1`, [request_id]);
+    const reqRes = await client.query(`SELECT * FROM requests WHERE id = $1 FOR UPDATE`, [request_id]);
     if (reqRes.rowCount === 0) throw createHttpError(404, 'Request not found');
+    if (String(reqRes.rows[0].status || '').trim().toLowerCase() === 'rejected') throw createHttpError(409, 'This request has been rejected and its approval workflow is stopped');
 
     if (decision === 'Rejected') {
       await client.query(`UPDATE requests SET status = 'Rejected' WHERE id = $1`, [request_id]);
@@ -1608,7 +1610,7 @@ const approveMaintenanceRequest = async (req, res, next) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Maintenance approval error:', err);
-    next(createHttpError(500, 'Failed to process maintenance request decision'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to process maintenance request decision'));
   } finally {
     client.release();
   }

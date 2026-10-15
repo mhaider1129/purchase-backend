@@ -39,8 +39,8 @@ router.post('/:id/department-ranking', authenticateUser, async (req, res, next) 
   try {
     req.user.requirePermission('procurement-priority.rank-department');
     const orderedCaseIds = req.body?.ordered_case_ids;
-    if (!Array.isArray(orderedCaseIds) || !orderedCaseIds.length || req.body?.version == null) {
-      return res.status(400).json({ message: 'ordered_case_ids and version are required' });
+    if (!Array.isArray(orderedCaseIds) || !orderedCaseIds.length || (req.body?.version == null && req.body?.versions == null)) {
+      return res.status(400).json({ message: 'ordered_case_ids and version or per-entry versions are required' });
     }
     await client.query('BEGIN');
     const found = await client.query(
@@ -68,7 +68,7 @@ router.post('/:id/department-ranking', authenticateUser, async (req, res, next) 
     const isCompletedRetry = existingOrder.length === requestedOrder.length && existingOrder.every((id, index) => id === requestedOrder[index]);
     // The repository transaction is deliberately bypassed: ranking and continuation share this transaction.
     const queue = isCompletedRetry ? existingQueue : await repo.reorderDepartment({ instituteId: req.user.institute_id, departmentId: req.user.department_id,
-      orderedCaseIds, version: req.body.version, actorId: req.user.id, client });
+      orderedCaseIds, version: req.body.version, versions: req.body.versions, actorId: req.user.id, client });
     if (!isCompletedRetry) await writeAuditEvent({ client, entityType: 'request', entityId: approval.request_id, action: 'HOD_RANKING_COMPLETED',
       actorUserId: req.user.id, instituteId: req.user.institute_id, requestId: approval.request_id,
       afterData: { orderedCaseIds }, metadata: { approvalId: approval.id, approvalLevel: approval.approval_level } });

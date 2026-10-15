@@ -10,6 +10,7 @@ const {
 const { writeAuditEvent } = require("../services/auditService");
 const { ensureApprovedDepartmentPriorityCoverage } = require("../services/procurementPriority/departmentPriorityCoverageService");
 const router = express.Router();
+const { assertQueueVersions } = require('../services/procurementPriority/queueVersionService');
 const { activePriorityCaseSql, priorityCaseJoins } = require('../services/procurementPriority/activePrioritySql');
 const repo = createProcurementPriorityRepository();
 const wrap = (fn) => (req, res, next) =>
@@ -44,16 +45,17 @@ router.put(
   wrap(async (req, res) => {
     permit(req, "procurement-priority.rank-department");
     const ids = req.body?.ordered_case_ids;
-    if (!Array.isArray(ids) || !ids.length || req.body.version == null)
+    if (!Array.isArray(ids) || !ids.length || (req.body.version == null && req.body.versions == null))
       return res
         .status(400)
-        .json({ message: "ordered_case_ids and version are required" });
+        .json({ message: "ordered_case_ids and version or per-entry versions are required" });
     res.json({
       data: await repo.reorderDepartment({
         instituteId: req.user.institute_id,
         departmentId: req.user.department_id,
         orderedCaseIds: ids,
         version: req.body.version,
+        versions: req.body.versions,
         actorId: req.user.id,
       }),
     });
@@ -203,7 +205,7 @@ router.put(
         .json({ message: "Complete institutional order is required" });
     const data = await tx(async (client) => {
       const current = await client.query(
-        `SELECT p.procurement_case_id,p.system_suggested_rank FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id ${priorityCaseJoins} WHERE p.institute_id=$1 AND ${activePriorityCaseSql} ORDER BY p.procurement_case_id FOR UPDATE OF p,pc,r,ri`,
+        `SELECT p.procurement_case_id,p.row_version,p.system_suggested_rank FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id ${priorityCaseJoins} WHERE p.institute_id=$1 AND ${activePriorityCaseSql} ORDER BY p.procurement_case_id FOR UPDATE OF p,pc,r,ri`,
         [req.user.institute_id],
       );
       const supplied = entries.map((e) => String(e.procurement_case_id));
@@ -229,6 +231,7 @@ router.put(
           ),
           { statusCode: 409 },
         );
+      if (entries.some(entry => Object.hasOwn(entry, "row_version"))) assertQueueVersions(current.rows, Object.fromEntries(entries.map(entry => [entry.procurement_case_id,entry.row_version])));
       const differs = entries.some(
         (e) =>
           Number(

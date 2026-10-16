@@ -10,12 +10,41 @@ const {
 const { writeAuditEvent } = require("../services/auditService");
 const { ensureApprovedDepartmentPriorityCoverage } = require("../services/procurementPriority/departmentPriorityCoverageService");
 const router = express.Router();
-const { activePriorityCaseSql, priorityCaseJoins } = require('../services/procurementPriority/activePrioritySql');
 const repo = createProcurementPriorityRepository();
+const { createRequestPriorityRepository } = require('../repositories/requestPriorityRepository');
+const requestRepo = createRequestPriorityRepository(repo);
 const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 const permit = (req, p) => req.user.requirePermission(p);
 const tx = (work) => repo.transaction(work);
+// Whole-request queues are explicit contracts; item assessment/group APIs remain
+// available without treating an individual item as an independently ranked request.
+for (const scope of ['department','institutional']) {
+  const path = scope === 'department' ? '/requests/department' : '/requests/manage';
+  router.get(path, wrap(async (req,res) => {
+    permit(req,scope === 'department' ? 'procurement-priority.rank-department' : 'procurement-priority.manage');
+    const departmentId=scope === 'department' ? req.user.department_id : null;
+    const data=await tx(async client => {
+      if (scope === 'department') await ensureApprovedDepartmentPriorityCoverage({client,instituteId:req.user.institute_id,departmentId,actorId:req.user.id});
+      return requestRepo.read({client,instituteId:req.user.institute_id,departmentId,scope});
+    });
+    res.json({data});
+  }));
+  router.put(scope === 'department' ? '/requests/department/order' : '/requests/institutional-order',wrap(async (req,res) => {
+    permit(req,scope === 'department' ? 'procurement-priority.rank-department' : 'procurement-priority.override');
+    if (!Array.isArray(req.body?.ordered_request_ids) || !req.body.ordered_request_ids.length || !req.body.snapshots)
+      return res.status(400).json({message:'ordered_request_ids and snapshots are required'});
+    const data=await tx(client => requestRepo.reorder({client,instituteId:req.user.institute_id,
+      departmentId:scope === 'department' ? req.user.department_id : null,scope,
+      orderedRequestIds:req.body.ordered_request_ids,snapshots:req.body.snapshots,reason:req.body.reason,actorId:req.user.id}));
+    res.json({data});
+  }));
+}
+// Prevent an older client from silently splitting a saved whole-request order.
+const requestOrderRequired = (_req,res) => res.status(409).json({code:'REQUEST_PRIORITY_CLIENT_UPGRADE_REQUIRED',message:'Priority positions now represent whole requests. Refresh the application and use the request priority workspace.'});
+router.put('/department/reorder',requestOrderRequired);
+router.put('/institutional-order',requestOrderRequired);
+router.put('/cases/:id/institutional-rank',requestOrderRequired);
 router.get(
   "/public",
   wrap(async (req, res) => {
@@ -39,26 +68,7 @@ router.get(
     });
   }),
 );
-router.put(
-  "/department/reorder",
-  wrap(async (req, res) => {
-    permit(req, "procurement-priority.rank-department");
-    const ids = req.body?.ordered_case_ids;
-    if (!Array.isArray(ids) || !ids.length || req.body.version == null)
-      return res
-        .status(400)
-        .json({ message: "ordered_case_ids and version are required" });
-    res.json({
-      data: await repo.reorderDepartment({
-        instituteId: req.user.institute_id,
-        departmentId: req.user.department_id,
-        orderedCaseIds: ids,
-        version: req.body.version,
-        actorId: req.user.id,
-      }),
-    });
-  }),
-);
+
 router.get(
   "/cases/:id",
   wrap(async (req, res) => {
@@ -109,46 +119,7 @@ router.post(
     });
   }),
 );
-router.put(
-  "/cases/:id/institutional-rank",
-  wrap(async (req, res) => {
-    permit(req, "procurement-priority.override");
-    if (
-      !Number.isInteger(req.body?.institutional_rank) ||
-      !String(req.body?.reason || "").trim()
-    )
-      return res
-        .status(400)
-        .json({ message: "Institutional rank and reason are required" });
-    const data = await tx(async (client) => {
-      const row = await client.query(
-        `UPDATE procurement_priority_profiles SET institutional_rank=$1,institutional_override_reason=$2,row_version=row_version+1,updated_at=now() WHERE procurement_case_id=$3 AND institute_id=$4 RETURNING *`,
-        [
-          req.body.institutional_rank,
-          req.body.reason.trim(),
-          req.params.id,
-          req.user.institute_id,
-        ],
-      );
-      if (!row.rowCount)
-        throw Object.assign(new Error("Priority profile not found"), {
-          statusCode: 404,
-        });
-      await writeAuditEvent({
-        client,
-        entityType: "procurement_priority_profile",
-        entityId: req.params.id,
-        action: "INSTITUTIONAL_RANK_OVERRIDDEN",
-        actorUserId: req.user.id,
-        instituteId: req.user.institute_id,
-        reason: req.body.reason,
-        afterData: { institutional_rank: req.body.institutional_rank },
-      });
-      return row.rows[0];
-    });
-    res.json({ data });
-  }),
-);
+
 router.post(
   "/groups",
   wrap(async (req, res) => {
@@ -192,84 +163,7 @@ router.get(
     res.json({ data: await repo.managementQueue(req.user.institute_id) });
   }),
 );
-router.put(
-  "/institutional-order",
-  wrap(async (req, res) => {
-    permit(req, "procurement-priority.override");
-    const entries = req.body?.entries;
-    if (!Array.isArray(entries) || !entries.length)
-      return res
-        .status(400)
-        .json({ message: "Complete institutional order is required" });
-    const data = await tx(async (client) => {
-      const current = await client.query(
-        `SELECT p.procurement_case_id,p.system_suggested_rank FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id ${priorityCaseJoins} WHERE p.institute_id=$1 AND ${activePriorityCaseSql} ORDER BY p.procurement_case_id FOR UPDATE OF p,pc,r,ri`,
-        [req.user.institute_id],
-      );
-      const supplied = entries.map((e) => String(e.procurement_case_id));
-      const expected = current.rows.map((e) => String(e.procurement_case_id));
-      const ranks = entries.map((e) => e.institutional_rank);
-      if (
-        new Set(supplied).size !== supplied.length ||
-        supplied.length !== expected.length ||
-        supplied
-          .slice()
-          .sort()
-          .some((v, i) => v !== expected.slice().sort()[i]) ||
-        ranks.some((r) => !Number.isInteger(r) || r < 1) ||
-        new Set(ranks).size !== ranks.length ||
-        ranks
-          .slice()
-          .sort((a, b) => a - b)
-          .some((r, i) => r !== i + 1)
-      )
-        throw Object.assign(
-          new Error(
-            "Complete active queue with unique contiguous ranks is required",
-          ),
-          { statusCode: 409 },
-        );
-      const differs = entries.some(
-        (e) =>
-          Number(
-            current.rows.find(
-              (x) =>
-                String(x.procurement_case_id) === String(e.procurement_case_id),
-            ).system_suggested_rank,
-          ) !== e.institutional_rank,
-      );
-      if (differs && !String(req.body.reason || "").trim())
-        throw Object.assign(
-          new Error(
-            "Override reason is required when order differs from suggested order",
-          ),
-          { statusCode: 400 },
-        );
-      for (const e of entries)
-        await client.query(
-          `UPDATE procurement_priority_profiles SET institutional_rank=$1,institutional_override_reason=$2,row_version=row_version+1,updated_at=now() WHERE procurement_case_id=$3 AND institute_id=$4`,
-          [
-            e.institutional_rank,
-            differs ? req.body.reason.trim() : null,
-            e.procurement_case_id,
-            req.user.institute_id,
-          ],
-        );
-      await writeAuditEvent({
-        client,
-        entityType: "institutional_priority_queue",
-        entityId: String(req.user.institute_id),
-        action: "INSTITUTIONAL_PRIORITY_REORDERED",
-        actorUserId: req.user.id,
-        instituteId: req.user.institute_id,
-        reason: req.body.reason || null,
-        afterData: { entries },
-      });
-      return repo.managementQueue(req.user.institute_id, client);
-    });
-    res.json({ data });
-  }),
-);
+
 router.get(
   "/groups",
   wrap(async (req, res) => {

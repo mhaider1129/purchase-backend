@@ -80,7 +80,7 @@ async function recalculate({
   reason = null,
 }) {
   const locked = await client.query(
-    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN (${activeDepartmentRankingSql}) d ON d.procurement_case_id=p.procurement_case_id WHERE p.procurement_case_id=$1 FOR UPDATE OF p`,
+    `SELECT p.*,COALESCE(q.institutional_rank,p.institutional_rank) AS institutional_rank,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id LEFT JOIN request_priority_rankings q ON q.request_id=pc.request_id AND q.institute_id=p.institute_id LEFT JOIN (${activeDepartmentRankingSql}) d ON d.procurement_case_id=p.procurement_case_id WHERE p.procurement_case_id=$1 FOR UPDATE OF p`,
     [caseId],
   );
   if (!locked.rowCount)
@@ -158,7 +158,7 @@ async function updateFactors({ client, caseId, instituteId, input, actorId }) {
 async function previewFactors({ client, caseId, instituteId, input }) {
   validateFactorInput(input);
   const result = await client.query(
-    `SELECT p.*,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p LEFT JOIN (${activeDepartmentRankingSql}) d ON d.procurement_case_id=p.procurement_case_id WHERE p.procurement_case_id=$1 AND p.institute_id=$2`,
+    `SELECT p.*,COALESCE(q.institutional_rank,p.institutional_rank) AS institutional_rank,d.department_rank,d.department_rank_total FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id LEFT JOIN request_priority_rankings q ON q.request_id=pc.request_id AND q.institute_id=p.institute_id LEFT JOIN (${activeDepartmentRankingSql}) d ON d.procurement_case_id=p.procurement_case_id WHERE p.procurement_case_id=$1 AND p.institute_id=$2`,
     [caseId, instituteId],
   );
   if (!result.rowCount)

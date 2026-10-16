@@ -38,11 +38,13 @@ router.post('/:id/department-ranking', authenticateUser, async (req, res, next) 
   const client = await pool.connect();
   try {
     req.user.requirePermission('procurement-priority.rank-department');
-    const orderedCaseIds = req.body?.ordered_case_ids;
-    if (!Array.isArray(orderedCaseIds) || !orderedCaseIds.length || req.body?.version == null) {
-      return res.status(400).json({ message: 'ordered_case_ids and version are required' });
+    const orderedRequestIds = req.body?.ordered_request_ids;
+    if (!Array.isArray(orderedRequestIds) || !orderedRequestIds.length || !req.body?.snapshots) {
+      return res.status(400).json({ message: 'ordered_request_ids and snapshots are required; refresh the application' });
     }
     await client.query('BEGIN');
+    // Match the standalone queue writer's lock order before locking a request.
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended('request-priority:' || $1::text,0))",[req.user.institute_id]);
     const found = await client.query(
       `SELECT a.*,r.*,a.id AS id,a.request_id AS request_id,r.status AS request_status,
               u.role AS approver_role,requester.email AS requester_email
@@ -62,16 +64,15 @@ router.post('/:id/department-ranking', authenticateUser, async (req, res, next) 
     const pending = await client.query(`SELECT 1 FROM approvals WHERE request_id=$1 AND approval_level=$2 AND status='Pending' LIMIT 1`, [approval.request_id, approval.approval_level]);
     if (pending.rowCount) throw Object.assign(new Error('All required approvals at this level must finish before ranking'), { statusCode: 409 });
     const repo = createProcurementPriorityRepository(pool);
-    const existingQueue = await repo.departmentQueue(req.user.institute_id, req.user.department_id, client);
-    const existingOrder = existingQueue.filter(row => row.department_rank != null).map(row => String(row.procurement_case_id));
-    const requestedOrder = orderedCaseIds.map(String);
-    const isCompletedRetry = existingOrder.length === requestedOrder.length && existingOrder.every((id, index) => id === requestedOrder[index]);
-    // The repository transaction is deliberately bypassed: ranking and continuation share this transaction.
-    const queue = isCompletedRetry ? existingQueue : await repo.reorderDepartment({ instituteId: req.user.institute_id, departmentId: req.user.department_id,
-      orderedCaseIds, version: req.body.version, actorId: req.user.id, client });
-    if (!isCompletedRetry) await writeAuditEvent({ client, entityType: 'request', entityId: approval.request_id, action: 'HOD_RANKING_COMPLETED',
-      actorUserId: req.user.id, instituteId: req.user.institute_id, requestId: approval.request_id,
-      afterData: { orderedCaseIds }, metadata: { approvalId: approval.id, approvalLevel: approval.approval_level } });
+    const { createRequestPriorityRepository } = require('../repositories/requestPriorityRepository');
+    const requestRepo=createRequestPriorityRepository(repo);
+    // Ranking and approval continuation share the same transaction. Every retry
+    // must supply a current snapshot; a matching order alone cannot bypass it.
+    const queue=await requestRepo.reorder({client,instituteId:req.user.institute_id,departmentId:req.user.department_id,
+      scope:'department',orderedRequestIds,snapshots:req.body.snapshots,actorId:req.user.id});
+    await writeAuditEvent({ client, entityType:'request',entityId:approval.request_id,action:'HOD_RANKING_COMPLETED',
+      actorUserId:req.user.id,instituteId:req.user.institute_id,requestId:approval.request_id,
+      afterData:{orderedRequestIds},metadata:{approvalId:approval.id,approvalLevel:approval.approval_level} });
     const notifications = [];
     let technicianEmail = null;
     if (approval.request_type === 'Maintenance' && approval.initiated_by_technician_id) {

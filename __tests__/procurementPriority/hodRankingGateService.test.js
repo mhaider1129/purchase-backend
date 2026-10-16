@@ -18,44 +18,46 @@ test('HOD approval without an active unranked priority case continues normally',
 });
 
 test('one unranked case produces the controlled ranking representation', async () => {
-  const item = { procurement_case_id: 101, public_title: 'Sterile supplies', row_version: 0, department_rank: null };
-  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [item] }).mockResolvedValueOnce({ rows: [item] }) };
+  const item = { request_id:41, procurement_case_id: 101, public_title: 'Sterile supplies', row_version: 0, department_rank: null };
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [item] }).mockResolvedValueOnce({ rows: [item] }).mockResolvedValueOnce({ rows: [] }) };
   const gate = await findGate({ client, request, approvalLevel: 2 });
   expect(gate).toMatchObject({ state: STATE, instruction: INSTRUCTION, requestId: 41, approvalLevel: 2, requiredCaseIds: [101] });
 });
 
 test('active case with a missing profile provisions neutral coverage then requires ranking', async () => {
-  const item = { procurement_case_id: 101, institute_id: 7, department_id: 9, row_version: null, department_rank: null };
+  const item = { request_id:41, procurement_case_id: 101, institute_id: 7, department_id: 9, row_version: null, department_rank: null };
   const client = { query: jest.fn().mockResolvedValueOnce({ rows: [item] })
-    .mockResolvedValueOnce({ rows: [{ procurement_case_id: 101, coverage_status: 'NEEDS_ASSESSMENT' }] })
-    .mockResolvedValueOnce({ rows: [{ ...item, row_version: 0 }] }) };
+    .mockResolvedValueOnce({ rows: [{ request_id:41, procurement_case_id: 101, coverage_status: 'NEEDS_ASSESSMENT' }] })
+    .mockResolvedValueOnce({ rows: [{ ...item, row_version: 0 }] }).mockResolvedValueOnce({ rows: [] }) };
   await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toMatchObject({ state: STATE, requiredCaseIds: [101] });
   expect(client.query.mock.calls[1][0]).toContain("'NEEDS_ASSESSMENT'");
   expect(client.query.mock.calls[1][0]).not.toMatch(/score|tier|impact|risk|deadline|dependency|regulatory|strategic|rank/i);
 });
 
 test('existing profile does not invoke neutral provisioning', async () => {
-  const item = { procurement_case_id: 101, row_version: 1, department_rank: null };
-  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [item] }).mockResolvedValueOnce({ rows: [item] }) };
+  const item = { request_id:41, procurement_case_id: 101, row_version: 1, department_rank: null };
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [item] }).mockResolvedValueOnce({ rows: [item] }).mockResolvedValueOnce({ rows: [] }) };
   await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toMatchObject({ state: STATE });
-  expect(client.query).toHaveBeenCalledTimes(2);
+  expect(client.query).toHaveBeenCalledTimes(3);
   expect(client.query.mock.calls.some(([sql]) => sql.includes('INSERT INTO procurement_priority_profiles'))).toBe(false);
 });
 
-test('multi-item request keeps every applicable procurement case distinct', async () => {
+test('multi-item request has one ranking position with all item versions', async () => {
   const rows = [
-    { procurement_case_id: 101, row_version: 1, department_rank: null },
-    { procurement_case_id: 102, row_version: 1, department_rank: null },
-    { procurement_case_id: 103, row_version: 1, department_rank: 1 },
+    { request_id:41, procurement_case_id: 101, row_version: 1, department_rank: null },
+    { request_id:41, procurement_case_id: 102, row_version: 1, department_rank: null },
+    { request_id:41, procurement_case_id: 103, row_version: 1, department_rank: 1 },
   ];
-  const client = { query: jest.fn().mockResolvedValueOnce({ rows }).mockResolvedValueOnce({ rows }) };
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows }).mockResolvedValueOnce({ rows }).mockResolvedValueOnce({ rows: [] }) };
   const gate = await findGate({ client, request, approvalLevel: 4 });
   expect(gate.requiredCaseIds).toEqual([101, 102]);
-  expect(gate.queue).toHaveLength(3);
+  expect(gate.queue).toHaveLength(1);
+  expect(gate.queue[0].snapshot.cases).toEqual({101:'1',102:'1',103:'1'});
+  expect(gate.requiredRequestIds).toEqual([41]);
 });
 
 test('already ranked cases make a retry gate-free and gate creation is audited', async () => {
-  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ procurement_case_id: 101, row_version: 1, department_rank: 1 }] }) };
+  const client = { query: jest.fn().mockResolvedValueOnce({ rows: [{ request_id:41, procurement_case_id: 101, row_version: 1, department_rank: 1 }] }) };
   await expect(findGate({ client, request, approvalLevel: 2 })).resolves.toBeNull();
   const gate = { state: STATE, requiredCaseIds: [101] };
   await auditGate({ client, request, approval: { id: 8, approval_level: 2 }, actorId: 6, gate });

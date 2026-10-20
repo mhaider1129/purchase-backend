@@ -1,5 +1,6 @@
 //controllers/dashboardController.js
 const pool = require('../config/db');
+const {activeSecondsSql,activeDaysSql}=require('../services/approvalTimingSql');
 
 const WORKLOAD_DEFAULTS = {
   pendingStatuses: ['Pending', 'On Hold'],
@@ -116,13 +117,13 @@ const getDashboardSummary = async (req, res) => {
         WHERE ${isRequestProcurementCompletedCondition}
       `),
       pool.query(`
-        SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) / 86400 AS avg_days
+        SELECT AVG(${activeDaysSql('id','created_at','updated_at')}) AS avg_days
         FROM requests
         WHERE LOWER(status) = 'approved' AND request_type <> 'Warehouse Supply'
       `),
       pool.query(`
         WITH request_rollup AS (${requestProcurementRollup})
-        SELECT AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at))) / 86400 AS avg_days
+        SELECT AVG(${activeDaysSql('id','created_at','CURRENT_TIMESTAMP')}) AS avg_days
         FROM request_rollup
         WHERE ${isRequestProcurementPendingCondition}
       `),
@@ -173,7 +174,7 @@ const getDashboardSummary = async (req, res) => {
           rr.id,
           COALESCE(r.justification, 'No justification provided') AS justification,
           COALESCE(d.name, 'Unassigned') AS department,
-          EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - rr.created_at)) / 86400 AS age_days,
+          ${activeDaysSql('rr.id','rr.created_at','CURRENT_TIMESTAMP')} AS age_days,
           rr.item_count,
           rr.procured_item_count
         FROM request_rollup rr
@@ -204,25 +205,27 @@ const getDashboardSummary = async (req, res) => {
         ORDER BY request_count DESC, stage
       `),
       pool.query(`
-        WITH request_rollup AS (${requestProcurementRollup}), aged AS (
+        WITH request_rollup AS (${requestProcurementRollup}), timed AS MATERIALIZED (
+          SELECT *,${activeSecondsSql('id','created_at','CURRENT_TIMESTAMP')} AS active_seconds
+          FROM request_rollup WHERE ${isRequestProcurementPendingCondition}
+        ), aged AS (
           SELECT
             CASE
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '7 days' THEN '0-7 days'
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '14 days' THEN '8-14 days'
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '30 days' THEN '15-30 days'
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '60 days' THEN '31-60 days'
+              WHEN active_seconds <= 604800 THEN '0-7 days'
+              WHEN active_seconds <= 1209600 THEN '8-14 days'
+              WHEN active_seconds <= 2592000 THEN '15-30 days'
+              WHEN active_seconds <= 5184000 THEN '31-60 days'
               ELSE '60+ days'
             END AS bucket,
             CASE
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '7 days' THEN 1
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '14 days' THEN 2
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '30 days' THEN 3
-              WHEN CURRENT_TIMESTAMP - created_at <= INTERVAL '60 days' THEN 4
+              WHEN active_seconds <= 604800 THEN 1
+              WHEN active_seconds <= 1209600 THEN 2
+              WHEN active_seconds <= 2592000 THEN 3
+              WHEN active_seconds <= 5184000 THEN 4
               ELSE 5
             END AS sort_order,
             actual_procured_cost
-          FROM request_rollup
-          WHERE ${isRequestProcurementPendingCondition}
+          FROM timed
         )
         SELECT bucket, COUNT(*) AS request_count, SUM(actual_procured_cost) AS procured_cost
         FROM aged
@@ -311,6 +314,7 @@ const getDashboardSummary = async (req, res) => {
     const completionRate = actionableTotal ? (completedRequests / actionableTotal) * 100 : 0;
 
     res.json({
+      timing_basis: 'active_time_excluding_approval_holds',
       total_requests: totalRequests,
       approved_requests: parseInt(approvedRes.rows[0].count, 10),
       rejected_requests: parseInt(rejectedRes.rows[0].count, 10),
@@ -479,7 +483,7 @@ const getLifecycleAnalytics = async (req, res) => {
         WHERE status = 'Approved' AND approved_at IS NOT NULL
         GROUP BY request_id
       )
-      SELECT AVG(EXTRACT(EPOCH FROM (fa.final_approved_at - r.created_at))) / 86400 AS avg_days
+      SELECT AVG(${activeDaysSql('r.id','r.created_at','fa.final_approved_at')}) AS avg_days
       FROM final_approvals fa
       JOIN requests r ON r.id = fa.request_id
       WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
@@ -488,7 +492,7 @@ const getLifecycleAnalytics = async (req, res) => {
 
     const stageDurationRes = await pool.query(`
       SELECT a.approval_level,
-             AVG(EXTRACT(EPOCH FROM (a.approved_at - r.created_at))) / 86400 AS avg_days
+             AVG(${activeDaysSql('r.id','r.created_at','a.approved_at')}) AS avg_days
       FROM approvals a
       JOIN requests r ON a.request_id = r.id
       WHERE a.status = 'Approved'
@@ -534,7 +538,7 @@ const getLifecycleAnalytics = async (req, res) => {
         FROM po_events
         GROUP BY request_id
       )
-      SELECT AVG(EXTRACT(EPOCH FROM (po.po_timestamp - r.created_at))) / 86400 AS avg_days
+      SELECT AVG(${activeDaysSql('r.id','r.created_at','po.po_timestamp')}) AS avg_days
       FROM first_po_events po
       JOIN requests r ON po.request_id = r.id
       WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
@@ -544,6 +548,7 @@ const getLifecycleAnalytics = async (req, res) => {
     res.json({
       avg_approval_time_days:
         parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
+      timing_basis: 'active_time_excluding_approval_holds',
       avg_pr_to_final_approval_days:
         parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
       avg_pr_to_po_cycle_days:
@@ -575,7 +580,7 @@ const getWorkloadAnalysis = async (req, res) => {
             COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS active_pending,
             COUNT(*) FILTER (WHERE a.status = 'On Hold' AND a.is_active = TRUE) AS on_hold,
             COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_pending,
-            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400)
+            AVG(${activeDaysSql('r.id','r.created_at','CURRENT_TIMESTAMP')})
               FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS avg_age_days
           FROM approvals a
           JOIN requests r ON a.request_id = r.id
@@ -589,7 +594,7 @@ const getWorkloadAnalysis = async (req, res) => {
             COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS pending_count,
             COUNT(*) FILTER (WHERE a.status = 'On Hold' AND a.is_active = TRUE) AS on_hold_count,
             COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE AND a.is_urgent = TRUE) AS urgent_count,
-            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400)
+            AVG(${activeDaysSql('r.id','r.created_at','CURRENT_TIMESTAMP')})
               FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS avg_age_days
           FROM approvals a
           LEFT JOIN users u ON a.approver_id = u.id
@@ -606,7 +611,7 @@ const getWorkloadAnalysis = async (req, res) => {
             a.approval_level,
             COUNT(*) AS pending_count,
             COUNT(*) FILTER (WHERE a.is_urgent = TRUE) AS urgent_count,
-            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400) AS avg_age_days
+            AVG(${activeDaysSql('r.id','r.created_at','CURRENT_TIMESTAMP')}) AS avg_age_days
           FROM approvals a
           JOIN requests r ON a.request_id = r.id
           WHERE a.is_active = TRUE
@@ -620,7 +625,7 @@ const getWorkloadAnalysis = async (req, res) => {
             COALESCE(d.name, 'Unassigned') AS department,
             COUNT(*) AS pending_count,
             COUNT(*) FILTER (WHERE r.is_urgent) AS urgent_count,
-            AVG(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - r.created_at)) / 86400) AS avg_age_days
+            AVG(${activeDaysSql('r.id','r.created_at','CURRENT_TIMESTAMP')}) AS avg_age_days
           FROM approvals a
           JOIN requests r ON a.request_id = r.id
           LEFT JOIN departments d ON r.department_id = d.id
@@ -645,6 +650,7 @@ const getWorkloadAnalysis = async (req, res) => {
     const summary = backlogSummaryRes.rows[0] || {};
 
     res.json({
+      timing_basis: 'active_time_excluding_approval_holds',
       total_active: Number(summary.active_pending || 0),
       on_hold: Number(summary.on_hold || 0),
       urgent_active: Number(summary.urgent_pending || 0),

@@ -10,7 +10,10 @@ module.exports = async (client) => {
   const end = controller.indexOf("), '[]'::json) AS current_pending_approvals");
   const start = controller.lastIndexOf('COALESCE((', end);
   assert(start >= 0 && end > start);
-  const expression = controller.slice(start, end) + "), '[]'::json)";
+  const {activeSecondsSql}=require('../services/approvalTimingSql');
+  const expression = (controller.slice(start, end) + "), '[]'::json)").replace(
+    '${activeSecondsSql(\'ap.request_id\', "NULLIF(to_jsonb(ap)->>\'activated_at\',\'\')", \'CURRENT_TIMESTAMP\')}',
+    activeSecondsSql('ap.request_id',"NULLIF(to_jsonb(ap)->>'activated_at','')",'CURRENT_TIMESTAMP'));
   await client.query(`CREATE TEMP TABLE users(id integer PRIMARY KEY, name text, role text);
     CREATE TEMP TABLE approvals(id integer PRIMARY KEY, request_id integer, approval_level integer,
       approver_id integer, status text, is_active boolean, is_superseded boolean);

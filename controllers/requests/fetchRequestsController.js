@@ -1,3 +1,4 @@
+const {activeDaysSql,activeSecondsSql}=require('../../services/approvalTimingSql');
 const { IDENTITY_FIELDS } = require('../../services/procurementItemIdentityService');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
@@ -1296,6 +1297,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
              'approver_id', ap.approver_id,
              'approval_level', ap.approval_level,
              'activated_at', to_jsonb(ap)->>'activated_at',
+             'active_waiting_seconds', ${activeSecondsSql('ap.request_id', "NULLIF(to_jsonb(ap)->>'activated_at','')", 'CURRENT_TIMESTAMP')},
              'approver_name', approver.name,
              'approver_role', approver.role
            ) ORDER BY ap.approval_level, ap.id)
@@ -1355,7 +1357,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          at.approval_timeline,
          CASE
            WHEN at.final_approval_at IS NULL THEN NULL
-           ELSE ROUND(EXTRACT(EPOCH FROM (at.final_approval_at - r.created_at)) / 86400.0, 2)
+           ELSE ROUND(${activeDaysSql('r.id','r.created_at','at.final_approval_at')}, 2)
          END AS approval_duration_days,
          (
            SELECT COUNT(*)

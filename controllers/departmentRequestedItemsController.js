@@ -1,3 +1,4 @@
+const {activeDaysSql}=require('../services/approvalTimingSql');
 const pool = require('../config/db');
 const ensureDepartmentItemFollowUpNotesTable = require('../utils/ensureDepartmentItemFollowUpNotesTable');
 
@@ -211,7 +212,7 @@ const baseSelect = whereSql => `
       at.approval_timeline,
       CASE
         WHEN at.final_approval_at IS NULL THEN NULL
-        ELSE ROUND(EXTRACT(EPOCH FROM (at.final_approval_at - r.created_at)) / 86400.0, 2)
+        ELSE ROUND(${activeDaysSql('r.id','r.created_at','at.final_approval_at')}, 2)
       END AS approval_duration_days,
       COALESCE(le.created_at, ri.procurement_updated_at, ri.marked_at) AS last_procurement_update,
       GREATEST(0, DATE_PART('day', CURRENT_TIMESTAMP - r.created_at)::int) AS days_since_request,

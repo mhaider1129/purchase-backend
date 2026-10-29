@@ -354,6 +354,7 @@ const budgetControlRoutes = require('./routes/budgetControl');
 const requestAutoAssignmentRulesRoutes = require('./routes/requestAutoAssignmentRules');
 const departmentRequestedItemsRoutes = require('./routes/departmentRequestedItems');
 const procurementEvaluationsRoutes = require('./routes/procurementEvaluations');
+const deviceDemosRoutes = require('./routes/deviceDemos');
 const printServiceRequestsRoutes = require('./routes/printServiceRequests');
 const documentBrandingRoutes = require('./routes/documentBranding');
 const procurementPerformanceRoutes = require('./routes/procurementPerformance');
@@ -433,6 +434,7 @@ const protectedApiRoutes = [
   { path: '/request-auto-assignment-rules', router: requestAutoAssignmentRulesRoutes },
   { path: '/department-requested-items', router: departmentRequestedItemsRoutes },
   { path: '/procurement-evaluations', router: procurementEvaluationsRoutes },
+  { path: '/device-demos', router: deviceDemosRoutes },
   { path: '/print-service-requests', router: printServiceRequestsRoutes },
   { path: '/document-branding', router: documentBrandingRoutes },
   { path: '/procurement-performance', router: procurementPerformanceRoutes },

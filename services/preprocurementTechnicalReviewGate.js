@@ -9,7 +9,13 @@ const GATED_COMMANDS = new Set([
   "create_purchase_order",
   "register_procurement",
 ]);
-async function assertTechnicalClearance(client, item, actor, command) {
+async function assertTechnicalClearance(
+  client,
+  item,
+  actor,
+  command,
+  context = {},
+) {
   if (!GATED_COMMANDS.has(command)) return;
   if (!client?.query)
     throw error(
@@ -17,8 +23,16 @@ async function assertTechnicalClearance(client, item, actor, command) {
       "Technical review gate requires a transactional database client",
     );
   const configured = await client.query(
-    "SELECT to_regclass('public.preprocurement_technical_reviews') IS NOT NULL AS technical_review_available",
+    "SELECT to_regclass('public.preprocurement_technical_reviews') IS NOT NULL AS technical_review_available, to_regclass('public.device_demo_workspaces') IS NOT NULL AS demo_workspace_available",
   );
+  if (configured.rows[0]?.demo_workspace_available === true)
+    await require("./deviceDemoGate").assertDemoSelection(
+      client,
+      item,
+      actor,
+      command,
+      context,
+    );
   // Before SQL 049 exists there cannot be a selected review or enabled policy.
   if (configured.rows[0]?.technical_review_available !== true) return;
   const id = item.id || item.item_id;

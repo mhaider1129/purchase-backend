@@ -55,9 +55,10 @@ async function assertReadyForCommand(
   item,
   actor,
   action = "procurement",
+  context = {},
 ) {
   if (isProcurementReady(item)) {
-    await assertTechnicalClearance(client, item, actor, action);
+    await assertTechnicalClearance(client, item, actor, action, context);
     return;
   }
   if (!isCompatibilityCandidate(item)) return assertProcurementReady(item);
@@ -77,7 +78,7 @@ async function assertReadyForCommand(
       enforce_item_identity: false,
     },
   });
-  await assertTechnicalClearance(client, item, actor, action);
+  await assertTechnicalClearance(client, item, actor, action, context);
 }
 
 async function updatePolicy(client, input, actor) {

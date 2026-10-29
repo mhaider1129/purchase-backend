@@ -20,7 +20,7 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
   return repository.withTransaction(async (tx) => {
     const locked = await tx.lockRequestItem(requestItem.id);
     if (!locked) throw Object.assign(new Error('Requested item not found'), { code: 'REQUEST_ITEM_NOT_FOUND', status: 404 });
-    await assertReadyForCommand(tx.client, locked, actor, 'create_award');
+    await assertReadyForCommand(tx.client, locked, actor, 'create_award', {supplier_id:supplier.id, approved_product_id:input.approved_product_id, supplier_catalog_item_id:input.supplier_catalog_item_id});
     const governedPhysical = !isCompatibilityCandidate(locked) && locked.request_mode && !['service','approved_free_text_exception'].includes(locked.request_mode);
     if (!governedPhysical && (input.approved_product_id || input.supplier_catalog_item_id)) throw Object.assign(new Error('Resolve the request identity before attaching physical catalog identities'), { code: 'AWARD_CATALOG_IDENTITY_INVALID', status: 409 });
     if (governedPhysical && (!input.approved_product_id || !input.supplier_catalog_item_id)) throw Object.assign(new Error('Governed physical awards require Product and Supplier Catalog identities'), { code: 'AWARD_CATALOG_IDENTITY_REQUIRED', status: 409 });

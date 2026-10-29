@@ -2,6 +2,12 @@
 
 This request type regulates procedure-specific, vendor-owned implant/surgical sets when the exact size is selected during surgery. F18 authorizes arranging consigned stock; F19 records temporary custody; F20 confirms usage, returns and discrepancies. Only clinically confirmed used quantities enter a dedicated normal purchase/PO/invoice handoff. No owned stock, payable or approval of payment is created by the temporary delivery.
 
+## Workflow design
+
+The supplied F18/F19/F20 documents are reference practices, not a mandated digital workflow or a requirement to reproduce paper screens. The workspace is one procedure-specific case: identify the clinical need and size ranges, authorize vendor custody, record delivered lots, confirm actual consumption, reconcile unused stock and exceptions, then hand off used-only billing. Exact sizes need not be selected when requesting. Form identifiers remain on printable supporting records for traceability; operational actions use task names.
+
+Keep clinical authorization, vendor custody, consumption and financial settlement distinct. A delivery is not a purchase, a signed usage record is not payment approval, and custody closure is not payment completion. Existing budget/contract/PO and finance approvals still apply. The current explicit authorization and confirmation roles are the initial controlled route, rather than a claim that the paper form defines every future organizational policy.
+
 ## Manual deployment
 
 **MANUAL DATABASE MIGRATION REQUIRED**: apply the **entire** `purchase-backend/sql/manual/051_surgical_consignment.sql`, from `BEGIN;` through `COMMIT;`, in Supabase SQL Editor. Do not run a selected column fragment. The existing repository schema, organization/permission catalog and P2P tables must already be installed. Deploy the backend before rebuilding/deploying the frontend. No production or Supabase database was accessed during implementation.

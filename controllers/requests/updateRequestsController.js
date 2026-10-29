@@ -183,7 +183,7 @@ const updateApprovalStatus = async (req, res, next) => {
 
     const requestInfoRes = await client.query(
       `SELECT request_type, department_id, request_domain, estimated_cost, is_urgent, requester_id,
-              status, supply_warehouse_id, assigned_to
+              status, supply_warehouse_id, assigned_to, institute_id
          FROM requests
         WHERE id = $1
         FOR UPDATE`,
@@ -198,6 +198,8 @@ const updateApprovalStatus = async (req, res, next) => {
     if (String(requestInfoRes.rows[0].status || '').trim().toLowerCase() === 'rejected') throw createHttpError(409, 'This request has been rejected and its approval workflow is stopped');
 
     const requestRow = requestInfoRes.rows[0];
+    if (decision === 'Approved') await require('../../services/procurementPriority/departmentPriorityCoverageService').recordDepartmentHodApproval({
+      client,request:{...requestRow,id:request_id},approvalId:approval_id,actor:req.user});
     const wasAlreadyUrgent = requestRow.is_urgent === true;
 
     await client.query(

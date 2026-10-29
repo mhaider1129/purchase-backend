@@ -10,7 +10,11 @@ module.exports = async (client) => {
   await client.query('BEGIN');
   try {
     await client.query(`
-      CREATE TEMP TABLE requests(id int,status text,maintenance_ref_number text) ON COMMIT DROP;
+      CREATE TEMP TABLE requests(id int,status text,maintenance_ref_number text,institute_id int DEFAULT 7,department_id int DEFAULT 9) ON COMMIT DROP;
+      CREATE TEMP TABLE users(id int,role text,institute_id int,department_id int) ON COMMIT DROP;
+      CREATE TEMP TABLE approval_logs(approval_id int,request_id int,approver_id int,action text,comments text) ON COMMIT DROP;
+      CREATE TEMP TABLE approvals(id int,request_id int,approver_id int,status text,is_superseded bool DEFAULT false) ON COMMIT DROP;
+      INSERT INTO users VALUES(901,'HOD',7,9),(902,'HOD',7,10);
       CREATE TEMP TABLE requested_items(id int,request_id int,item_name text,approval_status text,procurement_status text) ON COMMIT DROP;
       CREATE TEMP TABLE departments(id int,name text) ON COMMIT DROP;
       CREATE TEMP TABLE request_priority_rankings(request_id bigint PRIMARY KEY,institute_id bigint,department_id bigint,department_rank int,institutional_rank int,institutional_override_reason text,row_version bigint DEFAULT 1,updated_by bigint,updated_at timestamptz DEFAULT now()) ON COMMIT DROP;
@@ -19,7 +23,8 @@ module.exports = async (client) => {
       CREATE TEMP TABLE department_priority_rankings(procurement_case_id bigint,department_rank int,department_rank_total int,valid_until timestamptz,institute_id int,department_id int,ranked_by int) ON COMMIT DROP;
       CREATE TEMP TABLE procurement_priority_groups(id int PRIMARY KEY,institute_id int,is_public bool,status text,public_title text,public_description text,tier_override text,institutional_rank int,created_at timestamptz DEFAULT now()) ON COMMIT DROP;
       CREATE TEMP TABLE procurement_priority_group_members(group_id int,procurement_case_id bigint,removed_at timestamptz) ON COMMIT DROP;
-      INSERT INTO requests VALUES(1,'Approved','R1'),(2,' completed ','R2'),(3,'Closed','R3'),(4,'Partially Procured','R4'),(5,'Approved','R5'),(6,'Approved','R6'),(7,'Received','R7');
+      INSERT INTO requests(id,status,maintenance_ref_number) VALUES(1,'Approved','R1'),(2,' completed ','R2'),(3,'Closed','R3'),(4,'Partially Procured','R4'),(5,'Approved','R5'),(6,'Approved','R6'),(7,'Received','R7');
+      INSERT INTO approvals(id,request_id,approver_id,status) SELECT id,id,901,'Approved' FROM requests;
       INSERT INTO requested_items SELECT id+100,id,'Item '||id,'Approved',CASE WHEN id=5 THEN 'purchased' ELSE 'pending' END FROM requests;
       INSERT INTO procurement_cases(id,request_id,requested_item_id,institute_id,department_id,case_status) SELECT id+10,id,id+100,7,9,CASE WHEN id=6 THEN 'DELIVERED' ELSE 'READY_FOR_SOURCING' END FROM requests;
       INSERT INTO procurement_priority_profiles(procurement_case_id,institute_id,public_title,system_score,system_tier,institutional_rank) SELECT id,7,'Case '||id,50,'P3',id-10 FROM procurement_cases;
@@ -109,6 +114,30 @@ module.exports = async (client) => {
     assert.deepEqual((await read('institutional')).map(row=>[Number(row.request_id),row.institutional_rank]),[[4,1]]);
     assert.equal((await repo.profile(14,7)).department_rank_total,1);
     assert.equal((await client.query('SELECT count(*)::int AS count FROM request_priority_rankings')).rows[0].count,2);
+    // Assessment coverage and a saved institutional position do not make an
+    // unapproved request eligible for the HOD's departmental list.
+    await client.query("INSERT INTO requests(id,status,maintenance_ref_number) VALUES(8,'Submitted','R8')");
+    await client.query("INSERT INTO requested_items VALUES(110,8,'New device','Approved','pending')");
+    await client.query("INSERT INTO procurement_cases(id,request_id,requested_item_id,institute_id,department_id,case_status) VALUES(20,8,110,7,9,'APPROVAL_PENDING')");
+    await client.query("INSERT INTO procurement_priority_profiles(procurement_case_id,institute_id,public_title,row_version) VALUES(20,7,'New device',1)");
+    assert.equal((await read('institutional')).length,2);
+    assert.deepEqual((await read('department')).map(row=>Number(row.request_id)),[4]);
+    await client.query("INSERT INTO approvals VALUES(80,8,902,'Approved',false),(81,8,901,'Rejected',false),(82,8,901,'Approved',true)");
+    assert.deepEqual((await read('department')).map(row=>Number(row.request_id)),[4]);
+    await client.query("INSERT INTO approvals VALUES(83,8,901,'Approved',false)");
+    assert.equal((await read('department')).length,2);
+    await require('../services/procurementPriority/departmentPriorityCoverageService').recordDepartmentHodApproval({
+      client,request:{id:8,institute_id:7,department_id:9},approvalId:83,actor:{id:901,role:'HOD',institute_id:7,department_id:9}});
+    await client.query("UPDATE users SET role='CMO',department_id=10 WHERE id=901");
+    assert((await read('department')).some(row=>Number(row.request_id)===8));
+    await client.query("UPDATE users SET role='HOD',department_id=9 WHERE id=901");
+    const institutional=await read('institutional');
+    assert.equal(institutional.find(row=>Number(row.request_id)===8).department_rank_total,2);
+    for (const status of ['Rejected','Completed','Closed','Available in Stock','in_stock','Cancelled','Canceled']) {
+      await client.query('UPDATE requests SET status=$1 WHERE id=8',[status]);
+      assert.deepEqual((await read('department')).map(row=>Number(row.request_id)),[4]);
+    }
+    console.log('HOD departmental eligibility: only own-department non-superseded approved decisions, no assessed-only or cross-department technical opinions, all terminal/stock exclusions PASS');
     console.log('Whole request queues: one position for multiple items, independent department/institutional ranks, stale snapshot rejection, completion exclusion and private titles preserved PASS');
     console.log('Active priority queues: immediate completion exclusion, case/item terminals, active group counts, normalized department ranks, stale reorder rejection and history preservation PASS');
   } finally { await client.query('ROLLBACK'); }

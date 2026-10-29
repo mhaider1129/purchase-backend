@@ -63,3 +63,9 @@ test('already ranked cases make a retry gate-free and gate creation is audited',
   await auditGate({ client, request, approval: { id: 8, approval_level: 2 }, actorId: 6, gate });
   expect(writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ action: STATE, client, instituteId: 7, requestId: 41 }));
 });
+// An existing assessment/rank must not suppress placement of a fresh HOD decision.
+test('a fresh HOD decision explicitly offers placement even if its cases were already ranked', async () => {
+  const item={request_id:41,procurement_case_id:101,row_version:1,department_rank:2};
+  const client={query:jest.fn().mockResolvedValueOnce({rows:[item]}).mockResolvedValueOnce({rows:[item]}).mockResolvedValueOnce({rows:[]})};
+  await expect(findGate({client,request,approvalLevel:2,force:true})).resolves.toMatchObject({state:STATE,requiredRequestIds:[41],grain:'request'});
+});

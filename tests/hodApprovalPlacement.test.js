@@ -1,0 +1,33 @@
+jest.mock('../config/db',()=>({connect:jest.fn()}));
+jest.mock('../utils/ensureRequestedItemApprovalColumns',()=>jest.fn(async()=>{}));
+jest.mock('../utils/emailService',()=>({sendEmail:jest.fn()}));
+jest.mock('../utils/notificationService',()=>({createNotifications:jest.fn()}));
+jest.mock('../controllers/utils/approvalRoutes',()=>({fetchApprovalRoutes:jest.fn(async()=>[{approval_level:1,role:'HOD'},{approval_level:2,role:'SCM'}]),resolveRouteDomain:jest.fn(async()=> 'clinical')}));
+jest.mock('../services/approvalContinuationService',()=>({continueApprovalWorkflowAfterLevel:jest.fn(async()=>({state:'NEXT_APPROVAL_ACTIVE',requestStatus:null}))}));
+jest.mock('../services/procurementPriority/hodRankingGateService',()=>({findGate:jest.fn(),auditGate:jest.fn()}));
+jest.mock('../services/procurementPriority/departmentPriorityCoverageService',()=>({recordDepartmentHodApproval:jest.fn()}));
+const pool=require('../config/db');
+const {handleApprovalDecision}=require('../controllers/approvalsController');
+const {continueApprovalWorkflowAfterLevel}=require('../services/approvalContinuationService');
+const {findGate}=require('../services/procurementPriority/hodRankingGateService');
+const {recordDepartmentHodApproval}=require('../services/procurementPriority/departmentPriorityCoverageService');
+const approval={id:8,request_id:41,approval_level:1,approver_id:5,is_active:true,status:'Pending'};
+const reqRow={id:41,department_id:9,institute_id:7,requester_id:99,request_type:'Stock',status:'Submitted'};
+beforeEach(()=>{jest.clearAllMocks();findGate.mockResolvedValue({state:'HOD_PRIORITY_PLACEMENT',requestId:41,queue:[]});});
+test.each([0,1])('HOD approval returns placement while normal continuation respects %s pending peers',async pending=>{
+ const client={release:jest.fn(),query:jest.fn(async sql=>{
+  if(sql.includes('SELECT * FROM approvals WHERE id'))return {rows:[approval]};
+  if(sql.includes('SELECT r.*, p.name'))return {rows:[reqRow]};
+  if(sql.includes('AS pending_count'))return {rows:[{pending_count:String(pending)}]};
+  if(sql.includes('SELECT status FROM approvals'))return {rows:[{status:'Approved'},{status:'Pending'}]};
+  return {rows:[],rowCount:0};
+ })};pool.connect.mockResolvedValue(client);
+ const req={params:{id:'8'},body:{status:'Approved'},user:{id:5,role:'HOD',department_id:9,institute_id:7}};
+ const res={json:jest.fn(),status:jest.fn().mockReturnThis()},next=jest.fn();
+ await handleApprovalDecision(req,res,next);
+ expect(next).not.toHaveBeenCalled();expect(recordDepartmentHodApproval).toHaveBeenCalledWith(expect.objectContaining({request:reqRow,approvalId:8,actor:req.user}));
+ expect(findGate).toHaveBeenCalledWith(expect.objectContaining({force:true}));
+ expect(continueApprovalWorkflowAfterLevel).toHaveBeenCalledTimes(pending===0?1:0);
+ expect(client.query).toHaveBeenCalledWith('COMMIT');
+ expect(res.json).toHaveBeenCalledWith(expect.objectContaining({workflowState:'HOD_PRIORITY_PLACEMENT'}));
+});

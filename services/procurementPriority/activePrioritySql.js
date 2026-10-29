@@ -11,12 +11,29 @@ const priorityCaseJoins = `JOIN requests r ON r.id=pc.request_id
 const activePriorityCaseSql = `pc.closed_at IS NULL AND pc.id IS NOT NULL AND r.id IS NOT NULL AND ri.id IS NOT NULL
   AND UPPER(TRIM(COALESCE(pc.case_status,''))) NOT IN (${terminal})
   AND ${requestActiveSql} AND ${itemActiveSql}`;
+// A departmental queue starts only after a non-superseded approval by that
+// department's HOD. Institution-wide assessment coverage alone is not approval.
+const departmentApprovedRequestSql = `EXISTS (
+  SELECT 1 FROM approvals department_approval
+  JOIN users department_approver ON department_approver.id=department_approval.approver_id
+  WHERE department_approval.request_id=r.id AND department_approval.status='Approved'
+    AND COALESCE(department_approval.is_superseded,FALSE)=FALSE
+    AND ((UPPER(TRIM(department_approver.role))='HOD'
+      AND department_approver.department_id=r.department_id
+      AND department_approver.institute_id=r.institute_id)
+      OR EXISTS(SELECT 1 FROM approval_logs department_decision
+        WHERE department_decision.approval_id=department_approval.id
+          AND department_decision.request_id=r.id
+          AND department_decision.approver_id=department_approval.approver_id
+          AND department_decision.action='Department HOD approved'
+          AND department_decision.comments='institute:' || r.institute_id::text || ';department:' || r.department_id::text))
+)`;
 // Project current positions without rewriting the effective-dated rank history.
 const activeDepartmentRankingSql = `WITH active_cases AS (
   SELECT pc.id,pc.request_id,pc.institute_id,pc.department_id,d.department_rank AS legacy_rank
   FROM procurement_cases pc JOIN procurement_priority_profiles p ON p.procurement_case_id=pc.id ${priorityCaseJoins}
   LEFT JOIN department_priority_rankings d ON d.procurement_case_id=pc.id AND d.valid_until IS NULL
-  WHERE ${activePriorityCaseSql}
+  WHERE ${activePriorityCaseSql} AND ${departmentApprovedRequestSql}
 ), request_positions AS (
   SELECT c.request_id,c.institute_id,c.department_id,COALESCE(q.department_rank,min(c.legacy_rank)) AS saved_rank
   FROM active_cases c LEFT JOIN request_priority_rankings q ON q.request_id=c.request_id
@@ -31,4 +48,4 @@ const activeDepartmentRankingSql = `WITH active_cases AS (
 SELECT c.id AS procurement_case_id,p.department_rank,p.department_rank_total
 FROM active_cases c JOIN projected p ON p.request_id=c.request_id`;
 
-module.exports = { requestActiveSql, itemActiveSql, priorityCaseJoins, activePriorityCaseSql, activeDepartmentRankingSql };
+module.exports = { departmentApprovedRequestSql, requestActiveSql, itemActiveSql, priorityCaseJoins, activePriorityCaseSql, activeDepartmentRankingSql };

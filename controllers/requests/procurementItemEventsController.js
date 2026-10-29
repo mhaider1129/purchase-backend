@@ -1,3 +1,4 @@
+const {stockItemSql}=require('../../services/requestFulfillmentSql');
 const { insertRequestedItem } = require('../../services/requestedItemWriteService');
 const { assertReadyForCommand } = require('../../services/procurementIdentityPolicyService');
 const pool = require('../../config/db');
@@ -7,7 +8,7 @@ const uom = require('../../services/uomConversionService');
 
 const PRIVILEGED_ROLES = new Set(['SCM', 'Admin', 'Procurement Supervisor', 'ProcurementSupervisor']);
 const OVERAGE_APPROVER_ROLES = new Set(['SCM', 'Admin']);
-const BLOCKED_REQUEST_STATUSES = new Set(['rejected', 'cancelled', 'canceled', 'closed', 'completed', 'received']);
+const BLOCKED_REQUEST_STATUSES = new Set(['rejected', 'cancelled', 'canceled', 'closed', 'completed', 'received', 'available in stock', 'available_in_stock', 'in stock', 'in_stock']);
 const BLOCKED_ITEM_STATUSES = new Set(['purchased', 'completed', 'fully_procured', 'canceled', 'cancelled', 'not_procured', 'unable_to_procure']);
 const TERMINALLY_BLOCKED_ITEM_STATUSES = new Set(['canceled', 'cancelled', 'not_procured', 'unable_to_procure']);
 
@@ -52,7 +53,7 @@ const deriveItemStatus = (newPurchasedQuantity, requestedQuantity) => {
 
 const resolveProcurementEventItem = async (client, requestRow, requestId, itemId, actor) => {
   const itemRes = await client.query(
-    `SELECT ri.*, r.assigned_to AS request_assigned_to
+    `SELECT ri.*,${stockItemSql('ri')} AS is_available_in_stock, r.assigned_to AS request_assigned_to
      FROM public.requested_items ri
      JOIN requests r ON r.id = ri.request_id
      WHERE ri.id = $1 AND ri.request_id = $2
@@ -233,6 +234,11 @@ const addProcurementItemEvent = async (req, res, next) => {
     if (!hasProcurementEventAccess(req, requestRow, item)) {
       await client.query('ROLLBACK');
       return next(createHttpError(403, 'You must be assigned to this request or have SCM/Admin/Procurement Supervisor access'));
+    }
+
+    if (item.is_available_in_stock) {
+      await client.query('ROLLBACK');
+      return next(createHttpError(409, 'This item is available in stock and does not require procurement'));
     }
 
     if (String(item.approval_status || 'Approved').trim().toLowerCase() === 'rejected') {

@@ -389,6 +389,7 @@ async function run() {
     await require('../integration/requestPriorityMigration')(client,read('sql/manual/047_whole_request_priorities.sql'));
     await require('../integration/approvalHoldTiming')(client);
     await require('../integration/preprocurementTechnicalReviews')(client);
+    await require('../integration/stockFulfilledRequests')(client);
     await require('../integration/activePriorityQueues')(client);
     await require('../integration/scmRequestIntervention')(client);
     await validateBackendQueryCompatibility(client,extractBackendSqlContract(root).sql);

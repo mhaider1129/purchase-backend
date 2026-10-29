@@ -1,9 +1,11 @@
 'use strict';
 const { TERMINAL_STATUSES } = require('./constants');
+const {stockItemSql,effectiveRequestStatusSql}=require('../requestFulfillmentSql');
 const terminal = [...TERMINAL_STATUSES].map(status => `'${status.replace(/'/g, "''")}'`).join(',');
-const requestActiveSql = `UPPER(TRIM(COALESCE(r.status,''))) NOT IN (${terminal})`;
+const requestActiveSql = `UPPER(TRIM(COALESCE(${effectiveRequestStatusSql('r')},''))) NOT IN (${terminal})`;
 const itemActiveSql = `UPPER(TRIM(COALESCE(ri.approval_status,''))) <> 'REJECTED'
-  AND UPPER(TRIM(COALESCE(ri.procurement_status,''))) NOT IN (${terminal},'PURCHASED','FULLY_PROCURED','NOT_PROCURED','UNABLE_TO_PROCURE')`;
+  AND UPPER(TRIM(COALESCE(ri.procurement_status,''))) NOT IN (${terminal},'PURCHASED','FULLY_PROCURED','NOT_PROCURED','UNABLE_TO_PROCURE')
+  AND NOT ${stockItemSql('ri')}`;
 const priorityCaseJoins = `JOIN requests r ON r.id=pc.request_id
   JOIN requested_items ri ON ri.id=pc.requested_item_id AND ri.request_id=pc.request_id`;
 const activePriorityCaseSql = `pc.closed_at IS NULL AND pc.id IS NOT NULL AND r.id IS NOT NULL AND ri.id IS NOT NULL

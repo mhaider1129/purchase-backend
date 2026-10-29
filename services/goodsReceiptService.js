@@ -86,6 +86,7 @@ async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey,
         item_name: poLine.item_name || input.item_name, requested_item_id: poLine.requested_item_id });
     }
 
+    if(tx.assertSurgicalConsignmentReceipt) await tx.assertSurgicalConsignmentReceipt(po,prepared,actor);
     const receipt = await tx.insertGoodsReceipt({ purchase_order_id: po.id, request_id: po.request_id,
       idempotency_key: key, payload_fingerprint: payloadFingerprint, received_at: receivedAt,
       received_by: actor?.id, warehouse_location: warehouseLocation, notes, discrepancy_notes: discrepancyNotes });

@@ -304,6 +304,13 @@ async function run() {
       baseline += `CREATE TABLE public.${table} (${normalized});\n`;
     }
     await client.query(baseline);
+    // The column-only historical export omits SERIAL ownership metadata.
+    // Restore it only in this fresh local fixture for conventional table ID sequences.
+    for(const [table,body] of Object.entries(snapshot)) {
+      const owned=body.match(/\bid\s+[^\n]*DEFAULT nextval\('(?:public\.)?([a-z_][a-z0-9_]*)'::regclass\)/i);
+      if(owned&&owned[1]===`${table}_id_seq`) await client.query(`ALTER SEQUENCE public.${owned[1]} OWNED BY public.${table}.id`);
+    }
+
     await client.query(read('sql/permissions_Table.sql'));
     await client.query(read('sql/UI_resource_permissions.sql').replace(/ARRAY\[\]/g, 'ARRAY[]::text[]'));
     console.log(`Snapshot fixture created: ${Object.keys(snapshot).length} tables`);
@@ -390,6 +397,7 @@ async function run() {
     await require('../integration/approvalHoldTiming')(client);
     await require('../integration/preprocurementTechnicalReviews')(client);
     await require('../integration/deviceDemoWorkspaces')(client);
+    await require('../integration/surgicalConsignments')(client);
     await require('../integration/stockFulfilledRequests')(client);
     await require('../integration/activePriorityQueues')(client);
     await require('../integration/scmRequestIntervention')(client);

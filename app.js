@@ -355,6 +355,7 @@ const requestAutoAssignmentRulesRoutes = require('./routes/requestAutoAssignment
 const departmentRequestedItemsRoutes = require('./routes/departmentRequestedItems');
 const procurementEvaluationsRoutes = require('./routes/procurementEvaluations');
 const deviceDemosRoutes = require('./routes/deviceDemos');
+const surgicalConsignmentsRoutes = require('./routes/surgicalConsignments');
 const printServiceRequestsRoutes = require('./routes/printServiceRequests');
 const documentBrandingRoutes = require('./routes/documentBranding');
 const procurementPerformanceRoutes = require('./routes/procurementPerformance');
@@ -435,6 +436,7 @@ const protectedApiRoutes = [
   { path: '/department-requested-items', router: departmentRequestedItemsRoutes },
   { path: '/procurement-evaluations', router: procurementEvaluationsRoutes },
   { path: '/device-demos', router: deviceDemosRoutes },
+  { path: '/surgical-consignments', router: surgicalConsignmentsRoutes },
   { path: '/print-service-requests', router: printServiceRequestsRoutes },
   { path: '/document-branding', router: documentBrandingRoutes },
   { path: '/procurement-performance', router: procurementPerformanceRoutes },

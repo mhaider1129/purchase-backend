@@ -262,7 +262,11 @@ router.get('/download', authenticateUser, (req, res, next) => {
     ? normalized.slice('uploads/'.length)
     : normalized;
 
-  const filePath = path.join(UPLOADS_DIR, relativePath);
+  const filePath = path.resolve(UPLOADS_DIR, relativePath);
+  const scopedPath = path.relative(UPLOADS_DIR, filePath);
+  if (scopedPath === '..' || scopedPath.startsWith(`..${path.sep}`) || path.isAbsolute(scopedPath)) {
+    return next(createHttpError(400, 'Attachment path must remain inside uploads'));
+  }
   const filename = sanitize(path.basename(relativePath) || 'attachment');
 
   fs.access(filePath, fs.constants.F_OK, err => {

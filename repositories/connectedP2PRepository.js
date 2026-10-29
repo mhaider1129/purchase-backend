@@ -7,6 +7,8 @@ const one = async (client, sql, values) => (await client.query(sql, values)).row
 
 const createConnectedP2PRepository = (client) => ({
   client,
+  assertSurgicalConsignmentInvoice: (po,lines,currency,actor)=>require('../services/surgicalConsignmentFinancialGate').invoice(client,po,lines,currency,actor),
+  assertSurgicalConsignmentReceipt: (po,lines,actor)=>require('../services/surgicalConsignmentFinancialGate').receipt(client,po,lines,actor),
   async withSavepoint(work) {
     await client.query('SAVEPOINT generated_po_number');
     try {
@@ -151,8 +153,8 @@ const createConnectedP2PRepository = (client) => ({
   loadInvoicePurchaseOrder: (id) => one(client,'SELECT * FROM purchase_orders WHERE id=$1',[id]),
   findInvoiceByIdempotency: (key) => one(client,'SELECT * FROM supplier_invoices WHERE idempotency_key=$1',[key]),
   findSupplierInvoiceByNormalizedNumber: (supplierId,number) => one(client,'SELECT * FROM supplier_invoices WHERE supplier_id=$1 AND normalized_invoice_number=$2',[supplierId,number]),
-  insertSupplierInvoice: (i) => one(client,`INSERT INTO supplier_invoices (request_id,supplier_id,purchase_order_id,invoice_number,normalized_invoice_number,invoice_date,currency,idempotency_key,payload_fingerprint,status,subtotal_amount,tax_amount,discount_amount,total_amount,attachment_metadata,submitted_by)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'AP_INVOICE_SUBMITTED',$10,$11,$12,$13,$14::jsonb,$15) RETURNING *`,[i.request_id,i.supplier_id,i.purchase_order_id,i.invoice_number,i.normalized_invoice_number,i.invoice_date,i.currency,i.idempotency_key,i.payload_fingerprint,i.subtotal_amount,i.tax_amount,i.discount_amount,i.total_amount,JSON.stringify(i.attachment_metadata),i.submitted_by]),
+  insertSupplierInvoice: (i) => one(client,`INSERT INTO supplier_invoices (request_id,supplier_id,supplier,purchase_order_id,invoice_number,normalized_invoice_number,invoice_date,currency,idempotency_key,payload_fingerprint,status,subtotal_amount,tax_amount,discount_amount,total_amount,attachment_metadata,submitted_by)
+    VALUES ($1,$2,(SELECT name FROM suppliers WHERE id=$2),$3,$4,$5,$6,$7,$8,$9,'AP_INVOICE_SUBMITTED',$10,$11,$12,$13,$14::jsonb,$15) RETURNING *`,[i.request_id,i.supplier_id,i.purchase_order_id,i.invoice_number,i.normalized_invoice_number,i.invoice_date,i.currency,i.idempotency_key,i.payload_fingerprint,i.subtotal_amount,i.tax_amount,i.discount_amount,i.total_amount,JSON.stringify(i.attachment_metadata),i.submitted_by]),
   insertSupplierInvoiceLine: (l) => one(client,'INSERT INTO invoice_items (supplier_invoice_id,purchase_order_item_id,requested_item_id,description,quantity,unit_price,line_total,tax_amount,discount_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',[l.supplier_invoice_id,l.purchase_order_item_id,l.requested_item_id,l.description,l.quantity,l.unit_price,l.line_total,l.tax,l.discount]),
   loadInvoiceWithLines: async (id) => { const invoice=await one(client,'SELECT * FROM supplier_invoices WHERE id=$1',[id]); if(!invoice)return null; invoice.lines=(await client.query('SELECT * FROM invoice_items WHERE supplier_invoice_id=$1 ORDER BY id',[id])).rows; return invoice; },
   loadPurchaseOrderForInvoice: (id) => one(client,'SELECT po.* FROM supplier_invoices si JOIN purchase_orders po ON po.id=si.purchase_order_id WHERE si.id=$1',[id]),

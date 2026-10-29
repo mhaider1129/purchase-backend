@@ -45,6 +45,7 @@ const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, s
     if (await tx.findSupplierInvoiceByNormalizedNumber(supplierId, normalized)) throw error('Duplicate supplier invoice', 'DUPLICATE_INVOICE', 409);
     if (String(po.supplier_id) !== String(supplierId)) throw error('Invoice supplier does not match purchase order supplier', 'SUPPLIER_MISMATCH', 409);
     if (!['PO_ISSUED', 'PO_PARTIAL', 'PO_DELIVERED'].includes(po.status)) throw error(`Purchase order status ${po.status} does not permit invoicing`, 'PO_NOT_INVOICEABLE', 409);
+    if(tx.assertSurgicalConsignmentInvoice) await tx.assertSurgicalConsignmentInvoice(po,lines,currency,actor);
     const poLines = await tx.loadPurchaseOrderLines(po.id);
     const byId = new Map(poLines.map((line) => [String(line.id), line]));
     const calculated = calculatePurchaseOrderTotals({ lines });

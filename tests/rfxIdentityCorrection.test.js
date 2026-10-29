@@ -1,4 +1,5 @@
 'use strict';
+const legacyTechnicalReviewClient=require('./helpers/legacyTechnicalReviewClient');
 
 const { createPurchaseOrderFromAwards } = require('../services/purchaseOrderService');
 const { normalizeQuotationLines, submitLinkedRfxResponse } = require('../services/rfxResponseService');
@@ -9,6 +10,7 @@ const poRepository = () => {
   let sequence = 0;
   const numbers = new Set();
   const tx = {
+    client: legacyTechnicalReviewClient(),
     lockAwards: async () => [award], getAwardConversion: async () => ({ remaining_quantity: '10' }), loadAwardUomSnapshot: async () => ({ request_mode:'generic_item',catalog_status:'catalogued',generic_item_id: 3, source_uom_id: 4, source_uom: 'CASE', base_uom_id: 1, base_uom: 'EA', generic_base_uom_id: 1, inventory_uom_id: 1, supplier_conversion_factor: '10', package_quantity: '100' }),
     nextPurchaseOrderNumber: async () => ({ po_number: `PO-2026-${String(++sequence).padStart(6, '0')}` }),
     findPurchaseOrderByNumber: async number => numbers.has(number) ? { id: 1 } : null,

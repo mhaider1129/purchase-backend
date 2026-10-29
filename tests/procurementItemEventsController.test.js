@@ -49,6 +49,7 @@ const buildClient = ({ itemOverrides = {}, requestOverrides = {}, allFully = fal
   };
 
   client.query.mockImplementation(async (sql, params) => {
+    if (sql.includes('technical_review_available')) return { rows: [{technical_review_available:false}] };
     if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return {};
     if (/SELECT id, status, assigned_to, request_type FROM requests/.test(sql)) {
       return { rowCount: 1, rows: [state.request] };

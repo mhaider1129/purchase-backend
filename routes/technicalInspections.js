@@ -10,6 +10,9 @@ const {
 const createHttpError = require('../utils/httpError');
 
 const router = express.Router();
+// The parent API mount authenticates users. New review routes independently
+// authorize SCM management or explicit reviewer assignments, before legacy CRUD.
+router.use('/pre-procurement', require('./preprocurementTechnicalReviews'));
 
 const requireTechnicalInspectionPermission = (req, _res, next) => {
   const hasPermission = req.user?.hasPermission?.('technical-inspections.manage');

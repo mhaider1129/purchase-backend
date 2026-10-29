@@ -519,3 +519,13 @@ describe('overage decision transaction safeguards', () => {
     expect(pool.connect).not.toHaveBeenCalled();
   });
 });
+
+test('stock-resolved items reject new procurement without inserting a purchase event', async () => {
+  const client=buildClient({itemOverrides:{is_available_in_stock:true}});
+  pool.connect.mockResolvedValue(client);
+  const next=jest.fn();
+  await addProcurementItemEvent(buildRequest({event_quantity:1,unit_cost:5}),buildResponse(),next);
+  expect(next).toHaveBeenCalledWith(expect.objectContaining({statusCode:409,message:expect.stringContaining('available in stock')}));
+  expect(client.query.mock.calls.some(([sql])=>sql.includes('INSERT INTO public.procurement_item_events'))).toBe(false);
+  expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+});

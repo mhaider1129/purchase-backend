@@ -1,10 +1,11 @@
+const {stockItemSql,effectiveRequestStatusSql}=require('../services/requestFulfillmentSql');
 const {activeDaysSql}=require('../services/approvalTimingSql');
 const pool = require('../config/db');
 const ensureDepartmentItemFollowUpNotesTable = require('../utils/ensureDepartmentItemFollowUpNotesTable');
 
 const PRIVILEGED_ROLES = new Set(['admin', 'scm', 'procurementsupervisor']);
 const DEPARTMENT_ROLES = new Set(['hod', 'requester']);
-const CLOSED_REQUEST_STATUSES = ['rejected', 'cancelled', 'canceled', 'closed', 'completed', 'received'];
+const CLOSED_REQUEST_STATUSES = ['rejected', 'cancelled', 'canceled', 'closed', 'completed', 'received', 'available in stock'];
 const FULLY_PROCURED_STATUSES = ['fully procured', 'completed', 'complete', 'received'];
 const ALLOWED_SORTS = new Set([
   'department_name',
@@ -128,8 +129,9 @@ const buildWhereClause = (query = {}, user) => {
   }
 
   if (!isTrue(query.include_completed)) {
-    where.push(`LOWER(COALESCE(r.status, '')) <> ALL(${addParam(values, CLOSED_REQUEST_STATUSES)}::text[])`);
+    where.push(`LOWER(COALESCE(${effectiveRequestStatusSql('r')}, '')) <> ALL(${addParam(values, CLOSED_REQUEST_STATUSES)}::text[])`);
     where.push(`LOWER(COALESCE(ri.procurement_status, 'pending')) <> ALL(${addParam(values, FULLY_PROCURED_STATUSES)}::text[])`);
+    where.push(`NOT ${stockItemSql('ri')}`);
     where.push('GREATEST(COALESCE(ri.quantity, 0) - COALESCE(ri.purchased_quantity, 0), 0) > 0');
   }
 
@@ -179,7 +181,7 @@ const baseSelect = whereSql => `
       r.created_at AS request_date,
       CONCAT('Submitted on ', TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI'), ' by ', COALESCE(r.temporary_requester_name, requester.name, 'Unknown requester')) AS submission_timeline,
       r.request_type,
-      r.status AS request_status,
+      ${effectiveRequestStatusSql('r')} AS request_status,
       ri.approval_status,
       r.department_id,
       d.name AS department_name,
@@ -197,7 +199,7 @@ const baseSelect = whereSql => `
       NULL::text AS sub_category,
       COALESCE(ri.quantity, 0) AS requested_quantity,
       COALESCE(ri.purchased_quantity, 0) AS purchased_quantity,
-      GREATEST(COALESCE(ri.quantity, 0) - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+      CASE WHEN ${stockItemSql('ri')} THEN 0 ELSE GREATEST(COALESCE(ri.quantity, 0) - COALESCE(ri.purchased_quantity, 0), 0) END AS remaining_quantity,
       COALESCE(NULLIF(ri.procurement_status, ''), 'pending') AS procurement_status,
       COALESCE(ri.assigned_to, r.assigned_to) AS assigned_to_id,
       assigned_user.name AS assigned_to_name,

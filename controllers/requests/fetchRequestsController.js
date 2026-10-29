@@ -1,3 +1,4 @@
+const {stockItemSql,effectiveRequestStatusSql,completedRequestSql}=require('../../services/requestFulfillmentSql');
 const {activeDaysSql,activeSecondsSql}=require('../../services/approvalTimingSql');
 const { IDENTITY_FIELDS } = require('../../services/procurementItemIdentityService');
 const pool = require('../../config/db');
@@ -94,7 +95,8 @@ const getRequestDetails = async (req, res, next) => {
            ri.unit_of_measure,
            ri.available_quantity,
            ri.purchased_quantity,
-           GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+           ${stockItemSql('ri')} AS is_available_in_stock,
+           CASE WHEN ${stockItemSql('ri')} THEN 0 ELSE GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) END AS remaining_quantity,
            procurement_events.latest_procurement_date,
            COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
            ri.unit_cost,
@@ -296,7 +298,8 @@ const getRequestItemsOnly = async (req, res, next) => {
         ri.unit_of_measure,
         ri.available_quantity,
         ri.purchased_quantity,
-        GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+        ${stockItemSql('ri')} AS is_available_in_stock,
+           CASE WHEN ${stockItemSql('ri')} THEN 0 ELSE GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) END AS remaining_quantity,
         procurement_events.latest_procurement_date,
         COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
         ri.unit_cost,
@@ -378,8 +381,8 @@ const getMyRequests = async (req, res, next) => {
     const conditions = [`r.requester_id = $1`];
 
     if (status) {
-      params.push(status);
-      conditions.push(`r.status = $${params.length}`);
+      if (String(status).toLowerCase() === 'completed') conditions.push(completedRequestSql('r'));
+      else { params.push(status); conditions.push(`${effectiveRequestStatusSql('r')} = $${params.length}`); }
     }
 
     const normalizedType = requestType || request_type;
@@ -432,7 +435,7 @@ const getMyRequests = async (req, res, next) => {
         r.request_type,
         r.justification,
         r.estimated_cost,
-        r.status,
+        ${effectiveRequestStatusSql('r')} AS status,
         r.created_at,
         r.project_id,
         p.name AS project_name,
@@ -535,7 +538,7 @@ const buildApprovalHistoryQuery = ({ whereSQL }) => `SELECT
          r.request_type,
          r.justification,
          r.estimated_cost,
-         r.status,
+         ${effectiveRequestStatusSql('r')} AS status,
          a.status AS decision,
          a.comments,
          a.approval_level,
@@ -665,7 +668,7 @@ const getAllRequests = async (req, res, next) => {
   let whereClauses = [];
   const activeUrgentSort = `CASE
     WHEN r.is_urgent = TRUE
-      AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'rejected', 'received', 'cancelled')
+      AND COALESCE(NULLIF(LOWER(TRIM(${effectiveRequestStatusSql('r')})), ''), 'pending') NOT IN ('completed', 'rejected', 'received', 'cancelled', 'available in stock')
     THEN 1
     ELSE 0
   END DESC`;
@@ -681,7 +684,7 @@ const getAllRequests = async (req, res, next) => {
       )
     )`);
     params.push('Approved');
-    whereClauses.push(`r.status = $${params.length}`);
+    whereClauses.push(`${effectiveRequestStatusSql('r')} = $${params.length}`);
   }
 
   if (request_type) {
@@ -737,22 +740,22 @@ const getAllRequests = async (req, res, next) => {
           AND COALESCE(step_ap.is_superseded, FALSE) = FALSE`;
       switch (normalizedCurrentStepLower) {
         case 'rejected':
-          whereClauses.push(`LOWER(TRIM(r.status)) = 'rejected'`);
+          whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = 'rejected'`);
           break;
         case 'completed':
-          whereClauses.push(`LOWER(TRIM(r.status)) = 'completed'`);
+          whereClauses.push(`${completedRequestSql('r')}`);
           break;
         case 'technical inspection pending':
-          whereClauses.push(`LOWER(TRIM(r.status)) = 'technical_inspection_pending'`);
+          whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = 'technical_inspection_pending'`);
           break;
         case 'received':
-          whereClauses.push(`LOWER(TRIM(r.status)) = 'received'`);
+          whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = 'received'`);
           break;
         case 'partially procured':
-          whereClauses.push(`LOWER(TRIM(r.status)) = 'partially procured'`);
+          whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = 'partially procured'`);
           break;
         case 'approved':
-          whereClauses.push(`LOWER(TRIM(r.status)) = 'approved' AND NOT EXISTS (
+          whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = 'approved' AND NOT EXISTS (
             SELECT 1 FROM approvals approved_ap
             WHERE approved_ap.request_id = r.id AND approved_ap.is_active = true
               AND COALESCE(approved_ap.is_superseded, FALSE) = FALSE
@@ -762,7 +765,7 @@ const getAllRequests = async (req, res, next) => {
           whereClauses.push(`COALESCE(NULLIF(TRIM(r.status), ''), 'Submitted') = 'Submitted'`);
           break;
         case 'available in stock':
-          whereClauses.push(`LOWER(TRIM(r.status)) = 'available in stock'`);
+          whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = 'available in stock'`);
           break;
         default:
           params.push(normalizedCurrentStep);
@@ -805,17 +808,19 @@ const getAllRequests = async (req, res, next) => {
     const statusValue = Array.isArray(status) ? status[0] : status;
     if (typeof statusValue === 'string') {
       const normalizedStatus = statusValue.trim().toLowerCase();
-      if (normalizedStatus === 'pending') {
+      if (normalizedStatus === 'completed') {
+        whereClauses.push(completedRequestSql('r'));
+      } else if (normalizedStatus === 'pending') {
         whereClauses.push(
-          "COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received', 'approved', 'rejected')"
+          `COALESCE(NULLIF(LOWER(TRIM(${effectiveRequestStatusSql('r')})), ''), 'pending') NOT IN ('completed', 'received', 'approved', 'rejected', 'available in stock')`
         );
       } else {
         params.push(normalizedStatus);
-        whereClauses.push(`LOWER(TRIM(r.status)) = $${params.length}`);
+        whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = $${params.length}`);
       }
     } else {
       params.push(String(statusValue).trim().toLowerCase());
-      whereClauses.push(`LOWER(TRIM(r.status)) = $${params.length}`);
+      whereClauses.push(`LOWER(TRIM(${effectiveRequestStatusSql('r')})) = $${params.length}`);
     }
   }
 
@@ -875,7 +880,7 @@ const getAllRequests = async (req, res, next) => {
     const result = await pool.query(
       `
       SELECT
-        r.*,
+        r.*, ${effectiveRequestStatusSql('r')} AS status, r.status AS stored_status,
         p.name AS project_name,
         d.name AS department_name,
         s.name AS section_name,
@@ -1012,7 +1017,7 @@ const getAssignedRequests = async (req, res) => {
 
     const userId = req.query?.procurement_user_id ? overrideAssigneeId : req.user.id;
     const result = await pool.query(
-      `SELECT r.*, p.name AS project_name,
+      `SELECT r.*, ${effectiveRequestStatusSql('r')} AS status, r.status AS stored_status, p.name AS project_name,
               d.name AS department_name,
               COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name) AS requester_name,
               CASE
@@ -1031,7 +1036,7 @@ const getAssignedRequests = async (req, res) => {
              WHERE assigned_ri.request_id = r.id AND assigned_ri.assigned_to = $1
            )
          )
-         AND COALESCE(NULLIF(LOWER(TRIM(r.status)), ''), 'pending') NOT IN ('completed', 'received')
+         AND COALESCE(NULLIF(LOWER(TRIM(${effectiveRequestStatusSql('r')})), ''), 'pending') NOT IN ('completed', 'received', 'available in stock', 'rejected', 'closed', 'cancelled', 'canceled')
        ORDER BY r.created_at DESC`,
       [userId],
     );
@@ -1045,7 +1050,8 @@ const getAssignedRequests = async (req, res) => {
     const requestStatusById = new Map(requests.map((row) => [row.id, row.status]));
     const itemsRes = await pool.query(
       `SELECT ri.request_id, ri.procurement_status, ri.unit_cost, ri.quantity, ri.purchased_quantity,
-              GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+              ${stockItemSql('ri')} AS is_available_in_stock,
+           CASE WHEN ${stockItemSql('ri')} THEN 0 ELSE GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) END AS remaining_quantity,
               COALESCE(procurement_events.procurement_events_count, 0)::integer AS procurement_events_count,
               procurement_events.latest_procurement_date,
               ri.approval_status, ri.assigned_to
@@ -1098,7 +1104,7 @@ const getPendingApprovals = async (req, res, next) => {
          r.justification,
          r.maintenance_ref_number,
          r.estimated_cost,
-         r.status,
+         ${effectiveRequestStatusSql('r')} AS status,
          r.is_urgent,
          a.status AS approval_status,
          a.comments AS approval_comments,
@@ -1170,6 +1176,7 @@ const getPendingApprovals = async (req, res, next) => {
          AND a.is_active = true
          AND COALESCE(a.is_superseded, FALSE) = FALSE
          AND a.status IN ('Pending', 'On Hold')
+         AND NOT ${completedRequestSql('r')}
          ORDER BY r.created_at DESC`,
       [req.user.id],
     );
@@ -1254,7 +1261,7 @@ const getMyMaintenanceRequests = async (req, res, next) => {
          r.id,
          r.justification,
          r.maintenance_ref_number,
-         r.status,
+         ${effectiveRequestStatusSql('r')} AS status,
          r.created_at,
          CONCAT('Submitted on ', TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI'), ' by ', COALESCE(r.temporary_requester_name, u.name, 'Unknown requester')) AS submission_timeline,
          r.project_id,
@@ -1493,6 +1500,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          AND a.status = 'Pending'
          AND a.is_active = true
          AND COALESCE(a.is_superseded, FALSE) = FALSE
+         AND NOT ${completedRequestSql('r')}
        GROUP BY a.id, r.id, r.temporary_requester_name, u.name, d.name, s.name, p.name,
          budget_snapshot.budget_envelope_id,
          budget_snapshot.allocated_amount,
@@ -1521,12 +1529,12 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
   }
 
   try {
-    const statusFilter = ['approved', 'rejected', 'completed', 'received'];
+    const statusFilter = ['approved', 'rejected', 'completed', 'received', 'available in stock'];
     const { rows } = await pool.query(
       `SELECT r.id,
               r.request_type,
               r.justification,
-              r.status,
+              ${effectiveRequestStatusSql('r')} AS status,
               r.project_id,
               r.department_id,
               r.section_id,
@@ -1542,7 +1550,7 @@ const getAuditApprovedRejectedRequests = async (req, res, next) => {
          LEFT JOIN departments d ON r.department_id = d.id
          LEFT JOIN sections s ON r.section_id = s.id
          LEFT JOIN approvals a ON r.id = a.request_id
-        WHERE LOWER(TRIM(r.status)) = ANY($1::text[])
+        WHERE LOWER(TRIM(${effectiveRequestStatusSql('r')})) = ANY($1::text[])
         GROUP BY r.id, r.request_type, r.justification, r.status, p.name, requester.name, d.name, s.name
         ORDER BY approval_timestamp DESC`,
       [statusFilter]
@@ -1570,7 +1578,7 @@ const getClosedRequests = async (req, res, next) => {
          r.id,
          r.request_type,
          r.justification,
-         r.status,
+         ${effectiveRequestStatusSql('r')} AS status,
          r.project_id,
          r.created_at,
          r.updated_at,
@@ -1592,6 +1600,7 @@ const getClosedRequests = async (req, res, next) => {
                'total_cost', ri.total_cost,
                'specs', ri.specs,
                'procurement_status', ri.procurement_status,
+               'is_available_in_stock', ${stockItemSql('ri')},
                'is_received', ri.is_received,
                'received_at', ri.received_at,
                'received_by', ri.received_by,
@@ -1609,7 +1618,7 @@ const getClosedRequests = async (req, res, next) => {
        LEFT JOIN projects p ON r.project_id = p.id
        LEFT JOIN users u ON r.assigned_to = u.id
        LEFT JOIN public.requested_items ri ON ri.request_id = r.id
-       WHERE LOWER(TRIM(r.status)) = ANY($2::text[])
+       WHERE LOWER(TRIM(${effectiveRequestStatusSql('r')})) = ANY($2::text[])
          AND r.requester_id = $1
        GROUP BY
          r.id,

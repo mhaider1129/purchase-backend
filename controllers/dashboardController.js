@@ -1,3 +1,4 @@
+const {stockItemSql,fulfilledItemSql,effectiveRequestStatusSql,completedRequestSql}=require('../services/requestFulfillmentSql');
 //controllers/dashboardController.js
 const pool = require('../config/db');
 const {activeSecondsSql,activeDaysSql}=require('../services/approvalTimingSql');
@@ -52,8 +53,9 @@ const requestProcurementRollup = `
     r.department_id,
     r.created_at,
     r.updated_at,
-    LOWER(COALESCE(r.status, '')) AS request_status,
+    LOWER(${effectiveRequestStatusSql('r')}) AS request_status,
     COUNT(ri.id) AS item_count,
+    COUNT(ri.id) FILTER (WHERE ${fulfilledItemSql('ri')}) AS fulfilled_item_count,
     COUNT(ri.id) FILTER (WHERE ${isProcuredItemCondition}) AS procured_item_count,
     COALESCE(SUM(${itemActualCostExpression}), 0) AS actual_procured_cost
   FROM requests r
@@ -66,16 +68,16 @@ const isRequestProcurementPendingCondition = `(
   request_status = 'pending'
   OR (
     request_status = 'approved'
-    AND (item_count = 0 OR procured_item_count < item_count)
+    AND (item_count = 0 OR fulfilled_item_count < item_count)
   )
 )`;
 
 const isRequestProcurementCompletedCondition = `(
-  request_status IN ('completed', 'received')
+  request_status IN ('completed', 'received', 'available in stock')
   OR (
     request_status = 'approved'
     AND item_count > 0
-    AND procured_item_count = item_count
+    AND fulfilled_item_count = item_count
   )
 )`;
 
@@ -100,9 +102,7 @@ const getDashboardSummary = async (req, res) => {
       dataQualityAlertsRes,
     ] = await Promise.all([
       pool.query("SELECT COUNT(*) FROM requests WHERE request_type <> 'Warehouse Supply'"),
-      pool.query(
-        "SELECT COUNT(*) FROM requests WHERE LOWER(status) = 'approved' AND request_type <> 'Warehouse Supply'",
-      ),
+      pool.query(`SELECT COUNT(*) FROM requests r WHERE LOWER(${effectiveRequestStatusSql('r')}) = 'approved' AND request_type <> 'Warehouse Supply'`),
       pool.query(
         "SELECT COUNT(*) FROM requests WHERE LOWER(status) = 'rejected' AND request_type <> 'Warehouse Supply'",
       ),
@@ -118,8 +118,8 @@ const getDashboardSummary = async (req, res) => {
       `),
       pool.query(`
         SELECT AVG(${activeDaysSql('id','created_at','updated_at')}) AS avg_days
-        FROM requests
-        WHERE LOWER(status) = 'approved' AND request_type <> 'Warehouse Supply'
+        FROM requests r
+        WHERE LOWER(${effectiveRequestStatusSql('r')}) = 'approved' AND request_type <> 'Warehouse Supply'
       `),
       pool.query(`
         WITH request_rollup AS (${requestProcurementRollup})
@@ -131,7 +131,7 @@ const getDashboardSummary = async (req, res) => {
         SELECT
           TO_CHAR(created_at, 'YYYY-MM') AS month,
           COUNT(*) AS rejected_count
-        FROM requests
+        FROM requests r
         WHERE LOWER(status) = 'rejected' AND request_type <> 'Warehouse Supply'
         GROUP BY month
         ORDER BY month
@@ -190,9 +190,9 @@ const getDashboardSummary = async (req, res) => {
             CASE
               WHEN request_status = 'pending' THEN 'Pending approval'
               WHEN request_status = 'approved' AND item_count = 0 THEN 'Approved - no items'
-              WHEN request_status = 'approved' AND procured_item_count = 0 THEN 'Approved - not started'
-              WHEN request_status = 'approved' AND procured_item_count < item_count THEN 'Partially procured'
-              WHEN request_status = 'approved' AND procured_item_count = item_count THEN 'Ready to close'
+              WHEN request_status = 'approved' AND fulfilled_item_count = 0 THEN 'Approved - not started'
+              WHEN request_status = 'approved' AND fulfilled_item_count < item_count THEN 'Partially procured'
+              WHEN request_status = 'approved' AND fulfilled_item_count = item_count THEN 'Ready to close'
               ELSE 'Other pending'
             END AS stage,
             actual_procured_cost
@@ -238,7 +238,7 @@ const getDashboardSummary = async (req, res) => {
             r.id,
             r.department_id,
             r.created_at,
-            LOWER(COALESCE(r.status, '')) AS status,
+            LOWER(${effectiveRequestStatusSql('r')}) AS status,
             ${requestValueExpression} AS submitted_cost,
             COALESCE(SUM(${itemActualCostExpression}), 0) AS actual_procured_cost
           FROM requests r
@@ -293,7 +293,7 @@ const getDashboardSummary = async (req, res) => {
           JOIN requested_items ri ON ri.request_id = r.id
           WHERE LOWER(COALESCE(r.status, '')) IN ('completed', 'received')
             AND r.request_type <> 'Warehouse Supply'
-            AND NOT ${isProcuredItemCondition}
+            AND NOT ${isProcuredItemCondition} AND NOT ${stockItemSql('ri')}
           UNION ALL
           SELECT 'missing_department', 'Requests without a department', COUNT(*)
           FROM requests r
@@ -429,7 +429,7 @@ const getDepartmentMonthlyRequestCosts = async (req, res) => {
            r.id,
            r.department_id,
            r.created_at,
-           LOWER(COALESCE(r.status, '')) AS status,
+           LOWER(${effectiveRequestStatusSql('r')}) AS status,
            ${requestValueExpression} AS request_cost
          FROM requests r
          LEFT JOIN requested_items ri ON ri.request_id = r.id
@@ -486,7 +486,7 @@ const getLifecycleAnalytics = async (req, res) => {
       SELECT AVG(${activeDaysSql('r.id','r.created_at','fa.final_approved_at')}) AS avg_days
       FROM final_approvals fa
       JOIN requests r ON r.id = fa.request_id
-      WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
+      WHERE LOWER(${effectiveRequestStatusSql('r')}) IN ('approved', 'completed', 'received', 'available in stock')
         AND r.request_type <> 'Warehouse Supply'
     `);
 
@@ -541,7 +541,7 @@ const getLifecycleAnalytics = async (req, res) => {
       SELECT AVG(${activeDaysSql('r.id','r.created_at','po.po_timestamp')}) AS avg_days
       FROM first_po_events po
       JOIN requests r ON po.request_id = r.id
-      WHERE LOWER(r.status) IN ('approved', 'completed', 'received')
+      WHERE LOWER(${effectiveRequestStatusSql('r')}) IN ('approved', 'completed', 'received', 'available in stock')
         AND r.request_type <> 'Warehouse Supply'
     `);
 
@@ -583,7 +583,7 @@ const getWorkloadAnalysis = async (req, res) => {
             AVG(${activeDaysSql('r.id','r.created_at','CURRENT_TIMESTAMP')})
               FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS avg_age_days
           FROM approvals a
-          JOIN requests r ON a.request_id = r.id
+          JOIN requests r ON a.request_id = r.id AND NOT ${completedRequestSql('r')}
         `, [filters.pendingStatuses]),
         pool.query(`
           SELECT
@@ -598,7 +598,7 @@ const getWorkloadAnalysis = async (req, res) => {
               FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS avg_age_days
           FROM approvals a
           LEFT JOIN users u ON a.approver_id = u.id
-          JOIN requests r ON a.request_id = r.id
+          JOIN requests r ON a.request_id = r.id AND NOT ${completedRequestSql('r')}
           LEFT JOIN departments d ON r.department_id = d.id
           WHERE a.is_active = TRUE
             AND COALESCE(a.is_superseded, FALSE) = FALSE
@@ -613,7 +613,7 @@ const getWorkloadAnalysis = async (req, res) => {
             COUNT(*) FILTER (WHERE a.is_urgent = TRUE) AS urgent_count,
             AVG(${activeDaysSql('r.id','r.created_at','CURRENT_TIMESTAMP')}) AS avg_age_days
           FROM approvals a
-          JOIN requests r ON a.request_id = r.id
+          JOIN requests r ON a.request_id = r.id AND NOT ${completedRequestSql('r')}
           WHERE a.is_active = TRUE
             AND COALESCE(a.is_superseded, FALSE) = FALSE
             AND a.status = ANY($1)
@@ -627,7 +627,7 @@ const getWorkloadAnalysis = async (req, res) => {
             COUNT(*) FILTER (WHERE r.is_urgent) AS urgent_count,
             AVG(${activeDaysSql('r.id','r.created_at','CURRENT_TIMESTAMP')}) AS avg_age_days
           FROM approvals a
-          JOIN requests r ON a.request_id = r.id
+          JOIN requests r ON a.request_id = r.id AND NOT ${completedRequestSql('r')}
           LEFT JOIN departments d ON r.department_id = d.id
           WHERE a.is_active = TRUE
             AND COALESCE(a.is_superseded, FALSE) = FALSE

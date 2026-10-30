@@ -28,6 +28,62 @@ module.exports = async (client) => {
   );
   await client.query(patch);
   await client.query(patch);
+  // Reproduce the older Item Master schema in this disposable transaction.
+  await client.query("BEGIN");
+  try {
+    const directory = require("../services/technicalProposalDirectory");
+    const count = (
+      await client.query("SELECT count(*) n FROM approved_products")
+    ).rows[0].n;
+    const suppliersBefore = (
+      await client.query("SELECT id,institute_id FROM suppliers ORDER BY id")
+    ).rows;
+    await client.query(
+      "ALTER TABLE approved_products DROP COLUMN institute_id",
+    );
+    await assert.rejects(
+      directory.requireSchema(client),
+      (e) =>
+        e.code === "TECHNICAL_PROPOSAL_SCHEMA_REQUIRED" &&
+        e.message.includes("public.approved_products.institute_id"),
+    );
+    const compatibility = fs
+      .readFileSync(
+        path.join(
+          __dirname,
+          "../sql/manual/055_technical_proposal_scope_compatibility.sql",
+        ),
+        "utf8",
+      )
+      .replace(/^BEGIN;$/m, "")
+      .replace(/^COMMIT;$/m, "");
+    await client.query(compatibility);
+    await client.query(compatibility);
+    await directory.requireSchema(client);
+    assert.equal(
+      (await client.query("SELECT count(*) n FROM approved_products")).rows[0]
+        .n,
+      count,
+    );
+    assert.deepEqual(
+      (await client.query("SELECT id,institute_id FROM suppliers ORDER BY id"))
+        .rows,
+      suppliersBefore,
+    );
+    assert.equal(
+      (
+        await client.query(
+          "SELECT count(*) n FROM approved_products WHERE institute_id IS NOT NULL",
+        )
+      ).rows[0].n,
+      "0",
+    );
+    console.log(
+      "SQL 055: missing product scope reproduced, actionable error, populated repeat application preserves catalog rows and supplier ownership PASS",
+    );
+  } finally {
+    await client.query("ROLLBACK");
+  }
   await client.query("BEGIN");
   let serial = 0,
     failNotification = false;

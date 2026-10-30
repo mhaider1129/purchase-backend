@@ -1,6 +1,12 @@
 "use strict";
 const { error, fingerprint } = require("./preprocurementTechnicalReviewModel");
 async function prepare(db, actor, evidence, itemId) {
+  if (
+    evidence.supplier_id ||
+    evidence.approved_product_id ||
+    evidence.quotation_item_id
+  )
+    await require("./technicalProposalDirectory").requireSchema(db);
   if (evidence.quotation_item_id) {
     const quote = (
       await db.query(
@@ -34,7 +40,7 @@ async function prepare(db, actor, evidence, itemId) {
   if (evidence.approved_product_id) {
     const snapshot = (
       await db.query(
-        "SELECT to_jsonb(p)-'updated_at'-'updated_by' AS product,m.manufacturer_name AS manufacturer FROM approved_products p LEFT JOIN item_manufacturers m ON m.id=p.manufacturer_id WHERE p.id=$1 AND p.institute_id=$2 AND p.is_active",
+        "SELECT to_jsonb(p)-'updated_at'-'updated_by' AS product,m.manufacturer_name AS manufacturer FROM approved_products p LEFT JOIN item_manufacturers m ON m.id=p.manufacturer_id WHERE p.id=$1 AND (p.institute_id=$2 OR p.institute_id IS NULL) AND p.is_active",
         [evidence.approved_product_id, actor.institute_id],
       )
     ).rows[0];

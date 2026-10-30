@@ -38,27 +38,12 @@ router.get(
 router.get(
   "/proposals",
   wrap(async (req, res) => {
-    require("../services/technicalReviewProfiles").requireManager(req.user);
-    res.json({
-      quotations: (
-        await pool.query(
-          "SELECT q.id,q.requested_item_id,ri.item_name,rr.supplier_id,s.name supplier_name FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN requested_items ri ON ri.id=q.requested_item_id JOIN requests r ON r.id=ri.request_id JOIN suppliers s ON s.id=rr.supplier_id WHERE r.institute_id=$1 AND rr.request_id=r.id ORDER BY q.id DESC LIMIT 1000",
-          [req.user.institute_id],
-        )
-      ).rows,
-      suppliers: (
-        await pool.query(
-          "SELECT id,name FROM suppliers WHERE (institute_id=$1 OR institute_id IS NULL) AND lower(COALESCE(status,'')) NOT IN ('inactive','suspended','blacklisted') ORDER BY name",
-          [req.user.institute_id],
-        )
-      ).rows,
-      products: (
-        await pool.query(
-          "SELECT id,product_name FROM approved_products WHERE institute_id=$1 AND is_active ORDER BY product_name",
-          [req.user.institute_id],
-        )
-      ).rows,
-    });
+    res.json(
+      await require("../services/technicalProposalDirectory").load(
+        pool,
+        req.user,
+      ),
+    );
   }),
 );
 router.get(

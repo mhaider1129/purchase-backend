@@ -195,3 +195,15 @@ role needs its normal table/sequence/RLS access to the new tables; browser roles
 receive no direct access. No production/Supabase SQL was executed by this change.
 SQL 054 is tested on populated data and repeat application, with existing
 receipt quantities, signed records and new history preserved.
+
+## Older proposal-directory schemas
+
+If the proposal picker reports a missing `institute_id`, apply the complete
+`purchase-backend/sql/manual/055_technical_proposal_scope_compatibility.sql`.
+SQL 054 does not add these older supplier/catalog scope columns. SQL 055 safely
+adds missing scope fields, checks their types, adds foreign keys/indexes, and
+preserves existing values and rows. It never guesses an institute for legacy
+products or suppliers. NULL retains the original shared catalog/directory
+semantics; explicit foreign-institute records remain hidden and cannot be
+selected. This applies consistently to the picker and submitted proposals.
+Missing columns now produce a named setup error before directory queries run.

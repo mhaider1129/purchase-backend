@@ -13,6 +13,49 @@ const evidence = {
   no_sample_reason: "Vendor cannot provide a sample",
 };
 const packets = [{ item_id: "1" }];
+const concise = () => ({
+  item_id: "1",
+  assessment_version: 2,
+  decision: "APPROVED",
+  assessment: {
+    specifications: "compliant",
+    compatibility: "not_applicable",
+    suitability: "suitable",
+  },
+});
+test("concise suitability review does not fabricate the physical sample checklist", () => {
+  const value = normalizeReports([concise()], packets)[0];
+  expect(value.assessment).toEqual(concise().assessment);
+  expect(value.checklist).toEqual({});
+  expect(value.assessed_at).toEqual(expect.any(String));
+});
+test.each([
+  ["specifications", "partially_compliant"],
+  ["specifications", "requires_clarification"],
+  ["compatibility", "incompatible"],
+  ["suitability", "unsuitable"],
+])("concise approval cannot conceal unresolved %s findings", (key, value) => {
+  const row = concise();
+  row.assessment[key] = value;
+  expect(() => normalizeReports([row], packets)).toThrow(
+    "Full technical approval",
+  );
+});
+test("concise rejection requires corrective findings and ignores client attestation", () => {
+  const row = {
+    ...concise(),
+    decision: "REJECTED",
+    assessed_at: "forged",
+    signed_by: 55,
+  };
+  expect(() => normalizeReports([row], packets)).toThrow("Explain");
+  const result = normalizeReports(
+    [{ ...row, findings: "Revise the proposed model" }],
+    packets,
+  )[0];
+  expect(result).not.toHaveProperty("signed_by");
+  expect(result.assessed_at).not.toBe("forged");
+});
 const report = () => ({
   item_id: "1",
   decision: "APPROVED",

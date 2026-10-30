@@ -67,6 +67,21 @@ const CATEGORIES = [
   "Housekeeping Supply",
   "Other",
 ];
+const ASSESSMENT = {
+  specifications: [
+    "compliant",
+    "partially_compliant",
+    "non_compliant",
+    "requires_clarification",
+  ],
+  compatibility: [
+    "compatible",
+    "incompatible",
+    "not_applicable",
+    "requires_clarification",
+  ],
+  suitability: ["suitable", "unsuitable", "requires_clarification"],
+};
 const snapshotItem = (row) =>
   Object.fromEntries(
     [
@@ -87,7 +102,7 @@ const fingerprint = (value) =>
 const canManage = (actor) =>
   Boolean(
     actor?.hasPermission?.("technical-inspections.manage") ||
-      actor?.permissions?.includes("technical-inspections.manage"),
+    actor?.permissions?.includes("technical-inspections.manage"),
   ) &&
   ["scm", "admin", "procurementsupervisor", "procurement supervisor"].includes(
     String(actor?.role || "")
@@ -159,6 +174,44 @@ function normalizeReports(input, packets) {
     const report = input.find(
       (row) => String(row.item_id) === String(packet.item_id),
     );
+    if (report?.assessment_version === 2) {
+      if (!["APPROVED", "REJECTED"].includes(report.decision))
+        throw error(400, "Choose a technical decision");
+      const assessment = {};
+      for (const [key, choices] of Object.entries(ASSESSMENT)) {
+        if (!choices.includes(report.assessment?.[key]))
+          throw error(400, `Complete the ${key} technical assessment`);
+        assessment[key] = report.assessment[key];
+      }
+      if (
+        report.decision === "APPROVED" &&
+        (assessment.specifications !== "compliant" ||
+          !["compatible", "not_applicable"].includes(
+            assessment.compatibility,
+          ) ||
+          assessment.suitability !== "suitable")
+      )
+        throw error(
+          400,
+          "Full technical approval requires compliant specifications, compatibility and suitability. Unresolved findings must not be approved.",
+        );
+      if (report.decision !== "APPROVED" && !text(report.findings))
+        throw error(
+          400,
+          "Explain the technical rejection or required corrective action",
+        );
+      // Preserve exactly what was assessed. Never fabricate responses to the
+      // old physical sample checklist from a suitability assessment.
+      return {
+        item_id: String(packet.item_id),
+        assessment_version: 2,
+        assessment,
+        decision: report.decision,
+        findings: text(report.findings),
+        checklist: {},
+        assessed_at: new Date().toISOString(),
+      };
+    }
     if (
       !report ||
       !["APPROVED", "REJECTED"].includes(report.decision) ||
@@ -235,6 +288,7 @@ function normalizeReports(input, packets) {
   });
 }
 module.exports = {
+  ASSESSMENT,
   CHECKLIST,
   CATEGORIES,
   error,

@@ -6,6 +6,15 @@ const {
   getInspectionSummaryForRequest,
 } = require('../utils/technicalInspectionStatus');
 
+const inspectionScope = (req) => {
+  const instituteId = Number(req.user?.institute_id);
+  if (!Number.isInteger(instituteId) || instituteId < 1)
+    throw createHttpError(403, 'An institute account is required');
+  return instituteId;
+};
+const scopedInspection = `(EXISTS(SELECT 1 FROM requests scope_request WHERE scope_request.id=technical_inspections.request_id AND scope_request.institute_id=$1)
+ OR (technical_inspections.request_id IS NULL AND EXISTS(SELECT 1 FROM users scope_creator WHERE scope_creator.id=technical_inspections.created_by AND scope_creator.institute_id=$1)))`;
+
 const CONDITION_OPTIONS = new Set([
   'excellent',
   'good',
@@ -143,7 +152,7 @@ const parseDateOrThrow = (value, fieldName) => {
   return parsed.toISOString().slice(0, 10);
 };
 
-const resolveRequestLink = async ({ request_id, requested_item_id }) => {
+const resolveRequestLink = async ({ request_id, requested_item_id, instituteId }) => {
   const parsedRequestId = Number(request_id);
   const parsedRequestedItemId = Number(requested_item_id);
 
@@ -154,21 +163,21 @@ const resolveRequestLink = async ({ request_id, requested_item_id }) => {
 
   if (resolvedRequestedItemId) {
     const { rows, rowCount } = await pool.query(
-      'SELECT id, request_id FROM requested_items WHERE id = $1',
-      [resolvedRequestedItemId],
+      'SELECT ri.id,ri.request_id FROM requested_items ri JOIN requests r ON r.id=ri.request_id WHERE ri.id=$1 AND r.institute_id=$2',
+      [resolvedRequestedItemId, instituteId],
     );
 
     if (rowCount === 0) {
       throw createHttpError(404, 'Requested item not found for technical inspection link');
     }
 
+    if (resolvedRequestId && Number(rows[0].request_id) !== resolvedRequestId)
+      throw createHttpError(400, 'Requested item does not belong to this request');
     resolvedRequestId = resolvedRequestId ?? rows[0].request_id ?? null;
   }
 
   if (resolvedRequestId) {
-    const requestCheck = await pool.query('SELECT id FROM requests WHERE id = $1', [
-      resolvedRequestId,
-    ]);
+    const requestCheck = await pool.query('SELECT id FROM requests WHERE id=$1 AND institute_id=$2', [resolvedRequestId, instituteId]);
 
     if (requestCheck.rowCount === 0) {
       throw createHttpError(404, 'Request not found for technical inspection link');
@@ -199,14 +208,15 @@ const formatRow = (row) => ({
 
 const listTechnicalInspections = async (req, res, next) => {
   try {
+    const instituteId = inspectionScope(req);
     await ensureTechnicalInspectionsTable();
 
     const { search, start_date, end_date, category, acceptance_status } =
       req.query || {};
 
-    const clauses = [];
-    const params = [];
-    let idx = 1;
+    const clauses = [scopedInspection];
+    const params = [instituteId];
+    let idx = 2;
 
     if (search) {
       clauses.push(
@@ -264,6 +274,7 @@ const listTechnicalInspections = async (req, res, next) => {
 
 const getTechnicalInspectionById = async (req, res, next) => {
   try {
+    const instituteId = inspectionScope(req);
     await ensureTechnicalInspectionsTable();
 
     const id = Number(req.params.id);
@@ -272,8 +283,8 @@ const getTechnicalInspectionById = async (req, res, next) => {
     }
 
     const { rows } = await pool.query(
-      'SELECT * FROM technical_inspections WHERE id = $1',
-      [id],
+      `SELECT * FROM technical_inspections WHERE id=$2 AND ${scopedInspection}`,
+      [instituteId,id],
     );
 
     if (rows.length === 0) {
@@ -288,6 +299,7 @@ const getTechnicalInspectionById = async (req, res, next) => {
 
 const createTechnicalInspection = async (req, res, next) => {
   try {
+    const instituteId = inspectionScope(req);
     await ensureTechnicalInspectionsTable();
 
     const {
@@ -342,6 +354,7 @@ const createTechnicalInspection = async (req, res, next) => {
     const { requestId, requestedItemId } = await resolveRequestLink({
       request_id,
       requested_item_id,
+      instituteId,
     });
 
     const { rows } = await pool.query(
@@ -417,6 +430,7 @@ const createTechnicalInspection = async (req, res, next) => {
 
 const updateTechnicalInspection = async (req, res, next) => {
   try {
+    const instituteId = inspectionScope(req);
     await ensureTechnicalInspectionsTable();
 
     const id = Number(req.params.id);
@@ -434,8 +448,8 @@ const updateTechnicalInspection = async (req, res, next) => {
         acceptance_recorded_by,
         acceptance_recorded_at
        FROM technical_inspections
-      WHERE id = $1`,
-      [id],
+      WHERE id = $2 AND ${scopedInspection}`,
+      [instituteId,id],
     );
 
     if (existing.rowCount === 0) {
@@ -490,6 +504,7 @@ const updateTechnicalInspection = async (req, res, next) => {
     const { requestId, requestedItemId } = await resolveRequestLink({
       request_id: request_id ?? existingRow.request_id,
       requested_item_id: requested_item_id ?? existingRow.requested_item_id,
+      instituteId,
     });
 
     const acceptanceStatus =
@@ -537,7 +552,7 @@ const updateTechnicalInspection = async (req, res, next) => {
               acceptance_recorded_by = $19,
               acceptance_recorded_at = $20,
               updated_at = NOW()
-        WHERE id = $21
+        WHERE id = $21 AND ${scopedInspection.replaceAll('$1', '$22')}
       RETURNING *`,
       [
         parsedDate,
@@ -561,9 +576,11 @@ const updateTechnicalInspection = async (req, res, next) => {
         acceptanceRecordedBy,
         acceptanceRecordedAt,
         id,
+        instituteId,
       ],
     );
 
+    if (!rows.length) throw createHttpError(404, 'Inspection no longer belongs to this institute');
     const updatedRow = formatRow(rows[0]);
 
     if (requestId) {
@@ -583,6 +600,7 @@ const updateTechnicalInspection = async (req, res, next) => {
 
 const deleteTechnicalInspection = async (req, res, next) => {
   try {
+    const instituteId = inspectionScope(req);
     await ensureTechnicalInspectionsTable();
 
     const id = Number(req.params.id);
@@ -591,8 +609,8 @@ const deleteTechnicalInspection = async (req, res, next) => {
     }
 
     const { rowCount } = await pool.query(
-      'DELETE FROM technical_inspections WHERE id = $1',
-      [id],
+      `DELETE FROM technical_inspections WHERE id=$2 AND ${scopedInspection}`,
+      [instituteId,id],
     );
 
     if (rowCount === 0) {

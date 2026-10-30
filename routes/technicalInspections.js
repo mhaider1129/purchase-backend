@@ -10,6 +10,11 @@ const {
 const createHttpError = require('../utils/httpError');
 
 const router = express.Router();
+const worklist = require('../services/technicalWorklistService').createTechnicalWorklistService(require('../config/db'));
+router.get('/worklist', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  worklist(req.user, req.query).then((result) => res.json(result)).catch(next);
+});
 // The parent API mount authenticates users. New review routes independently
 // authorize SCM management or explicit reviewer assignments, before legacy CRUD.
 router.use('/pre-procurement', require('./preprocurementTechnicalReviews'));

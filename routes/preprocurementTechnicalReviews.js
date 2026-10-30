@@ -6,6 +6,7 @@ const {
 } = require("../services/preprocurementTechnicalReviewService");
 const {
   CHECKLIST,
+  ASSESSMENT,
   CATEGORIES,
   canManage,
 } = require("../services/preprocurementTechnicalReviewModel");
@@ -23,6 +24,7 @@ router.get(
   wrap(async (req, res) =>
     res.json({
       checklist: CHECKLIST,
+      assessment: ASSESSMENT,
       categories: CATEGORIES,
       can_manage: canManage(req.user),
       form_reference: "DPP.SC.001.F07",

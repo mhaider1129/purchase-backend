@@ -122,6 +122,10 @@ module.exports = async (client) => {
         );
       return { request, items };
     };
+    const worklist =
+      require("../services/technicalWorklistService").createTechnicalWorklistService(
+        database,
+      );
     const fixture = await makeRequest();
     const payload = (key) => ({
       request_id: fixture.request.id,
@@ -367,6 +371,122 @@ module.exports = async (client) => {
           [fixture.request.id],
         )
       ).rows.every((row) => row.purchased_quantity === 0),
+    );
+    // Actual SQL read model: access scope, filters, paged totals, and historical
+    // records remain separate from authenticated departmental assignments.
+    const unassignedTasks = await worklist(outsider);
+    assert.equal(unassignedTasks.total, 0);
+    assert.equal((await worklist(foreign)).total, 0);
+    const completedTasks = await worklist(hod, {
+      tab: "history",
+      type: "PRE_PROCUREMENT",
+    });
+    assert.equal(completedTasks.total, 3);
+    assert.equal(Number(completedTasks.summary.completed), 3);
+    assert.equal(Number(completedTasks.summary.awaiting_my_review), 0);
+    assert(completedTasks.rows.every((row) => row.item_name.includes("Chair")));
+    assert.equal(
+      (await worklist(hod, { search: "nonexistent technical item" })).total,
+      0,
+    );
+    assert.equal((await worklist(hod, { department: foreignDept })).total, 0);
+    assert.equal((await worklist(manager, { from: "2099-01-01" })).total, 0);
+    await client.query(
+      "INSERT INTO technical_inspections(id,item_name,created_by,acceptance_status) SELECT COALESCE(max(id),0)+100,'Historical local inspection',$1,'pending' FROM technical_inspections",
+      [manager.id],
+    );
+    await client.query(
+      "INSERT INTO technical_inspections(id,item_name,created_by,acceptance_status) SELECT COALESCE(max(id),0)+100,'Foreign historical inspection',$1,'pending' FROM technical_inspections",
+      [foreign.id],
+    );
+    const legacyTasks = await worklist(manager, { type: "LEGACY_INSPECTION" });
+    assert.equal(legacyTasks.total, 1);
+    assert.equal(legacyTasks.rows[0].item_name, "Historical local inspection");
+    assert.equal(legacyTasks.rows[0].awaiting_me, false);
+    const conciseRequest = await makeRequest();
+    let conciseReview = await service.create(manager, {
+      ...payload("concise-round"),
+      request_id: conciseRequest.request.id,
+      items: conciseRequest.items.map((item, index) => ({
+        ...payload("unused").items[index],
+        item_id: item.id,
+      })),
+    });
+    assert.equal(
+      Number(
+        (await worklist(hod, { tab: "pending" })).summary.awaiting_my_review,
+      ),
+      1,
+    );
+    const conciseReports = conciseReview.item_packets.map((packet) => ({
+      item_id: packet.item_id,
+      assessment_version: 2,
+      decision: "APPROVED",
+      assessment: {
+        specifications: "compliant",
+        compatibility: "compatible",
+        suitability: "suitable",
+      },
+    }));
+    conciseReview = await service.opinion(hod, conciseReview.id, {
+      row_version: conciseReview.row_version,
+      reports: conciseReports,
+    });
+    assert.equal((await worklist(hod, { tab: "in_progress" })).total, 1);
+    assert.equal(Number((await worklist(hod)).summary.awaiting_my_review), 0);
+    conciseReview = await service.opinion(expert, conciseReview.id, {
+      row_version: conciseReview.row_version,
+      reports: conciseReports,
+    });
+    assert.equal(
+      Number((await worklist(manager)).summary.awaiting_my_review),
+      1,
+    );
+    assert.deepEqual(conciseReview.assignments[0].reports[0].checklist, {});
+    conciseReview = await service.sign(manager, conciseReview.id, {
+      row_version: conciseReview.row_version,
+      decision: "APPROVED",
+      notes: "All suitability opinions are complete",
+    });
+    assert.equal(conciseReview.status, "APPROVED");
+    const cleared = await worklist(manager, {
+      type: "PRE_PROCUREMENT",
+      tab: "history",
+    });
+    assert.equal(cleared.total, 4);
+    assert.equal(Number(cleared.summary.awaiting_my_review), 0);
+    // Pagination counts the entire result; cards never summarize a 25-row slice.
+    for (let n = 0; n < 27; n++)
+      await client.query(
+        "INSERT INTO technical_inspections(id,item_name,created_by,acceptance_status) SELECT COALESCE(max(id),0)+100,$1,$2,'pending' FROM technical_inspections",
+        ["Paged inspection " + n, manager.id],
+      );
+    const secondPage = await worklist(manager, {
+      type: "LEGACY_INSPECTION",
+      page: 2,
+    });
+    assert.equal(secondPage.total, 28);
+    assert.equal(secondPage.rows.length, 3);
+    await client.query(
+      "INSERT INTO technical_inspections(id,item_name,created_by,acceptance_status,created_at) SELECT COALESCE(max(id),0)+100,'Baghdad boundary before midnight',$1,'pending','2026-10-30T20:59:59Z'::timestamptz FROM technical_inspections",
+      [manager.id],
+    );
+    await client.query(
+      "INSERT INTO technical_inspections(id,item_name,created_by,acceptance_status,created_at) SELECT COALESCE(max(id),0)+100,'Baghdad boundary after midnight',$1,'pending','2026-10-30T21:00:00Z'::timestamptz FROM technical_inspections",
+      [manager.id],
+    );
+    const boundary = await worklist(manager, {
+      search: "Baghdad boundary",
+      from: "2026-10-30",
+      to: "2026-10-30",
+    });
+    assert.equal(boundary.total, 1);
+    assert.equal(
+      boundary.rows[0].item_name,
+      "Baghdad boundary before midnight",
+    );
+    console.log(
+      "Technical worklist: actual scoped SQL, date/search/department filters, full-result counts, pagination and concise signed opinions PASS",
     );
     const beforeRows = (
       await client.query(

@@ -708,7 +708,7 @@ const awardRfxResponse = async (req, res, next) => {
     // transactions therefore compose without opening an independent connection.
     const repository = createConnectedP2PRepository(client);
     repository.withTransaction = async (work) => work(repository);
-    const actor = { id: req.user?.id || null };
+    const actor = req.user;
     const awards = [];
     for (const priced of pricedItems) {
       const award = await createAward({ repository, requestItem: priced.requestItem,

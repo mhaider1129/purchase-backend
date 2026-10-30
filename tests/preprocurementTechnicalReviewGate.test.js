@@ -5,6 +5,7 @@ const {
   snapshotItem,
   fingerprint,
 } = require("../services/preprocurementTechnicalReviewModel");
+const actor = { id: 1, institute_id: 7 };
 const item = {
   id: 11,
   request_id: 2,
@@ -58,7 +59,7 @@ test.each(["create_award", "create_purchase_order", "register_procurement"])(
       assertTechnicalClearance(
         fixture({ status: "IN_REVIEW" }),
         item,
-        {},
+        actor,
         command,
       ),
     ).rejects.toMatchObject({
@@ -66,14 +67,14 @@ test.each(["create_award", "create_purchase_order", "register_procurement"])(
       code: "TECHNICAL_REVIEW_REQUIRED",
     });
     await expect(
-      assertTechnicalClearance(fixture(), item, {}, command),
-    ).resolves.toBeUndefined();
+      assertTechnicalClearance(fixture(), item, actor, command),
+    ).resolves.toEqual(expect.objectContaining({ review_id: 1 }));
   },
 );
 test("sourcing and quotations remain possible to obtain a sample or data sheet", async () => {
   const client = fixture({ status: "IN_REVIEW" });
-  await assertTechnicalClearance(client, item, {}, "start_sourcing");
-  await assertTechnicalClearance(client, item, {}, "submit_quotation");
+  await assertTechnicalClearance(client, item, actor, "start_sourcing");
+  await assertTechnicalClearance(client, item, actor, "submit_quotation");
   expect(client.query).not.toHaveBeenCalled();
 });
 test("policy distinguishes never-routed requests from an enabled institution-wide requirement", async () => {
@@ -81,7 +82,7 @@ test("policy distinguishes never-routed requests from an enabled institution-wid
     assertTechnicalClearance(
       fixture({ history: false }),
       item,
-      {},
+      actor,
       "create_purchase_order",
     ),
   ).resolves.toBeUndefined();
@@ -89,7 +90,7 @@ test("policy distinguishes never-routed requests from an enabled institution-wid
     assertTechnicalClearance(
       fixture({ history: false, required: true }),
       item,
-      {},
+      actor,
       "create_purchase_order",
     ),
   ).rejects.toMatchObject({ code: "TECHNICAL_REVIEW_REQUIRED" });
@@ -101,7 +102,7 @@ test.each(["REJECTED", "CANCELLED"])(
       assertTechnicalClearance(
         fixture({ status }),
         item,
-        {},
+        actor,
         "register_procurement",
       ),
     ).rejects.toMatchObject({ code: "TECHNICAL_REVIEW_REQUIRED" });
@@ -112,8 +113,16 @@ test("a changed item requires a new technical round", async () => {
     assertTechnicalClearance(
       fixture({ stale: true }),
       item,
-      {},
+      actor,
       "create_award",
     ),
   ).rejects.toMatchObject({ code: "TECHNICAL_REVIEW_STALE" });
+});
+test.each([{ quantity: 3 }, { specs: 'Revised requirement' }, { unit_of_measure: 'BOX' }])('request content change still invalidates clearance: %j', async change => {
+  const db = fixture(), original = db.query.getMockImplementation();
+  db.query.mockImplementation((sql,...args) => sql.includes('SELECT ri.*') ? Promise.resolve({ rows: [{ ...item, ...change }] }) : original(sql,...args));
+  await expect(assertTechnicalClearance(db, item, actor, 'release_purchase_order')).rejects.toMatchObject({ code: 'TECHNICAL_REVIEW_STALE' });
+});
+test.each([{ id: 1 }, { id: 1, institute_id: 8 }])('missing/foreign institute fails closed', async foreign => {
+  await expect(assertTechnicalClearance(fixture(), item, foreign, 'create_award')).rejects.toMatchObject({ code: 'TECHNICAL_REVIEW_SCOPE_DENIED', statusCode: 403 });
 });

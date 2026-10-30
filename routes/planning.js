@@ -11,14 +11,16 @@ const {
   runReplenishmentPlanner,
 } = require('../controllers/demandPlanningController');
 
+const capability = require('../middleware/planningPermission');
 router.use(authenticateUser);
+router.use((req,res,next) => { res.set('Cache-Control','no-store'); next(); });
 
-router.post('/forecast', getDemandForecast);
-router.post('/safety-stock', calculateSafetyStock);
-router.post('/mrp', runMrp);
-router.get('/defaults', getPlanningDefaults);
-router.post('/defaults', savePlanningDefaults);
-router.post('/replenishment/policies', saveReplenishmentPolicy);
-router.post('/replenishment/run', runReplenishmentPlanner);
+router.post('/forecast', capability(), getDemandForecast);
+router.post('/safety-stock', capability(), calculateSafetyStock);
+router.post('/mrp', capability(), runMrp);
+router.get('/defaults', capability(), getPlanningDefaults);
+router.post('/defaults', capability('manage'), savePlanningDefaults);
+router.post('/replenishment/policies', capability('replenish'), saveReplenishmentPolicy);
+router.post('/replenishment/run', capability('replenish'), runReplenishmentPlanner);
 
 module.exports = router;

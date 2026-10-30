@@ -102,11 +102,12 @@ test("view permission is insufficient for delete", async () => {
 
 test("plan file requires both a current planning capability and department ownership", async () => {
   f.state.plan = { id: 5, institute_id: 10, department_id: 2 };
+  f.state.permissions = ["planning.view"];
   const a = await access.actor({ id: 1 });
   await expect(access.plan(a, 5)).resolves.toMatchObject({ id: 5 });
   f.state.plan.department_id = 3;
   await expect(access.plan(a, 5)).rejects.toMatchObject({ statusCode: 404 });
-  f.state.permissions = ["requests.manage"];
+  f.state.permissions = ["planning.manage", "planning.cross-department"];
   const manager = await access.actor({ id: 1 });
   await expect(access.plan(manager, 5)).resolves.toMatchObject({ id: 5 });
   f.state.plan.institute_id = 11;

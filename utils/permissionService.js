@@ -17,6 +17,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'technical-inspections.manage',
   ],
   warehousemanager: [
+    'planning.view', 'replenishment.manage',
     'warehouse.manage-supply',
     'warehouse.view-supply',
     'stock-requests.create',
@@ -24,6 +25,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
   ],
   warehousekeeper: ['warehouse.manage-supply', 'warehouse.view-supply', 'technical-inspections.manage', 'procure-to-pay.receipts.manage'],
   scm: [
+    'planning.view', 'planning.manage', 'replenishment.manage',
+    'planning.cross-department', 'planning.cross-warehouse',
     'organization.manage',
     'approvals.reassign',
     'contracts.manage',
@@ -76,6 +79,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'rfid.view','rfid.manage-tags','rfid.manage-infrastructure','rfid.view-raw-events','rfid.manage-exceptions','rfid.manage-integrations',
   ],
   procurementspecialist: [
+    'planning.view', 'planning.manage',
     'contracts.manage',
     'evaluations.manage',
     'procurement.update-cost',
@@ -123,6 +127,11 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+  { code: 'planning.view', name: 'View procurement planning', description: 'Read plans and advisory forecasts within authorized institute, department and warehouse scopes.' },
+  { code: 'planning.manage', name: 'Prepare procurement plans', description: 'Upload plans, add plan items and links, and maintain planning defaults in authorized scopes; no approval or procurement authority.' },
+  { code: 'replenishment.manage', name: 'Manage replenishment configuration', description: 'Maintain scoped replenishment policies and generate advisory tasks; no inventory or procurement posting authority.' },
+  { code: 'planning.cross-department', name: 'Plan across departments', description: 'Extend a planning capability across departments of the actor institute only.' },
+  { code: 'planning.cross-warehouse', name: 'Plan across warehouses', description: 'Extend a planning capability across warehouses of the actor institute only.' },
 
   { code: 'ai-intelligence.use', name: 'Use AI Intelligence', description: 'Use the read-only, audited AI Intelligence assistant within existing data scopes.' },
 
@@ -394,8 +403,8 @@ const ensurePermissionDefinitions = async (definitions = []) => {
   }
 };
 
-const getAllPermissionCodes = async () => {
-  const { rows } = await pool.query(
+const getAllPermissionCodes = async (database = pool) => {
+  const { rows } = await database.query(
     `SELECT code
        FROM permissions
       ORDER BY code`
@@ -404,8 +413,8 @@ const getAllPermissionCodes = async () => {
   return rows.map(row => row.code);
 };
 
-const getPermissionsForUserId = async (userId) => {
-  const { rows } = await pool.query(
+const getPermissionsForUserId = async (userId, database = pool) => {
+  const { rows } = await database.query(
     `SELECT u.role,
             COALESCE(ARRAY_AGG(DISTINCT p.code ORDER BY p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
        FROM users u
@@ -431,7 +440,7 @@ const getPermissionsForUserId = async (userId) => {
 
   const { role, permissions } = rows[0];
 
-  const scopeRes = await pool.query(
+  const scopeRes = await database.query(
     `SELECT ds.code,
             COALESCE(ARRAY_AGG(DISTINCT effective_scopes.scope_value ORDER BY effective_scopes.scope_value)
               FILTER (WHERE effective_scopes.scope_value IS NOT NULL), '{}') AS values
@@ -460,7 +469,7 @@ const getPermissionsForUserId = async (userId) => {
   const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
 
   if (normalizedRole === 'admin') {
-    const allPermissions = await getAllPermissionCodes();
+    const allPermissions = await getAllPermissionCodes(database);
     return { permissions: allPermissions, dataScopes, role, found: true };
   }
 

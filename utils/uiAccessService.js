@@ -120,6 +120,20 @@ const defaultResources = [
     requireAll: false,
   },
   {
+    resourceKey: 'feature.procurementPlanning',
+    label: 'Scoped Procurement Planning',
+    description: 'Controls access to institute/department-scoped procurement plans.',
+    permissions: ['planning.view', 'planning.manage'],
+    requireAll: false,
+  },
+  {
+    resourceKey: 'feature.demandPlanning',
+    label: 'Demand Planning',
+    description: 'Scoped planning and replenishment workbench.',
+    permissions: ['planning.view', 'planning.manage', 'replenishment.manage'],
+    requireAll: false,
+  },
+  {
     resourceKey: 'feature.contracts',
     label: 'Contracts Workspace',
     description: 'Shows the contracts management page and navigation.',

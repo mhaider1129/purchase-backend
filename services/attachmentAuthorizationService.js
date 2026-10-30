@@ -209,44 +209,17 @@ function createAttachmentAuthorization(
       throw denied();
     return c;
   }
+  // Plan aliases and file routes share the planning object/capability policy;
+  // ordinary request permissions must not become an alternate plan-file grant.
   async function department(a, id, db = database) {
-    if (!positive(id)) throw denied();
-    const d = (
-      await db.query("SELECT id,institute_id FROM departments WHERE id=$1", [
-        id,
-      ])
-    ).rows[0];
-    if (!d) throw denied();
-    institute(a, d.institute_id);
-    if (
-      !has(a, "requests.manage") &&
-      !(
-        String(a.department_id) === String(d.id) &&
-        has(a, "stock-requests.create")
-      )
-    )
-      throw denied();
-    return d;
+    const planning = require('./planningAuthorizationService').createPlanningAuthorization(database, lookupPermissions);
+    try { return await planning.department(await planning.actor(a,'manage',db),id,db); }
+    catch (e) { if ([401,403,404].includes(e.statusCode)) throw denied(); throw e; }
   }
-  async function plan(a, id, action = "read", db = database) {
-    if (!positive(id)) throw denied();
-    const p = (
-      await db.query(
-        "SELECT p.*,d.institute_id FROM procurement_plans p JOIN departments d ON d.id=p.department_id WHERE p.id=$1",
-        [id],
-      )
-    ).rows[0];
-    if (!p) throw denied();
-    institute(a, p.institute_id);
-    if (
-      !has(a, "requests.manage") &&
-      !(
-        String(a.department_id) === String(p.department_id) &&
-        has(a, "stock-requests.create")
-      )
-    )
-      throw denied();
-    return p;
+  async function plan(a, id, action = 'read', db = database) {
+    const planning = require('./planningAuthorizationService').createPlanningAuthorization(database, lookupPermissions);
+    try { return await planning.plan(await planning.actor(a,action==='read'?'read':'manage',db),id,action==='read'?'read':'manage',db); }
+    catch (e) { if ([401,403,404].includes(e.statusCode)) throw denied(); throw e; }
   }
   async function parent(a, spec, action = "read", db = database) {
     if (spec.surgicalCaseId) {

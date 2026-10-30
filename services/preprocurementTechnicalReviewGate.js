@@ -45,6 +45,9 @@ async function assertTechnicalClearance(
   const current = found.rows[0];
   if (!current)
     throw error(404, "Requested item not found for technical clearance");
+  if (!actor?.id || !Number.isInteger(Number(actor.institute_id)) ||
+      Number(actor.institute_id) !== Number(current.institute_id))
+    throw error(403, 'Technical clearance requires an actor in the request institute', 'TECHNICAL_REVIEW_SCOPE_DENIED');
   if (current.request_type === "Warehouse Supply") return;
   await client.query(
     "SELECT pg_advisory_xact_lock_shared(hashtextextended('technical-review-policy:'||$1::text,0))",
@@ -61,7 +64,7 @@ async function assertTechnicalClearance(
     )
   ).rows[0];
   const history = await client.query(
-    "SELECT id,status,item_packets,requesting_department_id FROM public.preprocurement_technical_reviews WHERE request_id=$1 AND institute_id=$2 ORDER BY id DESC",
+    "SELECT id,status,item_packets,requesting_department_id,row_version,signed_at,signed_by FROM public.preprocurement_technical_reviews WHERE request_id=$1 AND institute_id=$2 ORDER BY id DESC",
     [current.request_id, current.institute_id],
   );
   const review = history.rows.find((row) =>
@@ -107,6 +110,9 @@ async function assertTechnicalClearance(
       "Technical proposal preparation is required",
       "TECHNICAL_PROPOSAL_REQUIRED",
     );
+  if (packet?.evidence?.quotation_fingerprint_version === 2 &&
+      (!review.signed_by || !review.signed_at || !review.row_version))
+    throw error(409, 'Signed technical approval evidence is required; review the current proposal', 'TECHNICAL_PROPOSAL_REVIEW_REQUIRED');
   if (packet?.evidence)
     await require("./technicalProposalSnapshot").assertCurrent(
       client,
@@ -123,5 +129,22 @@ async function assertTechnicalClearance(
       "The requested item changed after technical approval; send it for a new technical review",
       "TECHNICAL_REVIEW_STALE",
     );
+  // Approved review rows cannot be revised by the application. The link pins
+  // the exact signed review/round used to create this PO, not a later review.
+  if (context.purchase_order_id && packet.evidence?.quotation_fingerprint_version === 2) {
+    const bound = await client.query(
+      "SELECT id FROM document_flow_links WHERE request_id=$1 AND source_document_type='TECHNICAL_REVIEW' AND source_document_id=$2 AND target_document_type='PURCHASE_ORDER' AND target_document_id=$3",
+      [current.request_id, String(review.id), String(context.purchase_order_id)],
+    );
+    if (!bound.rows.length) throw error(409, 'PO technical approval provenance cannot be verified; review the current proposal', 'TECHNICAL_PROPOSAL_REVIEW_REQUIRED');
+  }
+  return {
+    review_id: review.id, round_version: review.row_version,
+    signed_at: review.signed_at, signed_by: review.signed_by,
+    item_id: id, request_fingerprint: packet.fingerprint,
+    quotation_item_id: packet.evidence?.quotation_item_id || null,
+    quotation_fingerprint: packet.evidence?.quotation_fingerprint || null,
+    quotation_fingerprint_version: packet.evidence?.quotation_fingerprint_version || null,
+  };
 }
 module.exports = { assertTechnicalClearance, GATED_COMMANDS };

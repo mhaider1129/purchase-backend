@@ -48,7 +48,7 @@ test("a revised quotation cannot reuse the same source ID approval", async () =>
       source_type: "QUOTATION",
       source_id: 7,
     }),
-  ).rejects.toMatchObject({ code: "TECHNICAL_PROPOSAL_CHANGED" });
+  ).rejects.toMatchObject({ code: "TECHNICAL_PROPOSAL_REVIEW_REQUIRED" });
   expect(db.query).toHaveBeenCalled();
 });
 test("material approved-product changes invalidate technical clearance", async () => {

@@ -25,6 +25,7 @@ const createPurchaseOrderFromAwards = async ({ repository, requestId: routeReque
   if (currencies.size !== 1) throw Object.assign(new Error('PO awards must use one currency'), { code: 'PO_CURRENCY_MISMATCH' });
   const conversions = new Map();
   const snapshots = new Map();
+  const technicalClearances = [];
   for (const award of awards) {
     const conversion = await tx.getAwardConversion(award.id);
     const quantity = String(quantities[award.id] ?? award.awarded_quantity);
@@ -33,7 +34,8 @@ const createPurchaseOrderFromAwards = async ({ repository, requestId: routeReque
     const governed = Boolean(award.approved_product_id && award.supplier_catalog_item_id);
     const snapshot = governed ? await tx.loadAwardUomSnapshot(award.id) : await tx.loadAwardExceptionSnapshot?.(award.id);
     if (!snapshot) throw Object.assign(new Error('Award UOM identity cannot be resolved'), { code: 'AWARD_UOM_IDENTITY_REQUIRED', statusCode: 409 });
-    await assertReadyForCommand(tx.client, { ...snapshot, id: award.request_item_id, request_id: award.request_id }, actor, 'create_purchase_order', {source_type:award.source_type,source_id:award.source_id,supplier_id:award.supplier_id, approved_product_id:award.approved_product_id, supplier_catalog_item_id:award.supplier_catalog_item_id});
+    const technicalClearance = await assertReadyForCommand(tx.client, { ...snapshot, id: award.request_item_id, request_id: award.request_id }, actor, 'create_purchase_order', {source_type:award.source_type,source_id:award.source_id,supplier_id:award.supplier_id, approved_product_id:award.approved_product_id, supplier_catalog_item_id:award.supplier_catalog_item_id,quantity,unit_price:award.unit_price,currency:award.currency});
+    if (technicalClearance) technicalClearances.push(technicalClearance);
     if (isCompatibilityCandidate(snapshot) && award.line_type && award.line_type !== 'NON_INVENTORY') throw Object.assign(new Error('Unmapped compatibility lines must be non-inventory'), { code: 'PO_COMPATIBILITY_LINE_TYPE_INVALID', statusCode: 409 });
     if (isCompatibilityCandidate(snapshot) && (award.approved_product_id || award.supplier_catalog_item_id)) throw Object.assign(new Error('Resolve item identity before attaching physical catalog identities'), { code: 'AWARD_CATALOG_IDENTITY_INVALID', statusCode: 409 });
     if (!snapshot.source_uom || !snapshot.base_uom) throw Object.assign(new Error('Award requires a controlled UOM snapshot'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
@@ -69,10 +71,11 @@ const createPurchaseOrderFromAwards = async ({ repository, requestId: routeReque
   const created={...header,lines};
   if (tx.linkDocuments) {
     for (const award of awards) await tx.linkDocuments(header.request_id, 'PROCUREMENT_AWARD', award.id, 'PURCHASE_ORDER', header.id, actor.id);
+    for (const clearance of technicalClearances) await tx.linkDocuments(header.request_id, 'TECHNICAL_REVIEW', clearance.review_id, 'PURCHASE_ORDER', header.id, actor.id);
   }
   // Connected repositories expose the transaction client required by the
   // canonical audit/outbox writers; lightweight calculation adapters do not.
-  if(typeof tx.client?.query==='function') await event(tx,auditService,outbox,'PO_CREATED',created,actor,{requestedItemIds:[...new Set(lines.map(line=>line.requested_item_id))],supplierId:header.supplier_id,actorId:actor.id});
+  if(typeof tx.client?.query==='function') await event(tx,auditService,outbox,'PO_CREATED',created,actor,{requestedItemIds:[...new Set(lines.map(line=>line.requested_item_id))],supplierId:header.supplier_id,actorId:actor.id,technical_clearances:technicalClearances});
   return created;
 });
 const event = async (tx, auditService, outbox, action, po, actor, metadata = {}) => {
@@ -90,7 +93,7 @@ const releasePurchaseOrder = async ({ repository, purchaseOrderId, actor, auditS
   const lines = await tx.loadPurchaseOrderLines(po.id);
   await loadAndAssertSupplierEligible(tx, po.supplier_id);
   for (const line of lines) if (!line.award_id || !line.requested_item_id || !line.price_source_type || !line.price_source_id) throw Object.assign(new Error('PO line traceability and price provenance are required'), { code: 'PO_LINE_TRACE_REQUIRED', statusCode: 409 });
-  if(tx.client?.query) for(const line of lines) await require('./preprocurementTechnicalReviewGate').assertTechnicalClearance(tx.client,{id:line.requested_item_id,request_id:po.request_id},actor,'release_purchase_order',{supplier_id:po.supplier_id,approved_product_id:line.approved_product_id,source_type:line.price_source_type,source_id:line.price_source_id});
+  if(tx.client?.query) for(const line of lines) await require('./preprocurementTechnicalReviewGate').assertTechnicalClearance(tx.client,{id:line.requested_item_id,request_id:po.request_id},actor,'release_purchase_order',{supplier_id:po.supplier_id,approved_product_id:line.approved_product_id,source_type:line.price_source_type,source_id:line.price_source_id,supplier_catalog_item_id:line.supplier_catalog_item_id,quantity:line.quantity,unit_price:line.unit_price,currency:po.currency,purchase_order_id:po.id});
   const totals = calculatePurchaseOrderTotals({ lines, freight: po.freight, charges: po.charges });
   const commitment = await commitPurchaseOrder({ repository: tx, purchaseOrder: { ...po, grand_total: totals.grand_total }, idempotencyKey: key, actor });
   const issued = await tx.markPurchaseOrderIssued(po.id, totals, actor.id);

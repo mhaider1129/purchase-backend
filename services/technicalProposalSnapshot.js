@@ -1,6 +1,45 @@
 "use strict";
 const { error, fingerprint } = require("./preprocurementTechnicalReviewModel");
+const QUOTATION_FINGERPRINT_VERSION = 2;
+const { compareDecimal } = require('./purchaseOrderTotalsService');
+// Stable JSON ordering is required for nested response_data from JSONB. Do not
+// alter the legacy fingerprint implementation used by existing approvals.
+const stable = (value) => {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === 'object' && !(value instanceof Date))
+    return Object.fromEntries(
+      Object.keys(value).sort().map(key => [key, stable(value[key])]),
+    );
+  return value;
+};
+const quoteContent = quote => Object.fromEntries(
+  Object.entries(quote).filter(([key]) =>
+    !['response_status', 'created_at', 'updated_at'].includes(key)),
+);
+const quotationUsable = quote =>
+  ['submitted', 'evaluated', 'awarded', 'po_created'].includes(
+    String(quote.response_status || '').trim().toLowerCase().replace(/\s+/g, '_'),
+  );
+const reviewRequired = () => error(409,
+  'Historical quotation approval cannot be verified. Send the current proposal for a new technical review.',
+  'TECHNICAL_PROPOSAL_REVIEW_REQUIRED');
+async function quotationSnapshot(db, quote, attachmentIds = []) {
+  let catalog = null;
+  if (quote.supplier_catalog_item_id) {
+    const row = (await db.query('SELECT to_jsonb(c) AS catalog FROM supplier_catalog_items c WHERE id=$1 FOR SHARE', [quote.supplier_catalog_item_id])).rows[0]?.catalog;
+    if (!row) throw error(409, 'Quoted catalog identity is unavailable; review the proposal again', 'TECHNICAL_PROPOSAL_CHANGED');
+    catalog = Object.fromEntries(['id','supplier_id','approved_product_id','purchasing_uom_id','conversion_factor'].map(key => [key, row[key] ?? null]));
+  }
+  const ids = [...new Set(attachmentIds.map(String))].sort();
+  const attachments = ids.length ? (await db.query(
+    'SELECT to_jsonb(a) AS attachment FROM attachments a WHERE a.id=ANY($1::integer[]) AND a.request_id=$2 FOR SHARE OF a',
+    [ids, quote.response_request_id],
+  )).rows.map(row => row.attachment).sort((a,b) => String(a.id).localeCompare(String(b.id))) : [];
+  if (attachments.length !== ids.length) throw error(409, 'Technical evidence changed or is unavailable; review the proposal again', 'TECHNICAL_PROPOSAL_CHANGED');
+  return stable({ version: QUOTATION_FINGERPRINT_VERSION, quotation: quoteContent(quote), catalog, attachments });
+}
 async function prepare(db, actor, evidence, itemId) {
+  let quotation;
   if (
     evidence.supplier_id ||
     evidence.approved_product_id ||
@@ -8,9 +47,11 @@ async function prepare(db, actor, evidence, itemId) {
   )
     await require("./technicalProposalDirectory").requireSchema(db);
   if (evidence.quotation_item_id) {
+    // Lock the immutable line, not the mutable RFx header: the award controller
+    // already locks that header before taking the technical-review shared lock.
     const quote = (
       await db.query(
-        `SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN requested_items ri ON ri.id=q.requested_item_id JOIN requests r ON r.id=ri.request_id WHERE q.id=$1 AND q.requested_item_id=$2 AND rr.request_id=r.id AND r.institute_id=$3`,
+        `SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN requested_items ri ON ri.id=q.requested_item_id JOIN requests r ON r.id=ri.request_id WHERE q.id=$1 AND q.requested_item_id=$2 AND rr.request_id=r.id AND r.institute_id=$3 FOR SHARE OF q`,
         [evidence.quotation_item_id, itemId, actor.institute_id],
       )
     ).rows[0];
@@ -24,7 +65,12 @@ async function prepare(db, actor, evidence, itemId) {
         "Quotation must belong to the selected item, request and supplier",
       );
     evidence.supplier_id = String(quote.supplier_id);
-    evidence.quotation_fingerprint = fingerprint(quote);
+    if (evidence.approved_product_id && String(quote.approved_product_id || '') !== String(evidence.approved_product_id))
+      throw error(400, 'Quotation must use the selected approved product');
+    if (quote.approved_product_id) evidence.approved_product_id = String(quote.approved_product_id);
+    if (!quotationUsable(quote))
+      throw error(409, 'Quotation is not available for technical approval', 'TECHNICAL_PROPOSAL_CHANGED');
+    quotation = quote;
   }
   if (evidence.supplier_id) {
     const supplier = (
@@ -79,6 +125,11 @@ async function prepare(db, actor, evidence, itemId) {
       400,
       "Select the supplier identity when reviewing a specific proposed model",
     );
+  if (quotation) {
+    evidence.quotation_fingerprint_version = QUOTATION_FINGERPRINT_VERSION;
+    evidence.quotation_snapshot = await quotationSnapshot(db, quotation, evidence.attachment_ids || []);
+    evidence.quotation_fingerprint = fingerprint(evidence.quotation_snapshot);
+  }
 }
 async function assertCurrent(db, evidence, context = {}) {
   for (const field of ["supplier_id", "approved_product_id"])
@@ -117,16 +168,28 @@ async function assertCurrent(db, evidence, context = {}) {
       );
     const value = (
       await db.query(
-        "SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id WHERE q.id=$1",
+        "SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id WHERE q.id=$1 FOR SHARE OF q",
         [evidence.quotation_item_id],
       )
     ).rows[0];
-    if (!value || fingerprint(value) !== evidence.quotation_fingerprint)
-      throw error(
-        409,
-        "The quotation changed after technical review",
-        "TECHNICAL_PROPOSAL_CHANGED",
-      );
+    const version = evidence.quotation_fingerprint_version;
+    if (version == null || version === 1) {
+      // Verify exactly as it was signed; never strip status from an old hash or
+      // silently upgrade an already attested packet.
+      if (!value || fingerprint(value) !== evidence.quotation_fingerprint) throw reviewRequired();
+    } else if (version === QUOTATION_FINGERPRINT_VERSION) {
+      if (value && !quotationUsable(value))
+        throw error(409, 'Reviewed quotation is no longer available for procurement', 'TECHNICAL_PROPOSAL_CHANGED');
+      const snapshot = value && await quotationSnapshot(db, value, evidence.attachment_ids || []);
+      if (!snapshot || fingerprint(snapshot) !== evidence.quotation_fingerprint)
+        throw error(409, 'The quotation or technical evidence changed after review; review the revised proposal', 'TECHNICAL_PROPOSAL_CHANGED');
+    } else throw reviewRequired();
+    if (value && (
+      (context.unit_price != null && compareDecimal(context.unit_price, value.unit_price) !== 0) ||
+      (context.currency != null && String(context.currency).toUpperCase() !== String(value.currency).toUpperCase()) ||
+      (context.supplier_catalog_item_id != null && String(context.supplier_catalog_item_id) !== String(value.supplier_catalog_item_id || '')) ||
+      (context.quantity != null && compareDecimal(context.quantity, value.quoted_quantity) > 0)
+    )) throw error(409, 'Award/PO terms differ from the reviewed quotation', 'TECHNICAL_PROPOSAL_CHANGED');
   }
 }
-module.exports = { prepare, assertCurrent };
+module.exports = { prepare, assertCurrent, QUOTATION_FINGERPRINT_VERSION };

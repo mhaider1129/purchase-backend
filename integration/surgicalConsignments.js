@@ -31,6 +31,15 @@ module.exports = async (client) => {
     ).rows[0].n,
     11,
   );
+  const routingDdl = fs.readFileSync(
+    path.join(
+      __dirname,
+      "../sql/manual/053_surgical_consignment_department_routing.sql",
+    ),
+    "utf8",
+  );
+  await client.query(routingDdl);
+  await client.query(routingDdl);
   await client.query("BEGIN");
   let point = 0,
     failNotification = false;
@@ -96,7 +105,11 @@ module.exports = async (client) => {
             : role === "Requester"
               ? ["stock-requests.create"]
               : role === "SCM"
-                ? ["requests.manage", "procurement.update-status"]
+                ? [
+                    "requests.manage",
+                    "procurement.update-status",
+                    "departments.manage",
+                  ]
                 : [],
       };
     };
@@ -104,7 +117,7 @@ module.exports = async (client) => {
       hod = await user("Surgical manager", "HOD"),
       cmo = await user("Surgical CMO", "CMO"),
       scm = await user("Surgical SCM", "SCM"),
-      surgeon = await user("Surgical surgeon", "Requester"),
+      surgeon = requester,
       nurse = await user("Surgical nurse", "Requester"),
       receiver = await user("Surgical receiver", "WarehouseKeeper"),
       finance = await user("Surgical finance", "Finance"),
@@ -116,6 +129,59 @@ module.exports = async (client) => {
         [inst],
       )
     ).rows[0].id;
+    const warehouse = (
+      await client.query(
+        "INSERT INTO public.warehouses(id,name,institute_id) SELECT COALESCE(max(id),0)+100,$1,$2 FROM public.warehouses RETURNING id",
+        ["Surgical receiver fixture " + inst, inst],
+      )
+    ).rows[0].id;
+    await client.query("UPDATE public.users SET warehouse_id=$1 WHERE id=$2", [
+      warehouse,
+      receiver.id,
+    ]);
+    const section = (
+      await client.query(
+        "INSERT INTO public.sections(id,name,department_id) SELECT COALESCE(max(id),0)+100,'Surgical section',$1 FROM public.sections RETURNING id",
+        [department],
+      )
+    ).rows[0].id;
+    const sectionNurse = await user("Section nurse", "Requester");
+    const settingInput = {
+      department_id: department,
+      is_enabled: true,
+      nurse_id: nurse.id,
+      warehouse_id: warehouse,
+      receiver_id: receiver.id,
+      section_nurses: [{ section_id: section, nurse_id: sectionNurse.id }],
+      row_version: 0,
+      reason: "Enable surgical department and nursing responsibility",
+    };
+    await assert.rejects(service.saveRoutingSettings(requester, settingInput), {
+      statusCode: 403,
+    });
+    await service.saveRoutingSettings(scm, settingInput);
+    await assert.rejects(service.saveRoutingSettings(scm, settingInput), {
+      statusCode: 409,
+    });
+    const directory = await service.options(requester);
+    assert.deepEqual(
+      directory.departments.map((d) => Number(d.id)),
+      [Number(department)],
+    );
+    assert.deepEqual(directory.suppliers, []);
+    const assigned = await service.previewRouting(requester, department);
+    assert.equal(Number(assigned.surgeon.id), Number(requester.id));
+    assert.equal(Number(assigned.nurse.id), Number(nurse.id));
+    assert.equal(Number(assigned.receiver.id), Number(receiver.id));
+    assert.equal(
+      Number(
+        (await service.previewRouting(requester, department, section)).nurse.id,
+      ),
+      Number(sectionNurse.id),
+    );
+    await assert.rejects(service.previewRouting(requester, foreignDept), {
+      statusCode: 409,
+    });
     const seed = {
       department_id: department,
       surgery_date: m.today(),
@@ -124,6 +190,7 @@ module.exports = async (client) => {
       surgeon_id: surgeon.id,
       nurse_id: nurse.id,
       receiver_id: receiver.id,
+      recommended_vendor: "Surgeon suggested supplier (free text)",
       supplier_id: supplier,
       vendor_contact: "Fixture contact",
       agreement_reference: "Fixture agreed price list",
@@ -191,14 +258,6 @@ module.exports = async (client) => {
         (row) => Number(row.id) === Number(inactiveSupplier),
       ),
     );
-    await assert.rejects(
-      service.create(requester, {
-        ...seed,
-        submission_key: "foreign-supplier-scope",
-        supplier_id: foreignSupplier,
-      }),
-      { statusCode: 400 },
-    );
     await client.query("ALTER TABLE public.suppliers DROP COLUMN institute_id");
     await assert.rejects(
       service.options(scm),
@@ -239,6 +298,33 @@ module.exports = async (client) => {
     );
     let c = await service.create(requester, seed);
     assert.equal(c.status, "AWAITING_AUTHORIZATION");
+    assert.equal(c.supplier_id, null);
+    assert.equal(c.agreement_reference, null);
+    assert.equal(c.recommended_vendor, seed.recommended_vendor);
+    assert.equal(Number(c.surgeon_id), Number(requester.id));
+    assert.equal(Number(c.receiver_id), Number(receiver.id));
+    assert.equal(Number(c.receiving_warehouse_id), Number(warehouse));
+    assert.equal(Number(c.approvals[0].approver_id), Number(hod.id));
+    const tampered = await service.create(requester, {
+      ...seed,
+      submission_key: "ignored-manual-assignments",
+      surgeon_id: foreign.id,
+      nurse_id: foreign.id,
+      cmo_id: foreign.id,
+      receiver_id: foreign.id,
+    });
+    assert.equal(Number(tampered.surgeon_id), Number(requester.id));
+    assert.equal(Number(tampered.nurse_id), Number(nurse.id));
+    assert.equal(Number(tampered.approvals[1].approver_id), Number(cmo.id));
+    const noCode = await service.create(requester, {
+      ...seed,
+      submission_key: "optional-catalogue-code",
+      requested_items: seed.requested_items.map((item) => ({
+        ...item,
+        catalogue_code: "",
+      })),
+    });
+    assert.equal(noCode.requested_items[0].catalogue_code, "");
     assert.equal((await service.create(requester, seed)).id, c.id);
     await assert.rejects(
       service.create(requester, { ...seed, patient_mrn: "Different" }),
@@ -250,11 +336,31 @@ module.exports = async (client) => {
     assert.equal(financeView.clinical_access, false);
     assert(!JSON.stringify(financeView).includes("TEST-MRN"));
     assert(!("files" in financeView));
+    assert(!("recommended_vendor" in financeView));
+    assert(!("routing_snapshot" in financeView));
+    assert.equal(
+      (await service.list(finance)).find(
+        (row) => String(row.id) === String(c.id),
+      ).supplier_name,
+      "Supplier pending SCM",
+    );
     const mutate = async (a, op, fields = {}) => {
       c = await service.mutate(
         a,
         c.id,
-        { row_version: c.row_version, notes: "Fixture action", ...fields },
+        {
+          row_version: c.row_version,
+          notes: "Fixture action",
+          ...(op === "approve" && a.id === scm.id
+            ? {
+                supplier_id: supplier,
+                vendor_contact: "Fixture supplier contact",
+                agreement_reference: "Fixture agreed price list",
+                currency: "IQD",
+              }
+            : {}),
+          ...fields,
+        },
         op,
       );
       return c;
@@ -262,7 +368,13 @@ module.exports = async (client) => {
     await assert.rejects(mutate(cmo, "approve", { decision: "APPROVED" }), {
       statusCode: 403,
     });
-    await mutate(hod, "approve", { decision: "APPROVED" });
+    await mutate(hod, "approve", {
+      decision: "APPROVED",
+      supplier_id: supplier,
+      agreement_reference: "Must not be accepted from HOD",
+    });
+    assert.equal(c.supplier_id, null);
+    assert.equal(c.agreement_reference, null);
     await mutate(cmo, "approve", { decision: "APPROVED" });
     await assert.rejects(
       mutate(scm, "approve", {
@@ -284,11 +396,37 @@ module.exports = async (client) => {
     await assert.rejects(service.download(finance, c.id, files.AGREEMENT), {
       statusCode: 403,
     });
+    const invalidSupplier = (
+      await client.query(
+        "INSERT INTO public.suppliers(name,status,institute_id) VALUES('Foreign surgical authorizer vendor','active',$1) RETURNING id",
+        [other],
+      )
+    ).rows[0].id;
+    await assert.rejects(
+      mutate(scm, "approve", {
+        decision: "APPROVED",
+        acknowledge_vendor_ownership: true,
+        agreement_file_id: files.AGREEMENT,
+        supplier_id: invalidSupplier,
+      }),
+      { statusCode: 400 },
+    );
+    await assert.rejects(
+      mutate(scm, "approve", {
+        decision: "APPROVED",
+        acknowledge_vendor_ownership: true,
+        agreement_file_id: files.AGREEMENT,
+        agreement_reference: "",
+      }),
+      { statusCode: 400 },
+    );
     await mutate(scm, "approve", {
       decision: "APPROVED",
       acknowledge_vendor_ownership: true,
       agreement_file_id: files.AGREEMENT,
     });
+    assert.equal(Number(c.supplier_id), Number(supplier));
+    assert.equal(c.agreement_reference, "Fixture agreed price list");
     assert.equal(c.authorization_code, `SCN-${inst}-${c.id}`);
     const line = (name, qty, expiry = "2099-12-31") => ({
       requested_item_index: 0,
@@ -646,6 +784,73 @@ module.exports = async (client) => {
         ).rows,
       ),
       history,
+    );
+    const beforeRouting = (
+      await client.query(
+        "SELECT * FROM public.surgical_consignment_department_settings ORDER BY institute_id,department_id",
+      )
+    ).rows;
+    const beforeCases = (
+      await client.query(
+        "SELECT * FROM public.surgical_consignment_cases ORDER BY id",
+      )
+    ).rows;
+    await client.query(
+      routingDdl.replace(/^BEGIN;$/m, "").replace(/^COMMIT;$/m, ""),
+    );
+    assert.deepEqual(
+      (
+        await client.query(
+          "SELECT * FROM public.surgical_consignment_department_settings ORDER BY institute_id,department_id",
+        )
+      ).rows,
+      beforeRouting,
+    );
+    assert.deepEqual(
+      (
+        await client.query(
+          "SELECT * FROM public.surgical_consignment_cases ORDER BY id",
+        )
+      ).rows,
+      beforeCases,
+    );
+    await assert.rejects(
+      service.saveRoutingSettings(scm, {
+        ...settingInput,
+        row_version: 1,
+        nurse_id: foreign.id,
+      }),
+      { statusCode: 403 },
+    );
+    await service.saveRoutingSettings(scm, {
+      ...settingInput,
+      row_version: 1,
+      is_enabled: false,
+      reason: "Disable future surgical requests",
+    });
+    assert.equal((await service.options(requester)).departments.length, 0);
+    await assert.rejects(
+      service.create(requester, {
+        ...seed,
+        submission_key: "disabled-department",
+      }),
+      { statusCode: 409 },
+    );
+    assert.equal((await service.get(requester, c.id)).id, c.id);
+    const existingContinues = await service.mutate(
+      hod,
+      tampered.id,
+      {
+        row_version: tampered.row_version,
+        notes:
+          "Existing request retains its original route after department disable",
+        decision: "APPROVED",
+      },
+      "approve",
+    );
+    assert.equal(existingContinues.approvals[0].status, "APPROVED");
+    console.log(
+      "SQL 053 routing: department allowlist, requester surgeon, nurse overrides, warehouse responsibility, automatic HOD/CMO/SCM, forged-ID rejection, SCM commercial confirmation, scope/version guards, populated repeat and legacy history preservation PASS",
     );
     console.log(
       "SQL 051 surgical consignment: ordered authorization, private clinical scope, temporary custody/quarantine, used/returned/damaged/missing reconciliation, independent F20 signatures, usage-only PO and invoice caps, no inventory posting, canonical invoice matching, retry/rollback and populated repeat preservation PASS",

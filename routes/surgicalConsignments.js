@@ -61,6 +61,28 @@ router.get(
   }),
 );
 router.get(
+  "/settings",
+  wrap(async (req, res) => res.json(await service.routingSettings(req.user))),
+);
+router.put(
+  "/settings",
+  wrap(async (req, res) =>
+    res.json(await service.saveRoutingSettings(req.user, req.body)),
+  ),
+);
+router.get(
+  "/routing",
+  wrap(async (req, res) =>
+    res.json(
+      await service.previewRouting(
+        req.user,
+        req.query.department_id,
+        req.query.section_id,
+      ),
+    ),
+  ),
+);
+router.get(
   "/options",
   wrap(async (req, res) => res.json(await service.options(req.user))),
 );

@@ -8,9 +8,51 @@ The supplied F18/F19/F20 documents are reference practices, not a mandated digit
 
 Keep clinical authorization, vendor custody, consumption and financial settlement distinct. A delivery is not a purchase, a signed usage record is not payment approval, and custody closure is not payment completion. Existing budget/contract/PO and finance approvals still apply. The current explicit authorization and confirmation roles are the initial controlled route, rather than a claim that the paper form defines every future organizational policy.
 
+## Management setup and the simpler surgeon request
+
+Apply SQL 053, then open **Management → Surgical consignments**. Enable only the
+few departments where surgery is performed. For each, set a responsible department
+nurse and receiving warehouse. Optional section nurse overrides apply when the
+surgeon selects that section. The receiver comes from active warehouse managers/
+keepers assigned to the configured warehouse; when there is more than one,
+Management selects the responsible account once. Nurses can belong to the Nursing
+HR department; the explicit managed responsibility associates them to the surgical
+location without moving their account.
+
+For each new request the submitting user is the surgeon. HOD resolves from the
+current effective organizational department-head position, falling back only to
+a unique active HOD account for that department. CMO and SCM resolve from their
+unique active institute roles. Missing/ambiguous/inactive assignments or self
+approval block new submission with actionable setup errors; they do not trigger
+an arbitrary selection or automatic approval. Management edits affect future
+requests. Existing requests retain their recorded team, signatures and commercial
+terms. The surgeon may operate in an enabled department other than their HR
+account's own department, within the same institute.
+
+The surgeon enters department/optional section, expected date, MRN, procedure,
+requested item families and sizes/description, and an optional free-text vendor
+recommendation. No supplier-directory selection, commercial reference or six
+staff selectors are required. Family/catalogue codes are optional at this stage;
+exact supplied sizes, codes and lots remain mandatory at temporary receipt. A
+surgeon request provides the initial justification, with optional additional
+reasons. The UI shows the assigned team read-only, and the backend recalculates
+it at submission; posted staff/authorizer/supplier IDs cannot override routing.
+
+At SCM authorization, SCM chooses the actual eligible supplier and confirms its
+contact, currency, agreement/quotation/price-list reference and attached agreement
+evidence. The reference identifies the document behind the agreed prices; it is
+commercial work for SCM, not an obligation on the surgeon. A recommended vendor
+is not automatically approved, created as a supplier or accepted for billing.
+Temporary delivery still requires final SCM authorization and documented terms.
+
 ## Manual deployment
 
-**MANUAL DATABASE MIGRATION REQUIRED**: apply the **entire** `purchase-backend/sql/manual/051_surgical_consignment.sql`, from `BEGIN;` through `COMMIT;`, in Supabase SQL Editor. Do not run a selected column fragment. The existing repository schema, organization/permission catalog and P2P tables must already be installed. Deploy the backend before rebuilding/deploying the frontend. No production or Supabase database was accessed during implementation.
+**MANUAL DATABASE MIGRATION REQUIRED**: apply the **entire** `purchase-backend/sql/manual/051_surgical_consignment.sql`, from `BEGIN;` through `COMMIT;`, in Supabase SQL Editor. Do not run a selected column fragment. The existing repository schema, organization/permission catalog and P2P tables must already be installed. Also apply complete `purchase-backend/sql/manual/053_surgical_consignment_department_routing.sql`
+for automatic routing and deferred SCM commercial confirmation. It adds two RLS
+configuration tables and nullable case routing/recommendation metadata, and relaxes
+only initial supplier/contact/reference nullability. It does not overwrite old
+case assignments, suppliers or signatures. No department is automatically enabled.
+Deploy the backend before rebuilding/deploying the frontend. No production or Supabase database was accessed during implementation.
 
 The patch adds eleven RLS-protected tables and public privilege revocation. It does not backfill patients, infer signatures, move inventory, reset sequences, or rewrite historical financial values. It conditionally widens only the existing goods-receipt and supplier-invoice fingerprint columns if their declared string capacity is less than the 64 characters required for the existing SHA-256 writers. Existing bytes are preserved; missing historical hash bytes are not reconstructed. Widening uses normal PostgreSQL ALTER locks. The existing invoice writer now records its supplier label from the canonical supplier as well as supplier ID.
 
@@ -47,15 +89,15 @@ Downloads require a current case assignment or SCM/CMO authority, are scoped to 
 
 ## Access and authorization
 
-- Request creation reuses `stock-requests.create`; SCM may create for another department in the same institute. Other requesters use their own department.
-- Assign active same-institute surgeon, nurse and hospital receiver accounts; they must be three different people. Assign distinct department manager → CMO → SCM authorizers, independent of the requester. Department managers must currently be the department's HOD or a current configured Department Head. Authorities are revalidated when they sign. No missing-authority auto-approval or emergency bypass is provided.
+- Request creation reuses `stock-requests.create` and is limited to enabled surgical departments in the same institute. The submitting account is the surgeon; SCM administrators configure the workflow and commercial approval rather than submitting on behalf of an unspecified doctor.
+- Management nursing/warehouse responsibilities and current organization/role assignments determine the team automatically, with distinct surgeon/nurse/receiver and independent HOD/CMO/SCM signatories. No missing-authority auto-approval or emergency bypass is provided. Department setup requires existing `departments.manage` or `permissions.manage`, is versioned and transactionally audited.
 - SCM uses its current role plus existing request/procurement/technical-inspection management permission. CMO and explicitly assigned clinical/receiving/approval staff can read clinical case records. Unassigned staff and foreign institutes cannot.
 - External vendor representatives are recorded from the signed paper/manifest and evidence upload; their names are not represented as authenticated vendor e-signatures. Hospital attestations use server-recorded account identity/timestamps, not submitted signature fields. Electronic records do not claim handwritten/signature-certificate equivalence.
 
 ## Operating steps
 
-1. Open **Requests → Surgical consignment requests**, or its card on the request-type selector. Complete F18 with expected surgery date, MRN, procedure, requesting department, vendor/contact, agreement/price-list reference, clinical/receiving staff and authorities. Specify item families/size ranges and quantities rather than inventing the size needed before surgery. Select the relevant justification; emergency need still follows explicit authorization.
-2. Upload the vendor agreement/price-list under **Agreement**. The department manager, then CMO, then SCM signs or rejects F18. SCM acknowledges temporary vendor ownership and confirmed-usage billing, and selects the agreement evidence. Final authorization generates an immutable `SCN-institute-case` code. This is consignment/clinical authorization, not a waiver of the hospital's separate spend/budget/contract approval policy; obtain any required financial preauthorization under that policy before the procedure.
+1. Open **Requests → Surgical consignment requests**. Complete the short clinical request: enabled surgical department/optional section, expected surgery date, MRN, procedure and requested families/size ranges. Add a free-text vendor recommendation if helpful. Review the automatically assigned team, then submit. Surgeon request justification is recorded; extra justification and known family codes are optional.
+2. The department HOD and CMO authorize the clinical need. SCM then chooses an eligible supplier, confirms contact/currency/agreement reference, uploads/selects the agreed commercial document and acknowledges vendor ownership and used-only billing. Final SCM authorization generates the immutable `SCN-institute-case` code. This does not waive separate hospital budget/spend/contract requirements.
 3. The assigned hospital receiver records F19, a unique delivery/manifest reference, receiving date/location, recorded vendor representative/contact and signed vendor receipt evidence. Each physical line selects an authorized item family and records the exact size/catalogue code, batch/lot, optional serial, expiry, piece quantity, agreed per-piece rate, packaging/sterility and inspection findings. Capture each size/lot separately. Compromised packaging or expiry before delivery/planned surgery quarantines the lot. SCM separately confirms every temporary receipt before usage can be recorded.
 4. After surgery the assigned nurse records the actual procedure event date/outcome and used/damaged/missing quantities for **every** delivered lot, including zeros. Quarantined lots cannot be used. This remains an editable reconciliation draft; it is not yet an invoice authorization. A cancelled/postponed procedure must have zero used quantities and must still reconcile stock already delivered.
 5. The receiver records unused returns by exact lot, intact/damaged condition, quantity, date, named receiving vendor representative and signed return evidence. Returned quantities cannot exceed the relevant balance. Compromised packaging cannot be represented as an intact return. Stock cannot disappear by cancelling a case after physical delivery.
@@ -77,4 +119,4 @@ Search by case/authorization/vendor or a delivered catalogue code, lot or serial
 
 Local disposable PostgreSQL covers ordered independent authorization, current staff/institute scope, receipt confirmation/quarantine, exact lots and rates, return conservation, waiver snapshot validity, final triple attestation, cancelled/zero-use reconciliation, usage-only dedicated PO mapping, documentary receipt without owned inventory, cumulative supplier-invoice caps, canonical invoice matching, idempotency, notification rollback, repeated populated migration application and preservation when widening narrow fingerprint metadata. The local fixture restores standard SERIAL ownership metadata omitted by the column-only historical export; no production sequence is reset or rewired.
 
-Unit/route tests exercise quantity/rate algebra, quarantines, exception requirements, financial gates, real private file storage/permissions/downloads, denial of finance-only file access, rollback cleanup, public-path traversal bounds and actual transport-audit MRN redaction. React tests cover F18 creation, F20 reconciliation/signatures, stale drafts, private uploads and redacted finance views. Known unchanged baseline backend failures are reported in the PR rather than hidden.
+Unit/route tests exercise quantity/rate algebra, quarantines, exception requirements, financial gates, real private file storage/permissions/downloads, denial of finance-only file access, rollback cleanup, public-path traversal bounds and actual transport-audit MRN redaction. React tests cover Management setup, clinical-only submission, automatic routing readiness, SCM-only commercial confirmation, F20 reconciliation/signatures, stale drafts, private uploads and redacted finance views. Known unchanged baseline backend failures are reported in the PR rather than hidden.

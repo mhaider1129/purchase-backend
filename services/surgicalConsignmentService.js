@@ -2,8 +2,11 @@
 const m = require("./surgicalConsignmentModel");
 const { writeAuditEvent } = require("./auditService");
 const { error, text, id } = m;
-const HOD = `(lower(trim(u.role))='hod' OR EXISTS(SELECT 1 FROM public.organization_positions p JOIN public.organization_units ou ON ou.id=p.organization_unit_id WHERE p.user_id=u.id AND ou.department_id=u.department_id AND ou.institute_id=u.institute_id AND ou.is_active IS TRUE AND p.is_active IS TRUE AND p.position_type='DEPARTMENT_HEAD' AND (p.effective_from IS NULL OR p.effective_from<=current_date) AND (p.effective_to IS NULL OR p.effective_to>=current_date)))`;
+const {
+  createSurgicalConsignmentRoutingService,
+} = require("./surgicalConsignmentRoutingService");
 function createSurgicalConsignmentService(database) {
+  const routing = createSurgicalConsignmentRoutingService(database);
   const scope = (a) => {
     if (!a?.id || !(Number(a.institute_id) > 0))
       throw error(403, "An active institute account is required");
@@ -266,7 +269,7 @@ function createSurgicalConsignmentService(database) {
     await configured(database);
     return (
       await database.query(
-        `SELECT c.id,c.status,c.created_at,c.surgery_date::text,c.supplier_name,d.name AS department_name,c.authorization_code,c.billing_po_id FROM public.surgical_consignment_cases c JOIN public.departments d ON d.id=c.department_id AND d.institute_id=c.institute_id WHERE c.institute_id=$1 AND ($2::boolean OR c.created_by=$3 OR c.surgeon_id=$3 OR c.nurse_id=$3 OR c.receiver_id=$3 OR EXISTS(SELECT 1 FROM public.surgical_consignment_approvals a WHERE a.case_id=c.id AND a.approver_id=$3)) AND (c.id::text ILIKE $4 OR c.supplier_name ILIKE $4 OR COALESCE(c.authorization_code,'') ILIKE $4 OR EXISTS(SELECT 1 FROM public.surgical_consignment_receipt_lines l JOIN public.surgical_consignment_receipts r ON r.id=l.receipt_id WHERE r.case_id=c.id AND (l.catalogue_code ILIKE $4 OR l.batch_number ILIKE $4 OR COALESCE(l.serial_number,'') ILIKE $4))) ORDER BY (c.status NOT IN ('CLOSED','CANCELLED','REJECTED')) DESC,c.id DESC LIMIT 100`,
+        `SELECT c.id,c.status,c.created_at,c.surgery_date::text,COALESCE(c.supplier_name,'Supplier pending SCM') AS supplier_name,d.name AS department_name,c.authorization_code,c.billing_po_id FROM public.surgical_consignment_cases c JOIN public.departments d ON d.id=c.department_id AND d.institute_id=c.institute_id WHERE c.institute_id=$1 AND ($2::boolean OR c.created_by=$3 OR c.surgeon_id=$3 OR c.nurse_id=$3 OR c.receiver_id=$3 OR EXISTS(SELECT 1 FROM public.surgical_consignment_approvals a WHERE a.case_id=c.id AND a.approver_id=$3)) AND (c.id::text ILIKE $4 OR c.supplier_name ILIKE $4 OR COALESCE(c.authorization_code,'') ILIKE $4 OR EXISTS(SELECT 1 FROM public.surgical_consignment_receipt_lines l JOIN public.surgical_consignment_receipts r ON r.id=l.receipt_id WHERE r.case_id=c.id AND (l.catalogue_code ILIKE $4 OR l.batch_number ILIKE $4 OR COALESCE(l.serial_number,'') ILIKE $4))) ORDER BY (c.status NOT IN ('CLOSED','CANCELLED','REJECTED')) DESC,c.id DESC LIMIT 100`,
         [
           a.institute_id,
           m.scm(a) || m.cmo(a) || m.finance(a),
@@ -281,25 +284,22 @@ function createSurgicalConsignmentService(database) {
     await configured(database);
     if (!m.canCreate(a))
       throw error(403, "Request-creation permission required");
-    const departments = (
-      await database.query(
-        "SELECT id,name FROM public.departments WHERE institute_id=$1 AND ($2::boolean OR id=$3) ORDER BY name",
-        [a.institute_id, m.scm(a), a.department_id],
-      )
-    ).rows;
-    const users = (
-      await database.query(
-        `SELECT u.id,u.name,u.role,u.department_id,${HOD} AS is_department_manager FROM public.users u JOIN public.departments d ON d.id=u.department_id AND d.institute_id=u.institute_id WHERE u.institute_id=$1 AND u.is_active IS TRUE ORDER BY u.name`,
-        [a.institute_id],
-      )
-    ).rows;
-    const suppliers = (
-      await database.query(
-        "SELECT id,name FROM public.suppliers WHERE (institute_id=$1 OR institute_id IS NULL) AND lower(trim(COALESCE(status,''))) NOT IN ('inactive','suspended','blacklisted') ORDER BY name",
-        [a.institute_id],
-      )
-    ).rows;
-    return { departments, users, suppliers, reasons: m.REASONS };
+    const clinical = await routing.selections(a);
+    const suppliers = m.scm(a)
+      ? (
+          await database.query(
+            "SELECT id,name FROM public.suppliers WHERE (institute_id=$1 OR institute_id IS NULL) AND lower(trim(COALESCE(status,''))) NOT IN ('inactive','suspended','blacklisted') ORDER BY name",
+            [a.institute_id],
+          )
+        ).rows
+      : [];
+    return { ...clinical, suppliers, reasons: m.REASONS };
+  };
+  const previewRouting = async (a, departmentId, sectionId) => {
+    scope(a);
+    if (!m.canCreate(a))
+      throw error(403, "Request-creation permission required");
+    return routing.resolve(a, departmentId, sectionId);
   };
   const validateApprover = async (
     db,
@@ -310,15 +310,13 @@ function createSurgicalConsignmentService(database) {
   ) => {
     const u = (
       await db.query(
-        `SELECT u.id,u.role,u.department_id,${HOD} AS is_department_manager FROM public.users u JOIN public.departments d ON d.id=u.department_id AND d.institute_id=u.institute_id WHERE u.id=$1 AND u.institute_id=$2 AND u.is_active IS TRUE`,
-        [userId, instituteId],
+        `SELECT u.id,u.role,u.department_id,(lower(trim(u.role))='hod' AND u.department_id=$3) OR EXISTS(SELECT 1 FROM public.organization_positions p JOIN public.organization_units ou ON ou.id=p.organization_unit_id WHERE p.user_id=u.id AND ou.department_id=$3 AND ou.institute_id=$2 AND ou.is_active IS TRUE AND p.is_active IS TRUE AND p.position_type='DEPARTMENT_HEAD' AND (p.effective_from IS NULL OR p.effective_from<=$4::date) AND (p.effective_to IS NULL OR p.effective_to>=$4::date)) AS is_department_manager FROM public.users u WHERE u.id=$1 AND u.institute_id=$2 AND u.is_active IS TRUE`,
+        [userId, instituteId, departmentId, m.today()],
       )
     ).rows[0];
     if (
       !u ||
-      (role === "DEPARTMENT_MANAGER" &&
-        (!u.is_department_manager ||
-          String(u.department_id) !== String(departmentId))) ||
+      (role === "DEPARTMENT_MANAGER" && !u.is_department_manager) ||
       (role === "CMO" && m.role(u) !== "cmo") ||
       (role === "SCM" && m.role(u) !== "scm")
     )
@@ -345,62 +343,47 @@ function createSurgicalConsignmentService(database) {
     scope(a);
     if (!m.canCreate(a))
       throw error(403, "Request-creation permission required");
-    const departmentId = id(input.department_id);
-    if (!m.scm(a) && String(a.department_id) !== departmentId)
-      throw error(403, "Create the request in your own surgical department");
-    const assignments = ["surgeon_id", "nurse_id", "receiver_id"].map((k) =>
-      id(input[k]),
-    );
-    if (new Set(assignments).size !== 3)
-      throw error(400, "Assign distinct surgeon, nurse and receiver accounts");
-    const approvers = ["manager_id", "cmo_id", "scm_id"].map((k) =>
-      id(input[k]),
-    );
-    if (new Set(approvers).size !== 3 || approvers.includes(String(a.id)))
-      throw error(
-        400,
-        "The department manager, CMO and SCM must be distinct, independent of the requester",
-      );
     const items = input.requested_items;
     if (!Array.isArray(items) || !items.length || items.length > 100)
       throw error(400, "Request 1–100 item families / sets");
-    const lines = items.map((i) => ({
-      item_name: text(i.item_name, "Item name", 250),
-      quantity: m.quantity(i.quantity, true),
-      catalogue_code: text(i.catalogue_code, "Catalogue / family code", 250),
-      functional_specs: text(i.functional_specs, "Functional specifications"),
-    }));
+    const reasons = input.justification?.length
+      ? input.justification
+      : ["SURGEON_REQUEST"];
     if (
-      !Array.isArray(input.justification) ||
-      !input.justification.length ||
-      input.justification.some((r) => !m.REASONS.includes(r))
+      !Array.isArray(reasons) ||
+      reasons.some((reason) => !m.REASONS.includes(reason))
     )
-      throw error(400, "Select a consignment justification");
-    if (input.justification.includes("OTHER"))
+      throw error(400, "Invalid surgical justification");
+    if (reasons.includes("OTHER"))
       text(input.other_justification, "Other justification");
     const payload = {
-      department_id: departmentId,
+      submitted_by: id(a.id),
+      department_id: id(input.department_id),
+      surgery_section_id: input.surgery_section_id
+        ? id(input.surgery_section_id)
+        : null,
       surgery_date: m.date(input.surgery_date),
       patient_mrn: text(input.patient_mrn, "Patient MRN", 100),
       procedure_type: text(input.procedure_type, "Procedure", 500),
-      surgeon_id: assignments[0],
-      nurse_id: assignments[1],
-      receiver_id: assignments[2],
-      supplier_id: id(input.supplier_id),
-      vendor_contact: text(input.vendor_contact, "Vendor contact", 250),
-      agreement_reference: text(
-        input.agreement_reference,
-        "Vendor agreement / price-list reference",
-        250,
-      ),
-      currency: text(input.currency, "Currency", 3).toUpperCase(),
-      requested_items: lines,
-      justification: input.justification,
-      other_justification: input.other_justification || "",
-      approvers,
+      recommended_vendor: input.recommended_vendor
+        ? text(input.recommended_vendor, "Vendor recommendation", 250)
+        : "",
+      requested_items: items.map((i) => ({
+        item_name: text(i.item_name, "Item name", 250),
+        quantity: m.quantity(i.quantity, true),
+        catalogue_code: i.catalogue_code
+          ? text(i.catalogue_code, "Catalogue / family code", 250)
+          : "",
+        functional_specs: text(
+          i.functional_specs,
+          "Required sizes / description",
+        ),
+      })),
+      justification: reasons,
+      other_justification: input.other_justification
+        ? text(input.other_justification, "Other justification")
+        : "",
     };
-    if (!/^[A-Z]{3}$/.test(payload.currency))
-      throw error(400, "Use a three-letter currency code");
     const key = text(input.submission_key, "Submission key", 128),
       fingerprint = m.hash(payload);
     return tx(async (db) => {
@@ -422,81 +405,65 @@ function createSurgicalConsignmentService(database) {
           );
         return get(a, prior.id, db);
       }
-      if (
-        !(
-          await db.query(
-            "SELECT id FROM public.departments WHERE id=$1 AND institute_id=$2",
-            [departmentId, a.institute_id],
-          )
-        ).rows.length
-      )
-        throw error(403, "Surgical department is outside your institute");
-      const people = (
-        await db.query(
-          "SELECT id FROM public.users WHERE id=ANY($1::int[]) AND institute_id=$2 AND is_active IS TRUE",
-          [assignments, a.institute_id],
-        )
-      ).rows;
-      if (people.length !== 3)
-        throw error(
-          400,
-          "All assigned clinical/receiving staff must be active in this institute",
-        );
-      for (let i = 0; i < 3; i++)
-        await validateApprover(
-          db,
-          approvers[i],
-          ["DEPARTMENT_MANAGER", "CMO", "SCM"][i],
-          departmentId,
-          a.institute_id,
-        );
-      const supplier = (
-        await db.query(
-          "SELECT id,name FROM public.suppliers WHERE id=$1 AND (institute_id=$2 OR institute_id IS NULL) AND lower(trim(COALESCE(status,''))) NOT IN ('inactive','suspended','blacklisted')",
-          [payload.supplier_id, a.institute_id],
-        )
-      ).rows[0];
-      if (!supplier) throw error(400, "Choose an eligible company");
+      const team = await routing.resolve(
+        a,
+        payload.department_id,
+        payload.surgery_section_id,
+        db,
+        { serialize: true },
+      );
       const c = (
         await db.query(
-          "INSERT INTO public.surgical_consignment_cases(institute_id,department_id,created_by,surgery_date,patient_mrn,procedure_type,requester_snapshot,surgeon_id,nurse_id,receiver_id,supplier_id,supplier_name,vendor_contact,agreement_reference,currency,requested_items,justification,other_justification,submission_key,payload_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20) RETURNING *",
+          `INSERT INTO public.surgical_consignment_cases(institute_id,department_id,created_by,surgery_date,patient_mrn,procedure_type,requester_snapshot,
+       surgeon_id,nurse_id,receiver_id,requested_items,justification,other_justification,submission_key,payload_fingerprint,currency,
+       recommended_vendor,surgery_section_id,receiving_warehouse_id,routing_snapshot)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$3,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,'IQD',$15,$16,$17,$18::jsonb) RETURNING *`,
           [
             a.institute_id,
-            departmentId,
+            payload.department_id,
             a.id,
             payload.surgery_date,
             payload.patient_mrn,
             payload.procedure_type,
             JSON.stringify(await signature(db, a)),
-            ...assignments,
-            payload.supplier_id,
-            supplier.name,
-            payload.vendor_contact,
-            payload.agreement_reference,
-            payload.currency,
-            JSON.stringify(lines),
-            JSON.stringify(payload.justification),
+            team.nurse.id,
+            team.receiver.id,
+            JSON.stringify(payload.requested_items),
+            JSON.stringify(reasons),
             payload.other_justification,
             key,
             fingerprint,
+            payload.recommended_vendor,
+            payload.surgery_section_id,
+            team.warehouse.id,
+            JSON.stringify(team),
           ],
         )
       ).rows[0];
-      for (let i = 0; i < 3; i++)
+      for (const [index, authority] of [
+        team.manager,
+        team.cmo,
+        team.scm,
+      ].entries())
         await db.query(
           "INSERT INTO public.surgical_consignment_approvals(case_id,step,role,approver_id) VALUES($1,$2,$3,$4)",
-          [c.id, i + 1, ["DEPARTMENT_MANAGER", "CMO", "SCM"][i], approvers[i]],
+          [
+            c.id,
+            index + 1,
+            ["DEPARTMENT_MANAGER", "CMO", "SCM"][index],
+            authority.id,
+          ],
         );
       await event(
         db,
         a,
         c,
         "SURGICAL_CONSIGNMENT_REQUESTED",
-        "F18 request submitted",
+        "Surgical request submitted with automatic department routing",
       );
       await notify(
         db,
-        approvers[0],
+        team.manager.id,
         c,
         "Surgical consignment authorization requested",
       );
@@ -555,7 +522,52 @@ function createSurgicalConsignmentService(database) {
               400,
               "Acknowledge vendor ownership and usage-only billing",
             );
+          if (!(input.supplier_id || c.supplier_id))
+            throw error(
+              400,
+              "SCM must confirm the actual supplier before authorizing temporary delivery",
+            );
+          const supplierId = id(input.supplier_id || c.supplier_id);
+          const supplier = (
+            await db.query(
+              "SELECT id,name FROM public.suppliers WHERE id=$1 AND (institute_id=$2 OR institute_id IS NULL) AND lower(trim(COALESCE(status,''))) NOT IN ('inactive','suspended','blacklisted')",
+              [supplierId, c.institute_id],
+            )
+          ).rows[0];
+          if (!supplier)
+            throw error(
+              400,
+              "Choose an eligible supplier from this institute or the shared supplier directory",
+            );
+          const contact = text(
+              input.vendor_contact || c.vendor_contact,
+              "Supplier contact",
+              250,
+            ),
+            agreement = text(
+              input.agreement_reference || c.agreement_reference,
+              "Vendor agreement / price-list reference",
+              250,
+            ),
+            currency = text(
+              input.currency || c.currency || "IQD",
+              "Currency",
+              3,
+            ).toUpperCase();
+          if (!/^[A-Z]{3}$/.test(currency))
+            throw error(400, "Use a three-letter currency code");
           await file(db, c, input.agreement_file_id, "AGREEMENT");
+          await db.query(
+            "UPDATE public.surgical_consignment_cases SET supplier_id=$1,supplier_name=$2,vendor_contact=$3,agreement_reference=$4,currency=$5 WHERE id=$6",
+            [supplier.id, supplier.name, contact, agreement, currency, c.id],
+          );
+          Object.assign(c, {
+            supplier_id: supplier.id,
+            supplier_name: supplier.name,
+            vendor_contact: contact,
+            agreement_reference: agreement,
+            currency,
+          });
         }
         await db.query(
           "UPDATE public.surgical_consignment_approvals SET status=$1,notes=$2,signature=$3::jsonb,decided_at=now() WHERE case_id=$4 AND step=$5",
@@ -578,7 +590,16 @@ function createSurgicalConsignmentService(database) {
             c,
             "Surgical consignment authorization requested",
           );
-        metadata = { step: step.step, decision: input.decision };
+        metadata = {
+          step: step.step,
+          decision: input.decision,
+          ...(step.role === "SCM" && input.decision === "APPROVED"
+            ? {
+                supplier_id: c.supplier_id,
+                agreement_file_id: id(input.agreement_file_id),
+              }
+            : {}),
+        };
       } else if (operation === "receipt") {
         if (
           String(a.id) !== String(c.receiver_id) ||
@@ -1151,6 +1172,9 @@ function createSurgicalConsignmentService(database) {
   };
   return {
     checkSchema: () => configured(database),
+    previewRouting,
+    routingSettings: routing.management,
+    saveRoutingSettings: routing.save,
     create,
     get,
     read,

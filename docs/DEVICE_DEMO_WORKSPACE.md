@@ -43,3 +43,21 @@ Sourcing and quotations remain possible to arrange demos. A demo recommendation 
 Search is limited to 100 workspaces/items per query; narrow by request number or device. A workspace supports 1–20 evaluators and up to 20 criteria. No automatic assignment of all requests to demos, inventory capitalization of loan units, supplier portal, external messaging, clinical certification, contract handling or automatic cheapest/highest-score procurement is introduced. The existing commercial procurement-evaluation module remains available separately; its prices, lifecycle costs and calculations are not replaced by technical trial scores.
 
 Local PostgreSQL tests apply SQL 050 twice and again with populated history, exercise actual service transactions and the central readiness boundary, multiple companies, approval-stage authority, requesting-department inclusion, tenant isolation, immutable attestation, version conflicts, unfinished-report blocking, COO rejection/resubmission, supplier checks, changed requirements, trial-only return and notification rollback. Frontend tests cover creation, comparison/recommendation, missing reports, evaluator submission, COO decisions and stale drafts.
+
+
+## Supplier selection and directory recovery
+
+Demo registration selects an existing supplier, using its canonical supplier ID;
+there is no separate company record to create. The registration panel reports
+supplier loading, empty directory results and load failures beside the selector.
+Use **Reload suppliers** after adding/activating a supplier in the Suppliers
+directory or repairing its schema. Reload preserves unsaved registration details
+and notes. An unavailable/foreign/inactive selected supplier is cleared after a
+successful refresh and is independently rejected by the server on registration.
+
+If loading reports missing `public.suppliers.institute_id`, apply the previously
+provided complete `sql/manual/052_surgical_consignment_supplier_scope_compatibility.sql`
+through Supabase SQL Editor, then reload suppliers. No new SQL patch is introduced
+by this UI change. Supplier institute filtering remains required. A free-text
+request does not query the governed item catalogue to populate its supplier list;
+governed devices still require the selected supplier's approved catalogue device.

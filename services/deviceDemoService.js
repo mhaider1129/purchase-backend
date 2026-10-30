@@ -25,6 +25,17 @@ function createDeviceDemoService(database) {
         "DEVICE_DEMO_SCHEMA_REQUIRED",
       );
   };
+  const supplierScopeReady = async (client) => {
+    const result =
+      await client.query(`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='suppliers' AND column_name='institute_id') AS supplier_scope_available`);
+    if (!result.rows[0]?.supplier_scope_available)
+      throw error(
+        503,
+        "Supplier directory is missing public.suppliers.institute_id. Apply the complete SQL 052 supplier-scope compatibility patch, then reload suppliers.",
+        "DEVICE_DEMO_SUPPLIER_SCHEMA_REQUIRED",
+      );
+  };
   const lock = (client, itemId) =>
     client.query(
       "SELECT pg_advisory_xact_lock(hashtextextended('device-demo:'||$1::text,0))",
@@ -387,19 +398,22 @@ function createDeviceDemoService(database) {
   const options = async (actor, workspaceId) => {
     const w = await get(actor, workspaceId);
     if (!w.can_coordinate)
-      throw error(403, "Only demo coordinators may register company demos");
+      throw error(403, "Only demo coordinators may register supplier demos");
+    await supplierScopeReady(database);
     const suppliers = (
       await database.query(
         "SELECT id,name FROM public.suppliers WHERE (institute_id=$1 OR institute_id IS NULL) AND lower(trim(COALESCE(status,''))) NOT IN ('inactive','suspended','blacklisted') ORDER BY name",
         [actor.institute_id],
       )
     ).rows;
-    const catalog = (
-      await database.query(
-        "SELECT c.id,c.supplier_id,c.approved_product_id,p.product_name,p.manufacturer,p.model FROM public.supplier_catalog_items c JOIN public.approved_products p ON p.id=c.approved_product_id JOIN public.generic_items g ON g.id=p.generic_item_id JOIN public.suppliers s ON s.id=c.supplier_id WHERE p.generic_item_id=$1 AND p.is_active IS TRUE AND p.approval_status='approved' AND c.is_active IS TRUE AND g.is_active IS TRUE AND g.lifecycle_status='active' AND (s.institute_id=$2 OR s.institute_id IS NULL) ORDER BY p.product_name,p.model",
-        [w.item_snapshot.generic_item_id, actor.institute_id],
-      )
-    ).rows;
+    const catalog = w.item_snapshot.generic_item_id
+      ? (
+          await database.query(
+            "SELECT c.id,c.supplier_id,c.approved_product_id,p.product_name,p.manufacturer,p.model FROM public.supplier_catalog_items c JOIN public.approved_products p ON p.id=c.approved_product_id JOIN public.generic_items g ON g.id=p.generic_item_id JOIN public.suppliers s ON s.id=c.supplier_id WHERE p.generic_item_id=$1 AND p.is_active IS TRUE AND p.approval_status='approved' AND c.is_active IS TRUE AND g.is_active IS TRUE AND g.lifecycle_status='active' AND (s.institute_id=$2 OR s.institute_id IS NULL) ORDER BY p.product_name,p.model",
+            [w.item_snapshot.generic_item_id, actor.institute_id],
+          )
+        ).rows
+      : [];
     return { suppliers, catalog };
   };
   const mutate = async (actor, workspaceId, input, operation) =>
@@ -582,6 +596,7 @@ function createDeviceDemoService(database) {
             );
           await fresh(client, w);
           if (operation === "candidate") {
+            await supplierScopeReady(client);
             const supplierId = id(input.supplier_id),
               supplier = (
                 await client.query(
@@ -592,7 +607,7 @@ function createDeviceDemoService(database) {
             if (!supplier)
               throw error(
                 400,
-                "Choose an eligible company from this institute or the shared supplier list",
+                "Choose an eligible supplier from this institute or the shared supplier list",
               );
             let product = null;
             if (input.supplier_catalog_item_id) {
@@ -612,7 +627,7 @@ function createDeviceDemoService(database) {
               )
                 throw error(
                   400,
-                  "The demo catalog product must match the requested identity and company",
+                  "The demo catalog product must match the requested identity and supplier",
                 );
             }
             if (w.item_snapshot.generic_item_id && !product)

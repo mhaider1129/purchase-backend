@@ -71,7 +71,7 @@ async function assertDemoSelection(client, item, actor, command, context = {}) {
   )
     throw error(
       409,
-      "Procurement must use the company selected and approved by the COO; use a supplier-specific procurement entry",
+      "Procurement must use the supplier selected and approved by the COO; use a supplier-specific procurement entry",
       "DEVICE_DEMO_SUPPLIER_MISMATCH",
     );
   if (selection.approved_product_id) {

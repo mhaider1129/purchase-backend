@@ -201,6 +201,71 @@ module.exports = async (client) => {
     const a = await supplier("Demo company A"),
       b = await supplier("Demo company B"),
       f = await supplier("Foreign demo company", other);
+    await client.query("SAVEPOINT demo_supplier_directory_fixture");
+    const suspended = await supplier("Suspended demo supplier");
+    await client.query(
+      "UPDATE public.suppliers SET status='suspended' WHERE id=$1",
+      [suspended],
+    );
+    const choices = await service.options(scm, w.id);
+    assert(choices.suppliers.some((row) => Number(row.id) === Number(a)));
+    assert(choices.suppliers.some((row) => Number(row.id) === Number(b)));
+    assert(!choices.suppliers.some((row) => Number(row.id) === Number(f)));
+    assert(
+      !choices.suppliers.some((row) => Number(row.id) === Number(suspended)),
+    );
+    assert.deepEqual(choices.catalog, []);
+    await assert.rejects(service.options(reviewer, w.id), { statusCode: 403 });
+    // Legacy/free-text devices need the supplier directory, not an installed
+    // or populated governed product catalogue, to register a loan/demo.
+    await client.query(
+      "ALTER TABLE public.supplier_catalog_items RENAME TO demo_catalog_unavailable_fixture",
+    );
+    assert(
+      (await service.options(scm, w.id)).suppliers.some(
+        (row) => Number(row.id) === Number(a),
+      ),
+    );
+    await client.query("ALTER TABLE public.suppliers DROP COLUMN institute_id");
+    await assert.rejects(
+      service.options(scm, w.id),
+      (err) =>
+        err.code === "DEVICE_DEMO_SUPPLIER_SCHEMA_REQUIRED" &&
+        err.message.includes("SQL 052"),
+    );
+    await assert.rejects(
+      service.mutate(
+        scm,
+        w.id,
+        {
+          row_version: w.row_version,
+          notes: "Register supplier demo",
+          supplier_id: a,
+        },
+        "candidate",
+      ),
+      { code: "DEVICE_DEMO_SUPPLIER_SCHEMA_REQUIRED" },
+    );
+    const repair = fs
+      .readFileSync(
+        path.join(
+          __dirname,
+          "../sql/manual/052_surgical_consignment_supplier_scope_compatibility.sql",
+        ),
+        "utf8",
+      )
+      .replace(/^BEGIN;$/m, "")
+      .replace(/^COMMIT;$/m, "");
+    await client.query(repair);
+    assert(
+      (await service.options(scm, w.id)).suppliers.some(
+        (row) => Number(row.id) === Number(a),
+      ),
+    );
+    await client.query("ROLLBACK TO SAVEPOINT demo_supplier_directory_fixture");
+    console.log(
+      "Device demo supplier directory: canonical supplier IDs, tenant/status/role exclusions, no catalogue dependency for free text, named legacy-scope error and SQL 052 recovery PASS",
+    );
     const candidate = (supplierId) => ({
       row_version: w.row_version,
       notes: "Register loan demo",

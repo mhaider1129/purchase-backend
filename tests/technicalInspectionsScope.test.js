@@ -1,4 +1,4 @@
-jest.mock("../config/db", () => ({ query: jest.fn() }));
+jest.mock("../config/db", () => ({ query: jest.fn(), connect: jest.fn() }));
 jest.mock("../utils/ensureTechnicalInspectionsTable", () =>
   jest.fn().mockResolvedValue(),
 );
@@ -22,6 +22,10 @@ const response = () => {
 };
 beforeEach(() => {
   pool.query.mockReset();
+  pool.connect.mockResolvedValue({
+    query: jest.fn((sql, args) => /^(BEGIN|COMMIT|ROLLBACK)$/.test(sql) ? Promise.resolve({ rows: [] }) : pool.query(sql, args)),
+    release: jest.fn(),
+  });
 });
 test.each([
   "getTechnicalInspectionById",

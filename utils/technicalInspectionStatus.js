@@ -30,53 +30,13 @@ const getInspectionSummaryForRequest = async (client, requestId) => {
   return { pendingCount, totalCount };
 };
 
-const applyRequestStatusFromInspections = async (
-  client,
-  { requestId, actorId = null, pendingComment, completedComment },
-) => {
-  const runner = normalizeRunner(client);
-  const summary = await getInspectionSummaryForRequest(runner, requestId);
-
-  if (summary.totalCount === 0) {
-    return { ...summary, appliedStatus: null, statusUpdated: false };
-  }
-
-  const hasPending = summary.pendingCount > 0;
-  const targetStatus = hasPending ? 'technical_inspection_pending' : 'completed';
-
-  const updateRes = await runner.query(
-    `UPDATE requests
-        SET status = $1::text,
-            completed_at = CASE
-              WHEN $1 = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
-              ELSE completed_at
-            END,
-            updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-        AND LOWER(status) <> 'received'`,
-    [targetStatus, requestId],
-  );
-
-  const statusUpdated = updateRes.rowCount > 0;
-
-  if (statusUpdated) {
-    const comment = hasPending
-      ? pendingComment || 'Awaiting technical inspection before requester receipt.'
-      : completedComment || 'Technical inspections passed; request marked as completed.';
-
-    await runner.query(
-      `INSERT INTO request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, $2, $3, $4)`,
-      [
-        requestId,
-        hasPending ? 'Technical Inspection Pending' : 'Marked as Completed',
-        actorId ?? null,
-        comment,
-      ],
-    );
-  }
-
-  return { ...summary, appliedStatus: targetStatus, statusUpdated };
-};
+// Compatibility API for historical callers. Inspection evidence is not authority
+// to transition a request, close a case, settle a PO or release inventory.
+// Explicit request completion still consumes the read-only summary above.
+const applyRequestStatusFromInspections = async (client, { requestId }) => ({
+  ...(await getInspectionSummaryForRequest(client, requestId)),
+  appliedStatus: null,
+  statusUpdated: false,
+});
 
 module.exports = { getInspectionSummaryForRequest, applyRequestStatusFromInspections };

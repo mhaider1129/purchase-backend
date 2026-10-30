@@ -42,6 +42,18 @@ describe('canonical goods receipt transaction', () => {
     expect(h.cumulative).toBe(100);
   });
 
+  test('required technical inspection stays pending and cannot release stock or complete PO', async () => {
+    const h = harness({ lineType: 'INVENTORY' });
+    h.tx.prepareDeliveryInspection = jest.fn().mockResolvedValue({ required: true });
+    h.tx.generateDeliveryInspection = jest.fn().mockResolvedValue({ id: 18 });
+    await h.receive('required-held', 100, { warehouse_id: 3, stock_status: 'QUARANTINE', technical_review_requested: false });
+    expect(h.tx.generateDeliveryInspection).toHaveBeenCalledTimes(1);
+    expect(h.tx.insertGoodsReceiptLine).toHaveBeenCalledWith(expect.objectContaining({ accepted_quantity: '0' }));
+    expect(h.cumulative).toBe(0);
+    expect(h.inventory.postAcceptedReceiptLines).not.toHaveBeenCalled();
+    expect(h.tx.markPurchaseOrderDelivered).not.toHaveBeenCalled();
+  });
+
   test('identical idempotent retry has no duplicate audit, outbox, projection, or inventory', async () => {
     const h = harness({ lineType: 'INVENTORY' });
     const first = await h.receive('same', 40, { warehouse_id: 3, batch_number: 'B1', expiry_date: '2027-01-01' });

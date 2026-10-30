@@ -79,17 +79,15 @@ module.exports = async function validateBackendQueryCompatibility(client, litera
     await client.query("INSERT INTO rfid_read_events(id,institute_id,integration_client_id,epc,reader_id,read_timestamp,source_type) VALUES (991,1,1,'QUERY-EPC',1,now(),'TEST')");
     const read=(await run('services/rfidEventProcessor.js','SELECT r.*,pa.direction_role',[991])).rows[0];
     assert.equal(read.id,'991'); assert.equal(read.direction_role,null); assert.equal(read.portal_from_location_id,null);
-    for (const status of ['technical_inspection_pending','completed']) {
-      await run('utils/technicalInspectionStatus.js','SET status =',[status,991]);
-      const row=(await client.query('SELECT status,completed_at FROM public.requests WHERE id=991')).rows[0];
-      assert.equal(row.status,status); assert.equal(row.completed_at instanceof Date,status==='completed');
-    }
-    await client.query("UPDATE public.requests SET status='Received' WHERE id=991");
-    assert.equal((await run('utils/technicalInspectionStatus.js','SET status =',['completed',991])).rowCount,0);
+    // AUD-008: the historical helper is evidence-only. Do not reintroduce or
+    // execute its removed lifecycle UPDATE as a compatibility expectation.
+    const inspectionQueries = literals.filter(row => row.queryCall && row.source === 'utils/technicalInspectionStatus.js');
+    assert(inspectionQueries.length > 0);
+    assert(inspectionQueries.every(row => !/\b(?:UPDATE|INSERT|DELETE)\s+(?:INTO\s+)?requests\b/i.test(row.value)));
     await run('controllers/requestedItems/updateProcurementStatusController.js','INSERT INTO audit_logs',[1,991,'Test status change']);
     const audit=(await client.query('SELECT user_id,actor_id,target_id,details FROM audit_logs')).rows[0];
     assert.deepEqual(audit,{user_id:1,actor_id:1,target_id:991,details:'Test status change'});
-    console.log('Executed all 10 repaired backend queries: parameter types, actors, timestamps, guarded writes, canonical audit and nullable RFID joins PASS');
+    console.log('Executed retained repaired backend queries and evidence-only inspection boundary: parameter types, actors, timestamps, guarded writes, canonical audit and nullable RFID joins PASS');
   } finally {
     await client.query('ROLLBACK');
   }

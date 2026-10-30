@@ -142,6 +142,101 @@ module.exports = async (client) => {
       justification: ["PATIENT_SPECIFIC"],
       submission_key: "surgical-fixture",
     };
+    // Exercise the deployed legacy schema, not just the reconciled snapshot:
+    // the old supplier creator has no institute_id column.
+    const supplierPatch = fs
+      .readFileSync(
+        path.join(
+          __dirname,
+          "../sql/manual/052_surgical_consignment_supplier_scope_compatibility.sql",
+        ),
+        "utf8",
+      )
+      .replace(/^BEGIN;$/m, "")
+      .replace(/^COMMIT;$/m, "");
+    await client.query("SAVEPOINT supplier_scope_compatibility_fixture");
+    const foreignSupplier = (
+      await client.query(
+        "INSERT INTO public.suppliers(name,status,institute_id) VALUES('Other institute vendor','active',$1) RETURNING id",
+        [other],
+      )
+    ).rows[0].id;
+    const inactiveSupplier = (
+      await client.query(
+        "INSERT INTO public.suppliers(name,status) VALUES('Suspended vendor','suspended') RETURNING id",
+      )
+    ).rows[0].id;
+    const originalSuppliers = (
+      await client.query("SELECT * FROM public.suppliers ORDER BY id")
+    ).rows;
+    await client.query(supplierPatch);
+    await client.query(supplierPatch);
+    assert.deepEqual(
+      (await client.query("SELECT * FROM public.suppliers ORDER BY id")).rows,
+      originalSuppliers,
+    );
+    const modernOptions = await service.options(scm);
+    assert(
+      modernOptions.suppliers.some(
+        (row) => Number(row.id) === Number(supplier),
+      ),
+    );
+    assert(
+      !modernOptions.suppliers.some(
+        (row) => Number(row.id) === Number(foreignSupplier),
+      ),
+    );
+    assert(
+      !modernOptions.suppliers.some(
+        (row) => Number(row.id) === Number(inactiveSupplier),
+      ),
+    );
+    await assert.rejects(
+      service.create(requester, {
+        ...seed,
+        submission_key: "foreign-supplier-scope",
+        supplier_id: foreignSupplier,
+      }),
+      { statusCode: 400 },
+    );
+    await client.query("ALTER TABLE public.suppliers DROP COLUMN institute_id");
+    await assert.rejects(
+      service.options(scm),
+      (error) =>
+        error.code === "SURGICAL_CONSIGNMENT_SCHEMA_REQUIRED" &&
+        error.message.includes("public.suppliers.institute_id") &&
+        error.message.includes("SQL 052"),
+    );
+    await client.query(supplierPatch);
+    await client.query(supplierPatch);
+    assert.equal(
+      (
+        await client.query(
+          "SELECT count(*)::int AS n FROM public.suppliers WHERE institute_id IS NOT NULL",
+        )
+      ).rows[0].n,
+      0,
+    );
+    assert(
+      (await service.options(scm)).suppliers.some(
+        (row) => Number(row.id) === Number(supplier),
+      ),
+    );
+    assert.equal(
+      (
+        await service.create(requester, {
+          ...seed,
+          submission_key: "legacy-supplier-scope",
+        })
+      ).status,
+      "AWAITING_AUTHORIZATION",
+    );
+    await client.query(
+      "ROLLBACK TO SAVEPOINT supplier_scope_compatibility_fixture",
+    );
+    console.log(
+      "SQL 052 supplier scope: reproduce missing-column preflight, populated/repeat preservation, NULL legacy directory semantics, tenant/status exclusion and actual F18 create after patch PASS",
+    );
     let c = await service.create(requester, seed);
     assert.equal(c.status, "AWAITING_AUTHORIZATION");
     assert.equal((await service.create(requester, seed)).id, c.id);

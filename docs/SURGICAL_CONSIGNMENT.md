@@ -16,6 +16,29 @@ The patch adds eleven RLS-protected tables and public privilege revocation. It d
 
 Use the application's trusted backend database role. If a custom backend role is used, its normal trusted table/sequence/RLS access must cover the new tables. Browser roles receive no direct clinical-table access or automatic grants.
 
+### Legacy supplier scope compatibility
+
+If the page reports a missing `public.suppliers.institute_id`, apply the entire
+`purchase-backend/sql/manual/052_surgical_consignment_supplier_scope_compatibility.sql`
+in Supabase SQL Editor. The older supplier-table creator omitted this column,
+although the reconciled backend and consignment supplier queries require it.
+SQL 051 creates the consignment module; SQL 052 repairs this legacy supplier
+prerequisite and is safe to repeat on an already-correct populated supplier table.
+
+SQL 052 adds nullable institute scope only when absent, preserves all existing
+supplier fields and ownership, adds the missing FK for future writes without
+rewriting legacy orphan values, and reports verification counts. Existing NULL
+scope means the shared supplier directory already accepted by the backend; the
+patch does not guess which hospital owns a vendor. It changes no clinical,
+request, invoice, payment or permission records. The final prerequisite query must
+return no missing scope columns. Other missing institute-scope columns require
+explicit application schema reconciliation, not an unscoped query fallback.
+
+The schema endpoint, queue reads, form directory and transactional commands
+check these prerequisites and return a named 503 schema error before unsafe or
+invalid clinical queries. Restart/deploy the backend to obtain the clearer
+error; after manual SQL repair reload the page (there is no stale process cache).
+
 ### Private document storage
 
 `SURGICAL_CONSIGNMENT_PRIVATE_DIR` optionally sets a dedicated persistent directory for signed clinical forms. The default is `purchase-backend/private-uploads/surgical-consignments`, excluded from Git and outside the public `uploads` directory. A path inside public uploads is refused. The service creates new directories with mode 0700 and random-named files with mode 0600. Configure persistent storage/backups and backend write access before operational use; do not map this directory through Nginx or any static-file server. This first release uses private local/persistent filesystem storage, not the generic request-attachment public path or a supplier portal.

@@ -49,15 +49,16 @@ router.param("id", (req, res, next, v) => {
 });
 router.get(
   "/schema",
-  wrap(async (req, res) =>
-    res.json({
+  wrap(async (req, res) => {
+    await service.checkSchema();
+    return res.json({
       current_user_id: req.user.id,
       can_create: m.canCreate(req.user),
       can_scm: m.scm(req.user),
       file_purposes: m.PURPOSES,
       forms: ["DPP.SC.001.F18", "DPP.SC.001.F19", "DPP.SC.001.F20"],
-    }),
-  ),
+    });
+  }),
 );
 router.get(
   "/options",

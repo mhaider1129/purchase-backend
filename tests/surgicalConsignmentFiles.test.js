@@ -4,6 +4,7 @@ const express = require("express"),
   os = require("node:os"),
   path = require("node:path");
 const mockService = {
+  checkSchema: jest.fn(),
   get: jest.fn(),
   read: jest.fn(),
   attach: jest.fn(),
@@ -16,6 +17,7 @@ jest.mock("../config/db", () => ({ query: jest.fn() }));
 let directory, app;
 beforeEach(async () => {
   jest.clearAllMocks();
+  mockService.checkSchema.mockResolvedValue();
   directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "surgical-private-test-"),
   );
@@ -118,4 +120,17 @@ test("empty evidence cannot satisfy a clinical signed-document requirement", asy
   expect(response.status).toBe(400);
   expect(mockService.attach).not.toHaveBeenCalled();
   expect(await fs.readdir(directory)).toEqual([]);
+});
+
+test("schema endpoint returns an actionable preflight error before rendering an unusable request form", async () => {
+  mockService.checkSchema.mockRejectedValueOnce(
+    Object.assign(
+      new Error("Missing public.suppliers.institute_id; apply SQL 052"),
+      { statusCode: 503 },
+    ),
+  );
+  const result = await request(app).get("/surgical-consignments/schema");
+  expect(result.status).toBe(503);
+  expect(result.body.message).toContain("public.suppliers.institute_id");
+  expect(mockService.get).not.toHaveBeenCalled();
 });

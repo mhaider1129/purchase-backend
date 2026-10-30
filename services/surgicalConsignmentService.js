@@ -21,6 +21,33 @@ function createSurgicalConsignmentService(database) {
         "Apply the complete SQL 051 surgical-consignment patch",
         "SURGICAL_CONSIGNMENT_SCHEMA_REQUIRED",
       );
+    const missing = (
+      await db.query(`
+      SELECT required.table_name,required.column_name FROM (VALUES
+        ('surgical_consignment_cases','institute_id'),('departments','institute_id'),
+        ('users','institute_id'),('suppliers','institute_id'),
+        ('organization_units','institute_id'),('requests','institute_id')
+      ) AS required(table_name,column_name)
+      LEFT JOIN information_schema.columns actual ON actual.table_schema='public'
+        AND actual.table_name=required.table_name AND actual.column_name=required.column_name
+      WHERE actual.column_name IS NULL ORDER BY required.table_name
+    `)
+    ).rows;
+    if (missing.length) {
+      const names = missing
+        .map((column) => `public.${column.table_name}.${column.column_name}`)
+        .join(", ");
+      const remedy = missing.every(
+        (column) => column.table_name === "suppliers",
+      )
+        ? "Apply the complete SQL 052 surgical-consignment supplier-scope compatibility patch."
+        : "Restore the listed institute-scope columns using the existing backend schema reconciliation; do not assign or infer institute ownership automatically.";
+      throw error(
+        503,
+        `Surgical consignment schema is incomplete: ${names}. ${remedy}`,
+        "SURGICAL_CONSIGNMENT_SCHEMA_REQUIRED",
+      );
+    }
   };
   const tx = async (work) => {
     const db = await database.connect();
@@ -251,6 +278,7 @@ function createSurgicalConsignmentService(database) {
   };
   const options = async (a) => {
     scope(a);
+    await configured(database);
     if (!m.canCreate(a))
       throw error(403, "Request-creation permission required");
     const departments = (
@@ -963,11 +991,11 @@ function createSurgicalConsignmentService(database) {
             ).rows[0];
             identityMatches = Boolean(
               catalogue &&
-                String(catalogue.supplier_id) === String(c.supplier_id) &&
-                String(catalogue.approved_product_id) ===
-                  String(p.approved_product_id) &&
-                String(catalogue.supplier_item_code) ===
-                  String(line.catalogue_code),
+              String(catalogue.supplier_id) === String(c.supplier_id) &&
+              String(catalogue.approved_product_id) ===
+                String(p.approved_product_id) &&
+              String(catalogue.supplier_item_code) ===
+                String(line.catalogue_code),
             );
           }
           if (
@@ -1122,6 +1150,7 @@ function createSurgicalConsignmentService(database) {
     return c;
   };
   return {
+    checkSchema: () => configured(database),
     create,
     get,
     read,

@@ -125,6 +125,13 @@ function normalizeEvidence(input = {}) {
     basis: input.basis,
     category: input.category,
     supplier_name: text(input.supplier_name, 250),
+    quotation_item_id: input.quotation_item_id
+      ? String(input.quotation_item_id)
+      : null,
+    supplier_id: input.supplier_id ? String(input.supplier_id) : null,
+    approved_product_id: input.approved_product_id
+      ? String(input.approved_product_id)
+      : null,
     manufacturer: text(input.manufacturer, 250),
     model_number: text(input.model_number, 250),
     serial_batch_number: text(input.serial_batch_number, 250),
@@ -133,6 +140,14 @@ function normalizeEvidence(input = {}) {
     no_sample_reason: text(input.no_sample_reason),
     attachment_ids: input.attachment_ids || [],
   };
+  if (
+    [
+      evidence.supplier_id,
+      evidence.approved_product_id,
+      evidence.quotation_item_id,
+    ].some((id) => id && !/^\d+$/.test(id))
+  )
+    throw error(400, "Invalid proposed supplier or product identity");
   if (!evidence.evidence_description)
     throw error(
       400,
@@ -174,8 +189,24 @@ function normalizeReports(input, packets) {
     const report = input.find(
       (row) => String(row.item_id) === String(packet.item_id),
     );
+    const extra_assessment = {};
+    for (const key of packet.assessment_policy?.pre_checks || []) {
+      const allowed = require("./technicalReviewProfiles").DELIVERY_CHECKS[key];
+      if (!allowed?.includes(report?.extra_assessment?.[key]))
+        throw error(400, `Complete the required ${key} assessment`);
+      extra_assessment[key] = report.extra_assessment[key];
+      if (
+        report.decision === "APPROVED" &&
+        ["no", "fail", "not_assessed"].includes(extra_assessment[key])
+      )
+        throw error(400, "Failed technical checks cannot be approved");
+    }
     if (report?.assessment_version === 2) {
-      if (!["APPROVED", "REJECTED"].includes(report.decision))
+      if (
+        !["APPROVED", "REJECTED", "CONDITIONAL", "CLARIFICATION"].includes(
+          report.decision,
+        )
+      )
         throw error(400, "Choose a technical decision");
       const assessment = {};
       for (const [key, choices] of Object.entries(ASSESSMENT)) {
@@ -206,6 +237,7 @@ function normalizeReports(input, packets) {
         item_id: String(packet.item_id),
         assessment_version: 2,
         assessment,
+        extra_assessment,
         decision: report.decision,
         findings: text(report.findings),
         checklist: {},
@@ -275,6 +307,7 @@ function normalizeReports(input, packets) {
       throw error(400, "Record the overall condition");
     return {
       item_id: String(packet.item_id),
+      extra_assessment,
       decision: report.decision,
       inspection_date: report.inspection_date,
       inspection_time: report.inspection_time,

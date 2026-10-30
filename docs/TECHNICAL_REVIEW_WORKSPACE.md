@@ -1,85 +1,197 @@
-# Technical Reviews & Inspections — staged redesign
+# Technical Reviews & Inspections
 
-## Stage 1 delivered
+The workspace covers all three redesign stages: a task worklist, controlled
+pre-procurement reviews, and quantity-aware Goods Receipt inspections. Technical
+opinions do not grant PR, supplier, budget, PO, invoice or payment authorization.
 
-The `/technical-inspections` landing page is a scoped task worklist, with no new
-inspection form displayed by default. Its records come from the existing
-pre-procurement review service and historical inspection register; it does not
-create a second approval engine, receipt ledger or inventory balance.
+## Deployment and setup
 
-Pending, In Progress and History tabs support search, assigned department,
-review type, status and creation-date filters. Four cards show Awaiting My
-Review, In Progress, On Hold and Completed, using the same filtered result as
-the table across all pages. Dates use Asia/Baghdad boundaries, inclusive of the
-chosen end day. The 25-row page limit does not limit summary counts.
+**MANUAL DATABASE MIGRATION REQUIRED** — apply the entire
+`purchase-backend/sql/manual/054_technical_review_and_delivery_workflow.sql` in
+Supabase SQL Editor. The existing SQL 049 pre-procurement review schema and the
+canonical P2P, organizational and inventory schemas must already be installed.
+Deploy backend first, then build/deploy frontend.
 
-An assigned pre-procurement reviewer sees only their accessible reviews. SCM
-management retains its existing role **and** `technical-inspections.manage`
-requirements. The worklist is available to authenticated assigned reviewers
-without granting them the legacy register's management permission. Opening a
-review continues through the existing assigned-opinion and independent SCM
-sign-off endpoints, retaining version checks, audit, notifications, evidence
-access and procurement gates.
+Open **Management → Technical reviews** (also available through the worklist’s
+**Technical responsibilities** link) as an existing SCM/Admin/Procurement
+Supervisor with `technical-inspections.manage`. Configure profiles by the
+controlled Item Master type; free-text demand uses `unclassified`. Profiles
+are initially absent, so no automatic requirement is enabled by the patch.
 
-For a routine pre-procurement opinion, the reviewer sees the linked item and
-evidence, then three assessments: specification compliance, compatibility and
-intended-use suitability. All three require an explicit response. Full approval
-requires compliant specifications, compatible/not-applicable compatibility and
-suitable intended use. Rejection requires comments/corrective findings. The
-server records its assessment time and authenticated signature; client-provided
-names or timestamps cannot attest the opinion. It never invents physical
-packaging, batch, calibration or other checklist responses from these answers.
-Older clients and signed reports retain their original detailed checklist
-contract and recorded evidence.
+For each applicable type:
 
-The main worklist opens historical inspections as read-only records. Those
-records have no reliable assigned-reviewer identity and are labelled accordingly;
-they never contribute to Awaiting My Review. The original editor is retained at
-`/technical-inspections/legacy`, including links from completed requests, to
-preserve existing functionality. Its register/read/edit/delete and request/item
-links are restricted to the actor's institute. Unlinked records are scoped via
-their creator's institute; records without either scope are not exposed.
+- Choose Level 1 basic verification, Level 2 technical review, or Level 3 formal
+  acceptance. Basic verification leaves ordinary receiving in place. Level 2/3
+  can require pre-procurement review, delivery inspection, or both. Formal
+  acceptance always requires supporting evidence.
+- Configure the technical responsibilities: the current requesting-department
+  HOD, another department's current HOD, or a designated active departmental
+  inspector. Add multiple departments for multidisciplinary assessments.
+  Current effective organizational head positions take precedence over a unique
+  HOD role fallback. Missing or ambiguous responsibility blocks task generation
+  rather than choosing an arbitrary account. Receiving and final sign-off remain
+  independent of the technical opinions.
+- Select additional pre-procurement checks and delivery checks appropriate to
+  the category. Medical devices can include calibration/electrical safety,
+  consumables packaging/expiry/sterility, and IT configuration/compatibility.
+  Basic delivery specification, condition, documentation and functionality checks
+  remain explicit; not-applicable/not-required answers depend on the question.
+- Record a change reason. Profile edits use an optimistic version and audit.
+  Existing tasks retain their profile and responsibility snapshots.
 
-`IN_PROGRESS` in this first stage means that at least one departmental opinion
-has been submitted and final sign-off has not occurred. There is no invented
-start timestamp. Historical accepted/rejected records and signed/cancelled
-pre-procurement reviews appear in History, with their actual decision shown.
-The current owners do not yet have a Hold state, so their On Hold count is zero.
+The profile owner must retain active SCM technical-management authority for
+automatic pre-procurement generation. Configure responsibilities before enabling
+requirements. A missing current reviewer/owner blocks the final-approval
+transaction with setup guidance; it never grants procurement clearance. Generation
+runs before final-approved notifications. For already approved PRs, SCM can select
+an eligible request and use **Generate configured review**. Reads never create
+or mutate tasks.
 
-## Deployment
+## Worklist
 
-No new database migration, permissions, dependencies or lockfile changes are
-required for Stage 1. Deploy the backend, then build/deploy the frontend. The
-existing SQL `049_preprocurement_technical_reviews.sql` is a prerequisite for
-pre-procurement reviews if that module has not already been installed. The
-worklist reads schema availability and displays a warning when it is absent;
-it does not automatically create or migrate tables. Existing historical CRUD
-retains its pre-existing schema initializer.
+`/technical-inspections` opens **Technical Reviews & Inspections** without a large
+empty inspection form. Pending, In Progress, History and All tasks support search,
+assigned department, review type, status and creation-date filters. Four cards
+count Awaiting My Review, In Progress, On Hold and Completed using the same
+filtered result across every page. Date boundaries use Asia/Baghdad and include
+all of the selected end day.
 
-This implementation does not connect to production/Supabase. Database validation
-uses the repository's disposable local PostgreSQL harness.
+Ordinary users see their active departmental assignments. Existing SCM managers
+see the institute's reviews. Authorized receiving officers see delivery tasks
+within their institute and can apply authorized receiving dispositions. Historical
+forms require their existing management permission and are explicitly distinct
+from authenticated task assignments; they never count as Awaiting My Review.
 
-## Remaining stages and control boundaries
+## Pre-procurement technical review
 
-Stage 2 should introduce versioned category/technical-responsibility policies,
-capability/position-based reviewer routing, formal-acceptance profiles, proposal
-identity/revision binding, condition and clarification cycles and immutable
-decision history. Selected-only review remains the existing default; this
-change does not enable all-request or category-wide requirements. A conditional
-or clarification outcome must not be mapped to APPROVED. Conditions must be
-resolved and attested before procurement clearance. Replaced products or revised
-quotations need their own current technical evidence.
+When a controlled-type PR receives final approval, the system generates one
+required review with requesting-department and configured specialist assignments.
+Generation is idempotent and transactional. It starts as an evidence-preparation
+requirement: no inspector can approve an automatically generated placeholder.
+SCM prepares the actual proposed supplier/product and sample, data sheet or
+written description. A non-sample basis requires a real reason; formal policy
+requires evidence. Existing item names, quantities and requirements are read-only.
 
-Stage 3 should generate delivery tasks transactionally from canonical Goods
-Receipts, with separate accepted/held/rejected quantities, reviewer opinions and
-controlled final receiving disposition. Accepted quantity must feed the existing
-receipt, inventory, asset and invoice-matching services; held/rejected quantities
-must not become available stock or eligible financial receipts. Partial rejection
-also requires a defined replacement/return and cumulative receipt-capacity rule.
-No new delivery-inspection task or partial-release control is claimed by Stage 1.
-Historical forms must not be presented as quantity-aware GR inspection decisions.
+SCM can also request an additional review on an approved PR. Configured mandatory
+reviewers cannot be omitted, and the requesting department must be represented.
+The SCM signatory cannot be one of the departmental inspectors. A required
+category review binds the actual proposed supplier. Optional requirements-only
+reviews remain possible outside mandatory category policy.
 
-The original editor's request-completion behavior is preserved for compatibility
-in Stage 1. The new worklist and concise pre-procurement opinions do not call that
-status helper, complete a PR, issue a PO, accept a receipt, release inventory,
-register an asset, approve an invoice or authorize payment.
+The reviewer may start the task, then assess specification compliance,
+compatibility, intended-use suitability and any configured additional checks.
+The decisions are:
+
+- **Approve** — requires compliant, compatible/not-applicable and suitable
+  answers, with no failed additional check.
+- **Approve with conditions** — findings are mandatory; procurement remains
+  blocked until a new attested round fully approves the resolved conditions.
+- **Request clarification** — findings are mandatory and procurement stays blocked.
+- **Reject** — findings are mandatory; revise/replace the proposal in a new round.
+
+Every opinion records the authenticated account, timestamp, findings and exact
+answers; it does not fabricate responses to the former physical-sample checklist.
+The detailed report contract remains readable/usable for existing clients.
+
+SCM's **Revise proposal / resolve conditions or clarification** action records
+its reason, retains previous item/evidence/opinion snapshots and resets every
+assignment into a new round. The new round requires fresh opinions. Terminal
+signed reviews cannot be edited; create a new review for a changed signed proposal.
+Final SCM clearance requires every assigned opinion to approve the current
+request/item fingerprint. PR approval and normal purchasing authorization remain
+separate.
+
+Proposals may bind an approved Product and a normalized RFx quotation line.
+Supplier/Product substitution, material Product changes, quotation source changes
+or changed quotation content invalidate that clearance. Award creation, PO
+creation, PO issue and direct procurement registration recheck the technical gate.
+A quotation-bound proposal must use that quotation's canonical award/PO path;
+description-only direct registration cannot impersonate the reviewed quotation.
+For uncatalogued proposals, the supplier, model/description and selected evidence
+are retained; changed proposals must be submitted as a new revision.
+
+## Delivery inspection and receiving
+
+Canonical Goods Receipt creation applies the type's required inspection policy
+server-side. Receiving may also explicitly request an additional configured
+technical responsibility. Additional profiles combine their reviewers, checks,
+evidence requirement and inspection level with mandatory policy; they cannot
+replace it with weaker requirements. Transaction data supplies the item, PO,
+supplier, specifications, lot/serial and approved-product details.
+
+A required receipt line generates one task in the receipt transaction. Until an
+authorized disposition is applied, its net physically received units are held
+at receiving, excluded from available inventory, PO accepted fulfillment and
+financial acceptance. This is a disposition on the existing receipt, not a
+second owned-stock ledger. Existing receipts are not retrospectively reclassified.
+
+Each assigned inspector records explicit policy checks and one decision against
+the remaining held quantity:
+
+- **Accept** all remaining units;
+- **Partial acceptance**, with exact accepted/rejected quantities and the rest held;
+- **Hold / clarification**, retaining all remaining units on hold;
+- **Reject** all remaining units for return/replacement/escalation.
+
+Non-full acceptance requires corrective/rejection findings. Not assessed is
+available for honest hold/rejection records and cannot release accepted units. Failed checks cannot
+release accepted units; segregate affected units and assess the conforming units
+explicitly, or hold the delivery. Formal policies require linked evidence. Every
+opinion is attested and retained in immutable history. All quantities use the
+canonical four-decimal arithmetic and conserve the remaining receipt balance.
+
+An independent SCM signatory authorizes the agreed final disposition only after
+all reviewers submit. Disagreement on quantities requires a clarification round,
+not an SCM-invented quantity override. An authorized receiving officer then uses
+**Apply authorized receiving disposition**. That action calls the canonical Goods
+Receipt service, repository and inventory adapter under one transaction. Normal
+warehouse/institute/UOM/Stock Item permissions and identity checks remain enforced.
+Accepted inventory movements are linked into the existing document flow. Existing
+non-available stock status (including a separate quarantine) is retained.
+
+Applying a disposition is idempotent by its immutable authorization identifier.
+Accepted/rejected quantities never decrease. Held units can enter another round;
+prior signatures and evidence remain intact. Held units reserve PO receiving
+capacity, while rejected units free capacity for a replacement. The PO becomes
+delivered only when its cumulative accepted quantity reaches the order quantity.
+Rejected physical goods remain excluded from stock; document their vendor
+return, replacement or escalation in the findings/evidence and normal operational
+process. Technical rejection does not fabricate a supplier credit or a return
+inventory movement for units that were never posted.
+
+## Finance, assets, completion and evidence
+
+Canonical invoice matching consumes technically accepted receipt quantities.
+Match overrides, finance/AP verification/posting and payment recheck cumulative
+invoice quantities against technical acceptance, serializing on the PO. An
+override cannot authorize held/rejected units or allocate the same accepted units
+to multiple invoices. Existing price/value/tax, matching and spend controls remain.
+
+Procurement-sourced assets must link a specifically accepted GR line when
+technical acceptance applies. Registration/deployment cannot exceed its accepted
+base-unit capacity; an existing asset is excluded from its own capacity count.
+Legacy/manual assets without procurement provenance retain their existing path.
+Request completion checks also include outstanding required PO-line acceptance,
+so completing a historical form cannot clear a delivery hold or rejected remainder.
+
+Technical decisions and revisions use immutable history. Evidence references have
+foreign keys preventing deletion of retained attachments, even in a delete/reference
+race. File deletion reports a conflict and tells users to upload a revision. New
+upload paths contain a UUID to prevent same-name/time overwrites. The patch also
+protects existing available attachments selected by old technical reviews; it does
+not reconstruct missing historical files, signatures or decisions. Persistent
+storage/backups continue to use the application's existing attachment service.
+
+## Compatibility and boundaries
+
+Historical forms open read-only from the worklist; the original editor and
+completed-request entry points remain for compatibility. Its old request-status
+helper now includes required delivery acceptance. Historical forms are not
+quantity-aware GR decisions and cannot update the new receipt acceptance fields.
+No historical receipt/task, asset, invoice or inventory backfill is performed.
+
+No new permission grants or dependencies are introduced. The trusted backend
+role needs its normal table/sequence/RLS access to the new tables; browser roles
+receive no direct access. No production/Supabase SQL was executed by this change.
+SQL 054 is tested on populated data and repeat application, with existing
+receipt quantities, signed records and new history preserved.

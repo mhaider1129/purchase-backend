@@ -95,6 +95,7 @@ const getEffectiveInvoiceMatchState = async ({ repository, invoiceId }) => {
 };
 
 const assertInvoiceMatchApproved = async ({ repository, invoiceId }) => {
+  if(repository.assertTechnicalInvoiceClearance)await repository.assertTechnicalInvoiceClearance(invoiceId);
   const state = await getEffectiveInvoiceMatchState({ repository, invoiceId });
   if (!['MATCH_VERIFIED', 'MATCH_VERIFIED_BY_OVERRIDE'].includes(state.effectiveStatus)) {
     throw error('Invoice matching must be verified or have an approved override before finance verification', 'INVOICE_MATCH_NOT_APPROVED', 400);
@@ -112,6 +113,7 @@ const decideMatchOverride = async ({ repository, requestId, matchResultId, decis
     await tx.lockInvoice(current.supplier_invoice_id);
     const latest = await tx.getEffectiveInvoiceMatchState(current.supplier_invoice_id);
     if (!latest || String(latest.match_result_id) !== String(current.id)) throw error('Only the current match result can be overridden', 'MATCH_RESULT_SUPERSEDED', 409);
+    if(decision==='APPROVED'&&tx.assertTechnicalInvoiceClearance)await tx.assertTechnicalInvoiceClearance(current.supplier_invoice_id);
     const history = await tx.insertMatchOverrideDecision({ invoice_match_result_id: current.id, decision, reason: reason.trim(), actor_id: actor.id, original_variances: current.variances || current.mismatch_reasons || [] });
     const status = decision === 'APPROVED' ? 'MATCH_VERIFIED' : 'MATCH_EXCEPTION';
     const updated = await tx.updateInvoiceLifecycle(current.supplier_invoice_id, status);

@@ -7,6 +7,7 @@ const {
 const GATED_COMMANDS = new Set([
   "create_award",
   "create_purchase_order",
+  "release_purchase_order",
   "register_procurement",
 ]);
 async function assertTechnicalClearance(
@@ -23,7 +24,7 @@ async function assertTechnicalClearance(
       "Technical review gate requires a transactional database client",
     );
   const configured = await client.query(
-    "SELECT to_regclass('public.preprocurement_technical_reviews') IS NOT NULL AS technical_review_available, to_regclass('public.device_demo_workspaces') IS NOT NULL AS demo_workspace_available",
+    "SELECT to_regclass('public.preprocurement_technical_reviews') IS NOT NULL AS technical_review_available, to_regclass('public.device_demo_workspaces') IS NOT NULL AS demo_workspace_available, to_regclass('public.technical_review_profiles') IS NOT NULL AS technical_workflow_available",
   );
   if (configured.rows[0]?.demo_workspace_available === true)
     await require("./deviceDemoGate").assertDemoSelection(
@@ -38,7 +39,7 @@ async function assertTechnicalClearance(
   const id = item.id || item.item_id;
   const found = await client.query(
     `SELECT ri.*,r.institute_id,r.department_id AS requesting_department_id,r.request_type,r.status AS request_status
-    FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id WHERE ri.id=$1 AND ($2::integer IS NULL OR ri.request_id=$2)`,
+    FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id WHERE ri.id=$1 AND ($2::integer IS NULL OR ri.request_id=$2) FOR SHARE OF ri,r`,
     [id, item.request_id || null],
   );
   const current = found.rows[0];
@@ -66,7 +67,19 @@ async function assertTechnicalClearance(
   const review = history.rows.find((row) =>
     row.item_packets.some((packet) => String(packet.item_id) === String(id)),
   );
-  if (!review && !policy?.require_for_all && !history.rows.length) return;
+  const categoryProfile =
+    configured.rows[0]?.technical_workflow_available === true
+      ? await require("./technicalReviewProfiles").profileForItem(
+          client,
+          current,
+        )
+      : null;
+  if (
+    !review &&
+    !policy?.require_for_all &&
+    !categoryProfile?.settings.pre_required
+  )
+    return;
   if (
     !["approved", "partially procured", "partially_procured"].includes(
       String(current.request_status || "")
@@ -87,6 +100,18 @@ async function assertTechnicalClearance(
       409,
       "Departmental technical approval and SCM sign-off are required before procurement",
       "TECHNICAL_REVIEW_REQUIRED",
+    );
+  if (packet?.awaiting_proposal)
+    throw error(
+      409,
+      "Technical proposal preparation is required",
+      "TECHNICAL_PROPOSAL_REQUIRED",
+    );
+  if (packet?.evidence)
+    await require("./technicalProposalSnapshot").assertCurrent(
+      client,
+      packet.evidence,
+      context,
     );
   if (
     String(review.requesting_department_id) !==

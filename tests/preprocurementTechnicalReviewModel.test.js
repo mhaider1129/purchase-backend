@@ -142,3 +142,5 @@ test("unassessed specifications cannot authorize procurement", () => {
     "must be assessed",
   );
 });
+
+test('configured category checks must be assessed and cannot conceal a failed safety result',()=>{const row={...concise(),extra_assessment:{calibration:'fail'}};const scoped=[{item_id:'1',assessment_policy:{pre_checks:['calibration']}}];expect(()=>normalizeReports([row],scoped)).toThrow('Failed technical checks');expect(()=>normalizeReports([concise()],scoped)).toThrow('calibration');expect(normalizeReports([{...row,extra_assessment:{calibration:'pass'}}],scoped)[0].extra_assessment).toEqual({calibration:'pass'});});

@@ -32,7 +32,7 @@ const matchInvoice = ({ invoice, purchaseOrder, acceptedReceipts = [], priorQuan
     const id = String(lineIdentity);
     const poLine = poLines.get(id);
     if (!poLine) { variances.push({ code: 'PO_LINE_NOT_FOUND', purchase_order_item_id: lineIdentity }); continue; }
-    const service = poLine.line_type === 'SERVICE';
+    const service = poLine.line_type === 'SERVICE' && !(acceptedReceipts || []).some(receipt=>String(receipt.purchase_order_item_id)===String(poLine.id)&&receipt.technical_inspection_required===true);
     hasThreeWay ||= !service;
     if (compareDecimal(line.unit_price, poLine.unit_price) !== 0) variances.push({ code: 'PRICE_VARIANCE', purchase_order_item_id: poLine.id, expected: String(poLine.unit_price), actual: String(line.unit_price), difference: subtractDecimal(line.unit_price, poLine.unit_price), currency: purchaseOrder.currency });
     const cumulativeQty = addDecimal(priorQty.get(id) || 0, line.quantity);

@@ -1,133 +1,556 @@
-'use strict';
+"use strict";
 
-const crypto = require('crypto');
-const createHttpError = require('../utils/httpError');
-const inventoryAdapter = require('./goodsReceiptInventoryAdapter');
-const sharedAuditService = require('./auditService');
-const notificationOutbox = require('./notificationOutboxService');
+const crypto = require("crypto");
+const createHttpError = require("../utils/httpError");
+const inventoryAdapter = require("./goodsReceiptInventoryAdapter");
+const sharedAuditService = require("./auditService");
+const notificationOutbox = require("./notificationOutboxService");
 
-const RECEIVABLE_STATUSES = new Set(['PO_ISSUED', 'PO_PARTIAL']);
+const RECEIVABLE_STATUSES = new Set(["PO_ISSUED", "PO_PARTIAL"]);
 const SCALE = 10000n;
+const postReceiptInventory = (inventory, ...args) =>
+  inventory.postAcceptedReceiptLines(...args);
 
 function decimal(value, field) {
-  const text = String(value ?? '').trim();
-  if (!/^\d+(\.\d{1,4})?$/.test(text)) throw createHttpError(400, `${field} must be a positive decimal with at most four decimal places`);
-  const [whole, fraction = ''] = text.split('.');
-  return BigInt(whole) * SCALE + BigInt(fraction.padEnd(4, '0'));
+  const text = String(value ?? "").trim();
+  if (!/^\d+(\.\d{1,4})?$/.test(text))
+    throw createHttpError(
+      400,
+      `${field} must be a positive decimal with at most four decimal places`,
+    );
+  const [whole, fraction = ""] = text.split(".");
+  return BigInt(whole) * SCALE + BigInt(fraction.padEnd(4, "0"));
 }
 
 function scaledBigIntToDecimalString(value) {
   const negative = value < 0n;
   const absolute = negative ? -value : value;
   const whole = absolute / SCALE;
-  const fraction = String(absolute % SCALE).padStart(4, '0').replace(/0+$/, '');
-  return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`;
+  const fraction = String(absolute % SCALE)
+    .padStart(4, "0")
+    .replace(/0+$/, "");
+  return `${negative ? "-" : ""}${whole}${fraction ? `.${fraction}` : ""}`;
 }
 
 function fingerprint(purchaseOrderId, lines) {
   const canonicalQuantity = (value, field) => decimal(value, field).toString();
-  const normalized = lines.map((line) => ({
-    purchase_order_item_id: Number(line.purchase_order_item_id),
-    received_quantity: canonicalQuantity(line.received_quantity, 'received_quantity'),
-    damaged_quantity: canonicalQuantity(line.damaged_quantity || 0, 'damaged_quantity'),
-    short_quantity: canonicalQuantity(line.short_quantity || 0, 'short_quantity'), batch_number: line.batch_number || null,
-    lot_number: line.lot_number || null, serial_number: line.serial_number || null,
-    expiry_date: line.expiry_date || null, warehouse_id: line.warehouse_id == null ? null : Number(line.warehouse_id),
-    stock_status: line.stock_status || 'AVAILABLE',
-    // UOM conversion is an immutable PO-line snapshot and is deliberately not
-    // fingerprinted from caller input.
-  })).sort((a, b) => a.purchase_order_item_id - b.purchase_order_item_id);
-  return crypto.createHash('sha256').update(JSON.stringify({ purchase_order_id: Number(purchaseOrderId), lines: normalized })).digest('hex');
+  const normalized = lines
+    .map((line) => ({
+      purchase_order_item_id: Number(line.purchase_order_item_id),
+      received_quantity: canonicalQuantity(
+        line.received_quantity,
+        "received_quantity",
+      ),
+      damaged_quantity: canonicalQuantity(
+        line.damaged_quantity || 0,
+        "damaged_quantity",
+      ),
+      short_quantity: canonicalQuantity(
+        line.short_quantity || 0,
+        "short_quantity",
+      ),
+      batch_number: line.batch_number || null,
+      lot_number: line.lot_number || null,
+      serial_number: line.serial_number || null,
+      expiry_date: line.expiry_date || null,
+      warehouse_id:
+        line.warehouse_id == null ? null : Number(line.warehouse_id),
+      stock_status: line.stock_status || "AVAILABLE",
+      ...(line.technical_review_requested
+        ? {
+            technical_review_requested: true,
+            technical_profile_key: line.technical_profile_key || null,
+          }
+        : {}),
+      // UOM conversion is an immutable PO-line snapshot and is deliberately not
+      // fingerprinted from caller input.
+    }))
+    .sort((a, b) => a.purchase_order_item_id - b.purchase_order_item_id);
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        purchase_order_id: Number(purchaseOrderId),
+        lines: normalized,
+      }),
+    )
+    .digest("hex");
 }
 
-async function createGoodsReceipt({ repository, purchaseOrderId, idempotencyKey, lines, receivedAt = null,
-  actor, auditService = sharedAuditService, outbox = notificationOutbox, inventory = inventoryAdapter,
-  requestId = null, warehouseLocation = null, notes = null, discrepancyNotes = null, correlationId = null }) {
-  const key = String(idempotencyKey || '').trim();
-  if (!key) throw createHttpError(400, 'A non-empty idempotency key is required');
-  if (!Number.isInteger(Number(purchaseOrderId)) || Number(purchaseOrderId) <= 0) throw createHttpError(400, 'A valid purchase_order_id is required');
-  if (!Array.isArray(lines) || !lines.length) throw createHttpError(400, 'At least one receipt line is required');
+async function createGoodsReceipt({
+  repository,
+  purchaseOrderId,
+  idempotencyKey,
+  lines,
+  receivedAt = null,
+  actor,
+  auditService = sharedAuditService,
+  outbox = notificationOutbox,
+  inventory = inventoryAdapter,
+  requestId = null,
+  warehouseLocation = null,
+  notes = null,
+  discrepancyNotes = null,
+  correlationId = null,
+}) {
+  const key = String(idempotencyKey || "").trim();
+  if (!key)
+    throw createHttpError(400, "A non-empty idempotency key is required");
+  if (
+    !Number.isInteger(Number(purchaseOrderId)) ||
+    Number(purchaseOrderId) <= 0
+  )
+    throw createHttpError(400, "A valid purchase_order_id is required");
+  if (!Array.isArray(lines) || !lines.length)
+    throw createHttpError(400, "At least one receipt line is required");
   const payloadFingerprint = fingerprint(purchaseOrderId, lines);
 
   return repository.withTransaction(async (tx) => {
     await tx.lockGoodsReceiptOperation(key);
     const po = await tx.lockPurchaseOrder(Number(purchaseOrderId));
-    if (!po) throw createHttpError(404, 'Purchase order not found');
-    if (requestId != null && Number(po.request_id) !== Number(requestId)) throw Object.assign(createHttpError(409, 'The purchase order belongs to a different purchase request'), { code: 'REQUEST_SCOPE_MISMATCH' });
+    if (!po) throw createHttpError(404, "Purchase order not found");
+    if (requestId != null && Number(po.request_id) !== Number(requestId))
+      throw Object.assign(
+        createHttpError(
+          409,
+          "The purchase order belongs to a different purchase request",
+        ),
+        { code: "REQUEST_SCOPE_MISMATCH" },
+      );
     const prior = await tx.findReceiptByIdempotency(key);
     if (prior) {
-      if (prior.payload_fingerprint !== payloadFingerprint) throw Object.assign(createHttpError(409, 'Idempotency key was already used with a different receipt payload'), { code: 'IDEMPOTENCY_CONFLICT' });
-      return { receipt: await tx.loadReceiptWithLines(prior.id), idempotent: true };
+      if (prior.payload_fingerprint !== payloadFingerprint)
+        throw Object.assign(
+          createHttpError(
+            409,
+            "Idempotency key was already used with a different receipt payload",
+          ),
+          { code: "IDEMPOTENCY_CONFLICT" },
+        );
+      return {
+        receipt: await tx.loadReceiptWithLines(prior.id),
+        idempotent: true,
+      };
     }
-    if (!RECEIVABLE_STATUSES.has(po.status)) throw Object.assign(createHttpError(409, `Purchase order status ${po.status} cannot receive goods`), { code: 'PO_NOT_RECEIVABLE' });
+    if (!RECEIVABLE_STATUSES.has(po.status))
+      throw Object.assign(
+        createHttpError(
+          409,
+          `Purchase order status ${po.status} cannot receive goods`,
+        ),
+        { code: "PO_NOT_RECEIVABLE" },
+      );
 
     const ids = lines.map((line) => Number(line.purchase_order_item_id));
-    if (ids.some((id) => !Number.isInteger(id) || id <= 0) || new Set(ids).size !== ids.length) throw createHttpError(400, 'Each line requires a unique purchase_order_item_id');
-    const locked = await tx.lockPurchaseOrderLines([...ids].sort((a, b) => a - b));
+    if (
+      ids.some((id) => !Number.isInteger(id) || id <= 0) ||
+      new Set(ids).size !== ids.length
+    )
+      throw createHttpError(
+        400,
+        "Each line requires a unique purchase_order_item_id",
+      );
+    const locked = await tx.lockPurchaseOrderLines(
+      [...ids].sort((a, b) => a - b),
+    );
     const byId = new Map(locked.map((line) => [Number(line.id), line]));
-    if (locked.length !== ids.length || locked.some((line) => Number(line.purchase_order_id) !== Number(po.id))) throw createHttpError(400, 'Every receipt line must belong to the purchase order');
+    if (
+      locked.length !== ids.length ||
+      locked.some((line) => Number(line.purchase_order_id) !== Number(po.id))
+    )
+      throw createHttpError(
+        400,
+        "Every receipt line must belong to the purchase order",
+      );
 
     const prepared = [];
     for (const input of lines) {
+      if(input.technical_review_requested!==undefined&&typeof input.technical_review_requested!=='boolean')throw createHttpError(400,'Technical inspection request must be true or false');
       const poLine = byId.get(Number(input.purchase_order_item_id));
-      const governed = poLine.line_type === 'INVENTORY' || Boolean(poLine.generic_item_id || poLine.approved_product_id || poLine.supplier_catalog_item_id);
-      if (!poLine.source_uom || !poLine.base_uom || !poLine.conversion_factor || (governed && (!poLine.source_uom_id || !poLine.base_uom_id))) throw Object.assign(createHttpError(409, 'PO line lacks a governed UOM conversion snapshot'), { code: 'PO_UOM_SNAPSHOT_REQUIRED' });
-      const gross = decimal(input.received_quantity, 'received_quantity');
-      const damaged = decimal(input.damaged_quantity || 0, 'damaged_quantity');
-      const short = decimal(input.short_quantity || 0, 'short_quantity');
+      const governed =
+        poLine.line_type === "INVENTORY" ||
+        Boolean(
+          poLine.generic_item_id ||
+          poLine.approved_product_id ||
+          poLine.supplier_catalog_item_id,
+        );
+      if (
+        !poLine.source_uom ||
+        !poLine.base_uom ||
+        !poLine.conversion_factor ||
+        (governed && (!poLine.source_uom_id || !poLine.base_uom_id))
+      )
+        throw Object.assign(
+          createHttpError(
+            409,
+            "PO line lacks a governed UOM conversion snapshot",
+          ),
+          { code: "PO_UOM_SNAPSHOT_REQUIRED" },
+        );
+      const gross = decimal(input.received_quantity, "received_quantity");
+      const damaged = decimal(input.damaged_quantity || 0, "damaged_quantity");
+      const short = decimal(input.short_quantity || 0, "short_quantity");
       const accepted = gross - damaged - short;
-      if (gross <= 0n || accepted < 0n) throw createHttpError(400, 'Received quantity must be positive and discrepancies cannot exceed it');
-      const already = decimal(await tx.loadCumulativeAcceptedReceipts(poLine.id), 'already_accepted');
-      const ordered = decimal(poLine.quantity, 'ordered_quantity');
-      if (accepted > ordered - already) throw Object.assign(createHttpError(409, `Receipt exceeds remaining accepted quantity for PO line ${poLine.id}`), { code: 'OVER_RECEIPT' });
-      prepared.push({ ...input, ...poLine, purchase_order_item_id: poLine.id, received_quantity: input.received_quantity,
-        damaged_quantity: input.damaged_quantity || 0, short_quantity: input.short_quantity || 0,
-        accepted_quantity: scaledBigIntToDecimalString(accepted), ordered_quantity: poLine.quantity,
-        item_name: poLine.item_name || input.item_name, requested_item_id: poLine.requested_item_id });
+      if (gross <= 0n || accepted < 0n)
+        throw createHttpError(
+          400,
+          "Received quantity must be positive and discrepancies cannot exceed it",
+        );
+      const already = decimal(
+        await (
+          tx.loadCumulativeReceiptCapacity || tx.loadCumulativeAcceptedReceipts
+        )(poLine.id),
+        "already_accepted",
+      );
+      const ordered = decimal(poLine.quantity, "ordered_quantity");
+      if (accepted > ordered - already)
+        throw Object.assign(
+          createHttpError(
+            409,
+            `Receipt exceeds remaining accepted quantity for PO line ${poLine.id}`,
+          ),
+          { code: "OVER_RECEIPT" },
+        );
+      prepared.push({
+        ...input,
+        ...poLine,
+        purchase_order_item_id: poLine.id,
+        received_quantity: input.received_quantity,
+        damaged_quantity: input.damaged_quantity || 0,
+        short_quantity: input.short_quantity || 0,
+        accepted_quantity: scaledBigIntToDecimalString(accepted),
+        ordered_quantity: poLine.quantity,
+        item_name: poLine.item_name || input.item_name,
+        requested_item_id: poLine.requested_item_id,
+      });
     }
 
-    if(tx.assertSurgicalConsignmentReceipt) await tx.assertSurgicalConsignmentReceipt(po,prepared,actor);
-    const receipt = await tx.insertGoodsReceipt({ purchase_order_id: po.id, request_id: po.request_id,
-      idempotency_key: key, payload_fingerprint: payloadFingerprint, received_at: receivedAt,
-      received_by: actor?.id, warehouse_location: warehouseLocation, notes, discrepancy_notes: discrepancyNotes });
+    const technicalProfiles=tx.loadTechnicalProfiles?await tx.loadTechnicalProfiles(prepared.map(line=>line.requested_item_id),actor?.institute_id):undefined;
+    if (tx.prepareDeliveryInspection)
+      for (const line of prepared) {
+        line.inspection = await tx.prepareDeliveryInspection(po, line, actor,technicalProfiles);
+        if (line.inspection) line.accepted_quantity = "0";
+      }
+    if (tx.assertSurgicalConsignmentReceipt)
+      await tx.assertSurgicalConsignmentReceipt(po, prepared, actor);
+    const receipt = await tx.insertGoodsReceipt({
+      purchase_order_id: po.id,
+      request_id: po.request_id,
+      idempotency_key: key,
+      payload_fingerprint: payloadFingerprint,
+      received_at: receivedAt,
+      received_by: actor?.id,
+      warehouse_location: warehouseLocation,
+      notes,
+      discrepancy_notes: discrepancyNotes,
+    });
     receipt.items = [];
     const inventoryMovements = [];
     for (const line of prepared) {
-      const saved = await tx.insertGoodsReceiptLine({ ...line, goods_receipt_id: receipt.id });
+      const saved = await tx.insertGoodsReceiptLine({
+        ...line,
+        goods_receipt_id: receipt.id,
+      });
+      if (line.inspection) {
+        await tx.generateDeliveryInspection(
+          receipt,
+          saved,
+          line.inspection,
+          actor,
+        );
+        saved.technical_inspection_required = true;
+      }
       receipt.items.push(saved);
-      await tx.synchronizePurchaseOrderLineReceivedQuantity(line.purchase_order_item_id);
-      if (line.line_type === 'INVENTORY' && decimal(line.accepted_quantity, 'accepted_quantity') > 0n) {
-        const warehouse = await tx.loadWarehouseScope(Number(line.warehouse_id));
-        if (!warehouse?.institute_id) throw createHttpError(400, `Inventory line ${line.id} requires a valid warehouse_id`);
-        if (actor?.institute_id && Number(actor.institute_id) !== Number(warehouse.institute_id)) throw createHttpError(403, 'Receipt warehouse is outside the actor institute scope');
-        const stockItem = await tx.resolveReceiptStockItem({ generic_item_id: line.generic_item_id,
-          approved_product_id: line.approved_product_id, base_uom_id: line.base_uom_id, warehouse_id: warehouse.id });
-        if (!stockItem) throw Object.assign(createHttpError(409, 'Receipt Stock Item identity is unresolved'), { code: 'STOCK_IDENTITY_NOT_FOUND' });
-        if (!stockItem.inventory_uom_id || Number(stockItem.inventory_uom_id) !== Number(line.base_uom_id)) throw Object.assign(createHttpError(409, 'PO inventory UOM does not match the controlled Stock Item inventory UOM'), { code: 'STOCK_INVENTORY_UOM_MISMATCH' });
-        const posted = await inventory.postAcceptedReceiptLines(receipt, [{ ...line, ...saved, stock_item_id: stockItem.id, accepted_quantity: line.accepted_quantity,
-          quarantined: line.stock_status === 'QUARANTINE' }], { instituteId: warehouse.institute_id,
-          warehouseId: warehouse.id, actor, correlationId }, tx.client);
+      await tx.synchronizePurchaseOrderLineReceivedQuantity(
+        line.purchase_order_item_id,
+      );
+      if (
+        line.line_type === "INVENTORY" &&
+        decimal(line.accepted_quantity, "accepted_quantity") > 0n
+      ) {
+        const warehouse = await tx.loadWarehouseScope(
+          Number(line.warehouse_id),
+        );
+        if (!warehouse?.institute_id)
+          throw createHttpError(
+            400,
+            `Inventory line ${line.id} requires a valid warehouse_id`,
+          );
+        if (
+          actor?.institute_id &&
+          Number(actor.institute_id) !== Number(warehouse.institute_id)
+        )
+          throw createHttpError(
+            403,
+            "Receipt warehouse is outside the actor institute scope",
+          );
+        const stockItem = await tx.resolveReceiptStockItem({
+          generic_item_id: line.generic_item_id,
+          approved_product_id: line.approved_product_id,
+          base_uom_id: line.base_uom_id,
+          warehouse_id: warehouse.id,
+        });
+        if (!stockItem)
+          throw Object.assign(
+            createHttpError(409, "Receipt Stock Item identity is unresolved"),
+            { code: "STOCK_IDENTITY_NOT_FOUND" },
+          );
+        if (
+          !stockItem.inventory_uom_id ||
+          Number(stockItem.inventory_uom_id) !== Number(line.base_uom_id)
+        )
+          throw Object.assign(
+            createHttpError(
+              409,
+              "PO inventory UOM does not match the controlled Stock Item inventory UOM",
+            ),
+            { code: "STOCK_INVENTORY_UOM_MISMATCH" },
+          );
+        const posted = await postReceiptInventory(
+          inventory,
+          receipt,
+          [
+            {
+              ...line,
+              ...saved,
+              stock_item_id: stockItem.id,
+              accepted_quantity: line.accepted_quantity,
+              quarantined: line.stock_status === "QUARANTINE",
+            },
+          ],
+          {
+            instituteId: warehouse.institute_id,
+            warehouseId: warehouse.id,
+            actor,
+            correlationId,
+          },
+          tx.client,
+        );
         inventoryMovements.push(...posted);
       }
     }
     const totals = await tx.calculatePurchaseOrderReceiptTotals(po.id);
-    const delivered = decimal(totals.received_quantity, 'received total') >= decimal(totals.ordered_quantity, 'ordered total');
-    const updatedPo = delivered ? await tx.markPurchaseOrderDelivered(po.id) : await tx.markPurchaseOrderPartiallyReceived(po.id);
-    const movementIds = inventoryMovements.map((entry) => entry.movement?.id).filter(Boolean);
+    const delivered =
+      decimal(totals.received_quantity, "received total") >=
+      decimal(totals.ordered_quantity, "ordered total");
+    const updatedPo = delivered
+      ? await tx.markPurchaseOrderDelivered(po.id)
+      : await tx.markPurchaseOrderPartiallyReceived(po.id);
+    const movementIds = inventoryMovements
+      .map((entry) => entry.movement?.id)
+      .filter(Boolean);
     if (tx.linkDocuments) {
       await tx.linkDocuments(po.request_id, 'PURCHASE_ORDER', po.id, 'GOODS_RECEIPT', receipt.id, actor?.id || null);
       for (const movementId of movementIds) await tx.linkDocuments(po.request_id, 'GOODS_RECEIPT', receipt.id, 'INVENTORY_MOVEMENT', movementId, actor?.id || null);
     }
-    await auditService.writeAuditEvent({ entityType: 'goods_receipt', entityId: receipt.id, action: 'GOODS_RECEIPT_POSTED',
-      actorUserId: actor?.id, instituteId: actor?.institute_id, requestId: po.request_id, correlationId,
-      metadata: { receiptId: receipt.id, purchaseOrderId: po.id, supplierId: po.supplier_id, lineCount: receipt.items.length,
-        receivedQuantities: receipt.items.map((line) => line.received_quantity), inventoryMovementIds: movementIds }, client: tx.client });
-    await outbox.enqueueNotification(tx.client, { type: 'GOODS_RECEIPT_POSTED', entityType: 'goods_receipt', entityId: receipt.id,
-      idempotencyKey: `goods-receipt:${receipt.id}:posted`, payload: { purchaseOrderId: po.id, status: updatedPo.status, requestedItemIds: [...new Set(prepared.map(line => line.requested_item_id))], supplierId: po.supplier_id, actorId: actor?.id } });
-    await outbox.enqueueNotification(tx.client, { type: updatedPo.status, entityType: 'purchase_order', entityId: po.id,
-      idempotencyKey: `purchase-order:${po.id}:${updatedPo.status.toLowerCase()}:receipt:${receipt.id}`, payload: { receiptId: receipt.id } });
-    return { receipt, purchaseOrder: updatedPo, inventoryMovements, idempotent: false };
+    await auditService.writeAuditEvent({
+      entityType: "goods_receipt",
+      entityId: receipt.id,
+      action: "GOODS_RECEIPT_POSTED",
+      actorUserId: actor?.id,
+      instituteId: actor?.institute_id,
+      requestId: po.request_id,
+      correlationId,
+      metadata: {
+        receiptId: receipt.id,
+        purchaseOrderId: po.id,
+        supplierId: po.supplier_id,
+        lineCount: receipt.items.length,
+        receivedQuantities: receipt.items.map((line) => line.received_quantity),
+        inventoryMovementIds: movementIds,
+      },
+      client: tx.client,
+    });
+    await outbox.enqueueNotification(tx.client, {
+      type: "GOODS_RECEIPT_POSTED",
+      entityType: "goods_receipt",
+      entityId: receipt.id,
+      idempotencyKey: `goods-receipt:${receipt.id}:posted`,
+      payload: {
+        purchaseOrderId: po.id,
+        status: updatedPo.status,
+        requestedItemIds: [
+          ...new Set(prepared.map((line) => line.requested_item_id)),
+        ],
+        supplierId: po.supplier_id,
+        actorId: actor?.id,
+      },
+    });
+    await outbox.enqueueNotification(tx.client, {
+      type: updatedPo.status,
+      entityType: "purchase_order",
+      entityId: po.id,
+      idempotencyKey: `purchase-order:${po.id}:${updatedPo.status.toLowerCase()}:receipt:${receipt.id}`,
+      payload: { receiptId: receipt.id },
+    });
+    return {
+      receipt,
+      purchaseOrder: updatedPo,
+      inventoryMovements,
+      idempotent: false,
+    };
   });
 }
 
-module.exports = { createGoodsReceipt, fingerprint, decimal, scaledBigIntToDecimalString, RECEIVABLE_STATUSES };
+async function applyTechnicalDisposition({
+  repository,
+  taskId,
+  input,
+  actor,
+  inventory = inventoryAdapter,
+}) {
+  const delivery = require("./deliveryInspectionService"),
+    profiles = require("./technicalReviewProfiles");
+  if (!delivery.permitted(actor, "procure-to-pay.receipts.manage"))
+    throw createHttpError(
+      403,
+      "Goods Receipt permission is required to apply technical disposition",
+    );
+  return repository.withTransaction(async (tx) => {
+    await profiles.requireSchema(tx.client);
+    await tx.client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended('delivery-inspection:'||$1::text,0))",
+      [taskId],
+    );
+    const service = delivery.createDeliveryInspectionService({
+      query: (q, p) => tx.client.query(q, p),
+    });
+    const task = await service.get(actor, taskId);
+    const prior = task.history.find(
+      (h) =>
+        h.action === "DELIVERY_DISPOSITION_APPLIED" &&
+        String(h.payload.authorization_id) === String(input.disposition_id),
+    );
+    if (prior) return { task, idempotent: true };
+    if (
+      task.status !== "DECIDED" ||
+      String(task.row_version) !== String(input.row_version) ||
+      String(task.pending_disposition?.history_id) !==
+        String(input.disposition_id)
+    )
+      throw createHttpError(409, "Disposition changed; reload before applying");
+    const po = await tx.lockPurchaseOrder(task.purchase_order_id);
+    if (!["PO_ISSUED", "PO_PARTIAL", "PO_DELIVERED"].includes(po.status))
+      throw createHttpError(
+        409,
+        "This PO cannot accept a receiving disposition",
+      );
+    const poLine = (
+      await tx.lockPurchaseOrderLines([task.purchase_order_item_id])
+    )[0];
+    await tx.client.query(
+      "SELECT id FROM goods_receipt_items WHERE id=$1 FOR UPDATE",
+      [task.receipt_item_id],
+    );
+    const d = task.pending_disposition,
+      accepted = decimal(d.accepted_quantity, "accepted"),
+      rejected = decimal(d.rejected_quantity, "rejected");
+    if (accepted + rejected > decimal(task.remaining_quantity, "remaining"))
+      throw createHttpError(
+        409,
+        "Disposition exceeds the remaining held quantity",
+      );
+    const receipt = await tx.loadReceiptWithLines(task.goods_receipt_id);
+    const movements=[];
+    if (poLine.line_type === "INVENTORY" && accepted > 0n) {
+      const warehouse = await tx.loadWarehouseScope(Number(task.warehouse_id));
+      if (
+        !warehouse ||
+        Number(warehouse.institute_id) !== Number(actor.institute_id)
+      )
+        throw createHttpError(
+          403,
+          "Receiving warehouse is outside this institute",
+        );
+      const stock = await tx.resolveReceiptStockItem({
+        generic_item_id: poLine.generic_item_id,
+        approved_product_id: poLine.approved_product_id,
+        base_uom_id: poLine.base_uom_id,
+        warehouse_id: warehouse.id,
+      });
+      if (
+        !stock ||
+        String(stock.inventory_uom_id) !== String(poLine.base_uom_id)
+      )
+        throw createHttpError(
+          409,
+          "Receipt Stock Item identity/UOM must be resolved before release",
+        );
+      const posted=await postReceiptInventory(
+        inventory,
+        receipt,
+        [
+          {
+            ...poLine,
+            ...task,
+            id: task.receipt_item_id,
+            stock_item_id: stock.id,
+            accepted_quantity: formatQuantity(accepted),
+            quarantined: task.stock_status === "QUARANTINE",
+          },
+        ],
+        {
+          actor,
+          instituteId: actor.institute_id,
+          warehouseId: warehouse.id,
+          dispositionId: d.history_id,
+        },
+        tx.client,
+      );
+      movements.push(...posted);
+    }
+    if(tx.linkDocuments)for(const movement of movements)if(movement.movement?.id)await tx.linkDocuments(po.request_id,'GOODS_RECEIPT',receipt.id,'INVENTORY_MOVEMENT',movement.movement.id,actor.id);
+    await tx.applyTechnicalReceiptQuantities(
+      task.receipt_item_id,
+      d.accepted_quantity,
+      d.rejected_quantity,
+    );
+    await tx.synchronizePurchaseOrderLineReceivedQuantity(
+      task.purchase_order_item_id,
+    );
+    const totals = await tx.calculatePurchaseOrderReceiptTotals(po.id);
+    if (
+      decimal(totals.received_quantity, "received") >=
+      decimal(totals.ordered_quantity, "ordered")
+    )
+      await tx.markPurchaseOrderDelivered(po.id);
+    else await tx.markPurchaseOrderPartiallyReceived(po.id);
+    const remaining =
+      decimal(task.remaining_quantity, "remaining") - accepted - rejected;
+    await tx.client.query(
+      "UPDATE delivery_inspection_tasks SET status=$2,row_version=row_version+1 WHERE id=$1",
+      [taskId, remaining > 0n ? "ON_HOLD" : "CLOSED"],
+    );
+    await profiles.history(tx.client, {
+      actor,
+      taskId,
+      action: "DELIVERY_DISPOSITION_APPLIED",
+      payload: {
+        inventory_movement_ids:movements.map(m=>m.movement?.id).filter(Boolean),
+        authorization_id: d.history_id,
+        accepted_quantity: d.accepted_quantity,
+        rejected_quantity: d.rejected_quantity,
+        held_quantity: formatQuantity(remaining),
+        notes: d.notes,
+      },
+    });
+    for (const a of task.assignments)
+      await delivery.notify(
+        tx.client,
+        a.reviewer_id,
+        taskId,
+        "Receiving applied the authorized disposition",
+      );
+    return { task: await service.get(actor, taskId), idempotent: false };
+  });
+}
+const formatQuantity = scaledBigIntToDecimalString;
+
+module.exports = {
+  applyTechnicalDisposition,
+  createGoodsReceipt,
+  fingerprint,
+  decimal,
+  scaledBigIntToDecimalString,
+  RECEIVABLE_STATUSES,
+};

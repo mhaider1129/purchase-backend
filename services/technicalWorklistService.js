@@ -4,6 +4,7 @@ const {
   error,
   text,
 } = require("./preprocurementTechnicalReviewModel");
+const reviewerScope = require("./technicalReviewerScope");
 const { userHasPermission } = require("../utils/permissionService");
 
 // A read model over the existing owners. This module never creates inspections,
@@ -20,7 +21,7 @@ function createTechnicalWorklistService(database) {
     if (!Number.isSafeInteger(page) || page < 1 || page > 100000)
       throw error(400, "Invalid worklist page");
     const choices = {
-      type: ["PRE_PROCUREMENT", "LEGACY_INSPECTION"],
+      type: ["PRE_PROCUREMENT", "DELIVERY_INSPECTION", "LEGACY_INSPECTION"],
       status: ["PENDING", "IN_PROGRESS", "ON_HOLD", "COMPLETED"],
       tab: ["pending", "in_progress", "history"],
     };
@@ -43,7 +44,7 @@ function createTechnicalWorklistService(database) {
       (
         await database.query(`SELECT
       to_regclass('public.preprocurement_technical_reviews') IS NOT NULL AND to_regclass('public.preprocurement_technical_review_assignments') IS NOT NULL AS reviews,
-      to_regclass('public.technical_inspections') IS NOT NULL AS legacy`)
+      to_regclass('public.technical_inspections') IS NOT NULL AS legacy, to_regclass('public.delivery_inspection_tasks') IS NOT NULL AS delivery`)
       ).rows[0] || {};
     const sources = [],
       warnings = [];
@@ -51,13 +52,13 @@ function createTechnicalWorklistService(database) {
       sources.push(`SELECT 'PRE_PROCUREMENT'::text AS type,t.id,t.request_id,
       COALESCE(NULLIF(r.maintenance_ref_number,''),'PR-'||r.id) AS reference,
       (SELECT string_agg(p->'snapshot'->>'item_name',', ' ORDER BY p->>'item_id') FROM jsonb_array_elements(t.item_packets) p) AS item_name,
-      CASE WHEN t.status<>'IN_REVIEW' THEN 'COMPLETED' WHEN EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments progress WHERE progress.review_id=t.id AND progress.status<>'PENDING') THEN 'IN_PROGRESS' ELSE 'PENDING' END AS status,
+      CASE WHEN t.status<>'IN_REVIEW' THEN 'COMPLETED' WHEN EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments held WHERE held.review_id=t.id AND held.status IN ('CONDITIONAL','CLARIFICATION')) THEN 'ON_HOLD' WHEN EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments progress WHERE progress.review_id=t.id AND progress.status<>'PENDING') THEN 'IN_PROGRESS' ELSE 'PENDING' END AS status,
       t.status AS decision,t.created_at,t.requesting_department_id AS department_id,d.name AS requesting_department,
       (SELECT string_agg(DISTINCT ad.name,', ' ORDER BY ad.name) FROM preprocurement_technical_review_assignments a JOIN departments ad ON ad.id=a.department_id WHERE a.review_id=t.id) AS assigned_department,
       (SELECT jsonb_agg(DISTINCT a.department_id) FROM preprocurement_technical_review_assignments a WHERE a.review_id=t.id) AS assigned_department_ids,
-      t.status='IN_REVIEW' AND (EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments own WHERE own.review_id=t.id AND own.reviewer_id=$2 AND own.status='PENDING') OR ($3 AND NOT EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments waiting WHERE waiting.review_id=t.id AND waiting.status<>'APPROVED') AND NOT EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments self WHERE self.review_id=t.id AND self.reviewer_id=$2))) AS awaiting_me
+      t.status='IN_REVIEW' AND (EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments own WHERE own.review_id=t.id AND own.reviewer_id=$2 AND own.status IN ('PENDING','IN_PROGRESS')) OR ($3 AND NOT EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments waiting WHERE waiting.review_id=t.id AND waiting.status<>'APPROVED') AND NOT EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments self WHERE self.review_id=t.id AND self.reviewer_id=$2))) AS awaiting_me
       FROM preprocurement_technical_reviews t JOIN requests r ON r.id=t.request_id AND r.institute_id=t.institute_id JOIN departments d ON d.id=t.requesting_department_id AND d.institute_id=t.institute_id
-      WHERE t.institute_id=$1 AND ($3 OR EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments own JOIN users u ON u.id=own.reviewer_id WHERE own.review_id=t.id AND own.reviewer_id=$2 AND u.is_active IS TRUE AND u.institute_id=$1 AND u.department_id=own.department_id))`);
+      WHERE t.institute_id=$1 AND ($3 OR EXISTS(SELECT 1 FROM preprocurement_technical_review_assignments own JOIN users u ON u.id=own.reviewer_id WHERE own.review_id=t.id AND own.reviewer_id=$2 AND u.is_active IS TRUE AND u.institute_id=$1 AND ${reviewerScope("u", "own.department_id", "$1")}))`);
     else
       warnings.push(
         "Pre-procurement reviews require the existing SQL 049 schema.",
@@ -74,6 +75,20 @@ function createTechnicalWorklistService(database) {
       'Historical record — no task assignment'::text AS assigned_department,'[]'::jsonb AS assigned_department_ids,false AS awaiting_me
       FROM technical_inspections i LEFT JOIN requests r ON r.id=i.request_id LEFT JOIN departments d ON d.id=r.department_id LEFT JOIN users creator ON creator.id=i.created_by
       WHERE (i.request_id IS NOT NULL AND r.institute_id=$1) OR (i.request_id IS NULL AND creator.institute_id=$1)`);
+    if (available.delivery) {
+      const receiving = Boolean(
+        actor.hasPermission?.("procure-to-pay.receipts.manage") ||
+        actor.permissions?.includes("procure-to-pay.receipts.manage"),
+      );
+      sources.push(`SELECT 'DELIVERY_INSPECTION'::text AS type,t.id,t.request_id,gr.receipt_number AS reference,gri.item_name,
+       CASE WHEN t.status='CLOSED' THEN 'COMPLETED' WHEN t.status IN ('IN_PROGRESS','DECIDED') THEN 'IN_PROGRESS' ELSE t.status END AS status,
+       CASE WHEN t.status='DECIDED' THEN 'Awaiting receiving disposition' WHEN t.status='CLOSED' AND gri.technical_rejected_quantity>0 AND gri.technical_accepted_quantity>0 THEN 'PARTIALLY_ACCEPTED' WHEN t.status='CLOSED' AND gri.technical_rejected_quantity>0 THEN 'REJECTED' ELSE COALESCE(t.pending_disposition->>'decision',t.status) END AS decision,t.created_at,t.department_id,d.name AS requesting_department,
+       (SELECT string_agg(DISTINCT ad.name,', ' ORDER BY ad.name) FROM delivery_inspection_assignments a JOIN departments ad ON ad.id=a.department_id WHERE a.task_id=t.id) AS assigned_department,
+       (SELECT jsonb_agg(DISTINCT a.department_id) FROM delivery_inspection_assignments a WHERE a.task_id=t.id) AS assigned_department_ids,
+       ((t.status IN ('PENDING','IN_PROGRESS') AND EXISTS(SELECT 1 FROM delivery_inspection_assignments a WHERE a.task_id=t.id AND a.reviewer_id=$2 AND a.opinion IS NULL)) OR (t.status='DECIDED' AND ${receiving}) OR (t.status IN ('PENDING','IN_PROGRESS') AND $3 AND NOT EXISTS(SELECT 1 FROM delivery_inspection_assignments a WHERE a.task_id=t.id AND (a.opinion IS NULL OR a.reviewer_id=$2)))) AS awaiting_me
+       FROM delivery_inspection_tasks t JOIN goods_receipt_items gri ON gri.id=t.receipt_item_id JOIN goods_receipts gr ON gr.id=gri.goods_receipt_id JOIN departments d ON d.id=t.department_id
+       WHERE t.institute_id=$1 AND ($3 OR ${receiving} OR t.created_by=$2 OR EXISTS(SELECT 1 FROM delivery_inspection_assignments a JOIN users u ON u.id=a.reviewer_id WHERE a.task_id=t.id AND a.reviewer_id=$2 AND u.is_active AND u.institute_id=$1 AND ${reviewerScope("u", "a.department_id", "$1")}))`);
+    }
     if (!sources.length)
       return {
         rows: [],
@@ -109,9 +124,15 @@ function createTechnicalWorklistService(database) {
         input.department,
       );
     if (input.from)
-      add("created_at >= ?::date::timestamp AT TIME ZONE 'Asia/Baghdad'", input.from);
+      add(
+        "created_at >= ?::date::timestamp AT TIME ZONE 'Asia/Baghdad'",
+        input.from,
+      );
     if (input.to)
-      add("created_at < (?::date+1)::timestamp AT TIME ZONE 'Asia/Baghdad'", input.to);
+      add(
+        "created_at < (?::date+1)::timestamp AT TIME ZONE 'Asia/Baghdad'",
+        input.to,
+      );
     if (input.tab === "pending") filters.push("status='PENDING'");
     if (input.tab === "in_progress")
       filters.push("status IN ('IN_PROGRESS','ON_HOLD')");

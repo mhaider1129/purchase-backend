@@ -78,6 +78,7 @@ async function continueApprovalWorkflowAfterLevel({
   const approved = await client.query("UPDATE requests SET status='Approved',updated_at=NOW() WHERE id=$1 AND status NOT IN ('Approved','Rejected') RETURNING *", [approval.request_id]);
   if (!approved.rowCount) return { state: 'FINAL_APPROVED', nextApprovals: [], requestStatus: 'Approved', changed: false };
 
+  await require('./technicalReviewAutomation').ensureRequiredReview(client, approval.request_id);
   await client.query("INSERT INTO request_logs(request_id,action,actor_id,comments) VALUES($1,'Request marked Approved',$2,NULL)", [approval.request_id, actorId]);
   const requesterMessage = `Your ${request.request_type} request (ID: ${approval.request_id}) has been approved.`;
   enqueueNotification({ userId: request.requester_id, title: `Request ${approval.request_id} approved`, message: requesterMessage, link: `/requests/${approval.request_id}`, metadata: { requestId: approval.request_id, requestType: request.request_type, action: 'request_approved' } });

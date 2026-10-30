@@ -500,6 +500,7 @@ router.delete('/:id', authenticateUser, async (req, res, next) => {
 
     res.json({ message: '🗑️ File deleted successfully' });
   } catch (err) {
+    if(err.code==='23503'&&err.constraint==='technical_evidence_attachment_fk')return next(createHttpError(409,'This file is retained as technical review or inspection evidence. Upload a revised document instead.'));
     console.error('❌ File deletion error:', err.message);
     next(createHttpError(500, 'Failed to delete file'));
   }

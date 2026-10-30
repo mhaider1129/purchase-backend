@@ -401,6 +401,7 @@ async function run() {
     await require('../integration/stockFulfilledRequests')(client);
     await require('../integration/activePriorityQueues')(client);
     await require('../integration/scmRequestIntervention')(client);
+    await require('../integration/technicalWorkflow')(client);
     await validateBackendQueryCompatibility(client,extractBackendSqlContract(root).sql);
     const failures = [];
     const passed = [];

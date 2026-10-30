@@ -10,6 +10,7 @@ const {
 const createHttpError = require('../utils/httpError');
 
 const router = express.Router();
+router.use('/workflow',require('./technicalWorkflow'));
 const worklist = require('../services/technicalWorklistService').createTechnicalWorklistService(require('../config/db'));
 router.get('/worklist', (req, res, next) => {
   res.set('Cache-Control', 'no-store');

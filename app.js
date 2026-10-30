@@ -262,7 +262,9 @@ const apiRouter = express.Router();
 // =========================
 // 📁 Optional: Serve Uploads (if needed for frontend access)
 // =========================
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Registered legacy local URLs use the same authenticated object policy as IDs.
+app.use('/uploads', require('./middleware/authMiddleware').authenticateUser,
+  require('./controllers/attachmentsController').pathDownload);
 
 // =========================
 // 🧠 Rate Limiting (Optional for Public Routes)

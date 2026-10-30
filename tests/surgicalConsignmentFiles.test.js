@@ -14,9 +14,11 @@ jest.mock("../services/surgicalConsignmentService", () => ({
   createSurgicalConsignmentService: () => mockService,
 }));
 jest.mock("../config/db", () => ({ query: jest.fn() }));
+jest.mock('../utils/permissionService',()=>({...jest.requireActual('../utils/permissionService'),getPermissionsForUserId:jest.fn(async()=>({permissions:[],dataScopes:{}}))}));
 let directory, app;
 beforeEach(async () => {
   jest.clearAllMocks();
+  require('../config/db').query.mockResolvedValue({rows:[{id:1,institute_id:2,department_id:3,role:'Requester',is_active:true}]});
   mockService.checkSchema.mockResolvedValue();
   directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "surgical-private-test-"),
@@ -64,7 +66,7 @@ test("clinical PDFs are stored privately with random names and restrictive permi
     "/surgical-consignments/4/files/3/download",
   );
   expect(downloaded.status).toBe(200);
-  expect(downloaded.headers["cache-control"]).toBe("no-store");
+  expect(downloaded.headers["cache-control"]).toContain("no-store");
   expect(downloaded.headers["content-disposition"]).toContain("attachment");
 });
 test("finance-only access cannot upload clinical files", async () => {
@@ -73,7 +75,7 @@ test("finance-only access cannot upload clinical files", async () => {
     .post("/surgical-consignments/4/files")
     .field("purpose", "USAGE")
     .attach("file", Buffer.from("private"), "clinical.pdf");
-  expect(response.status).toBe(403);
+  expect(response.status).toBe(404);
   expect(await fs.readdir(directory)).toEqual([]);
   expect(mockService.attach).not.toHaveBeenCalled();
 });

@@ -260,7 +260,7 @@ const getLinkedRecords = async (requestId) => {
   return { rfqs, quotations, purchase_orders: purchaseOrders, grns, inspections, invoices, payments: [], contracts };
 };
 
-const getAttachments = async (requestId) => safeQuery(
+const rawAttachments = async (requestId) => safeQuery(
   'attachments',
   `SELECT a.id, a.request_id, a.item_id, a.contract_id, a.file_name, a.file_path, a.uploaded_at, u.name AS uploaded_by_name,
           CASE WHEN a.item_id IS NOT NULL THEN 'item' WHEN a.contract_id IS NOT NULL THEN 'contract' ELSE 'request' END AS source_type
@@ -270,6 +270,13 @@ const getAttachments = async (requestId) => safeQuery(
    ORDER BY a.uploaded_at DESC, a.id DESC`,
   [requestId],
 );
+
+const getAttachments = async (requestId,user) => {
+ const access=require('../../services/attachmentAuthorizationService').createAttachmentAuthorization();
+ const actor=await access.actor(user);const visible=[];
+ for(const row of await rawAttachments(requestId)){try{await access.attachment(actor,row.id);visible.push({...require('../../utils/attachmentPaths').serializeAttachment(row),uploaded_by_name:row.uploaded_by_name,source_type:row.source_type});}catch(e){if(e.statusCode!==404)throw e;}}
+ return visible;
+};
 
 const getCommunicationNotes = async (requestId) => safeQuery(
   'request_logs',
@@ -479,7 +486,7 @@ const getFullRequestDetails = async (req, res, next) => {
       getItems(requestId),
       getProcurementEvents(requestId),
       getLinkedRecords(requestId),
-      getAttachments(requestId),
+      getAttachments(requestId,req.user),
       getCommunicationNotes(requestId),
       getAuditLogs(requestId),
     ]);

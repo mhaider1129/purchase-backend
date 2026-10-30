@@ -129,6 +129,13 @@ for (const action of [
       res.json(await service.mutate(req.user, req.params.id, req.body, action)),
     ),
   );
+// Clinical files use the shared current-actor gate and existing case policy.
+router.use('/:id/files', async (req,res,next)=>{
+ try { const access=require('../services/attachmentAuthorizationService').createAttachmentAuthorization();
+   const current=await access.actor(req.user);await access.parent(current,{surgicalCaseId:req.params.id},req.method==='GET'?'read':'upload');
+   req.user=current;res.set('Cache-Control','private, no-store');res.set('X-Content-Type-Options','nosniff');next();
+ }catch(e){next(e);}
+});
 router.post(
   "/:id/files",
   (req, res, next) =>
@@ -175,8 +182,10 @@ router.get(
     );
     if (!/^[a-f0-9-]{36}(\.[a-z0-9]+)?$/i.test(f.storage_name))
       throw m.error(500, "Invalid private file record");
-    await fs.access(path.join(privateDir(), f.storage_name));
-    res.download(path.join(privateDir(), f.storage_name), f.file_name);
+    const directory=await fs.realpath(privateDir());
+    const target=await fs.realpath(path.join(directory,f.storage_name));
+    if(path.dirname(target)!==directory)throw m.error(404,'File not found');
+    res.download(target, f.file_name);
   }),
 );
 module.exports = router;

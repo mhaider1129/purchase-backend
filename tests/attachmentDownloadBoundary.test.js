@@ -25,6 +25,6 @@ test("legacy path downloads cannot traverse out of public uploads into private c
     expect(
       (await request(app).get("/attachments/download").query({ path: p }))
         .status,
-    ).toBe(400);
+    ).toBe(404);
   expect(access).not.toHaveBeenCalled();
 });

@@ -21,7 +21,10 @@ function resolveStoredLocalPath(storedPath = '') {
     ? normalized.slice('uploads/'.length)
     : normalized;
 
-  return path.join(UPLOADS_DIR, relativePath);
+  const resolved = path.resolve(UPLOADS_DIR, relativePath);
+  const within = path.relative(UPLOADS_DIR, resolved);
+  if (!within || within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) return null;
+  return resolved;
 }
 
 function serializeAttachment(row) {
@@ -67,8 +70,8 @@ function serializeAttachment(row) {
   }
 
   if (isLocal && storedPath) {
-    result.file_url = `/${storedPath}`;
-    result.fileUrl = `/${storedPath}`;
+    result.file_url = downloadUrl;
+    result.fileUrl = downloadUrl;
   }
 
   return result;

@@ -1,4 +1,3 @@
-const fs = require('fs/promises');
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const { ensureContractEvaluationsTable } = require('./contractEvaluationsController');
@@ -9,8 +8,6 @@ const {
   getSupplierById,
 } = require('./suppliersController');
 const { getComplianceStatusBySupplierIds } = require('./supplierSrmController');
-const { resolveStoredLocalPath, isStoredLocally } = require('../utils/attachmentPaths');
-const { removeObject } = require('../utils/storage');
 const { validateContractItemIdentity } = require('../services/contractItemIdentityService');
 
 const CONTRACT_STATUSES = [
@@ -2441,162 +2438,16 @@ const { getUploadedFile, describeUploadPayload } = require('../utils/uploadedFil
 const { serializeAttachment } = require('../utils/attachmentPaths');
 
 const removeStoredAttachmentFile = async storedPath => {
-  if (!storedPath) {
-    return;
-  }
-
-  try {
-    if (isStoredLocally(storedPath)) {
-      const localPath = resolveStoredLocalPath(storedPath);
-      if (localPath) {
-        await fs.unlink(localPath).catch(err => {
-          if (err?.code !== 'ENOENT') {
-            console.warn('⚠️ Failed to delete local attachment:', err.message);
-          }
-        });
-      }
-      return;
-    }
-
-    await removeObject(storedPath).catch(err => {
-      console.warn('⚠️ Failed to delete attachment from storage:', err.message);
-    });
-  } catch (err) {
-    console.warn('⚠️ Failed to cleanup attachment file:', err.message);
-  }
+  if(!storedPath)return;
+  const shared=await pool.query('SELECT id FROM attachments WHERE file_path=$1 LIMIT 1',[storedPath]);
+  if(shared.rows.length)return;
+  await require('../services/attachmentStorageAdapter').remove(storedPath).catch(()=>console.warn('Attachment storage cleanup deferred'));
 };
 
-const getContractAttachments = async (req, res, next) => {
-  const { contractId } = req.params;
-
-  try {
-    await ensureAttachmentsContractIdColumn(pool);
-
-    const supportsContractAttachments = await attachmentsHasContractIdColumn(pool);
-    if (!supportsContractAttachments) {
-      return res.json([]);
-    }
-
-    const result = await pool.query(
-      `SELECT id, file_name, file_path, uploaded_by, uploaded_at
-       FROM attachments
-       WHERE contract_id = $1`,
-      [contractId]
-    );
-
-    res.json(result.rows.map(serializeAttachment));
-  } catch (err) {
-    console.error('❌ Failed to fetch attachments:', err.message);
-    next(createHttpError(500, 'Failed to fetch attachments'));
-  }
-};
-
-const uploadContractAttachment = async (req, res, next) => {
-  const { contractId } = req.params;
-  const file = getUploadedFile(req);
-
-  if (!file) {
-    console.warn('⚠️ Contract upload request missing file. Payload:', JSON.stringify(describeUploadPayload(req)));
-    return next(createHttpError(400, 'No file uploaded'));
-  }
-
-  try {
-    await ensureAttachmentsContractIdColumn(pool);
-
-    const supportsContractAttachments = await attachmentsHasContractIdColumn(pool);
-    if (!supportsContractAttachments) {
-      return next(
-        createHttpError(
-          400,
-          'Contract-level attachments are not supported by the current database schema'
-        )
-      );
-    }
-
-    const { objectKey } = await storeAttachmentFile({
-      file,
-      requestId: null,
-      itemId: null,
-      contractId,
-    });
-
-    const saved = await insertAttachment(pool, {
-      requestId: null,
-      itemId: null,
-      contractId,
-      fileName: file.originalname,
-      filePath: objectKey,
-      uploadedBy: req.user.id,
-    });
-
-    res.status(201).json({
-      message: '📎 File uploaded successfully',
-      attachmentId: saved.rows[0].id
-    });
-  } catch (err) {
-    console.error('❌ Upload error:', err.message, '| upload payload:', JSON.stringify(describeUploadPayload(req)));
-    if (err.code === 'SUPABASE_NOT_CONFIGURED') {
-      return next(
-        createHttpError(
-          500,
-          'Supabase storage is not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
-        )
-      );
-    }
-
-    return next(createHttpError(500, 'Failed to upload attachment'));
-  }
-};
-
-const deleteContractAttachment = async (req, res, next) => {
-  if (!canManageContracts(req)) {
-    return next(createHttpError(403, 'You are not authorized to delete attachments'));
-  }
-
-  const contractId = Number.parseInt(req.params.contractId, 10);
-  const attachmentId = Number.parseInt(req.params.attachmentId, 10);
-
-  if (!Number.isInteger(contractId) || !Number.isInteger(attachmentId)) {
-    return next(createHttpError(400, 'Invalid contract or attachment id'));
-  }
-
-  let client;
-
-  try {
-    client = await pool.connect();
-    await ensureAttachmentsContractIdColumn(client);
-
-    const supportsContractAttachments = await attachmentsHasContractIdColumn(client);
-    if (!supportsContractAttachments) {
-      return next(createHttpError(400, 'Contract attachments are not supported by this database schema'));
-    }
-
-    const { rows } = await client.query(
-      `SELECT id, file_path
-         FROM attachments
-        WHERE id = $1
-          AND contract_id = $2`,
-      [attachmentId, contractId]
-    );
-
-    if (rows.length === 0) {
-      return next(createHttpError(404, 'Attachment not found for this contract'));
-    }
-
-    await client.query('DELETE FROM attachments WHERE id = $1', [attachmentId]);
-
-    await removeStoredAttachmentFile(rows[0].file_path);
-
-    res.json({ message: 'Attachment deleted successfully' });
-  } catch (err) {
-    console.error('❌ Failed to delete contract attachment:', err);
-    next(createHttpError(500, 'Failed to delete attachment'));
-  } finally {
-    if (client) {
-      client.release();
-    }
-  }
-};
+const attachmentHandlers = require('./attachmentsController');
+const getContractAttachments = attachmentHandlers.listContract;
+const uploadContractAttachment = attachmentHandlers.uploadContract;
+const deleteContractAttachment = attachmentHandlers.remove;
 
 const renewContract = async (req, res, next) => {
   if (!canManageContracts(req)) {
@@ -2751,9 +2602,14 @@ const deleteContract = async (req, res, next) => {
 
   try {
     client = await pool.connect();
+    const fileAuthority = require('../services/attachmentAuthorizationService').createAttachmentAuthorization();
     await ensureContractsTable();
     await ensureContractEvaluationsTable();
     await ensureAttachmentsContractIdColumn(client);
+
+    await client.query('BEGIN');
+    await client.query('SELECT id FROM contracts WHERE id=$1 FOR UPDATE',[contractId]);
+    await fileAuthority.contract(await fileAuthority.actor(req.user, client), contractId, 'delete', client);
 
     const { rows: contractRows } = await client.query(
       'SELECT id, supplier_id FROM contracts WHERE id = $1',
@@ -2761,17 +2617,16 @@ const deleteContract = async (req, res, next) => {
     );
 
     if (contractRows.length === 0) {
-      return next(createHttpError(404, 'Contract not found'));
+      throw createHttpError(404, 'Contract not found');
     }
 
     const { rows: attachmentRows } = await client.query(
-      `SELECT id, file_path
+      `SELECT *
          FROM attachments
         WHERE contract_id = $1`,
       [contractId]
     );
 
-    await client.query('BEGIN');
     await recordContractLog(client, {
       contractId,
       action: 'contract_deleted',
@@ -2780,6 +2635,10 @@ const deleteContract = async (req, res, next) => {
     });
 
     await client.query('DELETE FROM contract_evaluations WHERE contract_id = $1', [contractId]);
+    for (const row of attachmentRows) {
+      await require('./attachmentsController').retained(client,row);
+      await require('../services/auditService').writeAuditEvent({client,entityType:'attachment',entityId:row.id,action:'ATTACHMENT_DELETED_WITH_CONTRACT',actorUserId:req.user.id,beforeData:row});
+    }
     await client.query('DELETE FROM attachments WHERE contract_id = $1', [contractId]);
     await client.query('DELETE FROM contracts WHERE id = $1', [contractId]);
 
@@ -2793,7 +2652,7 @@ const deleteContract = async (req, res, next) => {
       await client.query('ROLLBACK').catch(() => {});
     }
     console.error('❌ Failed to delete contract:', err);
-    next(createHttpError(500, 'Failed to delete contract'));
+    next(err.statusCode ? err : createHttpError(err.code==='23503'?409:500, err.code==='23503'?'Contract contains retained business evidence':'Failed to delete contract'));
   } finally {
     if (client) {
       client.release();
@@ -2884,19 +2743,7 @@ const FINAL_APPROVAL_CHAIN = [
 ];
 
 
-const ROLE_ALIASES = {
-  legal: ['legal'],
-  finance: ['finance', 'cfo'],
-  technical: ['technical', 'technician'],
-  scm: ['scm'],
-  coo_ceo: ['coo', 'ceo', 'coo_ceo', 'coo/ceo'],
-};
-
-const normalizeUserRole = (role) => String(role || '').trim().toLowerCase();
-
-const getContractApprovalRoleAliases = reviewerRole => (
-  ROLE_ALIASES[String(reviewerRole || '').trim().toLowerCase()] || []
-);
+const {ROLE_ALIASES,normalizeUserRole,getContractApprovalRoleAliases,canUserDecideContractStep}=require('../policies/contractApprovalPolicy');
 
 const isContractUnderReviewStatus = status => (
   ['under_review', 'legal_review', 'technical_review', 'finance_review', 'executive_approval']
@@ -3179,17 +3026,6 @@ const reconcileContractsUnderReview = async (client) => {
   for (const row of rows) {
     await reconcileContractApprovalWorkflow(client, row.id);
   }
-};
-
-const canUserDecideContractStep = (user = {}, approvalStep = {}) => {
-  const userId = Number(user?.id);
-  const reviewerId = Number(approvalStep?.reviewer_id);
-  if (Number.isInteger(userId) && userId > 0 && Number.isInteger(reviewerId) && reviewerId > 0) {
-    return userId === reviewerId;
-  }
-  const role = normalizeUserRole(user?.role);
-  const allowedRoles = getContractApprovalRoleAliases(approvalStep?.reviewer_role);
-  return allowedRoles.includes(role);
 };
 
 const submitContractReview = async (req, res, next) => {

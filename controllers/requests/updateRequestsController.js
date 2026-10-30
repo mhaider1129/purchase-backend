@@ -557,6 +557,11 @@ const deleteRequestCompletely = async (req, res, next) => {
       return next(createHttpError(404, 'Request not found'));
     }
 
+    const fileAccess = require('../../services/attachmentAuthorizationService').createAttachmentAuthorization();
+    await fileAccess.request(await fileAccess.actor(req.user,client),requestId,'delete',client);
+    const attachmentEvidence=await client.query('SELECT * FROM attachments WHERE request_id=$1',[requestId]);
+    for(const file of attachmentEvidence.rows)await require('../attachmentsController').retained(client,file);
+
     const fkRes = await client.query(
       `SELECT
          child_ns.nspname AS schema_name,

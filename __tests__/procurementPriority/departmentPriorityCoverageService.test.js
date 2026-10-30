@@ -30,7 +30,7 @@ test('backfills every request previously approved by a department HOD', async ()
     client, instituteId: 7, departmentId: 9, actorId: 12,
   });
 
-  expect(client.query.mock.calls[0][0]).toContain("UPPER(approver.role)='HOD'");
+  expect(client.query.mock.calls[0][0]).toContain("UPPER(TRIM(department_approver.role))='HOD'");
   expect(client.query.mock.calls[0][1]).toEqual([7, 9]);
   expect(client.query.mock.calls[1][1]).toEqual([41, 7, 9, 12]);
   expect(client.query.mock.calls[3][1]).toEqual([42, 7, 9, 12]);

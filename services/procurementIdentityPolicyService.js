@@ -1,5 +1,6 @@
 "use strict";
 const createHttpError = require("../utils/httpError");
+const { assertTechnicalClearance } = require("./preprocurementTechnicalReviewGate");
 const {
   auditItemMaster,
   isProcurementReady,
@@ -54,8 +55,12 @@ async function assertReadyForCommand(
   item,
   actor,
   action = "procurement",
+  context = {},
 ) {
-  if (isProcurementReady(item)) return;
+  if (isProcurementReady(item)) {
+    await assertTechnicalClearance(client, item, actor, action, context);
+    return;
+  }
   if (!isCompatibilityCandidate(item)) return assertProcurementReady(item);
   const policy = await loadPolicy(client, { lock: true });
   if (policy.enforce_item_identity) return assertProcurementReady(item);
@@ -73,6 +78,7 @@ async function assertReadyForCommand(
       enforce_item_identity: false,
     },
   });
+  await assertTechnicalClearance(client, item, actor, action, context);
 }
 
 async function updatePolicy(client, input, actor) {

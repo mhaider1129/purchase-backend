@@ -1,5 +1,5 @@
 'use strict';
-const { requestActiveSql, itemActiveSql, activePriorityCaseSql, priorityCaseJoins } = require('./activePrioritySql');
+const { departmentApprovedRequestSql, requestActiveSql, itemActiveSql, activePriorityCaseSql, priorityCaseJoins } = require('./activePrioritySql');
 
 // Department ranking starts at HOD approval, before the request necessarily
 // reaches its final Approved state.  Procurement-performance normally creates
@@ -38,13 +38,9 @@ async function ensureRequestPriorityCoverage({ client, requestId, instituteId, d
 
 async function ensureApprovedDepartmentPriorityCoverage({ client, instituteId, departmentId, actorId }) {
   const requests = await client.query(
-    `SELECT DISTINCT r.id
-       FROM requests r
-       JOIN approvals a ON a.request_id=r.id AND a.status='Approved'
-       JOIN users approver ON approver.id=a.approver_id
+    `SELECT r.id FROM requests r
       WHERE r.institute_id=$1 AND r.department_id=$2
-        AND UPPER(approver.role)='HOD'
-        AND ${requestActiveSql}
+        AND ${departmentApprovedRequestSql} AND ${requestActiveSql}
         AND EXISTS (SELECT 1 FROM requested_items ri WHERE ri.request_id=r.id)`,
     [instituteId, departmentId],
   );
@@ -59,4 +55,15 @@ async function ensureApprovedDepartmentPriorityCoverage({ client, instituteId, d
   }
 }
 
-module.exports = { ensureRequestPriorityCoverage, ensureApprovedDepartmentPriorityCoverage };
+// Record decision-time authority in the existing immutable approval journal so
+// a later promotion/department move does not remove that department's approval.
+async function recordDepartmentHodApproval({client,request,approvalId,actor}) {
+  if (String(actor?.role || '').trim().toUpperCase()!=='HOD'
+    || !actor.department_id || !actor.institute_id
+    || String(actor.department_id)!==String(request.department_id)
+    || String(actor.institute_id)!==String(request.institute_id)) return;
+  await client.query(`INSERT INTO approval_logs(approval_id,request_id,approver_id,action,comments)
+    VALUES($1,$2,$3,'Department HOD approved',$4)`,
+    [approvalId,request.id,actor.id,`institute:${request.institute_id};department:${request.department_id}`]);
+}
+module.exports = { ensureRequestPriorityCoverage, ensureApprovedDepartmentPriorityCoverage, recordDepartmentHodApproval };

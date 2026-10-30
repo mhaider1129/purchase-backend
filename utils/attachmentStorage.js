@@ -1,4 +1,5 @@
 const path = require("path");
+const {randomUUID}=require("node:crypto");
 const fs = require("fs/promises");
 const sanitize = require("sanitize-filename");
 
@@ -26,7 +27,7 @@ function sanitizeSegment(segment) {
 function buildLocalFileName(originalName) {
   const base = sanitize(originalName || "attachment");
   const timestamp = Date.now();
-  return `${timestamp}-${base || "attachment"}`;
+  return `${timestamp}-${randomUUID()}-${base || "attachment"}`;
 }
 
 function isLocalFallbackEnabled() {

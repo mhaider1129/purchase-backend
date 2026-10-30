@@ -104,6 +104,13 @@ router.get('/renewals/due-soon', listDueSoonContractRenewals);
 router.get('/:id/risk', getContractRisk);
 router.post('/:id/risk/recalculate', recalculateContractRisk);
 router.get('/:id/risk/history', getContractRiskHistory);
+// File/document routes share the canonical parent capability and institute policy.
+router.use(['/:id/documents','/:id/ai-extract','/:id/ai-extractions'], async (req,res,next)=>{
+ try { const access=require('../services/attachmentAuthorizationService').createAttachmentAuthorization();
+   await access.contract(await access.actor(req.user),req.params.id,req.method==='GET'?'read':'upload');
+   res.set('Cache-Control','private, no-store');next();
+ }catch(e){next(e);}
+});
 router.post('/:id/ai-extract', requestContractAiExtraction);
 router.get('/:id/ai-extractions', listContractAiExtractions);
 router.get('/:id/ai-extractions/:extractionId', getContractAiExtractionById);

@@ -29,6 +29,7 @@ const postPayment = ({ repository, payableId, invoiceId, amount, currency, payme
     if (!payable.currency) throw fail('Payable currency is unavailable', 'PAYABLE_CURRENCY_UNAVAILABLE', 409);
     if (String(payable.currency).toUpperCase() !== normalized.currency) throw fail('Payment currency does not match payable', 'PAYMENT_CURRENCY_MISMATCH', 409);
     const paid = await tx.sumPostedPayments(payable.id);
+    if(tx.assertTechnicalInvoiceClearance)await tx.assertTechnicalInvoiceClearance(payable.supplier_invoice_id);
     const remaining = subtractDecimal(payable.invoice_total, paid);
     if (compareDecimal(amount, '0') <= 0 || compareDecimal(amount, remaining) > 0) throw fail('Payment exceeds open payable balance', 'PAYMENT_AMOUNT_EXCEEDED', 409);
     const payment = await tx.insertPaymentRecord({ request_id: payable.request_id, ap_voucher_id: authority.ap_voucher_id, supplier_invoice_id: payable.supplier_invoice_id, amount_paid: String(amount), currency: normalized.currency, payment_reference: paymentReference, payment_method: paymentMethod, idempotency_key: key, payload_fingerprint: payloadFingerprint, paid_by: actor?.id || actorId });

@@ -1,3 +1,4 @@
+const {stockItemSql,effectiveRequestStatusSql}=require('../../services/requestFulfillmentSql');
 
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
@@ -57,7 +58,7 @@ const checkWorkspaceAccess = async (requestId, user) => {
   }
 
   const { rows } = await pool.query(
-    `SELECT r.*,
+    `SELECT r.*, ${effectiveRequestStatusSql('r')} AS status,r.status AS stored_status,
             d.name AS department_name,
             s.name AS section_name,
             COALESCE(r.temporary_requester_name, requester.name) AS requester_name,
@@ -90,6 +91,9 @@ const buildRequestSummary = (request, approvals, items) => {
   if (normalize(request.status) === 'rejected') {
     currentBottleneck = 'Request rejected';
     nextRequiredAction = 'Request stopped; review the rejection reason in history';
+  } else if (['completed','received','available in stock'].includes(normalize(request.status))) {
+    currentBottleneck = 'Completed';
+    nextRequiredAction = 'No procurement required; review fulfillment history';
   } else if (activeApproval) {
     currentBottleneck = `Approval level ${activeApproval.approval_level}`;
     nextRequiredAction = `Awaiting ${activeApproval.approver_name || 'approver'} approval`;
@@ -112,8 +116,8 @@ const buildRequestSummary = (request, approvals, items) => {
     request_type: request.request_type,
     request_status: request.status,
     status: request.status,
-    approval_status: normalize(request.status) === 'rejected' ? 'Rejected' : pendingApprovals.length > 0 ? 'Pending' : approvals.some((approval) => normalize(approval.status) === 'rejected') ? 'Rejected' : 'Approved',
-    procurement_status: normalize(request.status) === 'rejected' ? 'Rejected' : procurementStatus,
+    approval_status: normalize(request.status) === 'rejected' ? 'Rejected' : ['completed','received','available in stock'].includes(normalize(request.status)) ? 'Completed' : pendingApprovals.length > 0 ? 'Pending' : approvals.some((approval) => normalize(approval.status) === 'rejected') ? 'Rejected' : 'Approved',
+    procurement_status: normalize(request.status) === 'rejected' ? 'Rejected' : ['completed','received','available in stock'].includes(normalize(request.status)) ? 'completed' : procurementStatus,
     department_id: request.department_id,
     department_name: request.department_name,
     section_id: request.section_id,
@@ -176,7 +180,7 @@ const getItems = async (requestId) => {
             ri.quantity AS requested_quantity,
             ri.unit_of_measure,
             COALESCE(ri.purchased_quantity, 0) AS purchased_quantity,
-            GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) AS remaining_quantity,
+            ${stockItemSql('ri')} AS is_available_in_stock,CASE WHEN ${stockItemSql('ri')} THEN 0 ELSE GREATEST(ri.quantity - COALESCE(ri.purchased_quantity, 0), 0) END AS remaining_quantity,
             ri.unit_cost,
             ri.total_cost,
             ri.available_quantity,
@@ -256,7 +260,7 @@ const getLinkedRecords = async (requestId) => {
   return { rfqs, quotations, purchase_orders: purchaseOrders, grns, inspections, invoices, payments: [], contracts };
 };
 
-const getAttachments = async (requestId) => safeQuery(
+const rawAttachments = async (requestId) => safeQuery(
   'attachments',
   `SELECT a.id, a.request_id, a.item_id, a.contract_id, a.file_name, a.file_path, a.uploaded_at, u.name AS uploaded_by_name,
           CASE WHEN a.item_id IS NOT NULL THEN 'item' WHEN a.contract_id IS NOT NULL THEN 'contract' ELSE 'request' END AS source_type
@@ -266,6 +270,13 @@ const getAttachments = async (requestId) => safeQuery(
    ORDER BY a.uploaded_at DESC, a.id DESC`,
   [requestId],
 );
+
+const getAttachments = async (requestId,user) => {
+ const access=require('../../services/attachmentAuthorizationService').createAttachmentAuthorization();
+ const actor=await access.actor(user);const visible=[];
+ for(const row of await rawAttachments(requestId)){try{await access.attachment(actor,row.id);visible.push({...require('../../utils/attachmentPaths').serializeAttachment(row),uploaded_by_name:row.uploaded_by_name,source_type:row.source_type});}catch(e){if(e.statusCode!==404)throw e;}}
+ return visible;
+};
 
 const getCommunicationNotes = async (requestId) => safeQuery(
   'request_logs',
@@ -422,7 +433,7 @@ const buildTimeline = (request, approvals, procurementEvents, linkedRecords, att
 const buildAvailableActions = (user, request, approvals, items) => {
   const role = normalize(user?.role);
   const actions = new Set(['upload_attachment', 'add_note', 'export_pdf']);
-  if (normalize(request.status) === 'rejected') return Array.from(actions);
+  if (['rejected','available in stock'].includes(normalize(request.status))) return Array.from(actions);
   if (canIntervene(user, request) && approvals.some(approval => !approval.is_superseded && ['pending','on hold'].includes(normalize(approval.status)))) actions.add('scm_reject_request');
   if (hasPermission(user, 'item-master.map') && ['approved','assigned','completed'].includes(normalize(request.status))) actions.add('resolve_item_identity');
   const assignedToUser = Number(request.assigned_to) === Number(user.id) || items.some((item) => Number(item.assigned_to) === Number(user.id));
@@ -475,7 +486,7 @@ const getFullRequestDetails = async (req, res, next) => {
       getItems(requestId),
       getProcurementEvents(requestId),
       getLinkedRecords(requestId),
-      getAttachments(requestId),
+      getAttachments(requestId,req.user),
       getCommunicationNotes(requestId),
       getAuditLogs(requestId),
     ]);

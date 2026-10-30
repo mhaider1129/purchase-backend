@@ -22,8 +22,10 @@ const getInspectionSummaryForRequest = async (client, requestId) => {
     [requestId],
   );
 
-  const pendingCount = Number(rows[0]?.pending_count || 0);
-  const totalCount = Number(rows[0]?.total_count || 0);
+  const quantities=require('../services/receiptInspectionQuantities');
+  const delivery=(await runner.query(`SELECT count(*) FILTER(WHERE actual.accepted_quantity<poi.quantity)::integer pending_count,count(*)::integer total_count FROM purchase_order_items poi JOIN purchase_orders po ON po.id=poi.purchase_order_id JOIN LATERAL (SELECT SUM(${quantities.accepted()}) AS accepted_quantity,bool_or(${quantities.required()}) AS required FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=poi.id) actual ON actual.required WHERE po.request_id=$1 AND po.status NOT IN ('PO_CANCELLED','CANCELLED')`,[requestId])).rows[0]||{};
+  const pendingCount = Number(rows[0]?.pending_count || 0) + Number(delivery.pending_count || 0);
+  const totalCount = Number(rows[0]?.total_count || 0) + Number(delivery.total_count || 0);
 
   return { pendingCount, totalCount };
 };

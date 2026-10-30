@@ -9,6 +9,38 @@ while another item remains active.
 
 ## Department workflow
 
+After an HOD approves a request from their own department, a placement popup
+loads the latest department queue. The newly approved whole request is a separate
+card above the previous HOD-approved active requests. Drag the card into a
+numbered gap, tap **Place here**, or select **Priority position**. Existing
+requests retain their relative order. Even the first request needs deliberate
+placement at position 1, then **Save department priority**.
+
+This is a shared department list, including approvals by a previous HOD; a
+cross-department routed technical HOD opinion does not add the request to that
+HOD's department. Non-superseded approved decisions are required. New HOD decisions record the
+institute and department in the existing approval journal, so a later promotion
+or transfer does not erase the department's approval. Older decisions without
+this marker use their existing HOD account/department relation; unknown historic
+authority is not fabricated. Merely having
+assessment coverage or institutional rank does not qualify an unapproved request.
+Completed, rejected, closed, cancelled and fulfilled-from-stock requests are
+excluded. Mixed requests remain while eligible procurement work is outstanding.
+
+Both the main Approvals panel and the existing approval workspace use the same
+placement dialog. Approval is recorded and its ordinary route continues before
+placement; a failed queue load or a closed browser must not strand the clinical
+approval route. Saving priority is a separately audited transaction and never
+makes a second approval decision. Existing clients can still finish an older
+ranking gate through the legacy atomic continuation endpoint. If
+requests complete or priorities change while the dialog is open, the server
+rejects the stale snapshot. **Reload current list** fetches fresh eligibility and
+versions and requires reviewing placement again; it never silently overwrites
+another HOD's change. Load failures expose retry and do not undo an approval.
+
+No new SQL migration or role grants are introduced by the placement popup. The
+previously installed SQL 047 request-priority foundation remains a prerequisite.
+
 Open Insights & Analytics → Department Priorities, or
 `/procurement-priorities/department`. The user needs
 `procurement-priority.rank-department`; access is scoped to the signed-in user's
@@ -17,10 +49,11 @@ request to its desired position, then Save Changes. Even a single new request
 can be saved without moving it. Cancel restores the loaded order. A conflict
 keeps the draft and offers Reload latest queue; reload discards the draft.
 
-HOD ranking-gate responses now have `grain: request`, `requiredRequestIds`, and
-one queue row per request. The ranking submission uses `ordered_request_ids` and
-`snapshots`; ranking and approval continuation remain one transaction. Item case
-IDs remain inside each request for version checking and assessment purposes.
+HOD placement responses use state `HOD_PRIORITY_PLACEMENT`, `grain: request`,
+`requiredRequestIds`, and one queue row per request. Priority saves use
+`ordered_request_ids` and `snapshots`. Item case IDs remain inside each request
+for version checking and assessment purposes. The older atomic ranking-gate
+endpoint remains available for requests already waiting on that contract.
 
 ## SCM workflow
 

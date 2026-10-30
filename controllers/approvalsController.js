@@ -286,6 +286,9 @@ const handleApprovalDecision = async (req, res, next) => {
       request.is_urgent = true;
     }
 
+    if (status === 'Approved') await require('../services/procurementPriority/departmentPriorityCoverageService').recordDepartmentHodApproval({
+      client,request:{...request,id:approval.request_id},approvalId,actor:req.user});
+
     // 7. Insert Audit Logs
     await client.query(`
       INSERT INTO request_logs (request_id, action, actor_id, comments)
@@ -560,18 +563,18 @@ const handleApprovalDecision = async (req, res, next) => {
         sameLevelPendingRes.rows?.[0]?.pending_count || 0,
       );
 
+      if ((user_role || '').toUpperCase() === 'HOD' && String(req.user.department_id) === String(request.department_id)) {
+        rankingGate = await hodRankingGate.findGate({ client, request: { ...request, id: approval.request_id }, approvalLevel: approval.approval_level, actorId: approver_id, force: true });
+        if (rankingGate) await hodRankingGate.auditGate({ client, request: { ...request, id: approval.request_id }, approval, actorId: approver_id, gate: rankingGate });
+      }
+      // Priority placement follows the recorded approval. A closed browser or
+      // failed queue load must not leave the clinical approval route stranded.
       if (pendingAtCurrentLevel === 0) {
-        if ((user_role || '').toUpperCase() === 'HOD') {
-          rankingGate = await hodRankingGate.findGate({ client, request: { ...request, id: approval.request_id }, approvalLevel: approval.approval_level, actorId: approver_id });
-          if (rankingGate) await hodRankingGate.auditGate({ client, request: { ...request, id: approval.request_id }, approval, actorId: approver_id, gate: rankingGate });
-        }
-        if (!rankingGate) {
-          continuationResult = await continueApprovalWorkflowAfterLevel({
-            client, request: { ...request, id: approval.request_id }, approval,
-            actorId: approver_id, routeDefinitions, routeDomain, technicianEmail,
-            enqueueNotification,
-          });
-        }
+        continuationResult = await continueApprovalWorkflowAfterLevel({
+          client, request: { ...request, id: approval.request_id }, approval,
+          actorId: approver_id, routeDefinitions, routeDomain, technicianEmail,
+          enqueueNotification,
+        });
       }
     }
 
@@ -730,7 +733,7 @@ const handleApprovalDecision = async (req, res, next) => {
     await client.query('COMMIT');
 
     res.json({
-      message: rankingGate ? 'Department priority ranking is required before approval can continue' : `✅ Approval ${status.toLowerCase()} successfully`,
+      message: rankingGate ? 'Approval recorded; place this request in the department priority list' : `✅ Approval ${status.toLowerCase()} successfully`,
       updatedRequestStatus: newStatus || 'Pending',
       itemApprovalSummary: itemSummary,
       workflowState: rankingGate?.state || null,

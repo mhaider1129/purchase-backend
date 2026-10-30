@@ -262,7 +262,9 @@ const apiRouter = express.Router();
 // =========================
 // 📁 Optional: Serve Uploads (if needed for frontend access)
 // =========================
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Registered legacy local URLs use the same authenticated object policy as IDs.
+app.use('/uploads', require('./middleware/authMiddleware').authenticateUser,
+  require('./controllers/attachmentsController').pathDownload);
 
 // =========================
 // 🧠 Rate Limiting (Optional for Public Routes)
@@ -354,6 +356,8 @@ const budgetControlRoutes = require('./routes/budgetControl');
 const requestAutoAssignmentRulesRoutes = require('./routes/requestAutoAssignmentRules');
 const departmentRequestedItemsRoutes = require('./routes/departmentRequestedItems');
 const procurementEvaluationsRoutes = require('./routes/procurementEvaluations');
+const deviceDemosRoutes = require('./routes/deviceDemos');
+const surgicalConsignmentsRoutes = require('./routes/surgicalConsignments');
 const printServiceRequestsRoutes = require('./routes/printServiceRequests');
 const documentBrandingRoutes = require('./routes/documentBranding');
 const procurementPerformanceRoutes = require('./routes/procurementPerformance');
@@ -433,6 +437,8 @@ const protectedApiRoutes = [
   { path: '/request-auto-assignment-rules', router: requestAutoAssignmentRulesRoutes },
   { path: '/department-requested-items', router: departmentRequestedItemsRoutes },
   { path: '/procurement-evaluations', router: procurementEvaluationsRoutes },
+  { path: '/device-demos', router: deviceDemosRoutes },
+  { path: '/surgical-consignments', router: surgicalConsignmentsRoutes },
   { path: '/print-service-requests', router: printServiceRequestsRoutes },
   { path: '/document-branding', router: documentBrandingRoutes },
   { path: '/procurement-performance', router: procurementPerformanceRoutes },

@@ -1,3 +1,4 @@
+const {stockItemSql,effectiveRequestStatusSql}=require('../../services/requestFulfillmentSql');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 
@@ -26,7 +27,7 @@ const getCompletedAssignedRequests = async (req, res, next) => {
 
 
     const result = await pool.query(
-      `SELECT r.*, p.name AS project_name,
+      `SELECT r.*,${effectiveRequestStatusSql('r')} AS status,r.status AS stored_status, p.name AS project_name,
               COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name) AS requester_name,
               CASE
                 WHEN NULLIF(TRIM(r.temporary_requester_name), '') IS NOT NULL THEN 'Temporary Requester'
@@ -41,10 +42,10 @@ const getCompletedAssignedRequests = async (req, res, next) => {
        LEFT JOIN LATERAL (
          SELECT
            COUNT(*) FILTER (
-             WHERE LOWER(TRIM(COALESCE(ri.procurement_status, ''))) IN ('purchased', 'completed')
+             WHERE (LOWER(TRIM(COALESCE(ri.procurement_status, ''))) IN ('purchased', 'completed') OR ${stockItemSql('ri')})
            )::int AS completed_item_count,
            MAX(COALESCE(ri.procurement_updated_at, ri.marked_at, ri.assigned_at, r.completed_at, r.updated_at)) FILTER (
-             WHERE LOWER(TRIM(COALESCE(ri.procurement_status, ''))) IN ('purchased', 'completed')
+             WHERE (LOWER(TRIM(COALESCE(ri.procurement_status, ''))) IN ('purchased', 'completed') OR ${stockItemSql('ri')})
            ) AS latest_completed_at,
            BOOL_OR(ri.assigned_to = $1) AND COALESCE(r.assigned_to, 0) <> $1 AS is_split_assignment
          FROM public.requested_items ri
@@ -52,7 +53,7 @@ const getCompletedAssignedRequests = async (req, res, next) => {
            AND ri.assigned_to = $1
        ) assigned_scope ON TRUE
        WHERE (
-           (r.assigned_to = $1 AND LOWER(TRIM(r.status)) IN ('completed', 'received', 'available in stock'))
+           (r.assigned_to = $1 AND LOWER(TRIM(${effectiveRequestStatusSql('r')})) IN ('completed', 'received', 'available in stock'))
            OR COALESCE(assigned_scope.completed_item_count, 0) > 0
          )${searchClause}
        ORDER BY COALESCE(r.completed_at, assigned_scope.latest_completed_at, r.updated_at) DESC NULLS LAST`,

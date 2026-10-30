@@ -19,10 +19,10 @@ function buildReceiptCommand(receipt, line, context) {
     baseUom: line.base_uom, sourceQuantity: accepted, sourceUom: line.source_uom,
     conversionFactor, batchNumber: line.batch_number || null,
     lotNumber: line.lot_number || null, serialNumber: line.serial_number || null,
-    expiryDate: line.expiry_date || null, stockStatus: line.quarantined ? 'QUARANTINE' : 'AVAILABLE',
+    expiryDate: line.expiry_date || null, stockStatus: line.quarantined ? 'QUARANTINE' : line.stock_status || 'AVAILABLE',
     sourceDocumentType: 'goods_receipt', sourceDocumentId: receipt.id,
     sourceDocumentLineId: line.id, actor: context.actor,
-    idempotencyKey: `goods-receipt:${receipt.id}:line:${line.id}:accepted:${accepted}`,
+    idempotencyKey: context.dispositionId ? `goods-receipt:${receipt.id}:line:${line.id}:technical:${context.dispositionId}` : `goods-receipt:${receipt.id}:line:${line.id}:accepted:${accepted}`,
     correlationId: context.correlationId, metadata: { receiptNumber: receipt.receipt_number, purchaseOrderId: receipt.purchase_order_id || null },
   };
 }

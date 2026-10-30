@@ -1,0 +1,53 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {effectiveRequestStatusSql,completedRequestSql,stockItemSql}=require('../services/requestFulfillmentSql');
+const {requestActiveSql,itemActiveSql}=require('../services/procurementPriority/activePrioritySql');
+module.exports=async(client)=>{
+  assert.equal(client.connectionParameters.host,'127.0.0.1');
+  assert.equal(client.connectionParameters.user,'p2p_test');
+  const pool=require('../config/db'),original=pool.query;
+  pool.query=(...args)=>client.query(...args);
+  await client.query('BEGIN');
+  try {
+    const department=(await client.query("INSERT INTO public.departments(name,type) VALUES('Stock fulfillment fixture','Operational') RETURNING id")).rows[0].id;
+    const make=async(status='Approved',type='Stock')=>(await client.query('INSERT INTO public.requests(request_type,status,requester_id,assigned_to,justification,department_id) VALUES($1,$2,1,1,$3,$4) RETURNING id',[type,status,'Stock fulfillment regression',department])).rows[0].id;
+    const item=async(requestId,status='pending',approval='Approved',purchased=0,quantity=1,cost=0)=>(await client.query('INSERT INTO public.requested_items(request_id,item_name,quantity,procurement_status,approval_status,purchased_quantity,unit_cost,total_cost) VALUES($1,$2,$3,$4,$5,$6,$7,$7::bigint*$3::integer) RETURNING id',[requestId,'Stock fixture',quantity,status,approval,purchased,cost])).rows[0].id;
+    const a=await make(),b=await make('Pending'),c=await make(),d=await make(),e=await make(),f=await make('Rejected'),g=await make(),h=await make('Available in Stock');
+    await item(a,' Available_in_stock ');
+    const diverted=await item(b,'pending','Rejected');
+    const warehouse=await make('Submitted','Warehouse Supply');
+    await client.query("INSERT INTO public.warehouse_supply_items(request_id,requested_item_id,item_name,quantity) VALUES($1,$2,'Stock fixture',1)",[warehouse,diverted]);
+    await item(c,'available in stock');await item(c);
+    await item(d,'available in stock');await item(d,'purchased','Approved',1,1,10);
+    const availableOnly=await item(e);await client.query('UPDATE public.requested_items SET available_quantity=999 WHERE id=$1',[availableOnly]);
+    await item(f,'available in stock');
+    await item(g,'available in stock');await item(g,'partially_procured','Approved',1,2,5);
+    const rows=(await client.query(`SELECT r.id,r.status AS stored_status,${effectiveRequestStatusSql('r')} AS status FROM public.requests r WHERE r.id=ANY($1::int[]) ORDER BY r.id`,[[a,b,c,d,e,f,g,h]])).rows;
+    assert.deepEqual(rows.map(row=>row.status),['Available in Stock','Available in Stock','Approved','Completed','Approved','Rejected','Approved','Available in Stock']);
+    assert.deepEqual((await client.query(`SELECT r.id FROM public.requests r WHERE ${completedRequestSql('r')} ORDER BY r.id`)).rows.map(row=>row.id),[a,b,d,h]);
+    const live=(await client.query(`SELECT DISTINCT r.id FROM public.requests r JOIN public.requested_items ri ON ri.request_id=r.id WHERE ${requestActiveSql} AND ${itemActiveSql} ORDER BY r.id`)).rows.map(row=>row.id);
+    assert.deepEqual(live,[c,e,g]);
+    const stockLines=(await client.query(`SELECT id,purchased_quantity,received_quantity FROM public.requested_items ri WHERE ${stockItemSql('ri')}`)).rows;
+    assert(stockLines.every(row=>row.purchased_quantity===0&&Number(row.received_quantity)===0));
+    const dashboard=require('../controllers/dashboardController');
+    const invoke=async(fn,query={})=>{
+      let output;const res={json:value=>{output=value;return res;},status:code=>{assert(code<400,`Unexpected HTTP ${code}`);return res;}};
+      await fn({query,user:{id:1,role:'SCM',hasPermission:()=>true}},res,error=>{throw error;});
+      return output;
+    };
+    const summary=await invoke(dashboard.getDashboardSummary);
+    assert.equal(summary.total_requests,8);assert.equal(summary.completed_requests,4);
+    assert.equal(summary.pending_requests,3);assert.equal(summary.approved_requests,3);
+    assert.equal(summary.rejected_requests,1);
+    assert.equal(summary.spending_by_month.reduce((sum,row)=>sum+row.total_cost,0),15);
+    const fetch=require('../controllers/requests/fetchRequestsController');
+    const closed=await invoke(fetch.getClosedRequests);
+    assert.deepEqual(closed.map(row=>row.id).sort((x,y)=>x-y),[a,b,d,f,h]);
+    const all=await invoke(fetch.getAllRequests,{status:'completed',limit:100});
+    assert.deepEqual(all.data.map(row=>row.id).sort((x,y)=>x-y),[a,b,d,h],'completed status filter');
+    const assigned=await invoke(fetch.getAssignedRequests);
+    assert.deepEqual(assigned.data.map(row=>row.id).sort((x,y)=>x-y),[c,e,g,warehouse].sort((x,y)=>x-y));
+    assert.deepEqual((await client.query('SELECT status FROM public.requests WHERE id=ANY($1::int[]) ORDER BY id',[[a,b,c,d,e,f,g,h]])).rows.map(row=>row.status),rows.map(row=>row.stored_status));
+    console.log('Stock fulfillment: actual request lists/dashboard, stock provenance, mixed/partial requests, priority eligibility, unchanged purchases/costs/raw statuses PASS');
+  } finally {await client.query('ROLLBACK');pool.query=original;}
+};

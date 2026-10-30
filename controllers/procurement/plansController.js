@@ -1,21 +1,22 @@
-const path = require('path');
-const fs = require('fs');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
 const {
   uploadBuffer,
-  createSignedUrl,
 } = require('../../utils/storage');
 const {
-  UPLOADS_DIR,
   isStoredLocally,
 } = require('../../utils/attachmentPaths');
-const sanitize = require('sanitize-filename');
 const ensureProcurementPlanTables = require('../../utils/ensureProcurementPlanTables');
 
+const fileAuthority = require('../../services/attachmentAuthorizationService').createAttachmentAuthorization();
+const fileStorage = require('../../services/attachmentStorageAdapter');
+async function planDepartment(user, departmentId) {
+  return fileAuthority.parent(await fileAuthority.actor(user),{departmentId},'upload');
+}
 const PLANS_STORAGE_PREFIX = process.env.SUPABASE_PLANS_PREFIX || 'procurement-plans';
 
 function handleStorageError(next, err) {
+  if(err.statusCode)return next(err);
   console.error('❌ Procurement plan storage error:', err.message);
   if (err.code === 'SUPABASE_NOT_CONFIGURED') {
     return next(
@@ -36,7 +37,7 @@ function serializePlan(row) {
   let fileUrl = null;
 
   if (isLocal && storedPath) {
-    fileUrl = `/${storedPath}`;
+    fileUrl = `/api/procurement-plans/${row.id}/download`;
   } else if (row.id) {
     fileUrl = `/api/procurement-plans/${row.id}/download`;
   }
@@ -83,6 +84,7 @@ const uploadPlan = async (req, res, next) => {
   }
 
   try {
+    await planDepartment(req.user, department_id);
     const segments = [`department-${department_id}`, `year-${plan_year}`];
     const { objectKey } = await uploadBuffer({
       file: req.file,
@@ -90,6 +92,7 @@ const uploadPlan = async (req, res, next) => {
       prefix: PLANS_STORAGE_PREFIX,
     });
 
+    await planDepartment(req.user, department_id);
     const { rows } = await pool.query(
       `INSERT INTO procurement_plans (department_id, plan_year, file_name, file_path)
        VALUES ($1,$2,$3,$4) RETURNING *`,
@@ -117,7 +120,9 @@ const getPlans = async (req, res, next) => {
   sql += ' ORDER BY plan_year DESC';
   try {
     const result = await pool.query(sql, values);
-    res.json(result.rows.map(serializePlan));
+    const actor=await fileAuthority.actor(req.user);const visible=[];
+    for(const row of result.rows){try{await fileAuthority.plan(actor,row.id);visible.push(serializePlan(row));}catch(e){if(e.statusCode!==404)throw e;}}
+    res.json(visible);
   } catch (err) {
     console.error('Failed to fetch procurement plans:', err);
     next(createHttpError(500, 'Failed to fetch procurement plans'));
@@ -129,16 +134,18 @@ const getPlanById = async (req, res, next) => {
   try {
     const result = await pool.query('SELECT * FROM procurement_plans WHERE id=$1', [id]);
     if (result.rowCount === 0) return next(createHttpError(404, 'Plan not found'));
+    await fileAuthority.plan(await fileAuthority.actor(req.user),id);
     res.json(serializePlan(result.rows[0]));
   } catch (err) {
     console.error('Failed to fetch procurement plan:', err);
-    next(createHttpError(500, 'Failed to fetch procurement plan'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to fetch procurement plan'));
   }
 };
 
 const getPlanForRequest = async (req, res, next) => {
   const { id } = req.params;
   try {
+    await fileAuthority.request(await fileAuthority.actor(req.user),id);
     const reqRes = await pool.query('SELECT department_id, created_at FROM requests WHERE id=$1', [id]);
     if (reqRes.rowCount === 0) return next(createHttpError(404, 'Request not found'));
     const { department_id, created_at } = reqRes.rows[0];
@@ -151,50 +158,15 @@ const getPlanForRequest = async (req, res, next) => {
     res.json(serializePlan(planRes.rows[0]));
   } catch (err) {
     console.error('Failed to match procurement plan:', err);
-    next(createHttpError(500, 'Failed to match procurement plan'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to match procurement plan'));
   }
 };
 
-const downloadPlan = async (req, res, next) => {
-  const { id } = req.params;
-  try {
-    const result = await pool.query('SELECT * FROM procurement_plans WHERE id=$1', [id]);
-    if (result.rowCount === 0) {
-      return next(createHttpError(404, 'Plan not found'));
-    }
-
-    const plan = result.rows[0];
-    const storedPath = plan.file_path || '';
-
-    if (!storedPath || isStoredLocally(storedPath)) {
-      const filename = storedPath
-        ? path.basename(storedPath)
-        : sanitize(plan.file_name || 'plan');
-      const filePath = path.join(UPLOADS_DIR, filename);
-
-      return fs.access(filePath, fs.constants.F_OK, err => {
-        if (err) {
-          console.warn('🟥 Procurement plan missing on disk:', filePath);
-          return next(createHttpError(404, 'Plan file not found'));
-        }
-        res.download(filePath, filename);
-      });
-    }
-
-    const signedUrl = await createSignedUrl(storedPath, { expiresIn: 120 });
-    return res.redirect(signedUrl);
-  } catch (err) {
-    console.error('Failed to download procurement plan:', err);
-    if (err.code === 'SUPABASE_NOT_CONFIGURED') {
-      return next(
-        createHttpError(
-          500,
-          'Supabase storage is not configured. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
-        )
-      );
-    }
-    next(createHttpError(500, 'Failed to download procurement plan'));
-  }
+const downloadPlan = async (req,res,next)=>{
+ try{
+  const plan=await fileAuthority.plan(await fileAuthority.actor(req.user),req.params.id);
+  return fileStorage.download(plan,req,res,next);
+ }catch(e){next(e);}
 };
 
 const createPlanItems = async (req, res, next) => {

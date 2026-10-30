@@ -12,8 +12,9 @@ function createRequestPriorityRepository(caseRepository) {
     // Department positions use the entire department, even in the institution view.
     if (departmentId == null) {
       const departments=[...new Set(cases.map(row => row.department_id).filter(value => value != null))];
+      for (const row of rows) { row.department_rank=null; row.department_rank_total=0; }
       for (const id of departments) {
-        const departmentRows=requestQueue(cases.filter(row => String(row.department_id)===String(id)),saved.rows,'department');
+        const departmentRows=requestQueue(cases.filter(row => String(row.department_id)===String(id) && row.department_approved !== false),saved.rows,'department');
         for (const row of departmentRows) {
           const target=rows.find(entry => String(entry.request_id)===String(row.request_id));
           target.department_rank=row.department_rank; target.department_rank_total=departmentRows.length;

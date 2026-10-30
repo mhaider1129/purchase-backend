@@ -70,7 +70,7 @@ const writeAuditTrail = (req, res, next) => {
       const requestPath = req.originalUrl?.split('?')[0] || req.path || '';
       const requestId = req.headers['x-request-id'] || null;
       const userAgent = req.headers['user-agent'] || null;
-      const payload = redactPayload(req.body || {});
+      const payload = redactPayload(req.auditPayload || req.body || {});
 
       await pool.query(
         `INSERT INTO governance_audit_trail (

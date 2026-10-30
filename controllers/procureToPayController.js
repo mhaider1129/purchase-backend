@@ -638,7 +638,7 @@ const getPurchaseOrderDetail = async (req, res, next) => {
     const poId = Number(req.params.poId);
     const [po, items, receipts, invoices] = await Promise.all([
       pool.query(`SELECT * FROM purchase_orders WHERE id=$1`, [poId]),
-      pool.query(`SELECT * FROM purchase_order_items WHERE purchase_order_id=$1 ORDER BY id ASC`, [poId]),
+      pool.query(`SELECT poi.*,(SELECT COALESCE(SUM(${require('../services/receiptInspectionQuantities').capacity()}),0) FROM goods_receipt_items gri WHERE gri.purchase_order_item_id=poi.id) AS receipt_capacity_reserved FROM purchase_order_items poi WHERE purchase_order_id=$1 ORDER BY id ASC`, [poId]),
       pool.query(`SELECT * FROM goods_receipts WHERE purchase_order_id=$1 ORDER BY received_at DESC`, [poId]),
       pool.query(`SELECT * FROM supplier_invoices WHERE purchase_order_id=$1 ORDER BY submitted_at DESC`, [poId]),
     ]);

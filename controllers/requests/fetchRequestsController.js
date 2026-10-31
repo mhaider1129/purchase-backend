@@ -614,26 +614,23 @@ const getApprovalHistory = async (req, res, next) => {
   }
 };
 
-const getProcurementUsers = async (req, res, next) => {
+const getProcurementUsers = async (req,res,next) => {
   try {
-    const params = [];
-    let instituteClause = '';
-    if (Number.isInteger(req.user?.institute_id)) {
-      params.push(req.user.institute_id);
-      instituteClause = ` AND institute_id = $1`;
-    }
-
-    const result = await pool.query(
-      `SELECT id, name FROM users
-       WHERE role IN ('ProcurementSpecialist', 'SCM')
-         AND is_active = true${instituteClause}`,
-      params
-    );
-    res.json(result.rows);
-  } catch (err) {
-    console.error('❌ Failed to fetch procurement users:', err);
-    next(createHttpError(500, 'Failed to fetch procurement users'));
-  }
+    const {createAssignmentPolicy,has,error,id,missing}=require('../../services/procurementAssignmentPolicy');
+    const rows=await require('../../utils/withTransaction')(async client=>{
+      const policy=createAssignmentPolicy(),actor=await policy.actor(req.user,client,false);
+      if(!has(actor,'requests.manage') && !has(actor,'requests.view-all'))throw error(403,'Procurement directory permission required');
+      let instituteId=actor.institute_id;
+      if(req.query?.request_id!=null) {
+        const root=(await client.query('SELECT * FROM requests WHERE id=$1 FOR SHARE',[id(req.query.request_id)])).rows[0];
+        if(!root)throw missing();policy.institute(actor,root.institute_id);instituteId=root.institute_id;
+      }
+      const candidates=(await client.query('SELECT id FROM users WHERE institute_id=$1 AND is_active=true ORDER BY id',[instituteId])).rows;
+      const eligible=[];
+      for(const row of candidates){try{const user=await policy.assignee(row.id,instituteId,client);eligible.push({id:user.id,name:user.name,role:user.role});}catch(e){if(![400,404].includes(e.statusCode))throw e;}}
+      return eligible;
+    });res.set('Cache-Control','private, no-store').json(rows);
+  }catch(e){next(e);}
 };
 
 const { successResponse, errorResponse } = require('../../utils/responseFormatter');
@@ -1644,24 +1641,21 @@ const getClosedRequests = async (req, res, next) => {
   }
 };
 
-const getRequestLogs = async (req, res, next) => {
-  const requestId = req.params.id;
-
+const getRequestLogs = async (req,res,next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT rl.*, u.name AS actor_name
-       FROM request_logs rl
-       LEFT JOIN users u ON rl.actor_id = u.id
-       WHERE rl.request_id = $1
-       ORDER BY rl.timestamp ASC`,
-      [requestId],
-    );
-
-    res.json(rows);
-  } catch (err) {
-    console.error('❌ Failed to fetch request logs:', err);
-    next(createHttpError(500, 'Failed to fetch request logs'));
-  }
+    const {createAssignmentPolicy,has,id,missing}=require('../../services/procurementAssignmentPolicy');
+    const rows=await require('../../utils/withTransaction')(async client=>{
+      const policy=createAssignmentPolicy(),actor=await policy.actor(req.user,client,false);
+      const requestId=id(req.params.id);
+      const root=(await client.query('SELECT * FROM requests WHERE id=$1 FOR SHARE',[requestId])).rows[0];
+      if(!root)throw missing();policy.institute(actor,root.institute_id);
+      if(!has(actor,'requests.manage')) {
+        const grant=await require('../../services/requestAuthorizationService').findAuthorizedRequest({requestId,user:actor,database:client,instituteIds:[root.institute_id]});
+        if(!grant)throw missing();
+      }
+      return (await client.query(`SELECT rl.*,u.name AS actor_name FROM request_logs rl LEFT JOIN users u ON rl.actor_id=u.id WHERE rl.request_id=$1 ORDER BY rl.timestamp ASC`,[requestId])).rows;
+    });res.json(rows);
+  }catch(e){next(e.statusCode ? e : createHttpError(500,'Failed to fetch request logs'));}
 };
 
 module.exports = {

@@ -35,77 +35,7 @@ const rewireRequestType = async (req, res, next) => {
   }
 };
 
-const assignRequestToProcurement = async (req, res, next) => {
-  const { request_id, user_id } = req.body;
-  if (!req.user.hasPermission('requests.manage')) {
-    return next(createHttpError(403, 'You do not have permission to assign requests'));
-  }
-
-  try {
-    const userCheck = await pool.query(
-      `SELECT id, email, name
-         FROM users
-        WHERE id = $1
-          AND role = 'ProcurementSpecialist'
-          AND is_active = true`,
-      [user_id],
-    );
-    if (userCheck.rowCount === 0) {
-      return next(createHttpError(400, 'Invalid procurement staff'));
-    }
-
-    const requestRes = await pool.query(
-      `SELECT id, request_type
-         FROM requests
-        WHERE id = $1`,
-      [request_id],
-    );
-
-    if (requestRes.rowCount === 0) {
-      return next(createHttpError(404, 'Request not found'));
-    }
-
-    await pool.query(
-      `UPDATE requests SET assigned_to = $1 WHERE id = $2`,
-      [user_id, request_id],
-    );
-
-    const assigneeEmail = userCheck.rows[0]?.email || null;
-    const assigneeName = userCheck.rows[0]?.name || 'Procurement Specialist';
-    const requestType = requestRes.rows[0]?.request_type || 'purchase';
-
-    if (assigneeEmail) {
-      await sendEmail(
-        assigneeEmail,
-        'New procurement assignment',
-        `Hello ${assigneeName},\n\nYou have been assigned to the ${requestType} request with ID ${request_id}.\nPlease log in to the procurement portal to review and take action.`,
-      );
-    }
-
-    try {
-      await createNotifications([
-        {
-          userId: Number(user_id),
-          title: 'New procurement assignment',
-          message: `You have been assigned to the ${requestType} request with ID ${request_id}.`,
-          link: `/requests/${request_id}`,
-          metadata: {
-            requestId: request_id,
-            requestType,
-            action: 'procurement_assignment',
-          },
-        },
-      ]);
-    } catch (notifyErr) {
-      console.error('⚠️ Failed to record assignment notification:', notifyErr);
-    }
-
-    res.json({ message: '✅ Request assigned successfully' });
-  } catch (err) {
-    console.error('❌ Assignment error:', err);
-    next(createHttpError(500, 'Failed to assign request'));
-  }
-};
+const { assignRequestLegacy: assignRequestToProcurement } = require('./assignRequestController');
 
 const addReceivedStockToWarehouse = async (client, { warehouseId, requestId, itemName, quantity, userId, actor }) => {
   if (!Number.isInteger(warehouseId)) throw createHttpError(400, 'You must be assigned to a warehouse to receive stock items');

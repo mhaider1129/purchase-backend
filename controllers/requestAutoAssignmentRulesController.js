@@ -1,26 +1,22 @@
-const pool = require('../config/db');
-const createHttpError = require('../utils/httpError');
-const ensureRequestAutoAssignmentRulesTable = require('../utils/ensureRequestAutoAssignmentRulesTable');
+const pool = require("../config/db");
+const withTransaction = require("../utils/withTransaction");
+const ensureSchema = require("../utils/ensureRequestAutoAssignmentRulesTable");
+const {
+  createAssignmentPolicy,
+  id,
+  error,
+  missing,
+} = require("../services/procurementAssignmentPolicy");
 const {
   AUTO_ASSIGNMENT_REQUEST_TYPES,
   normalizeRequestType,
   isSupportedAutoAssignmentType,
-} = require('../services/requestAutoAssignmentService');
-
-const canManageAutoAssignmentRules = user =>
-  user?.hasAnyPermission?.(['requests.manage', 'permissions.manage', 'users.manage']) ||
-  ['Admin', 'SCM'].includes(user?.role);
-
-const parseOptionalId = value => {
-  if (value === undefined || value === null || value === '') {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : NaN;
-};
-
-const serializeRule = row => ({
+} = require("../services/requestAutoAssignmentService");
+const { writeAuditEvent } = require("../services/auditService");
+const policy = createAssignmentPolicy();
+const serialize = (row) => ({
   id: row.id,
+  institute_id: row.institute_id,
   request_type: row.request_type,
   warehouse_id: row.warehouse_id,
   warehouse_name: row.warehouse_name,
@@ -31,226 +27,194 @@ const serializeRule = row => ({
   created_at: row.created_at,
   updated_at: row.updated_at,
 });
-
-const listAutoAssignmentRules = async (req, res, next) => {
-  if (!canManageAutoAssignmentRules(req.user)) {
-    return next(createHttpError(403, 'You do not have permission to manage auto-assignment rules'));
-  }
-
-  try {
-    await ensureRequestAutoAssignmentRulesTable();
-    const { rows } = await pool.query(
-      `SELECT r.id,
-              r.request_type,
-              r.warehouse_id,
-              w.name AS warehouse_name,
-              r.assignee_user_id,
-              u.name AS assignee_name,
-              u.email AS assignee_email,
-              r.is_active,
-              r.created_at,
-              r.updated_at
-         FROM request_auto_assignment_rules r
-         JOIN users u ON u.id = r.assignee_user_id
-         LEFT JOIN warehouses w ON w.id = r.warehouse_id
-        ORDER BY LOWER(r.request_type), w.name NULLS FIRST, u.name`,
-    );
-
-    return res.json({
-      request_types: AUTO_ASSIGNMENT_REQUEST_TYPES,
-      rules: rows.map(serializeRule),
-    });
-  } catch (err) {
-    console.error('❌ Failed to list auto-assignment rules:', err);
-    return next(createHttpError(500, 'Failed to load auto-assignment rules'));
-  }
-};
-
-const validateRulePayload = async (client, body) => {
+async function payload(actor, body, client) {
   const requestType = normalizeRequestType(body?.request_type);
-  if (!requestType || !isSupportedAutoAssignmentType(requestType)) {
-    throw createHttpError(400, 'Choose a supported request type for auto-assignment');
-  }
-
-  const warehouseId = parseOptionalId(body?.warehouse_id);
-  if (Number.isNaN(warehouseId)) {
-    throw createHttpError(400, 'warehouse_id must be a valid warehouse');
-  }
-
-  if (requestType.toLowerCase() === 'stock' && warehouseId === null) {
-    throw createHttpError(400, 'Stock auto-assignment rules must select the submitted warehouse');
-  }
-
-  if (requestType.toLowerCase() !== 'stock' && warehouseId !== null) {
-    throw createHttpError(400, 'Warehouse criteria is only available for Stock requests');
-  }
-
-  if (warehouseId !== null) {
-    const warehouseCheck = await client.query('SELECT id FROM warehouses WHERE id = $1', [warehouseId]);
-    if (warehouseCheck.rowCount === 0) {
-      throw createHttpError(400, 'Selected warehouse does not exist');
-    }
-  }
-
-  const assigneeId = Number(body?.assignee_user_id ?? body?.user_id);
-  if (!Number.isInteger(assigneeId) || assigneeId <= 0) {
-    throw createHttpError(400, 'Choose a valid assignee');
-  }
-
-  const assigneeCheck = await client.query(
-    `SELECT id
-       FROM users
-      WHERE id = $1
-        AND is_active = TRUE
-        AND role IN ('ProcurementSpecialist', 'SCM')`,
-    [assigneeId],
-  );
-  if (assigneeCheck.rowCount === 0) {
-    throw createHttpError(400, 'Assignee must be an active Procurement Specialist or SCM user');
-  }
-
-  const isActive = body?.is_active === undefined ? true : Boolean(body.is_active);
-  return { requestType, warehouseId, assigneeId, isActive };
-};
-
-const upsertAutoAssignmentRule = async (req, res, next) => {
-  if (!canManageAutoAssignmentRules(req.user)) {
-    return next(createHttpError(403, 'You do not have permission to manage auto-assignment rules'));
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await ensureRequestAutoAssignmentRulesTable(client);
-    const { requestType, warehouseId, assigneeId, isActive } = await validateRulePayload(client, req.body);
-
-    const existing = await client.query(
-      `SELECT id
-         FROM request_auto_assignment_rules
-        WHERE LOWER(request_type) = LOWER($1)
-          AND COALESCE(warehouse_id, 0) = COALESCE($2::INT, 0)
-        LIMIT 1`,
-      [requestType, warehouseId],
+  if (!isSupportedAutoAssignmentType(requestType))
+    throw error(400, "Choose a supported request type for auto-assignment");
+  const warehouseId =
+    body.warehouse_id == null || body.warehouse_id === ""
+      ? null
+      : id(body.warehouse_id);
+  if (requestType === "Stock" && warehouseId === null)
+    throw error(
+      400,
+      "Stock auto-assignment rules must select the submitted warehouse",
     );
-
-    const { rows } = existing.rowCount > 0
-      ? await client.query(
-          `UPDATE request_auto_assignment_rules
-              SET assignee_user_id = $1,
-                  is_active = $2,
-                  updated_by = $3,
-                  updated_at = NOW()
-            WHERE id = $4
-            RETURNING id, request_type, warehouse_id, assignee_user_id, is_active, created_at, updated_at`,
-          [assigneeId, isActive, req.user.id, existing.rows[0].id],
+  if (requestType !== "Stock" && warehouseId !== null)
+    throw error(400, "Warehouse criteria is only available for Stock requests");
+  if (warehouseId !== null)
+    await policy.warehouse(warehouseId, actor.institute_id, client);
+  const assigneeId = id(body.assignee_user_id ?? body.user_id);
+  await policy.assignee(assigneeId, actor.institute_id, client);
+  if (body.is_active !== undefined && typeof body.is_active !== "boolean")
+    throw error(400, "is_active must be a boolean");
+  return {
+    requestType,
+    warehouseId,
+    assigneeId,
+    isActive: body.is_active ?? true,
+  };
+}
+async function audit(client, actor, before, after, action) {
+  await writeAuditEvent({
+    client,
+    entityType: "request_auto_assignment_rule",
+    entityId: (after || before).id,
+    actorUserId: actor.id,
+    instituteId: actor.institute_id,
+    action,
+    beforeData: before,
+    afterData: after,
+  });
+}
+const listAutoAssignmentRules = async (req, res, next) => {
+  try {
+    const result = await withTransaction(async (client) => {
+      const actor = await policy.actor(req.user, client);
+      await ensureSchema(client);
+      const rules = (
+        await client.query(
+          `SELECT r.*,u.name AS assignee_name,u.email AS assignee_email,w.name AS warehouse_name
+        FROM request_auto_assignment_rules r JOIN users u ON u.id=r.assignee_user_id LEFT JOIN warehouses w ON w.id=r.warehouse_id LEFT JOIN departments warehouse_department ON warehouse_department.id=w.department_id
+        WHERE r.institute_id=$1 AND u.institute_id=r.institute_id AND (r.warehouse_id IS NULL OR (w.institute_id=r.institute_id AND (w.department_id IS NULL OR warehouse_department.institute_id=r.institute_id)))
+        ORDER BY LOWER(r.request_type),w.name NULLS FIRST,u.name`,
+          [actor.institute_id],
         )
-      : await client.query(
-          `INSERT INTO request_auto_assignment_rules (
-              request_type, warehouse_id, assignee_user_id, is_active, created_by, updated_by
-            ) VALUES ($1, $2, $3, $4, $5, $5)
-            RETURNING id, request_type, warehouse_id, assignee_user_id, is_active, created_at, updated_at`,
-          [requestType, warehouseId, assigneeId, isActive, req.user.id],
+      ).rows;
+      const users = (
+        await client.query(
+          "SELECT id FROM users WHERE institute_id=$1 AND is_active=true ORDER BY id",
+          [actor.institute_id],
+        )
+      ).rows;
+      const assignees = [];
+      for (const user of users) {
+        try {
+          const u = await policy.assignee(user.id, actor.institute_id, client);
+          assignees.push({ id: u.id, name: u.name, role: u.role });
+        } catch (e) {
+          if (![400, 404].includes(e.statusCode)) throw e;
+        }
+      }
+      const warehouses = (
+        await client.query(
+          `SELECT w.id,w.name FROM warehouses w LEFT JOIN departments d ON d.id=w.department_id WHERE w.institute_id=$1 AND w.is_active=true AND (w.department_id IS NULL OR d.institute_id=w.institute_id) ORDER BY w.name`,
+          [actor.institute_id],
+        )
+      ).rows;
+      return {
+        request_types: AUTO_ASSIGNMENT_REQUEST_TYPES,
+        rules: rules.map(serialize),
+        assignees,
+        warehouses,
+      };
+    });
+    res.json(result);
+  } catch (e) {
+    next(e);
+  }
+};
+const mutate = (mode) => async (req, res, next) => {
+  try {
+    const result = await withTransaction(async (client) => {
+      const actor = await policy.actor(req.user, client);
+      await ensureSchema(client);
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('assignment-rules:'||$1::text,0))",
+        [actor.institute_id],
+      );
+      let before = null;
+      if (mode !== "upsert") {
+        before = (
+          await client.query(
+            "SELECT * FROM request_auto_assignment_rules WHERE id=$1 AND institute_id=$2 FOR UPDATE",
+            [id(req.params.id), actor.institute_id],
+          )
+        ).rows[0];
+        if (!before) throw missing();
+      }
+      if (mode === "delete") {
+        await client.query(
+          "DELETE FROM request_auto_assignment_rules WHERE id=$1 AND institute_id=$2",
+          [before.id, actor.institute_id],
         );
-
-    await client.query('COMMIT');
-    return res.status(201).json({ rule: serializeRule(rows[0]) });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    if (err?.statusCode) {
-      return next(err);
-    }
-    console.error('❌ Failed to save auto-assignment rule:', err);
-    return next(createHttpError(500, 'Failed to save auto-assignment rule'));
-  } finally {
-    client.release();
+        await audit(
+          client,
+          actor,
+          before,
+          null,
+          "AUTO_ASSIGNMENT_RULE_DELETED",
+        );
+        return null;
+      }
+      const v = await payload(actor, req.body, client);
+      const duplicate = (
+        await client.query(
+          "SELECT * FROM request_auto_assignment_rules WHERE institute_id=$1 AND LOWER(request_type)=LOWER($2) AND COALESCE(warehouse_id,0)=COALESCE($3::integer,0) FOR UPDATE",
+          [actor.institute_id, v.requestType, v.warehouseId],
+        )
+      ).rows[0];
+      if (
+        mode === "update" &&
+        duplicate &&
+        Number(duplicate.id) !== Number(before.id)
+      )
+        throw error(
+          409,
+          "A rule already exists for this request type and warehouse",
+        );
+      before = before || duplicate || null;
+      const after = before
+        ? (
+            await client.query(
+              "UPDATE request_auto_assignment_rules SET request_type=$1,warehouse_id=$2,assignee_user_id=$3,is_active=$4,updated_by=$5,updated_at=NOW() WHERE id=$6 AND institute_id=$7 RETURNING *",
+              [
+                v.requestType,
+                v.warehouseId,
+                v.assigneeId,
+                v.isActive,
+                actor.id,
+                before.id,
+                actor.institute_id,
+              ],
+            )
+          ).rows[0]
+        : (
+            await client.query(
+              "INSERT INTO request_auto_assignment_rules(institute_id,request_type,warehouse_id,assignee_user_id,is_active,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$6) RETURNING *",
+              [
+                actor.institute_id,
+                v.requestType,
+                v.warehouseId,
+                v.assigneeId,
+                v.isActive,
+                actor.id,
+              ],
+            )
+          ).rows[0];
+      await audit(
+        client,
+        actor,
+        before,
+        after,
+        before
+          ? "AUTO_ASSIGNMENT_RULE_UPDATED"
+          : "AUTO_ASSIGNMENT_RULE_CREATED",
+      );
+      return after;
+    });
+    if (mode === "delete") res.json({ success: true });
+    else
+      res
+        .status(mode === "upsert" ? 201 : 200)
+        .json({ rule: serialize(result) });
+  } catch (e) {
+    next(e);
   }
 };
-
-const updateAutoAssignmentRule = async (req, res, next) => {
-  if (!canManageAutoAssignmentRules(req.user)) {
-    return next(createHttpError(403, 'You do not have permission to manage auto-assignment rules'));
-  }
-
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
-    return next(createHttpError(400, 'Invalid rule ID'));
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await ensureRequestAutoAssignmentRulesTable(client);
-    const { requestType, warehouseId, assigneeId, isActive } = await validateRulePayload(client, req.body);
-
-    const duplicateCheck = await client.query(
-      `SELECT id
-         FROM request_auto_assignment_rules
-        WHERE LOWER(request_type) = LOWER($1)
-          AND COALESCE(warehouse_id, 0) = COALESCE($2::INT, 0)
-          AND id <> $3`,
-      [requestType, warehouseId, id],
-    );
-    if (duplicateCheck.rowCount > 0) {
-      throw createHttpError(409, 'A rule already exists for this request type and warehouse');
-    }
-
-    const { rows } = await client.query(
-      `UPDATE request_auto_assignment_rules
-          SET request_type = $1,
-              warehouse_id = $2,
-              assignee_user_id = $3,
-              is_active = $4,
-              updated_by = $5,
-              updated_at = NOW()
-        WHERE id = $6
-        RETURNING id, request_type, warehouse_id, assignee_user_id, is_active, created_at, updated_at`,
-      [requestType, warehouseId, assigneeId, isActive, req.user.id, id],
-    );
-
-    if (rows.length === 0) {
-      throw createHttpError(404, 'Auto-assignment rule not found');
-    }
-
-    await client.query('COMMIT');
-    return res.json({ rule: serializeRule(rows[0]) });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    if (err?.statusCode) {
-      return next(err);
-    }
-    console.error('❌ Failed to update auto-assignment rule:', err);
-    return next(createHttpError(500, 'Failed to update auto-assignment rule'));
-  } finally {
-    client.release();
-  }
-};
-
-const deleteAutoAssignmentRule = async (req, res, next) => {
-  if (!canManageAutoAssignmentRules(req.user)) {
-    return next(createHttpError(403, 'You do not have permission to manage auto-assignment rules'));
-  }
-
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
-    return next(createHttpError(400, 'Invalid rule ID'));
-  }
-
-  try {
-    await ensureRequestAutoAssignmentRulesTable();
-    const result = await pool.query('DELETE FROM request_auto_assignment_rules WHERE id = $1', [id]);
-    if (result.rowCount === 0) {
-      return next(createHttpError(404, 'Auto-assignment rule not found'));
-    }
-    return res.json({ success: true });
-  } catch (err) {
-    console.error('❌ Failed to delete auto-assignment rule:', err);
-    return next(createHttpError(500, 'Failed to delete auto-assignment rule'));
-  }
-};
-
 module.exports = {
   listAutoAssignmentRules,
-  upsertAutoAssignmentRule,
-  updateAutoAssignmentRule,
-  deleteAutoAssignmentRule,
+  upsertAutoAssignmentRule: mutate("upsert"),
+  updateAutoAssignmentRule: mutate("update"),
+  deleteAutoAssignmentRule: mutate("delete"),
 };

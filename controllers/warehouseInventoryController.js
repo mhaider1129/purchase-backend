@@ -158,8 +158,13 @@ const getWarehouseItems = async (req, res, next) => {
   try {
     const { rows } = await pool.query(
       `SELECT
+        wsl.id AS warehouse_stock_level_id,
         wsl.stock_item_id,
         wsl.batch_id,
+        wsl.batch_number,
+        wsl.stock_status,
+        wsl.reserved_quantity,
+        GREATEST(wsl.quantity - COALESCE(wsl.reserved_quantity,0),0) AS available_quantity,
         wsl.item_name,
         wsl.lot_number,
         wsl.expiry_date,

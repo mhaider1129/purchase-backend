@@ -98,10 +98,12 @@ function createAttachmentAuthorization(
       `SELECT own.id FROM delivery_inspection_assignments own JOIN delivery_inspection_tasks t ON t.id=own.task_id JOIN users u ON u.id=own.reviewer_id WHERE t.request_id=$1 AND t.institute_id=$3 AND own.reviewer_id=$2 AND ${reviewerScope("u", "own.department_id", "$3")}`,
       [id, a.id, r.institute_id],
     );
+    // Reviewers have a composite key (workspace_id, reviewer_id); only existence
+    // is needed for this grant, so do not select a nonexistent surrogate id.
     const demos = await optional(
       db,
       "device_demo_reviewers",
-      "SELECT own.id FROM device_demo_reviewers own JOIN device_demo_workspaces w ON w.id=own.workspace_id JOIN users u ON u.id=own.reviewer_id WHERE w.request_id=$1 AND own.reviewer_id=$2 AND u.department_id=own.department_id AND w.institute_id=$3",
+      "SELECT 1 AS authorized FROM device_demo_reviewers own JOIN device_demo_workspaces w ON w.id=own.workspace_id JOIN users u ON u.id=own.reviewer_id WHERE w.request_id=$1 AND own.reviewer_id=$2 AND u.department_id=own.department_id AND w.institute_id=$3",
       [id, a.id, r.institute_id],
     );
     const receiving = has(a, "procure-to-pay.receipts.manage")

@@ -20,6 +20,7 @@ function fixture() {
     approver: false,
     buyer: false,
     technical: false,
+    demoReviewer: false,
     selected: true,
     signed: false,
     retained: false,
@@ -53,6 +54,15 @@ function fixture() {
       sql.includes("FROM preprocurement_technical_review_assignments own")
     )
       rows = state.technical ? [{ id: 60 }] : [];
+    else if (sql.includes("FROM device_demo_reviewers own")) {
+      // SQL 050 defines PRIMARY KEY(workspace_id,reviewer_id), not an id column.
+      // The old permissive fixture hid this query/schema mismatch.
+      if (/\bown\.id\b/.test(sql))
+        throw Object.assign(new Error('column own.id does not exist'), { code: '42703' });
+      rows = state.demoReviewer ? [{ authorized: 1 }] : [];
+    }
+    else if (sql.startsWith("SELECT e.id FROM device_demo_events"))
+      rows = state.demoReviewer && state.selected ? [{ id: 61 }] : [];
     else if (sql.startsWith("SELECT t.id FROM preprocurement"))
       rows = state.technical && state.selected ? [{ id: 60 }] : [];
     else if (

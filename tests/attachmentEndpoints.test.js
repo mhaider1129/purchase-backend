@@ -67,6 +67,8 @@ const get = (path) =>
   request(app).get(path).set("Authorization", "Bearer fixture");
 test.each([
   "/attachments/30/download",
+  "/attachments/20",
+  "/attachments/item/50",
   "/files/30",
   "/uploads/request-20/test.pdf",
 ])("anonymous access blocked: %s", async (p) => {
@@ -246,3 +248,68 @@ test.each(["contract approval", "document version"])(
     expect(f.state.deleted).toBe(false);
   },
 );
+
+
+describe("approval attachment listing with the device-demo module installed", () => {
+  beforeEach(() => {
+    f.state.tables.add("device_demo_reviewers");
+  });
+
+  test.each(["requester", "approver", "buyer", "manager"])(
+    "%s can list request attachments when demo reviewers have no surrogate ID",
+    async (kind) => {
+      if (kind !== "requester") f.state.root.requester_id = 2;
+      if (kind === "approver") f.state.approver = true;
+      if (kind === "buyer") {
+        f.state.buyer = true;
+        f.state.permissions = ["procurement.update-status"];
+      }
+      if (kind === "manager") f.state.permissions = ["requests.view-all"];
+      const response = await get("/attachments/20");
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([expect.objectContaining({ id: 30, file_name: "test.pdf" })]);
+      expect(response.headers["cache-control"]).toContain("no-store");
+      expect(storage.download).not.toHaveBeenCalled();
+    },
+  );
+
+  test("unrelated and foreign accounts still cannot inspect attachment metadata", async () => {
+    f.state.root.requester_id = 2;
+    let response = await get("/attachments/20");
+    expect(response.status).toBe(404);
+    expect(response.text).not.toMatch(/test.pdf|request-20/);
+    f.state.permissions = ["requests.view-all"];
+    f.state.root.institute_id = 11;
+    response = await get("/attachments/20");
+    expect(response.status).toBe(404);
+    expect(response.text).not.toMatch(/test.pdf|request-20/);
+  });
+
+  test("demo reviewer sees selected evidence only and loses access when assignment is revoked", async () => {
+    f.state.root.requester_id = 2;
+    f.state.file.uploaded_by = 2;
+    f.state.demoReviewer = true;
+    f.state.tables.add("device_demo_events");
+    let response = await get("/attachments/20");
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([expect.objectContaining({ id: 30 })]);
+    f.state.selected = false;
+    response = await get("/attachments/20");
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+    f.state.demoReviewer = false;
+    expect((await get("/attachments/20")).status).toBe(404);
+  });
+
+  test("real query failures still fail closed rather than returning an empty success", async () => {
+    const query = f.query;
+    pool.query.mockImplementation((sql, args) => {
+      if (sql.includes("FROM device_demo_reviewers own"))
+        throw Object.assign(new Error("database unavailable"), { code: "ECONNRESET" });
+      return query(sql, args);
+    });
+    const response = await get("/attachments/20");
+    expect(response.status).toBe(500);
+    expect(response.text).not.toMatch(/test.pdf|request-20/);
+  });
+});

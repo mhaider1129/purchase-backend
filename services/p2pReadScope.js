@@ -49,7 +49,7 @@ function predicate(kind, a, parameter = "$1") {
   const commitment = (c) =>
     `(${root(`${c}.request_id`)} AND EXISTS(SELECT 1 FROM budget_envelopes scope_cb JOIN requests scope_cr ON scope_cr.id=${c}.request_id WHERE scope_cb.id=${c}.budget_envelope_id AND scope_cb.department_id=scope_cr.department_id AND scope_cb.project_id IS NOT DISTINCT FROM scope_cr.project_id AND ${budget("scope_cb")} AND (${c}.purchase_order_id IS NULL OR EXISTS(SELECT 1 FROM purchase_orders scope_cpo WHERE scope_cpo.id=${c}.purchase_order_id AND scope_cpo.request_id=${c}.request_id)) AND (${c}.supplier_invoice_id IS NULL OR EXISTS(SELECT 1 FROM supplier_invoices scope_ci WHERE scope_ci.id=${c}.supplier_invoice_id AND scope_ci.request_id=${c}.request_id AND ${invoice("scope_ci")})) AND (${c}.ap_voucher_id IS NULL OR EXISTS(SELECT 1 FROM ap_vouchers scope_cv WHERE scope_cv.id=${c}.ap_voucher_id AND scope_cv.request_id=${c}.request_id AND ${voucher("scope_cv")}))))`;
   const award = (x) =>
-    `(${root(`${x}.request_id`)} AND ${supplier(`${x}.supplier_id`, `${x}.request_id`)} AND EXISTS(SELECT 1 FROM requested_items scope_ai WHERE scope_ai.id=${x}.request_item_id AND scope_ai.request_id=${x}.request_id))`;
+    `(${root(`${x}.request_id`)} AND ${require("./rfxAuthorization").awardSourcePredicate(x)} AND ${supplier(`${x}.supplier_id`, `${x}.request_id`)} AND EXISTS(SELECT 1 FROM requested_items scope_ai WHERE scope_ai.id=${x}.request_item_id AND scope_ai.request_id=${x}.request_id))`;
   const posting = (f) =>
     `EXISTS(SELECT 1 FROM ap_vouchers scope_fv WHERE scope_fv.id=${f}.ap_voucher_id AND scope_fv.request_id=${f}.request_id AND scope_fv.supplier_invoice_id=${f}.supplier_invoice_id AND ${voucher("scope_fv")})`;
   const expressions = {

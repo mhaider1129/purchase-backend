@@ -19,7 +19,7 @@ async function load(db, actor) {
   await requireSchema(db);
   const quotations = (
     await db.query(
-      "SELECT q.id,q.requested_item_id,ri.item_name,rr.supplier_id,s.name supplier_name FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN requested_items ri ON ri.id=q.requested_item_id JOIN requests r ON r.id=ri.request_id JOIN suppliers s ON s.id=rr.supplier_id WHERE r.institute_id=$1 AND rr.request_id=r.id AND (s.institute_id=$1 OR s.institute_id IS NULL) ORDER BY q.id DESC LIMIT 1000",
+      "SELECT q.id,q.requested_item_id,ri.item_name,rr.supplier_id,s.name supplier_name FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN rfx_events evt ON evt.id=rr.rfx_id JOIN requested_items ri ON ri.id=q.requested_item_id JOIN requests r ON r.id=ri.request_id JOIN suppliers s ON s.id=rr.supplier_id WHERE r.institute_id=$1 AND rr.request_id=r.id AND evt.request_id=r.id AND (s.institute_id=$1 OR s.institute_id IS NULL) ORDER BY q.id DESC LIMIT 1000",
       [actor.institute_id],
     )
   ).rows;

@@ -20,7 +20,7 @@ const p2p = require('../controllers/procureToPayController');
 const res = () => ({ json: jest.fn() });
 async function approvedProposal(h) {
   // 1: canonical supplier quotation persistence (actual line normalization).
-  await h.repository.withTransaction(repository => submitLinkedRfxResponse({ repository, event: h.state.event, supplierId: 3, submittedBy: h.scm.id, notes: 'Supplier proposal', responseData: { manufacturer: 'Maker', model: 'Model A' }, lines: [{ requested_item_id: 4, quoted_quantity: '2', unit_price: '5', currency: 'IQD', offered_specs: 'Specification A', ...(h.state.item.generic_item_id ? { approved_product_id: 71, supplier_catalog_item_id: 72 } : {}) }] }));
+  await h.repository.withTransaction(repository => submitLinkedRfxResponse({ repository, event: h.state.event, supplierId: 3, submittedBy: h.scm.id, actor:h.scm, notes: 'Supplier proposal', responseData: { manufacturer: 'Maker', model: 'Model A' }, lines: [{ requested_item_id: 4, quoted_quantity: '2', unit_price: '5', currency: 'IQD', offered_specs: 'Specification A', ...(h.state.item.generic_item_id ? { approved_product_id: 71, supplier_catalog_item_id: 72 } : {}) }] }));
   const service = createTechnicalReviewService(h.database);
   // 2: SCM requests technical opinion on exact persisted quotation and evidence.
   let review = await service.create(h.scm, { request_id: 2, submission_key: 'review-1', instructions: 'Assess offered device and specification', reviewer_ids: [10], items: [{ item_id: 4, evidence: { basis: 'data_sheet', category: 'Device', quotation_item_id: 21, no_sample_reason: 'Sample unavailable; assess attached sheet', evidence_description: 'Supplier Model A', attachment_ids: [8] } }] });

@@ -254,9 +254,15 @@ const getLinkedRecords = async (requestId,user) => {
       client.query('SELECT si.id,si.invoice_number,si.supplier,si.total_amount,si.currency,si.submitted_at,si.purchase_order_id FROM supplier_invoices si WHERE si.request_id=$1 ORDER BY si.submitted_at DESC',[requestId]),
     ]);return {purchaseOrders:purchaseOrders.rows,receipts:receipts.rows,invoices:invoices.rows};
   },{requestId}).catch(error=>{if([403,404].includes(error.statusCode))return {purchaseOrders:[],receipts:[],invoices:[]};throw error;});
+  const sourcingPolicy=require('../../services/rfxAuthorization');
+  const sourcing=sourcingPolicy.transaction(user,{requestId},async(client)=>{
+    const rfqs=(await client.query('SELECT id,title,rfx_type,status,due_date,created_at,updated_at FROM rfx_events WHERE request_id=$1 ORDER BY created_at DESC',[requestId])).rows;
+    const quotations=(await client.query(`SELECT rr.id,rr.rfx_id,rr.bid_amount,rr.status,rr.created_at,s.name AS supplier_name FROM rfx_responses rr JOIN rfx_events e ON e.id=rr.rfx_id JOIN suppliers s ON s.id=rr.supplier_id WHERE e.request_id=$1 AND ${sourcingPolicy.responsePredicate('rr','e')} ORDER BY rr.created_at DESC`,[requestId])).rows;
+    return {rfqs,quotations};
+  }).catch(error=>{if([403,404].includes(error.statusCode))return {rfqs:[],quotations:[]};throw error;});
   const [rfqs, quotations, purchaseOrders, grns, inspections, invoices, contracts] = await Promise.all([
-    safeQuery('rfx_events', `SELECT id, title, rfx_type, status, due_date, created_at, updated_at FROM rfx_events WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
-    safeQuery('rfx_responses', `SELECT rr.id, rr.rfx_id, rr.bid_amount, rr.status, rr.created_at, s.name AS supplier_name FROM rfx_responses rr LEFT JOIN suppliers s ON s.id = rr.supplier_id WHERE rr.request_id = $1 ORDER BY rr.created_at DESC`, [requestId]),
+    sourcing.then(value=>value.rfqs),
+    sourcing.then(value=>value.quotations),
     financial.then(value=>value.purchaseOrders),
     financial.then(value=>value.receipts),
     safeQuery('technical_inspections', `SELECT id, item_name, supplier_name, inspection_date, acceptance_status, acceptance_notes, created_at FROM technical_inspections WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),

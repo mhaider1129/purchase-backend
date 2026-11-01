@@ -1,4 +1,7 @@
-const pool = require('../config/db');
+const defaultPool = require('../config/db');
+// Bind existing calculations and persistence to an authorized caller transaction.
+// Default exports retain compatibility for internal helpers and domain tests.
+function createService(pool=defaultPool) {
 
 const COMMERCIAL_MODELS = ['PURCHASE', 'LEASE', 'REAGENT_RENTAL', 'PAY_PER_REPORTABLE', 'KIT_OWNERSHIP', 'HYBRID', 'SUBSCRIPTION', 'OUTSOURCING', 'SERVICE_CONTRACT', 'CUSTOM'];
 const PRICING_METHODS = new Set(COMMERCIAL_MODELS);
@@ -665,7 +668,7 @@ const calculatePracticalUtilization = (testCost, monthlyVolume) => {
 };
 
 
-module.exports = {
+return {
   COMMERCIAL_MODELS,
   PRICING_METHODS,
   PRICING_MODELS,
@@ -696,3 +699,5 @@ module.exports = {
   validateImportRows,
   calculatePracticalUtilization,
 };
+}
+module.exports={...createService(),createService};

@@ -169,7 +169,7 @@ ALTER TABLE supplier_invoices ADD COLUMN receipt_id BIGINT;
 ALTER TABLE ap_voucher_lines ADD COLUMN cost_center_id INTEGER;
 CREATE TABLE finance_cost_centers(id SERIAL PRIMARY KEY,department_id INTEGER,project_id UUID,is_active BOOLEAN DEFAULT TRUE);
 INSERT INTO users(id,role,institute_id,is_active) VALUES(2,'Finance',1,true),(3,'SCM',1,true),(4,'Finance',2,true),(5,'Admin',1,true),(6,'Finance',1,false);
-INSERT INTO permissions(code) SELECT unnest(ARRAY['procure-to-pay.lifecycle.view','procure-to-pay.purchase-orders.manage','procure-to-pay.receipts.manage','procure-to-pay.invoices.manage','procure-to-pay.match.manage','finance.verify','finance.voucher.create','finance.voucher.verify','finance.post-ledger','finance.payment.manage','finance.override-mismatch','finance.budget.manage','inventory.receive','inventory.cross-warehouse']);
+INSERT INTO permissions(code) SELECT unnest(ARRAY['rfx.manage','rfx.respond','procure-to-pay.lifecycle.view','procure-to-pay.purchase-orders.manage','procure-to-pay.receipts.manage','procure-to-pay.invoices.manage','procure-to-pay.match.manage','finance.verify','finance.voucher.create','finance.voucher.verify','finance.post-ledger','finance.payment.manage','finance.override-mismatch','finance.budget.manage','inventory.receive','inventory.cross-warehouse']);
 INSERT INTO user_permissions SELECT u.id,p.id FROM users u CROSS JOIN permissions p WHERE u.id IN(1,2,4,6);
 
 ALTER TABLE supplier_invoices ADD COLUMN supplier TEXT;
@@ -185,3 +185,227 @@ CREATE TABLE rfx_responses(id BIGSERIAL PRIMARY KEY,rfx_id BIGINT REFERENCES rfx
 ALTER TABLE warehouses ADD COLUMN department_id INTEGER REFERENCES departments;
 
 ALTER TABLE requests ADD COLUMN supply_warehouse_id INTEGER REFERENCES warehouses;
+
+ALTER TABLE approved_products ADD COLUMN institute_id INTEGER;
+ALTER TABLE rfx_events ADD COLUMN title TEXT,ADD COLUMN rfx_type TEXT,ADD COLUMN description TEXT,ADD COLUMN details JSONB,ADD COLUMN due_date TIMESTAMPTZ,ADD COLUMN status TEXT DEFAULT 'open',ADD COLUMN created_by INTEGER,ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW(),ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE rfx_responses ADD COLUMN submitted_by INTEGER,ADD COLUMN bid_amount NUMERIC,ADD COLUMN notes TEXT,ADD COLUMN response_data JSONB,ADD COLUMN status TEXT DEFAULT 'submitted',ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW();
+CREATE TABLE rfx_response_items(id BIGSERIAL PRIMARY KEY,rfx_response_id BIGINT REFERENCES rfx_responses,requested_item_id INTEGER REFERENCES requested_items,quoted_quantity NUMERIC,free_quantity NUMERIC,unit_price NUMERIC,currency TEXT,brand TEXT,offered_specs TEXT,notes TEXT,approved_product_id BIGINT REFERENCES approved_products,supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items);
+ALTER TABLE requested_items ADD COLUMN approval_comments TEXT;
+ALTER TABLE requests ADD COLUMN sourcing_status TEXT,ADD COLUMN purchase_order_id BIGINT,ADD COLUMN awarded_supplier_id INTEGER,ADD COLUMN awarded_rfx_id BIGINT,ADD COLUMN awarded_rfx_response_id BIGINT,ADD COLUMN purchase_order_number TEXT,ADD COLUMN awarded_at TIMESTAMPTZ,ADD COLUMN po_issued_at TIMESTAMPTZ;
+CREATE TABLE request_logs(id BIGSERIAL PRIMARY KEY,request_id INTEGER,action TEXT,actor_id INTEGER,comments TEXT);
+
+CREATE TABLE approvals(id SERIAL PRIMARY KEY,request_id INTEGER REFERENCES requests,status TEXT,is_superseded BOOLEAN DEFAULT FALSE);
+
+ALTER TABLE users ADD COLUMN name TEXT;
+ALTER TABLE requests ADD COLUMN requester_id INTEGER,ADD COLUMN temporary_requester_name TEXT,ADD COLUMN justification TEXT;
+
+-- Independent evaluation tables: focused disposable subset of the existing contract.
+CREATE TABLE sections(id SERIAL PRIMARY KEY,department_id INTEGER REFERENCES departments);
+
+CREATE TABLE IF NOT EXISTS public.procurement_evaluation_cases (
+  id bigserial PRIMARY KEY,
+  title text,
+  description text,
+  category text,
+  request_id bigint,
+  department_id bigint,
+  section_id bigint,
+  evaluation_type text,
+  evaluation_period_years numeric(20,6) DEFAULT 5,
+  expected_annual_growth_rate numeric(20,6) DEFAULT 0,
+  currency text,
+  status text NOT NULL DEFAULT 'Draft' CHECK(status IN ('Draft','In Review','Finalized','Cancelled')),
+  recommendation_summary text,
+  selected_offer_id bigint,
+  created_by bigint,
+  finalized_by bigint,
+  finalized_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_evaluation_criteria (
+  id bigserial PRIMARY KEY,
+  evaluation_case_id bigint,
+  criteria_name text,
+  criteria_group text,
+  weight numeric(20,6) DEFAULT 0,
+  scoring_type text,
+  higher_is_better boolean DEFAULT true,
+  is_required boolean DEFAULT true,
+  metric_key text,
+  normalization_method text,
+  target_value numeric(20,6) DEFAULT 0,
+  min_value numeric(20,6) DEFAULT 0,
+  max_value numeric(20,6) DEFAULT 0,
+  is_knockout boolean DEFAULT false,
+  required_threshold numeric(20,6) DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_evaluation_offer_test_costs (
+  unit_cost numeric(20,6) DEFAULT 0,
+  id bigserial PRIMARY KEY,
+  evaluation_case_id bigint,
+  offer_id bigint,
+  test_id bigint,
+  pricing_method text,
+  element_type text,
+  quantity numeric(20,6) DEFAULT 0,
+  annual_quantity numeric(20,6) DEFAULT 0,
+  dependency_group text,
+  alternative_group text,
+  kit_price numeric(20,6) DEFAULT 0,
+  tests_per_kit numeric(20,6) DEFAULT 0,
+  usable_tests_per_kit numeric(20,6) DEFAULT 0,
+  open_vial_stability_days numeric(20,6) DEFAULT 0,
+  onboard_stability_days numeric(20,6) DEFAULT 0,
+  shelf_life_months numeric(20,6) DEFAULT 0,
+  expected_waste_percentage numeric(20,6) DEFAULT 0,
+  repeat_rate_percentage numeric(20,6) DEFAULT 0,
+  qc_frequency_per_kit numeric(20,6) DEFAULT 0,
+  qc_cost_per_kit numeric(20,6) DEFAULT 0,
+  calibrator_frequency_per_kit numeric(20,6) DEFAULT 0,
+  calibrator_cost_per_kit numeric(20,6) DEFAULT 0,
+  fixed_consumable_cost_per_kit numeric(20,6) DEFAULT 0,
+  other_kit_related_cost numeric(20,6) DEFAULT 0,
+  price_per_reportable_test numeric(20,6) DEFAULT 0,
+  company_absorbs_waste boolean DEFAULT false,
+  company_absorbs_qc boolean DEFAULT false,
+  company_absorbs_repeats boolean DEFAULT false,
+  notes text,
+  calculated_effective_cost_per_reported_test numeric(20,6) DEFAULT 0,
+  annual_test_cost numeric(20,6) DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(offer_id,test_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_evaluation_offers (
+  id bigserial PRIMARY KEY,
+  evaluation_case_id bigint,
+  supplier_id bigint,
+  supplier_name text,
+  offer_name text,
+  manufacturer_name text,
+  model_name text,
+  country_of_origin text,
+  pricing_model text,
+  is_disqualified boolean DEFAULT false,
+  disqualification_reason text,
+  compliance_status text,
+  lease_monthly_payment numeric(20,6) DEFAULT 0,
+  lease_term_months numeric(20,6) DEFAULT 0,
+  subscription_base_fee numeric(20,6) DEFAULT 0,
+  included_volume numeric(20,6) DEFAULT 0,
+  overage_price numeric(20,6) DEFAULT 0,
+  sla_penalty_amount numeric(20,6) DEFAULT 0,
+  uptime_guarantee_percentage numeric(20,6) DEFAULT 0,
+  downtime_cost numeric(20,6) DEFAULT 0,
+  supplier_risk_premium numeric(20,6) DEFAULT 0,
+  stockout_risk_cost numeric(20,6) DEFAULT 0,
+  fx_risk_cost numeric(20,6) DEFAULT 0,
+  obsolescence_risk_cost numeric(20,6) DEFAULT 0,
+  penalty_or_sla_adjustment numeric(20,6) DEFAULT 0,
+  device_price numeric(20,6) DEFAULT 0,
+  installation_cost numeric(20,6) DEFAULT 0,
+  training_cost numeric(20,6) DEFAULT 0,
+  shipping_cost numeric(20,6) DEFAULT 0,
+  customs_cost numeric(20,6) DEFAULT 0,
+  other_initial_cost numeric(20,6) DEFAULT 0,
+  device_discount_value numeric(20,6) DEFAULT 0,
+  warranty_years numeric(20,6) DEFAULT 0,
+  annual_maintenance_cost numeric(20,6) DEFAULT 0,
+  annual_service_contract_cost numeric(20,6) DEFAULT 0,
+  annual_fixed_consumables_cost numeric(20,6) DEFAULT 0,
+  annual_calibration_qc_cost numeric(20,6) DEFAULT 0,
+  annual_spare_parts_cost numeric(20,6) DEFAULT 0,
+  expected_lifetime_years numeric(20,6) DEFAULT 0,
+  delivery_time_days numeric(20,6) DEFAULT 0,
+  payment_terms text,
+  minimum_annual_commitment_amount numeric(20,6) DEFAULT 0,
+  minimum_annual_commitment_tests numeric(20,6) DEFAULT 0,
+  reagent_rental_terms text,
+  free_device_included boolean DEFAULT false,
+  commitment_penalty_terms text,
+  technical_notes text,
+  commercial_notes text,
+  risk_notes text,
+  technical_model jsonb DEFAULT '{}'::jsonb,
+  contract_model jsonb DEFAULT '{}'::jsonb,
+  package_model jsonb DEFAULT '{}'::jsonb,
+  service_model jsonb DEFAULT '{}'::jsonb,
+  risk_model jsonb DEFAULT '{}'::jsonb,
+  scenario_metadata jsonb DEFAULT '{}'::jsonb,
+  is_compliant boolean DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_evaluation_results (
+  pricing_model text,
+  initial_cost numeric(20,6) DEFAULT 0,
+  annual_fixed_cost numeric(20,6) DEFAULT 0,
+  annual_variable_test_cost numeric(20,6) DEFAULT 0,
+  annual_commitment_adjustment numeric(20,6) DEFAULT 0,
+  total_annual_cost numeric(20,6) DEFAULT 0,
+  tco_period_cost numeric(20,6) DEFAULT 0,
+  risk_adjusted_tco numeric(20,6) DEFAULT 0,
+  average_cost_per_reported_test numeric(20,6) DEFAULT 0,
+  total_expected_reported_tests numeric(20,6) DEFAULT 0,
+  cost_score numeric(20,6) DEFAULT 0,
+  technical_score numeric(20,6) DEFAULT 0,
+  supplier_score numeric(20,6) DEFAULT 0,
+  risk_score numeric(20,6) DEFAULT 0,
+  final_weighted_score numeric(20,6) DEFAULT 0,
+  commitment_volume_shortfall boolean DEFAULT false,
+  shortfall_tests numeric(20,6) DEFAULT 0,
+  commitment_warning text,
+  rank integer,
+  compliance_passed boolean DEFAULT true,
+  knockout_failed boolean DEFAULT false,
+  scoring_breakdown jsonb DEFAULT '{}'::jsonb,
+  recommendation_reason text,
+  id bigserial PRIMARY KEY,
+  evaluation_case_id bigint,
+  offer_id bigint,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE(evaluation_case_id,offer_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_evaluation_scores (
+  id bigserial PRIMARY KEY,
+  evaluation_case_id bigint,
+  offer_id bigint,
+  criteria_id bigint,
+  evaluator_id bigint,
+  weighted_score numeric(20,6) DEFAULT 0,
+  raw_value numeric(20,6) DEFAULT 0,
+  score numeric(20,6) DEFAULT 0,
+  comments text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(offer_id,criteria_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.procurement_evaluation_tests (
+  id bigserial PRIMARY KEY,
+  evaluation_case_id bigint,
+  test_name text,
+  test_code text,
+  category text,
+  unit text,
+  expected_monthly_volume numeric(20,6) DEFAULT 0,
+  growth_rate numeric(20,6) DEFAULT 0,
+  is_required boolean DEFAULT true,
+  dependency_risk text,
+  is_alternative boolean DEFAULT false,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO permissions(code) VALUES('evaluations.manage');
+INSERT INTO user_permissions SELECT 1,id FROM permissions WHERE code='evaluations.manage';

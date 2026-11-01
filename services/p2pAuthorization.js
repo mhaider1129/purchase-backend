@@ -232,6 +232,7 @@ async function authorizeCommand(tx, input, capability, refs = {}) {
     }
     if (kind === "item") link(row.request_id, request?.id);
     if (kind === "award") {
+      await require("./rfxAuthorization").assertAwardOwnership(client,row.id);
       const item = await visit("item", row.request_item_id);
       link(item.request_id, row.request_id);
       await supplier(row.supplier_id);

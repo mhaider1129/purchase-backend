@@ -1,3 +1,4 @@
+jest.mock('../services/rfxAuthorization',()=>({transaction:async(actor,_refs,work)=>work(require('../config/db'),{actor,instituteId:1})}));
 jest.mock('../config/db', () => ({
   query: jest.fn(),
 }));

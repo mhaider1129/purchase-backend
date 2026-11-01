@@ -51,7 +51,7 @@ async function prepare(db, actor, evidence, itemId) {
     // already locks that header before taking the technical-review shared lock.
     const quote = (
       await db.query(
-        `SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN requested_items ri ON ri.id=q.requested_item_id JOIN requests r ON r.id=ri.request_id WHERE q.id=$1 AND q.requested_item_id=$2 AND rr.request_id=r.id AND r.institute_id=$3 FOR SHARE OF q`,
+        `SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN rfx_events evt ON evt.id=rr.rfx_id JOIN requested_items ri ON ri.id=q.requested_item_id JOIN requests r ON r.id=ri.request_id WHERE q.id=$1 AND q.requested_item_id=$2 AND rr.request_id=r.id AND evt.request_id=r.id AND r.institute_id=$3 FOR SHARE OF q`,
         [evidence.quotation_item_id, itemId, actor.institute_id],
       )
     ).rows[0];
@@ -168,7 +168,7 @@ async function assertCurrent(db, evidence, context = {}) {
       );
     const value = (
       await db.query(
-        "SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id WHERE q.id=$1 FOR SHARE OF q",
+        "SELECT q.*,rr.supplier_id,rr.status AS response_status,rr.notes AS response_notes,rr.response_data,rr.bid_amount AS response_bid_amount,rr.request_id AS response_request_id FROM rfx_response_items q JOIN rfx_responses rr ON rr.id=q.rfx_response_id JOIN rfx_events evt ON evt.id=rr.rfx_id JOIN requested_items ri ON ri.id=q.requested_item_id WHERE q.id=$1 AND evt.request_id=ri.request_id AND (rr.request_id IS NULL OR rr.request_id=ri.request_id) FOR SHARE OF q",
         [evidence.quotation_item_id],
       )
     ).rows[0];

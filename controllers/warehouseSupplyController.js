@@ -55,15 +55,45 @@ const findActiveRecallBlocker = async (client, { stockItemId, itemName }) => {
   return rows[0] || null;
 };
 
-const decrementWarehouseStock = async (client, { warehouseId, stockItem, quantity, requestId, departmentId, userId, batchId = null, lotNumber = null, expiryDate = null, actor }) => {
+// Legacy batch IDs are foreign keys, not the canonical batch_number. Resolve
+// selected stock against this warehouse/item, then let the posting engine own
+// stock status, reservations, availability, allocations and audit.
+const resolveSupplyBalance = async (client, { warehouseId, stockItemId, balanceId, batchId, lotNumber, expiryDate }) => {
+  if (balanceId == null && batchId == null) return null;
+  // Do not lock balances before the posting engine acquires its advisory locks.
+  // The engine revalidates and locks the exact allocation before any deduction.
+  const result = await client.query(
+    `SELECT * FROM warehouse_stock_levels WHERE warehouse_id=$1 AND stock_item_id=$2
+       AND ($3::integer IS NULL OR id=$3)
+       AND ($4::integer IS NULL OR batch_id=$4)
+       AND ($5::text IS NULL OR lot_number=$5)
+       AND ($6::date IS NULL OR expiry_date=$6)
+       AND stock_status='AVAILABLE' AND quantity-COALESCE(reserved_quantity,0)>0
+     ORDER BY id LIMIT 2`,
+    [warehouseId, stockItemId, balanceId, batchId, lotNumber, expiryDate],
+  );
+  if (result.rows.length !== 1) {
+    const err = createHttpError(409, result.rows.length
+      ? 'This legacy batch identifies multiple stock balances. Refresh and select a specific batch/lot.'
+      : 'Selected batch/lot is no longer available in this warehouse. Refresh warehouse stock.');
+    err.code = 'SUPPLY_BALANCE_CHANGED';
+    throw err;
+  }
+  return result.rows[0];
+};
+
+const decrementWarehouseStock = async (client, { warehouseId, stockItem, quantity, requestId, supplyRecordId, departmentId, userId, balance = null, lotNumber = null, expiryDate = null, actor }) => {
   const warehouse = await client.query('SELECT institute_id FROM warehouses WHERE id=$1', [warehouseId]);
   const { postMovement } = require('../services/inventoryPostingService');
   const result = await postMovement({ movementType:'ISSUE', inventoryItemId:stockItem.id, instituteId:warehouse.rows[0].institute_id,
-    warehouseId, quantity, stockStatus:'AVAILABLE', batchNumber:batchId == null ? null : String(batchId), lotNumber, expiryDate,
-    sourceDocumentType:'warehouse_supply', sourceDocumentId:requestId, sourceDocumentLineId:stockItem.id,
+    warehouseId, quantity, stockStatus:'AVAILABLE', batchNumber:balance?.batch_number || null,
+    lotNumber:balance?.lot_number || lotNumber, expiryDate:balance?.expiry_date || expiryDate,
+    serialNumber:balance?.serial_number || null,
+    ...(balance ? { allocationOverrides:[{ warehouseStockLevelId:balance.id, quantity }] } : {}),
+    sourceDocumentType:'warehouse_supply', sourceDocumentId:requestId, sourceDocumentLineId:supplyRecordId,
     departmentId, destinationLocation:`department:${departmentId}`, actor:actor || { id:userId },
-    idempotencyKey:`warehouse-supply:${requestId}:item:${stockItem.id}:quantity:${quantity}`,
-    correlationId:`warehouse-supply:${requestId}`, metadata:{ requestId, departmentId } }, client);
+    idempotencyKey:`warehouse-supply:${requestId}:supply:${supplyRecordId}`,
+    correlationId:`warehouse-supply:${requestId}`, metadata:{ requestId, departmentId, supplyRecordId } }, client);
   return { stock_item_id:stockItem.id,item_name:stockItem.name,movement_id:result.movement.id,allocations:result.allocations };
 };
 
@@ -160,6 +190,9 @@ const recordSuppliedItems = async (req, res, next) => {
     }, {});
 
     const inventoryMovements = [];
+    if (new Set(items.map(item => String(item.item_id))).size !== items.length) {
+      throw createHttpError(400, 'Each supply item may appear only once per save');
+    }
 
     for (const item of items) {
       const { item_id: itemId, supplied_quantity: suppliedQuantity, batch_id: rawBatchId, lot_number: rawLotNumber, expiry_date: rawExpiryDate } = item;
@@ -176,12 +209,21 @@ const recordSuppliedItems = async (req, res, next) => {
       }
 
       const parsedQuantity = Number(suppliedQuantity);
-      if (Number.isNaN(parsedQuantity) || parsedQuantity <= 0) {
+      if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
         await client.query('ROLLBACK');
         return next(createHttpError(400, 'Supplied quantity must be a positive number'));
       }
 
       const alreadySupplied = suppliedMap[itemId] || 0;
+      if (item.expected_supplied_quantity !== undefined) {
+        const expected = Number(item.expected_supplied_quantity);
+        if (!Number.isFinite(expected) || expected < 0) throw createHttpError(400, 'Expected supplied quantity must be a nonnegative number');
+        if (expected !== alreadySupplied) {
+          const err = createHttpError(409, 'Supplied quantities changed since this page was loaded. Reload the request before supplying again.');
+          err.code = 'SUPPLY_QUANTITY_CHANGED';
+          throw err;
+        }
+      }
       const newTotal = alreadySupplied + parsedQuantity;
       if (newTotal > Number(requestedItem.quantity)) {
         await client.query('ROLLBACK');
@@ -224,11 +266,17 @@ const recordSuppliedItems = async (req, res, next) => {
       }
       const lotNumber = rawLotNumber ? String(rawLotNumber).trim() : null;
       const expiryDate = rawExpiryDate ? String(rawExpiryDate).slice(0, 10) : null;
+      const balanceId = item.warehouse_stock_level_id == null ? null : Number(item.warehouse_stock_level_id);
+      if (balanceId !== null && (!Number.isSafeInteger(balanceId) || balanceId <= 0)) throw createHttpError(400, 'A valid warehouse stock balance is required');
+      if (!stockItem && (balanceId !== null || batchId !== null)) throw createHttpError(409, 'Selected stock item could not be resolved. Refresh the request before supplying.');
+      const balance = stockItem ? await resolveSupplyBalance(client, {
+        warehouseId, stockItemId:stockItem.id, balanceId, batchId, lotNumber, expiryDate,
+      }) : null;
 
-      await client.query(
+      const supplyRecord = await client.query(
         `INSERT INTO warehouse_supplied_items (request_id, item_id, supplied_quantity, supplied_by, batch_id, lot_number, expiry_date)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [requestId, itemId, parsedQuantity, userId, batchId, lotNumber, expiryDate]
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [requestId, itemId, parsedQuantity, userId, balance?.batch_id ?? batchId, balance?.lot_number ?? lotNumber, balance?.expiry_date ?? expiryDate]
       );
 
       suppliedMap[itemId] = newTotal;
@@ -239,10 +287,11 @@ const recordSuppliedItems = async (req, res, next) => {
           stockItem,
           quantity: parsedQuantity,
           requestId: request.id,
+          supplyRecordId: supplyRecord.rows[0].id,
           departmentId: request.department_id,
           userId,
           actor: req.user,
-          batchId,
+          balance,
           lotNumber,
           expiryDate,
         });

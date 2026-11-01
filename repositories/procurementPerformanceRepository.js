@@ -12,6 +12,8 @@ function createProcurementPerformanceRepository(database = pool) {
       try { await client.query('BEGIN'); const value = await work(createProcurementPerformanceRepository(client)); await client.query('COMMIT'); return value; }
       catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
     },
+    lockAssignmentCases: async requestId => (await q('SELECT c.*,i.request_id AS item_request_id FROM procurement_cases c LEFT JOIN requested_items i ON i.id=c.requested_item_id WHERE c.request_id=$1 AND c.closed_at IS NULL ORDER BY c.id FOR UPDATE OF c',[requestId])).rows,
+    updateCaseAssignee: async (caseId,buyerId,actorId) => (await q('UPDATE procurement_cases SET assigned_buyer_id=$2,updated_by=$3,updated_at=NOW() WHERE id=$1 RETURNING *',[caseId,buyerId,actorId])).rows[0],
     findActiveByRequestedItem: async id => (await q('SELECT * FROM procurement_cases WHERE requested_item_id=$1 AND closed_at IS NULL', [id])).rows[0],
     insertCase: async row => (await q(`INSERT INTO procurement_cases(request_id,requested_item_id,institute_id,department_id,assigned_buyer_id,case_status,activity_coverage,complexity_coverage,commercial_coverage,cycle_time_coverage,logistics_coverage,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       ON CONFLICT(requested_item_id) WHERE closed_at IS NULL DO NOTHING RETURNING *`, [row.request_id,row.requested_item_id,row.institute_id,row.department_id,row.assigned_buyer_id,row.case_status,row.activity_coverage,row.complexity_coverage,row.commercial_coverage,row.cycle_time_coverage,row.logistics_coverage,row.created_by])).rows[0] || null,

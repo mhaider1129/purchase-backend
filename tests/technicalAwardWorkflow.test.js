@@ -1,3 +1,4 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 jest.mock('../config/db', () => ({ query: jest.fn(), connect: jest.fn() }));
 jest.mock('../controllers/suppliersController', () => ({ ensureSuppliersTable: jest.fn() }));
 jest.mock('../repositories/connectedP2PRepository', () => ({ createConnectedP2PRepository: jest.fn(), createTransactionalP2PRepository: jest.fn() }));
@@ -19,7 +20,7 @@ const p2p = require('../controllers/procureToPayController');
 const res = () => ({ json: jest.fn() });
 async function approvedProposal(h) {
   // 1: canonical supplier quotation persistence (actual line normalization).
-  await h.repository.withTransaction(repository => submitLinkedRfxResponse({ repository, event: h.state.event, supplierId: 3, submittedBy: h.scm.id, notes: 'Supplier proposal', responseData: { manufacturer: 'Maker', model: 'Model A' }, lines: [{ requested_item_id: 4, quoted_quantity: '2', unit_price: '5', currency: 'IQD', offered_specs: 'Specification A', ...(h.state.item.generic_item_id ? { approved_product_id: 71, supplier_catalog_item_id: 72 } : {}) }] }));
+  await h.repository.withTransaction(repository => submitLinkedRfxResponse({ repository, event: h.state.event, supplierId: 3, submittedBy: h.scm.id, actor:h.scm, notes: 'Supplier proposal', responseData: { manufacturer: 'Maker', model: 'Model A' }, lines: [{ requested_item_id: 4, quoted_quantity: '2', unit_price: '5', currency: 'IQD', offered_specs: 'Specification A', ...(h.state.item.generic_item_id ? { approved_product_id: 71, supplier_catalog_item_id: 72 } : {}) }] }));
   const service = createTechnicalReviewService(h.database);
   // 2: SCM requests technical opinion on exact persisted quotation and evidence.
   let review = await service.create(h.scm, { request_id: 2, submission_key: 'review-1', instructions: 'Assess offered device and specification', reviewer_ids: [10], items: [{ item_id: 4, evidence: { basis: 'data_sheet', category: 'Device', quotation_item_id: 21, no_sample_reason: 'Sample unavailable; assess attached sheet', evidence_description: 'Supplier Model A', attachment_ids: [8] } }] });
@@ -40,7 +41,7 @@ async function approvePo(h) {
   await poService.submitPurchaseOrder({ repository: h.repository, purchaseOrderId: 41, actor: h.scm });
   // 7: use real permission-gated approval controller and canonical PO service.
   const response = res(), next = jest.fn();
-  await p2p.approvePurchaseOrder({ params: { poId: '41' }, user: h.scm }, response, next);
+  await p2p.approvePurchaseOrder({ params: { poId: '41' }, user: {...h.scm,id:12} }, response, next);
   expect(next).not.toHaveBeenCalled(); expect(h.state.po.status).toBe('PO_APPROVED');
 }
 beforeEach(() => jest.clearAllMocks());
@@ -135,4 +136,9 @@ test('an APPROVED label without signed approval evidence is insufficient', async
   const result = await award(h);
   expect(result.next).toHaveBeenCalledWith(expect.objectContaining({ code: 'TECHNICAL_PROPOSAL_REVIEW_REQUIRED' }));
   expect(h.state.awards).toHaveLength(0); expect(h.state.po).toBeNull();
+});
+test('RFx award retry cannot disclose an existing PO after financial authorization is lost',async()=>{
+  const h=fixture(pool,createConnectedP2PRepository);await approvedProposal(h);const initial=await award(h);expect(initial.next).not.toHaveBeenCalled();
+  jest.spyOn(require('../services/p2pAuthorization'),'authorizeCommand').mockRejectedValueOnce(Object.assign(new Error('Financial access denied'),{statusCode:403}));
+  const retry=await award(h);expect(retry.next).toHaveBeenCalledWith(expect.objectContaining({statusCode:403}));expect(retry.response.json).not.toHaveBeenCalled();expect(h.state.awards).toHaveLength(1);expect(h.state.lines).toHaveLength(1);
 });

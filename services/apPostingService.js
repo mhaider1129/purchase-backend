@@ -1,4 +1,6 @@
 'use strict';
+const { authorizeCommand } = require('./p2pAuthorization');
+
 
 const { compareDecimal } = require('./purchaseOrderTotalsService');
 const { validateAccountingEntry } = require('./accountingEntryValidation');
@@ -15,12 +17,15 @@ const postApVoucher = ({ repository, requestId, voucherId, actor, idempotencyKey
   const key = String(idempotencyKey || '').trim();
   if (!key) throw fail('AP posting idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
   return repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'finance.post-ledger', {requestId,voucherId})).actor;
     await tx.lockApPostingOperation(key);
     const voucher = await tx.lockApVoucher(voucherId);
     if (!voucher) throw fail('AP voucher not found', 'AP_VOUCHER_NOT_FOUND', 404);
     assertRequestScope(requestId, voucher.request_id);
     const retry = await tx.findApPostingByIdempotency(key);
     if (retry) {
+      await authorizeCommand(tx,actor,'finance.post-ledger',{requestId:voucher.request_id,financePostingId:retry.id,voucherId});
       if (String(retry.ap_voucher_id) !== String(voucherId)) throw fail('Idempotency key belongs to another voucher', 'IDEMPOTENCY_CONFLICT', 409);
       return { posting: retry, actualization: await tx.findActualizationByVoucher(voucherId), payable: await tx.findPayableByVoucher(voucherId), idempotent: true };
     }
@@ -50,7 +55,7 @@ const postApVoucher = ({ repository, requestId, voucherId, actor, idempotencyKey
     }
     await tx.markVoucherPosted(voucher.id, actor.id);
     await tx.updateInvoiceLifecycle(invoice.id, 'AP_POSTED');
-    await auditService.writeAuditEvent({ client: tx.client, entityType: 'ap_voucher', entityId: voucher.id, requestId: invoice.request_id, action: 'AP_VOUCHER_POSTED', actorUserId: actor.id, metadata: { posting_id: posting.id, actualization_id: actualization.id } });
+    await auditService.writeAuditEvent({ client: tx.client, entityType: 'ap_voucher', entityId: voucher.id, requestId: invoice.request_id, instituteId: tx.financialContext?.instituteId, action: 'AP_VOUCHER_POSTED', actorUserId: actor.id,beforeData:{voucher_status:voucher.voucher_status},afterData:{voucher_status:'posted',posting_id:posting.id,payable_id:payable.id}, metadata: { posting_id: posting.id, actualization_id: actualization.id } });
     await outbox.enqueueNotification(tx.client, { type: 'AP_VOUCHER_POSTED', entityType: 'ap_voucher', entityId: voucher.id, payload: { posting_id: posting.id, payable_id: payable.id }, idempotencyKey: `ap-voucher-posted:${voucher.id}` });
     // Request completion remains derived by p2pCompletionService. Posting does
     // not write a lifecycle state because SQL 006 designates no such projection.

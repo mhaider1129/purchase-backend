@@ -373,7 +373,7 @@ const rfidRoutes = require('./routes/rfid');
 const rfidIngestionRoutes = require('./routes/rfidIngestion');
 const { createAiRouter } = require('./modules/ai-intelligence/routes');
 
-const { authenticateUser, authenticateUserOptional } = require('./middleware/authMiddleware');
+const { authenticateUser } = require('./middleware/authMiddleware');
 const errorHandler = require('./middleware/errorHandler');
 const aiRoutes = createAiRouter();
 
@@ -425,7 +425,7 @@ const protectedApiRoutes = [
   { path: '/technical-inspections', router: technicalInspectionsRoutes },
   { path: '/contract-evaluations', router: contractEvaluationsRouter },
   { path: '/risk-management', router: riskManagementRoutes },
-  { path: '/rfx-portal', router: rfxPortalRoutes, authenticate: authenticateUserOptional },
+  { path: '/rfx-portal', router: rfxPortalRoutes },
   { path: '/ui-access', router: uiAccessRoutes },
   { path: '/capability-policies', router: capabilityPoliciesRoutes },
   { path: '/notifications', router: notificationsRoutes },

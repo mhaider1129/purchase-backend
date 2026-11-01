@@ -4,6 +4,8 @@ const DEFAULT_MAX_RETRIES = 8;
 const retryDelaySeconds = retryCount => Math.min(3600, 15 * (2 ** Math.max(0, retryCount - 1)));
 
 async function deliverInApp(client, event) {
+  if (event.event_type === 'PROCUREMENT_ASSIGNMENT_CHANGED')
+    return require('./procurementAssignmentNotification').deliverAssignmentNotification(client,event);
   const { captureBusinessEvent } = require('./procurementPerformance/procurementEvidenceService');
   const { createProcurementPerformanceRepository } = require('../repositories/procurementPerformanceRepository');
   const payload = event.payload || {};

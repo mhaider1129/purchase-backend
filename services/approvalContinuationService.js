@@ -82,9 +82,9 @@ async function continueApprovalWorkflowAfterLevel({
   await client.query("INSERT INTO request_logs(request_id,action,actor_id,comments) VALUES($1,'Request marked Approved',$2,NULL)", [approval.request_id, actorId]);
   const requesterMessage = `Your ${request.request_type} request (ID: ${approval.request_id}) has been approved.`;
   enqueueNotification({ userId: request.requester_id, title: `Request ${approval.request_id} approved`, message: requesterMessage, link: `/requests/${approval.request_id}`, metadata: { requestId: approval.request_id, requestType: request.request_type, action: 'request_approved' } });
-  if (request.requester_email) await sendEmail(request.requester_email, `Your purchase request ${approval.request_id} has been Approved`, `${requesterMessage}\nLog in to view the full details.`);
   const autoAssignment = await applyAutoAssignmentForApprovedRequest(client, { ...request, id: approval.request_id }, actorId);
   if (autoAssignment?.assigned_request) request.assigned_to = autoAssignment.assigned_request.assigned_to;
+  if (request.requester_email) await sendEmail(request.requester_email, `Your purchase request ${approval.request_id} has been Approved`, `${requesterMessage}\nLog in to view the full details.`);
   if (request.request_type === 'Maintenance' && request.initiated_by_technician_id && technicianEmail) {
     enqueueNotification({ userId: request.initiated_by_technician_id, title: `Maintenance request ${approval.request_id} approved`, message: `The maintenance request you initiated (ID: ${approval.request_id}) has been approved.`, link: `/requests/${approval.request_id}`, metadata: { requestId: approval.request_id, requestType: request.request_type, action: 'maintenance_approved' } });
     await sendEmail(technicianEmail, `Maintenance request ${approval.request_id} approved`, `The maintenance request you initiated (ID: ${approval.request_id}) has received final approval.\nYou can follow up with the requesting department for fulfillment.`);

@@ -3355,10 +3355,13 @@ const getContractConsumption = async (req, res, next) => {
   const contractId = Number(req.params.id); if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
   try {
     const c = await assertContractExists(pool, contractId);
-    const safe = async q => { try { return await pool.query(q.text, q.values || []); } catch { return { rows: [] }; } };
-    const po = await safe({ text: 'SELECT id, po_number, total_amount FROM purchase_orders WHERE contract_id=$1', values: [contractId] });
-    const inv = await safe({ text: 'SELECT id, invoice_number, total_amount FROM supplier_invoices WHERE contract_id=$1', values: [contractId] });
-    const pay = await safe({ text: 'SELECT id, voucher_number, total_amount FROM ap_vouchers WHERE contract_id=$1', values: [contractId] });
+    // Only this canonical P2P read is secured here. Contract financial writers
+    // and their historical balances remain separate AUD-001/AUD-005 work.
+    const linked = c.source_request_id == null ? [{rows:[]},{rows:[]},{rows:[]}] : await require('../services/p2pReadScope').withRead(req.user,async(client,actor,predicate)=>{
+      const query=(kind,table,columns)=>client.query(`SELECT ${columns} FROM ${table} financial_doc WHERE (to_jsonb(financial_doc)->>'contract_id')=$1::text AND financial_doc.request_id=$3 AND ${predicate(kind,'financial_doc','$2')}`,[String(contractId),actor.institute_id,c.source_request_id]);
+      return Promise.all([query('purchaseOrder','purchase_orders','id,po_number,total_amount'),query('invoice','supplier_invoices','id,invoice_number,total_amount'),query('voucher','ap_vouchers','id,voucher_number,total_amount')]);
+    },{requestId:c.source_request_id}).catch(error=>{if([403,404].includes(error.statusCode))return [{rows:[]},{rows:[]},{rows:[]}];throw error;});
+    const [po,inv,pay]=linked;
     const consumedPO = po.rows.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
     const consumedInv = inv.rows.reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
     const paid = pay.rows.reduce((s, r) => s + (Number(r.total_amount) || 0), 0) || Number(c.amount_paid) || 0;

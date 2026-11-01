@@ -1,11 +1,14 @@
+const {authorizeCommand}=require('./p2pAuthorization');
 'use strict';
 const { subtractDecimal, compareDecimal } = require('./purchaseOrderTotalsService');
 
 const commitPurchaseOrder = async ({ repository, purchaseOrder, idempotencyKey, actor }) => {
+  actor=(await authorizeCommand(repository,actor,'procure-to-pay.purchase-orders.manage',{purchaseOrderId:purchaseOrder.id})).actor;
   const existing = await repository.findCommitmentByIdempotency(idempotencyKey);
-  if (existing) return existing;
+  if (existing) {await authorizeCommand(repository,actor,'procure-to-pay.purchase-orders.manage',{requestId:purchaseOrder.request_id,purchaseOrderId:purchaseOrder.id,commitmentId:existing.id});return existing;}
   const envelope = await repository.resolveBudgetEnvelope(purchaseOrder);
   if (!envelope) throw Object.assign(new Error('No valid budget envelope exists for this purchase order'), { code: 'BUDGET_ENVELOPE_NOT_FOUND', statusCode: 409 });
+  await authorizeCommand(repository,actor,'procure-to-pay.purchase-orders.manage',{requestId:purchaseOrder.request_id,budgetId:envelope.id});
   const budget = await repository.lockBudgetEnvelope(envelope.id);
   const committed = await repository.sumActiveEncumbrances(budget.id);
   const available = subtractDecimal(budget.allocated_amount, budget.consumed_amount || '0', committed);

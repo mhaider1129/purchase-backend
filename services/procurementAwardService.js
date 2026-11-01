@@ -18,6 +18,8 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
   if (compareDecimal(input.awarded_quantity, 0) <= 0) throw Object.assign(new Error('Award quantity must be positive'), { code: 'INVALID_AWARD_QUANTITY' });
   const fingerprint = fingerprintAward({ ...input, request_item_id: requestItem.id, supplier_id: supplier.id });
   return repository.withTransaction(async (tx) => {
+    const context=await require('./rfxAuthorization').authorizeAward(tx,actor,requestItem,supplier,input);
+    actor=context.actor;
     const locked = await tx.lockRequestItem(requestItem.id);
     if (!locked) throw Object.assign(new Error('Requested item not found'), { code: 'REQUEST_ITEM_NOT_FOUND', status: 404 });
     const technicalClearance = await assertReadyForCommand(tx.client, locked, actor, 'create_award', {source_type:input.source_type,source_id:input.source_id,supplier_id:supplier.id, approved_product_id:input.approved_product_id, supplier_catalog_item_id:input.supplier_catalog_item_id,quantity:input.awarded_quantity,unit_price:input.unit_price,currency:input.currency});
@@ -35,6 +37,7 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
     await loadAndAssertSupplierEligible(tx, supplier.id);
     const existing = await tx.findByIdempotencyKey(input.idempotency_key);
     if (existing) {
+      if (String(existing.request_id)!==String(locked.request_id) || String(existing.request_item_id)!==String(locked.id) || String(existing.supplier_id)!==String(supplier.id)) throw require('./rfxAuthorization').missing();
       if (existing.payload_fingerprint !== fingerprint) throw Object.assign(new Error('Idempotency key was used with a different award payload'), { code: 'IDEMPOTENCY_CONFLICT', status: 409 });
       return existing;
     }
@@ -43,7 +46,7 @@ const createAward = async ({ repository, requestItem, supplier, input, actor, au
     const award = await tx.insert({ request_id: locked.request_id, request_item_id: locked.id, supplier_id: supplier.id, approved_product_id: input.approved_product_id || null, supplier_catalog_item_id: input.supplier_catalog_item_id || null, awarded_quantity: String(input.awarded_quantity), unit_price: String(input.unit_price), currency: String(input.currency).toUpperCase(), source_type: input.source_type, source_id: input.source_id || null, selection_reason: input.selection_reason, actor_id: actor.id, idempotency_key: input.idempotency_key, payload_fingerprint: fingerprint });
     if (tx.linkDocuments) await tx.linkDocuments(locked.request_id, 'PURCHASE_REQUEST', locked.request_id, 'PROCUREMENT_AWARD', award.id, actor.id);
     if (technicalClearance && tx.linkDocuments) await tx.linkDocuments(locked.request_id, 'TECHNICAL_REVIEW', technicalClearance.review_id, 'PROCUREMENT_AWARD', award.id, actor.id);
-    await auditService.writeAuditEvent({ client: tx.client, entityType: 'procurement_award', entityId: award.id, requestId: locked.request_id, action: 'AWARD_CREATED', actorUserId: actor.id, metadata: { request_item_id: locked.id, supplier_id: supplier.id, technical_clearance: technicalClearance || null } });
+    await auditService.writeAuditEvent({ client: tx.client, entityType: 'procurement_award', entityId: award.id, requestId: locked.request_id, action: 'AWARD_CREATED', actorUserId: actor.id, instituteId: context.instituteId, metadata: { request_item_id: locked.id, supplier_id: supplier.id, technical_clearance: technicalClearance || null } });
     await outbox.enqueueNotification(tx.client, { type: 'AWARD_CREATED', entityType: 'procurement_award', entityId: award.id, payload: { award_id: award.id, request_id: locked.request_id, requestedItemIds: [locked.id], supplierId: supplier.id, actorId: actor.id }, idempotencyKey: `award-created:${award.id}` });
     return award;
   });

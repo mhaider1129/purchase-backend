@@ -1,4 +1,6 @@
 'use strict';
+const { authorizeCommand } = require('./p2pAuthorization');
+
 
 const crypto = require('crypto');
 const { calculatePurchaseOrderTotals } = require('./purchaseOrderTotalsService');
@@ -22,7 +24,7 @@ const assertRequestScope = (requestId, canonicalRequestId) => {
 };
 
 const emit = async (tx, auditService, outbox, action, invoice, actor, metadata = {}) => {
-  await auditService.writeAuditEvent({ client: tx.client, entityType: 'supplier_invoice', entityId: invoice.id, requestId: invoice.request_id, action, actorUserId: actor.id, metadata });
+  await auditService.writeAuditEvent({ client: tx.client, entityType: 'supplier_invoice', entityId: invoice.id, requestId: invoice.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor.id,beforeData:{status:tx.financialContext?.documents?.get(`invoice:${invoice.id}`)?.status||null},afterData:{status:invoice.status}, metadata });
   await outbox.enqueueNotification(tx.client, { type: action, entityType: 'supplier_invoice', entityId: invoice.id, payload: { supplier_invoice_id: invoice.id, purchase_order_id: invoice.purchase_order_id, ...metadata }, idempotencyKey: `${action.toLowerCase()}:${invoice.id}:${metadata.match_result_id || 'submission'}` });
 };
 
@@ -31,12 +33,15 @@ const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, s
   if (!purchaseOrderId || !supplierId || !String(invoiceNumber || '').trim() || !invoiceDate || !currency || !Array.isArray(lines) || !lines.length) throw error('Purchase order, supplier, invoice number/date, currency and lines are required', 'INVALID_INVOICE');
   const payloadFingerprint = fingerprintInvoice({ supplierId, purchaseOrderId, invoiceNumber, invoiceDate, currency, lines });
   return repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'procure-to-pay.invoices.manage', {requestId,purchaseOrderId,poLineIds:lines.map(l=>l.purchase_order_item_id)})).actor;
     await tx.lockInvoiceOperation(idempotencyKey);
     const po = await tx.lockPurchaseOrder(purchaseOrderId);
     if (!po) throw error('Purchase order not found', 'PURCHASE_ORDER_NOT_FOUND', 404);
     assertRequestScope(requestId, po.request_id);
     const retry = await tx.findInvoiceByIdempotency(idempotencyKey);
     if (retry) {
+      await authorizeCommand(tx,actor,'procure-to-pay.invoices.manage',{requestId:po.request_id,purchaseOrderId:po.id,invoiceId:retry.id});
       if (retry.payload_fingerprint !== payloadFingerprint) throw error('Idempotency key was already used with a different invoice payload', 'IDEMPOTENCY_CONFLICT', 409);
       return { invoice: await tx.loadInvoiceWithLines(retry.id), idempotent: true };
     }
@@ -63,6 +68,8 @@ const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, s
 };
 
 const runInvoiceMatch = ({ repository, requestId, invoiceId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'procure-to-pay.match.manage', {requestId,invoiceId})).actor;
   const invoice = await tx.lockInvoice(invoiceId); if (!invoice) throw error('Invoice not found', 'INVOICE_NOT_FOUND', 404);
   assertRequestScope(requestId, invoice.request_id);
   await tx.lockPurchaseOrder(invoice.purchase_order_id); // serializes competing matches for the PO
@@ -107,6 +114,8 @@ const decideMatchOverride = async ({ repository, requestId, matchResultId, decis
   if (!String(reason || '').trim()) throw error('Override reason is required', 'OVERRIDE_REASON_REQUIRED');
   if (!['APPROVED', 'DECLINED'].includes(decision)) throw error('Invalid override decision', 'INVALID_OVERRIDE_DECISION');
   return repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'finance.override-mismatch', {requestId,matchResultId})).actor;
     const current = await tx.lockMatchResult(matchResultId); if (!current) throw error('Match result not found', 'MATCH_RESULT_NOT_FOUND', 404);
     assertRequestScope(requestId, current.request_id);
     if (current.match_status !== 'MATCH_EXCEPTION') throw error('Only a match exception can be overridden', 'MATCH_OVERRIDE_NOT_ALLOWED', 409);

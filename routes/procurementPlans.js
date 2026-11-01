@@ -16,18 +16,20 @@ const {
   getPlanIntegrationInsights,
 } = require('../controllers/procurement/plansController');
 
+const capability = require('../middleware/planningPermission');
 router.use(authenticateUser);
+router.use((req,res,next) => { res.set('Cache-Control','no-store'); next(); });
 
-router.post('/', upload.single('plan'), uploadPlan);
-router.get('/', getPlans);
-router.get('/request/:id', getPlanForRequest);
-router.post('/:id/items', createPlanItems);
-router.get('/:id/items/variance', getPlanItemVariance);
-router.get('/:id/integration-insights', getPlanIntegrationInsights);
-router.get('/:id/items', getPlanItems);
-router.post('/:id/items/:itemId/requests', linkPlanItemRequests);
-router.post('/:id/items/:itemId/consumptions', linkPlanItemConsumptions);
-router.get('/:id/download', downloadPlan);
-router.get('/:id', getPlanById);
+router.post('/', capability('manage'), upload.single('plan'), uploadPlan);
+router.get('/', capability(), getPlans);
+router.get('/request/:id', capability(), getPlanForRequest);
+router.post('/:id/items', capability('manage'), createPlanItems);
+router.get('/:id/items/variance', capability(), getPlanItemVariance);
+router.get('/:id/integration-insights', capability(), getPlanIntegrationInsights);
+router.get('/:id/items', capability(), getPlanItems);
+router.post('/:id/items/:itemId/requests', capability('manage'), linkPlanItemRequests);
+router.post('/:id/items/:itemId/consumptions', capability('manage'), linkPlanItemConsumptions);
+router.get('/:id/download', capability(), downloadPlan);
+router.get('/:id', capability(), getPlanById);
 
 module.exports = router;

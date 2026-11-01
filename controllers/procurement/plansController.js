@@ -8,11 +8,15 @@ const {
 } = require('../../utils/attachmentPaths');
 const ensureProcurementPlanTables = require('../../utils/ensureProcurementPlanTables');
 
-const fileAuthority = require('../../services/attachmentAuthorizationService').createAttachmentAuthorization();
+const { createPlanningAuthorization, has, id: recordId } = require('../../services/planningAuthorizationService');
+const authority = createPlanningAuthorization();
+const withTransaction = require('../../utils/withTransaction');
+const { writeAuditEvent } = require('../../services/auditService');
 const fileStorage = require('../../services/attachmentStorageAdapter');
-async function planDepartment(user, departmentId) {
-  return fileAuthority.parent(await fileAuthority.actor(user),{departmentId},'upload');
-}
+const audit = (client, actor, entityType, afterData, action, beforeData = null) => writeAuditEvent({
+  client, actorUserId: actor.id, instituteId: actor.institute_id, entityType,
+  entityId: afterData.id, action, beforeData, afterData,
+});
 const PLANS_STORAGE_PREFIX = process.env.SUPABASE_PLANS_PREFIX || 'procurement-plans';
 
 function handleStorageError(next, err) {
@@ -68,110 +72,62 @@ const parseOptionalNumber = (value, fieldLabel) => {
   return numeric;
 };
 
-const uploadPlan = async (req, res, next) => {
-  const department_id =
-    req.body.department_id && req.body.department_id !== 'null'
-      ? parseInt(req.body.department_id, 10)
-      : req.user.department_id;
-  const plan_year = parseInt(req.body.plan_year, 10);
-
-  if (Number.isNaN(plan_year) || !req.file) {
-    return next(createHttpError(400, 'plan_year and file are required'));
-  }
-
-  if (Number.isNaN(department_id)) {
-    return next(createHttpError(400, 'department_id must be a valid number'));
-  }
-
+const uploadPlan = async (req,res,next) => {
+  let objectKey;
   try {
-    await planDepartment(req.user, department_id);
-    const segments = [`department-${department_id}`, `year-${plan_year}`];
-    const { objectKey } = await uploadBuffer({
-      file: req.file,
-      segments,
-      prefix: PLANS_STORAGE_PREFIX,
+    const actor = await authority.actor(req.user, 'manage');
+    const departmentId = recordId(req.body.department_id || actor.department_id);
+    const year = Number(req.body.plan_year);
+    if (!Number.isInteger(year) || !req.file) throw createHttpError(400, 'plan_year and file are required');
+    await authority.department(actor, departmentId);
+    ({ objectKey } = await uploadBuffer({ file: req.file, segments: [`department-${departmentId}`, `year-${year}`], prefix: PLANS_STORAGE_PREFIX }));
+    const plan = await withTransaction(async client => {
+      const current = await authority.actor(req.user, 'manage', client);
+      await authority.department(current, departmentId, client);
+      const row = (await client.query('INSERT INTO procurement_plans(department_id,plan_year,file_name,file_path) VALUES($1,$2,$3,$4) RETURNING *', [departmentId,year,req.file.originalname,objectKey])).rows[0];
+      await audit(client,current,'procurement_plan',row,'planning.plan.uploaded'); return row;
     });
-
-    await planDepartment(req.user, department_id);
-    const { rows } = await pool.query(
-      `INSERT INTO procurement_plans (department_id, plan_year, file_name, file_path)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [department_id, plan_year, req.file.originalname, objectKey]
-    );
-
-    res.status(201).json(serializePlan(rows[0]));
+    res.status(201).json(serializePlan(plan));
   } catch (err) {
-    handleStorageError(next, err);
+    if (objectKey) { try { await fileStorage.remove({ file_path: objectKey }); } catch (_) { console.error('Planning upload cleanup deferred'); } }
+    handleStorageError(next,err);
   }
 };
-
-const getPlans = async (req, res, next) => {
-  const { department_id, year } = req.query;
-  const values = [];
-  let sql = 'SELECT * FROM procurement_plans WHERE 1=1';
-  if (department_id) {
-    values.push(department_id);
-    sql += ` AND department_id = $${values.length}`;
-  }
-  if (year) {
-    values.push(year);
-    sql += ` AND plan_year = $${values.length}`;
-  }
-  sql += ' ORDER BY plan_year DESC';
+const getPlans = async (req,res,next) => {
   try {
-    const result = await pool.query(sql, values);
-    const actor=await fileAuthority.actor(req.user);const visible=[];
-    for(const row of result.rows){try{await fileAuthority.plan(actor,row.id);visible.push(serializePlan(row));}catch(e){if(e.statusCode!==404)throw e;}}
-    res.json(visible);
-  } catch (err) {
-    console.error('Failed to fetch procurement plans:', err);
-    next(createHttpError(500, 'Failed to fetch procurement plans'));
-  }
+    const actor = await authority.actor(req.user);
+    if (req.query.year != null && !Number.isInteger(Number(req.query.year))) throw createHttpError(400,'year must be an integer');
+    if (req.query.department_id) await authority.department(actor, req.query.department_id);
+    const { rows } = await pool.query(`SELECT p.* FROM procurement_plans p JOIN departments d ON d.id=p.department_id
+      WHERE d.institute_id=$1 AND ($2::boolean OR d.id=ANY($3::integer[]))
+      AND ($4::integer IS NULL OR p.department_id=$4) AND ($5::integer IS NULL OR p.plan_year=$5) ORDER BY p.plan_year DESC,p.id`,
+      [actor.institute_id,has(actor,'planning.cross-department'),actor.departmentIds,req.query.department_id || null,req.query.year || null]);
+    res.json(rows.map(serializePlan));
+  } catch (err) { next(err); }
 };
-
-const getPlanById = async (req, res, next) => {
-  const { id } = req.params;
+const getPlanById = async (req,res,next) => {
+  try { res.json(serializePlan(await authority.plan(await authority.actor(req.user),req.params.id))); }
+  catch (err) { next(err); }
+};
+const getPlanForRequest = async (req,res,next) => {
   try {
-    const result = await pool.query('SELECT * FROM procurement_plans WHERE id=$1', [id]);
-    if (result.rowCount === 0) return next(createHttpError(404, 'Plan not found'));
-    await fileAuthority.plan(await fileAuthority.actor(req.user),id);
-    res.json(serializePlan(result.rows[0]));
-  } catch (err) {
-    console.error('Failed to fetch procurement plan:', err);
-    next(err.statusCode ? err : createHttpError(500, 'Failed to fetch procurement plan'));
-  }
+    const actor = await authority.actor(req.user);
+    const request = (await pool.query('SELECT department_id,created_at FROM requests WHERE id=$1 AND institute_id=$2', [recordId(req.params.id),actor.institute_id])).rows[0];
+    if (!request) throw createHttpError(404, 'Planning record or reference not found');
+    await authority.department(actor,request.department_id);
+    const plan = (await pool.query('SELECT * FROM procurement_plans WHERE department_id=$1 AND plan_year=$2 ORDER BY id DESC LIMIT 1', [request.department_id,new Date(request.created_at).getFullYear()])).rows[0];
+    if (!plan) return res.status(404).json({ message: 'No procurement plan found' });
+    res.json(serializePlan(plan));
+  } catch (err) { next(err); }
 };
-
-const getPlanForRequest = async (req, res, next) => {
-  const { id } = req.params;
-  try {
-    await fileAuthority.request(await fileAuthority.actor(req.user),id);
-    const reqRes = await pool.query('SELECT department_id, created_at FROM requests WHERE id=$1', [id]);
-    if (reqRes.rowCount === 0) return next(createHttpError(404, 'Request not found'));
-    const { department_id, created_at } = reqRes.rows[0];
-    const year = new Date(created_at).getFullYear();
-    const planRes = await pool.query(
-      'SELECT * FROM procurement_plans WHERE department_id=$1 AND plan_year=$2 LIMIT 1',
-      [department_id, year]
-    );
-    if (planRes.rowCount === 0) return res.status(404).json({ message: 'No procurement plan found' });
-    res.json(serializePlan(planRes.rows[0]));
-  } catch (err) {
-    console.error('Failed to match procurement plan:', err);
-    next(err.statusCode ? err : createHttpError(500, 'Failed to match procurement plan'));
-  }
-};
-
-const downloadPlan = async (req,res,next)=>{
- try{
-  const plan=await fileAuthority.plan(await fileAuthority.actor(req.user),req.params.id);
-  return fileStorage.download(plan,req,res,next);
- }catch(e){next(e);}
+const downloadPlan = async (req,res,next) => {
+  try { return fileStorage.download(await authority.plan(await authority.actor(req.user),req.params.id),req,res,next); }
+  catch (err) { next(err); }
 };
 
 const createPlanItems = async (req, res, next) => {
   const { id } = req.params;
-  const planId = parseInt(id, 10);
+  const planId = Number(id);
   const { items } = req.body;
 
   if (!Number.isInteger(planId)) {
@@ -185,17 +141,14 @@ const createPlanItems = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const actor = await authority.actor(req.user, 'manage', client);
+    const plan = await authority.plan(actor, planId, 'manage', client);
     await ensureProcurementPlanTables(client);
-
-    const planRes = await client.query('SELECT id FROM procurement_plans WHERE id = $1', [planId]);
-    if (planRes.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Plan not found'));
-    }
 
     const inserted = [];
 
     for (const item of items) {
+      if (item.stock_item_id) await authority.stock(actor,item.stock_item_id,{ departmentId: plan.department_id },client);
       const plannedQuantity = parsePositiveNumber(item.planned_quantity, 'planned_quantity');
       const plannedUnitCost = parseOptionalNumber(item.planned_unit_cost, 'planned_unit_cost');
       const plannedTotalCost =
@@ -229,6 +182,7 @@ const createPlanItems = async (req, res, next) => {
         ]
       );
 
+      await audit(client,actor,'procurement_plan_item',rows[0],'planning.item.created');
       inserted.push(rows[0]);
     }
 
@@ -244,35 +198,42 @@ const createPlanItems = async (req, res, next) => {
 
 const getPlanItems = async (req, res, next) => {
   const { id } = req.params;
-  const planId = parseInt(id, 10);
+  const planId = Number(id);
 
   if (!Number.isInteger(planId)) {
     return next(createHttpError(400, 'Plan id must be a valid number'));
   }
 
   try {
-    await ensureProcurementPlanTables();
-    const { rows } = await pool.query(
-      'SELECT * FROM procurement_plan_items WHERE plan_id = $1 ORDER BY id',
-      [planId]
-    );
-    res.json(rows);
+    const result = await withTransaction(async client => {
+      const actor = await authority.actor(req.user,'read',client);
+      const plan = await authority.plan(actor,planId,'read',client);
+      await ensureProcurementPlanTables(client);
+      const { rows } = await client.query(
+        'SELECT * FROM procurement_plan_items WHERE plan_id = $1 ORDER BY id',
+        [planId]
+      );
+      for (const item of rows) if (item.stock_item_id) await authority.stock(actor,item.stock_item_id,{ departmentId: plan.department_id },client);
+      return rows;
+    });
+    res.json(result);
   } catch (err) {
     console.error('Failed to fetch procurement plan items:', err);
-    next(createHttpError(500, 'Failed to fetch procurement plan items'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to fetch procurement plan items'));
   }
 };
 
 const linkPlanItemRequests = async (req, res, next) => {
   const { id, itemId } = req.params;
-  const planId = parseInt(id, 10);
-  const planItemId = parseInt(itemId, 10);
+  const planId = Number(id);
+  const planItemId = Number(itemId);
   const { requested_item_ids = [], items = [] } = req.body;
 
   if (!Number.isInteger(planId) || !Number.isInteger(planItemId)) {
     return next(createHttpError(400, 'Plan id and item id must be valid numbers'));
   }
 
+  if (!Array.isArray(requested_item_ids) || !Array.isArray(items)) return next(createHttpError(400,'Request links must be arrays'));
   const ids = [
     ...requested_item_ids,
     ...items.map(item => item.requested_item_id),
@@ -285,30 +246,16 @@ const linkPlanItemRequests = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const actor = await authority.actor(req.user, 'manage', client);
+    const plan = await authority.plan(actor,planId,'manage',client);
     await ensureProcurementPlanTables(client);
-
-    const planItemRes = await client.query(
-      'SELECT id, plan_id FROM procurement_plan_items WHERE id = $1',
-      [planItemId]
-    );
-    if (planItemRes.rowCount === 0 || planItemRes.rows[0].plan_id !== planId) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Plan item not found'));
-    }
+    const planItem = await authority.planItem(actor,planId,planItemId,client);
 
     const linked = [];
-    for (const requestedItemId of ids) {
-      const itemRes = await client.query(
-        `SELECT id, request_id, quantity, unit_cost, total_cost
-         FROM requested_items WHERE id = $1`,
-        [requestedItemId]
-      );
-      if (itemRes.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(404, `Requested item ${requestedItemId} not found`));
-      }
-
-      const requestedItem = itemRes.rows[0];
+    for (const requestedItemId of [...new Set(ids.map(recordId))].sort((a,b)=>a-b)) {
+      const requestedItem = await authority.requestedItem(actor,requestedItemId,plan.department_id,client);
+      if (planItem.stock_item_id && requestedItem.stock_item_id && Number(planItem.stock_item_id)!==Number(requestedItem.stock_item_id)) throw createHttpError(400,'Linked item identity does not match plan item');
+      const before = (await client.query('SELECT * FROM procurement_plan_item_requests WHERE plan_item_id=$1 AND requested_item_id=$2 FOR UPDATE',[planItemId,requestedItemId])).rows[0] || null;
       const { rows } = await client.query(
         `INSERT INTO procurement_plan_item_requests
           (plan_item_id, request_id, requested_item_id, quantity, unit_cost, total_cost)
@@ -330,6 +277,7 @@ const linkPlanItemRequests = async (req, res, next) => {
         ]
       );
 
+      await audit(client,actor,'procurement_plan_item_request',rows[0],'planning.request.linked',before);
       linked.push(rows[0]);
     }
 
@@ -345,14 +293,15 @@ const linkPlanItemRequests = async (req, res, next) => {
 
 const linkPlanItemConsumptions = async (req, res, next) => {
   const { id, itemId } = req.params;
-  const planId = parseInt(id, 10);
-  const planItemId = parseInt(itemId, 10);
+  const planId = Number(id);
+  const planItemId = Number(itemId);
   const { warehouse_stock_movement_ids = [], department_stock_movement_ids = [] } = req.body;
 
   if (!Number.isInteger(planId) || !Number.isInteger(planItemId)) {
     return next(createHttpError(400, 'Plan id and item id must be valid numbers'));
   }
 
+  if (!Array.isArray(warehouse_stock_movement_ids) || !Array.isArray(department_stock_movement_ids)) return next(createHttpError(400,'Movement links must be arrays'));
   const movementIds = [
     ...warehouse_stock_movement_ids.map(idValue => ({ idValue, type: 'warehouse' })),
     ...department_stock_movement_ids.map(idValue => ({ idValue, type: 'department' })),
@@ -365,68 +314,23 @@ const linkPlanItemConsumptions = async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const actor = await authority.actor(req.user, 'manage', client);
+    const plan = await authority.plan(actor,planId,'manage',client);
     await ensureProcurementPlanTables(client);
-
-    const planItemRes = await client.query(
-      'SELECT id, plan_id FROM procurement_plan_items WHERE id = $1',
-      [planItemId]
-    );
-    if (planItemRes.rowCount === 0 || planItemRes.rows[0].plan_id !== planId) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Plan item not found'));
-    }
+    const planItem = await authority.planItem(actor,planId,planItemId,client);
 
     const linked = [];
-    for (const movement of movementIds) {
-      if (movement.type === 'warehouse') {
-        const movementRes = await client.query(
-          `SELECT id, direction, quantity FROM warehouse_stock_movements WHERE id = $1`,
-          [movement.idValue]
-        );
-        if (movementRes.rowCount === 0) {
-          await client.query('ROLLBACK');
-          return next(createHttpError(404, `Warehouse stock movement ${movement.idValue} not found`));
-        }
-        if (movementRes.rows[0].direction !== 'out') {
-          await client.query('ROLLBACK');
-          return next(createHttpError(400, 'Only outbound warehouse movements can be linked'));
-        }
-
-        const { rows } = await client.query(
-          `INSERT INTO procurement_plan_item_consumptions
-            (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id, quantity)
-           VALUES ($1,$2,NULL,$3)
-           ON CONFLICT (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id)
-           DO UPDATE SET quantity = EXCLUDED.quantity
-           RETURNING *`,
-          [planItemId, movement.idValue, movementRes.rows[0].quantity]
-        );
-        linked.push(rows[0]);
-      } else {
-        const movementRes = await client.query(
-          `SELECT id, direction, quantity FROM department_stock_movements WHERE id = $1`,
-          [movement.idValue]
-        );
-        if (movementRes.rowCount === 0) {
-          await client.query('ROLLBACK');
-          return next(createHttpError(404, `Department stock movement ${movement.idValue} not found`));
-        }
-        if (movementRes.rows[0].direction !== 'out') {
-          await client.query('ROLLBACK');
-          return next(createHttpError(400, 'Only outbound department movements can be linked'));
-        }
-
-        const { rows } = await client.query(
-          `INSERT INTO procurement_plan_item_consumptions
-            (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id, quantity)
-           VALUES ($1,NULL,$2,$3)
-           ON CONFLICT (plan_item_id, warehouse_stock_movement_id, department_stock_movement_id)
-           DO UPDATE SET quantity = EXCLUDED.quantity
-           RETURNING *`,
-          [planItemId, movement.idValue, movementRes.rows[0].quantity]
-        );
-        linked.push(rows[0]);
-      }
+    const unique = new Map(movementIds.map(m => [`${m.type}:${recordId(m.idValue)}`,m]));
+    for (const movement of unique.values()) {
+      const source = await authority.movement(actor,movement.type,movement.idValue,plan.department_id,client);
+      if (planItem.stock_item_id && source.stock_item_id && Number(planItem.stock_item_id)!==Number(source.stock_item_id)) throw createHttpError(400,'Consumption identity does not match plan item');
+      const column = movement.type==='warehouse' ? 'warehouse_stock_movement_id' : 'department_stock_movement_id';
+      const before = (await client.query(`SELECT * FROM procurement_plan_item_consumptions WHERE plan_item_id=$1 AND ${column}=$2 FOR UPDATE`,[planItemId,movement.idValue])).rows[0];
+      const row = before
+        ? (await client.query('UPDATE procurement_plan_item_consumptions SET quantity=$1 WHERE id=$2 RETURNING *',[source.quantity,before.id])).rows[0]
+        : (await client.query(`INSERT INTO procurement_plan_item_consumptions(plan_item_id,${column},quantity) VALUES($1,$2,$3) RETURNING *`,[planItemId,movement.idValue,source.quantity])).rows[0];
+      await audit(client,actor,'procurement_plan_item_consumption',row,'planning.consumption.linked',before || null);
+      linked.push(row);
     }
 
     await client.query('COMMIT');
@@ -441,148 +345,157 @@ const linkPlanItemConsumptions = async (req, res, next) => {
 
 const getPlanItemVariance = async (req, res, next) => {
   const { id } = req.params;
-  const planId = parseInt(id, 10);
+  const planId = Number(id);
 
   if (!Number.isInteger(planId)) {
     return next(createHttpError(400, 'Plan id must be a valid number'));
   }
 
   try {
-    await ensureProcurementPlanTables();
-    const { rows } = await pool.query(
-      `SELECT
-        ppi.*,
-        COALESCE(req_totals.requested_quantity, 0) AS requested_quantity,
-        COALESCE(req_totals.requested_cost, 0) AS requested_cost,
-        COALESCE(cons_totals.consumed_quantity, 0) AS consumed_quantity,
-        COALESCE(req_totals.requested_quantity, 0) - ppi.planned_quantity AS request_quantity_variance,
-        COALESCE(cons_totals.consumed_quantity, 0) - ppi.planned_quantity AS consumption_quantity_variance
-       FROM procurement_plan_items ppi
-       LEFT JOIN (
-         SELECT plan_item_id,
-           SUM(quantity) AS requested_quantity,
-           SUM(total_cost) AS requested_cost
-         FROM procurement_plan_item_requests
-         GROUP BY plan_item_id
-       ) req_totals ON req_totals.plan_item_id = ppi.id
-       LEFT JOIN (
-         SELECT plan_item_id,
-           SUM(quantity) AS consumed_quantity
-         FROM procurement_plan_item_consumptions
-         GROUP BY plan_item_id
-       ) cons_totals ON cons_totals.plan_item_id = ppi.id
-       WHERE ppi.plan_id = $1
-       ORDER BY ppi.id`,
-      [planId]
-    );
-    res.json(rows);
+    const result = await withTransaction(async client => {
+      const actor = await authority.actor(req.user,'read',client);
+      const plan = await authority.plan(actor,planId,'read',client);
+      await ensureProcurementPlanTables(client);
+      await authority.validateLinks(actor,plan,client);
+      const { rows } = await client.query(
+        `SELECT
+          ppi.*,
+          COALESCE(req_totals.requested_quantity, 0) AS requested_quantity,
+          COALESCE(req_totals.requested_cost, 0) AS requested_cost,
+          COALESCE(cons_totals.consumed_quantity, 0) AS consumed_quantity,
+          COALESCE(req_totals.requested_quantity, 0) - ppi.planned_quantity AS request_quantity_variance,
+          COALESCE(cons_totals.consumed_quantity, 0) - ppi.planned_quantity AS consumption_quantity_variance
+         FROM procurement_plan_items ppi
+         LEFT JOIN (
+           SELECT plan_item_id,
+             SUM(quantity) AS requested_quantity,
+             SUM(total_cost) AS requested_cost
+           FROM procurement_plan_item_requests
+           GROUP BY plan_item_id
+         ) req_totals ON req_totals.plan_item_id = ppi.id
+         LEFT JOIN (
+           SELECT plan_item_id,
+             SUM(quantity) AS consumed_quantity
+           FROM procurement_plan_item_consumptions
+           GROUP BY plan_item_id
+         ) cons_totals ON cons_totals.plan_item_id = ppi.id
+         WHERE ppi.plan_id = $1
+         ORDER BY ppi.id`,
+        [planId]
+      );
+      return rows;
+    });
+    res.json(result);
   } catch (err) {
     console.error('Failed to fetch procurement plan variance:', err);
-    next(createHttpError(500, 'Failed to fetch procurement plan variance'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to fetch procurement plan variance'));
   }
 };
 
 
 const getPlanIntegrationInsights = async (req, res, next) => {
   const { id } = req.params;
-  const planId = parseInt(id, 10);
+  const planId = Number(id);
 
   if (!Number.isInteger(planId)) {
     return next(createHttpError(400, 'Plan id must be a valid number'));
   }
 
   try {
-    await ensureProcurementPlanTables();
-    const { rows } = await pool.query(
-      `WITH plan_items AS (
-         SELECT ppi.id, ppi.plan_id, ppi.stock_item_id, ppi.item_name, ppi.planned_quantity,
-                ppi.needed_by_date, pp.department_id
-         FROM procurement_plan_items ppi
-         JOIN procurement_plans pp ON pp.id = ppi.plan_id
-         WHERE ppi.plan_id = $1
-       ),
-       request_history AS (
-         SELECT pi.id AS plan_item_id,
-                COALESCE(SUM(CASE WHEN r.created_at >= (CURRENT_DATE - INTERVAL '365 days') THEN pir.quantity ELSE 0 END), 0) AS requested_qty_12m,
-                COALESCE(SUM(CASE WHEN r.created_at >= (CURRENT_DATE - INTERVAL '90 days') THEN pir.quantity ELSE 0 END), 0) AS requested_qty_90d
+    const result = await withTransaction(async client => {
+      const actor = await authority.actor(req.user,'read',client);
+      const plan = await authority.plan(actor,planId,'read',client);
+      await ensureProcurementPlanTables(client);
+      await authority.validateLinks(actor,plan,client);
+      const { rows } = await client.query(
+        `WITH plan_items AS (
+           SELECT ppi.id, ppi.plan_id, ppi.stock_item_id, ppi.item_name, ppi.planned_quantity,
+                  ppi.needed_by_date, pp.department_id
+           FROM procurement_plan_items ppi
+           JOIN procurement_plans pp ON pp.id = ppi.plan_id
+           WHERE ppi.plan_id = $1
+         ),
+         request_history AS (
+           SELECT pi.id AS plan_item_id,
+                  COALESCE(SUM(CASE WHEN r.created_at >= (CURRENT_DATE - INTERVAL '365 days') THEN pir.quantity ELSE 0 END), 0) AS requested_qty_12m,
+                  COALESCE(SUM(CASE WHEN r.created_at >= (CURRENT_DATE - INTERVAL '90 days') THEN pir.quantity ELSE 0 END), 0) AS requested_qty_90d
+           FROM plan_items pi
+           LEFT JOIN procurement_plan_item_requests pir ON pir.plan_item_id = pi.id
+           LEFT JOIN requests r ON r.id = pir.request_id
+           GROUP BY pi.id
+         ),
+         seasonal AS (
+           SELECT pi.id AS plan_item_id,NULL::numeric AS seasonal_avg_next_3m,NULL::numeric AS monthly_avg FROM plan_items pi
+         ),
+         replenishment AS (
+           SELECT pi.id AS plan_item_id,
+                  COALESCE(AVG(wrp.reorder_point), 0) AS reorder_point,
+                  COALESCE(AVG(wrp.safety_stock), 0) AS safety_stock,
+                  COALESCE(AVG(wrp.lead_time_days), 0) AS lead_time_days
+           FROM plan_items pi
+           LEFT JOIN warehouse_replenishment_policies wrp
+             ON wrp.stock_item_id = pi.stock_item_id AND wrp.is_active = true
+             AND EXISTS(SELECT 1 FROM warehouses w LEFT JOIN departments wd ON wd.id=w.department_id WHERE w.id=wrp.warehouse_id AND w.institute_id=$2 AND (w.department_id IS NULL OR wd.institute_id=w.institute_id)
+               AND ($3::boolean OR w.id=ANY($4::integer[]) OR w.department_id=$5))
+           GROUP BY pi.id
+         )
+         SELECT
+           pi.id AS plan_item_id,
+           pi.stock_item_id,
+           pi.item_name,
+           pi.planned_quantity,
+           pi.needed_by_date,
+           rh.requested_qty_12m,
+           rh.requested_qty_90d,
+           s.monthly_avg AS consumption_monthly_avg,
+           s.seasonal_avg_next_3m,
+           r.reorder_point,
+           r.safety_stock,
+           r.lead_time_days,
+           (rh.requested_qty_12m / 12.0) AS demand_monthly_avg,
+           GREATEST(0, r.reorder_point + r.safety_stock - pi.planned_quantity) AS reorder_gap,
+           CASE
+             WHEN s.monthly_avg > 0 THEN ROUND((s.seasonal_avg_next_3m / s.monthly_avg)::numeric, 3)
+             ELSE 1
+           END AS seasonal_index,
+           ROUND((rh.requested_qty_90d / 90.0 * COALESCE(NULLIF(r.lead_time_days, 0), 14))::numeric, 2) AS lead_time_demand,
+           ROUND((pi.planned_quantity - (rh.requested_qty_12m / 12.0))::numeric, 2) AS plan_vs_demand_gap
          FROM plan_items pi
-         LEFT JOIN procurement_plan_item_requests pir ON pir.plan_item_id = pi.id
-         LEFT JOIN requests r ON r.id = pir.request_id
-         GROUP BY pi.id
-       ),
-       seasonal AS (
-         SELECT pi.id AS plan_item_id,
-                COALESCE(AVG(CASE WHEN EXTRACT(MONTH FROM md.month_start) IN (EXTRACT(MONTH FROM CURRENT_DATE), EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '1 month'), EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '2 month')) THEN md.quantity END), 0) AS seasonal_avg_next_3m,
-                COALESCE(AVG(md.quantity), 0) AS monthly_avg
-         FROM plan_items pi
-         LEFT JOIN monthly_dispensing md ON LOWER(md.item_name) = LOWER(pi.item_name)
-           AND md.month_start >= date_trunc('month', CURRENT_DATE) - INTERVAL '24 months'
-         GROUP BY pi.id
-       ),
-       replenishment AS (
-         SELECT pi.id AS plan_item_id,
-                COALESCE(AVG(wrp.reorder_point), 0) AS reorder_point,
-                COALESCE(AVG(wrp.safety_stock), 0) AS safety_stock,
-                COALESCE(AVG(wrp.lead_time_days), 0) AS lead_time_days
-         FROM plan_items pi
-         LEFT JOIN warehouse_replenishment_policies wrp
-           ON wrp.stock_item_id = pi.stock_item_id AND wrp.is_active = true
-         GROUP BY pi.id
-       )
-       SELECT
-         pi.id AS plan_item_id,
-         pi.stock_item_id,
-         pi.item_name,
-         pi.planned_quantity,
-         pi.needed_by_date,
-         rh.requested_qty_12m,
-         rh.requested_qty_90d,
-         s.monthly_avg AS consumption_monthly_avg,
-         s.seasonal_avg_next_3m,
-         r.reorder_point,
-         r.safety_stock,
-         r.lead_time_days,
-         (rh.requested_qty_12m / 12.0) AS demand_monthly_avg,
-         GREATEST(0, r.reorder_point + r.safety_stock - pi.planned_quantity) AS reorder_gap,
-         CASE
-           WHEN s.monthly_avg > 0 THEN ROUND((s.seasonal_avg_next_3m / s.monthly_avg)::numeric, 3)
-           ELSE 1
-         END AS seasonal_index,
-         ROUND((rh.requested_qty_90d / 90.0 * COALESCE(NULLIF(r.lead_time_days, 0), 14))::numeric, 2) AS lead_time_demand,
-         ROUND((pi.planned_quantity - (rh.requested_qty_12m / 12.0))::numeric, 2) AS plan_vs_demand_gap
-       FROM plan_items pi
-       LEFT JOIN request_history rh ON rh.plan_item_id = pi.id
-       LEFT JOIN seasonal s ON s.plan_item_id = pi.id
-       LEFT JOIN replenishment r ON r.plan_item_id = pi.id
-       ORDER BY pi.id`,
-      [planId]
-    );
+         LEFT JOIN request_history rh ON rh.plan_item_id = pi.id
+         LEFT JOIN seasonal s ON s.plan_item_id = pi.id
+         LEFT JOIN replenishment r ON r.plan_item_id = pi.id
+         ORDER BY pi.id`,
+        [planId,actor.institute_id,has(actor,'planning.cross-warehouse'),actor.warehouseIds,actor.department_id || null]
+      );
 
-    const items = rows.map(row => ({
-      ...row,
-      recommended_actions: [
-        row.reorder_gap > 0 ? 'Increase planned quantity to cover reorder point and safety stock.' : null,
-        row.lead_time_days > 0 ? `Start sourcing at least ${Math.ceil(Number(row.lead_time_days))} days before need-by date.` : null,
-        Number(row.seasonal_index) > 1.1 ? 'Apply seasonal uplift for upcoming months.' : null,
-        Number(row.plan_vs_demand_gap) < 0 ? 'Current plan trails average demand; review budget allocation.' : null,
-      ].filter(Boolean),
-    }));
+      const items = rows.map(row => ({
+        ...row,
+        recommended_actions: [
+          row.reorder_gap > 0 ? 'Increase planned quantity to cover reorder point and safety stock.' : null,
+          row.lead_time_days > 0 ? `Start sourcing at least ${Math.ceil(Number(row.lead_time_days))} days before need-by date.` : null,
+          Number(row.seasonal_index) > 1.1 ? 'Apply seasonal uplift for upcoming months.' : null,
+          Number(row.plan_vs_demand_gap) < 0 ? 'Current plan trails average demand; review budget allocation.' : null,
+        ].filter(Boolean),
+      }));
 
-    res.json({
-      plan_id: planId,
-      generated_at: new Date().toISOString(),
-      integration_dimensions: [
-        'consumption_history',
-        'reorder_engine',
-        'demand_planning',
-        'supplier_lead_time',
-        'seasonal_usage',
-      ],
-      items,
+      return {
+        plan_id: planId,
+        data_limitations: ['Unscoped monthly dispensing history is excluded; seasonal usage is unavailable until ownership is established.'],
+        generated_at: new Date().toISOString(),
+        integration_dimensions: [
+          'consumption_history',
+          'reorder_engine',
+          'demand_planning',
+          'supplier_lead_time',
+          'seasonal_usage',
+        ],
+        items,
+      };
     });
+    res.json(result);
   } catch (err) {
     console.error('Failed to build procurement planning integration insights:', err);
-    next(createHttpError(500, 'Failed to build procurement planning integration insights'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to build procurement planning integration insights'));
   }
 };
 

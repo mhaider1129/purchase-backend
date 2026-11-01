@@ -1,4 +1,6 @@
 'use strict';
+const { authorizeCommand } = require('./p2pAuthorization');
+
 
 const crypto = require('crypto');
 const { compareDecimal, subtractDecimal } = require('./purchaseOrderTotalsService');
@@ -15,9 +17,12 @@ const postPayment = ({ repository, payableId, invoiceId, amount, currency, payme
   const normalized = { payable_id: String(payableId), amount: String(amount), currency: String(currency || '').toUpperCase(), payment_reference: String(paymentReference || ''), payment_method: String(paymentMethod || '') };
   const payloadFingerprint = paymentFingerprint(normalized);
   return repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'finance.payment.manage', {payableId})).actor;
     await tx.lockPaymentOperation(key);
     const retry = await tx.findPaymentByIdempotency(key);
     if (retry) {
+      await authorizeCommand(tx,actor,'finance.payment.manage',{requestId:tx.financialContext?.request?.id,payableId,paymentId:retry.id});
       if (retry.payload_fingerprint !== payloadFingerprint) throw fail('Idempotency key was used with a different payment payload', 'IDEMPOTENCY_CONFLICT', 409);
       return { payment: retry, idempotent: true };
     }
@@ -41,7 +46,7 @@ const postPayment = ({ repository, payableId, invoiceId, amount, currency, payme
     await tx.updateInvoicePaymentProjection(payable.supplier_invoice_id, status);
     if (tx.linkDocuments) await tx.linkDocuments(payable.request_id, 'ACCOUNTS_PAYABLE', payable.id, 'PAYMENT', payment.id, actor?.id || actorId);
     const action = status === 'PAID' ? 'PAYMENT_COMPLETED' : 'PAYMENT_PARTIAL';
-    await auditService.writeAuditEvent({ client: tx.client, entityType: 'payment', entityId: payment.id, requestId: payable.request_id, action, actorUserId: actor?.id || actorId, metadata: { payable_id: payable.id, amount: String(amount), open_balance: openBalance } });
+    await auditService.writeAuditEvent({ client: tx.client, entityType: 'payment', entityId: payment.id, requestId: payable.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor?.id || actorId,beforeData:{open_balance:payable.open_balance,status:payable.payable_status},afterData:{open_balance:openBalance,status}, metadata: { payable_id: payable.id, amount: String(amount), open_balance: openBalance } });
     await outbox.enqueueNotification(tx.client, { type: action, entityType: 'payment', entityId: payment.id, payload: { payable_id: payable.id, amount: String(amount), open_balance: openBalance }, idempotencyKey: `payment-posted:${payment.id}` });
     return { payment, open_balance: openBalance, payable_status: status, idempotent: false };
   });

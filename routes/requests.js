@@ -1,6 +1,7 @@
 // ✅ All purchase request-related routes
 const express = require('express');
 const router = express.Router();
+const requirePermission = require('../middleware/requirePermission');
 const { authenticateUser } = require('../middleware/authMiddleware');
 router.use(authenticateUser); // 🔐 Protect all routes
 const { getCompletedAssignedRequests } = require('../controllers/requests/procurementHistoryController');
@@ -364,8 +365,8 @@ router.get('/:id', getRequestDetails);
 // ✅ Approval & Assignment
 // ==========================
 router.put('/approval/:id', updateApprovalStatus);
-router.put('/assign', assignRequestToProcurement);
-router.put('/assign-procurement', assignRequestToUser);
-router.put('/:id/split-assign-procurement', splitAssignRequest);
+router.put('/assign', requirePermission('requests.manage'), assignRequestToProcurement);
+router.put('/assign-procurement', requirePermission('requests.manage'), assignRequestToUser);
+router.put('/:id/split-assign-procurement', requirePermission('requests.manage'), splitAssignRequest);
 
 module.exports = router;

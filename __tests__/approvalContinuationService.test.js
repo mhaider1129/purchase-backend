@@ -41,3 +41,10 @@ test('retry after final approval has no duplicate downstream effects', async () 
   const client = clientFor({ transition: false }); const notify = jest.fn(); const result = await continueApprovalWorkflowAfterLevel({ client, request, approval, actorId: 5, enqueueNotification: notify });
   expect(result).toMatchObject({ state: 'FINAL_APPROVED', changed: false }); expect(notify).not.toHaveBeenCalled(); expect(sendEmail).not.toHaveBeenCalled(); expect(applyAutoAssignmentForApprovedRequest).not.toHaveBeenCalled(); expect(client.query.mock.calls.some(([sql]) => sql.includes('INSERT INTO request_logs'))).toBe(false);
 });
+test('assignment failure occurs before approval success email escapes the transaction', async () => {
+  const client = clientFor();
+  applyAutoAssignmentForApprovedRequest.mockRejectedValueOnce(new Error('Assignment audit failure'));
+  await expect(continueApprovalWorkflowAfterLevel({ client, request: { ...request }, approval, actorId: 5 })).rejects.toThrow('Assignment audit failure');
+  expect(applyAutoAssignmentForApprovedRequest).toHaveBeenCalledWith(client, expect.objectContaining({ id: 10 }), 5);
+  expect(sendEmail).not.toHaveBeenCalled();
+});

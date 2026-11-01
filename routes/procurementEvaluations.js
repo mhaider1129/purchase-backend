@@ -1,11 +1,11 @@
 const express = require('express');
-const pool = require('../config/db');
-const service = require('../services/procurementEvaluationService');
+const authorization=require('../services/procurementEvaluationAuthorization');
+const scope=authorization.createContext();
+const pool=scope.db;
+const service=require('../services/procurementEvaluationService').createService(pool);
 
 const router = express.Router();
 
-const EDIT_ROLES = new Set(['admin', 'scm', 'procurementsupervisor', 'procurementspecialist', 'procurementmanager']);
-const VIEW_ROLES = new Set([...EDIT_ROLES, 'cmo', 'cfo', 'coo', 'ceo', 'technicalowner', 'bme', 'lab', 'labuser']);
 const EVALUATION_TYPES = new Set(['General', 'Laboratory Device', 'Medical Device', 'IT System', 'Service Contract', 'Maintenance Contract', 'Consumables', 'Medication', 'Capital Equipment', 'Construction Project', 'Outsourcing Agreement']);
 const STATUSES = new Set(['Draft', 'In Review', 'Finalized', 'Cancelled']);
 const CASE_FIELDS = ['title','description','category','request_id','department_id','section_id','evaluation_type','evaluation_period_years','expected_annual_growth_rate','currency','status','recommendation_summary'];
@@ -26,10 +26,9 @@ const defaultCriteria = [
   ['Risk', 'Risk', 5, 'manual', false, false],
 ];
 
-const role = req => String(req.user?.role || '').toLowerCase();
-const canEdit = req => EDIT_ROLES.has(role(req)) || req.user?.hasAnyPermission?.(['procurement.update-status', 'evaluations.manage']);
-const canView = req => VIEW_ROLES.has(role(req)) || req.user?.hasAnyPermission?.(['requests.view-all', 'evaluations.manage', 'procurement.update-status']);
-const asyncHandler = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const canEdit=req=>req.user?.permissions?.includes('evaluations.manage');
+const canView=canEdit;
+const asyncHandler=fn=>(req,res,next)=>scope.withRequest(req,res,fn).catch(next);
 const userId = req => req.user?.id || req.user?.user_id || null;
 
 const forbidUnlessView = req => { if (!canView(req)) { const err = new Error('Not authorized to view procurement evaluations'); err.statusCode = 403; throw err; } };
@@ -37,24 +36,7 @@ const forbidUnlessEdit = req => { if (!canEdit(req)) { const err = new Error('No
 const badRequest = message => { const err = new Error(message); err.statusCode = 400; throw err; };
 const notFound = message => { const err = new Error(message); err.statusCode = 404; throw err; };
 
-const audit = async (action, actorId, targetId, details = {}) => {
-  try {
-    await pool.query(
-      `INSERT INTO audit_logs (action_type, actor_id, target_type, target_id, details, description)
-       VALUES ($1, $2, 'procurement_evaluation', $3, $4, $5)`,
-      [action, actorId, targetId, JSON.stringify(details), `${action} procurement evaluation #${targetId}`]
-    );
-  } catch (_error) {
-    try {
-      await pool.query(
-        `INSERT INTO audit_logs (action, actor_id, target_id, description) VALUES ($1,$2,$3,$4)`,
-        [action, actorId, targetId, `${action} procurement evaluation #${targetId}`]
-      );
-    } catch (error) {
-      console.warn('Failed to write procurement evaluation audit log:', error.message);
-    }
-  }
-};
+const audit=scope.record;
 
 const getCase = async id => {
   const result = await pool.query('SELECT * FROM procurement_evaluation_cases WHERE id = $1', [id]);
@@ -152,12 +134,13 @@ router.get('/', asyncHandler(async (req, res) => {
        FROM procurement_evaluation_cases c
        LEFT JOIN departments d ON d.id = c.department_id
        LEFT JOIN users u ON u.id = c.created_by
-       LEFT JOIN procurement_evaluation_offers so ON so.id = c.selected_offer_id
+       LEFT JOIN procurement_evaluation_offers so ON so.id = c.selected_offer_id AND so.evaluation_case_id=c.id
        LEFT JOIN LATERAL (
          SELECT tco_period_cost, final_weighted_score FROM procurement_evaluation_results r
           WHERE r.evaluation_case_id = c.id ORDER BY rank NULLS LAST, final_weighted_score DESC LIMIT 1
        ) best ON TRUE
-      ORDER BY c.created_at DESC`
+      WHERE ${authorization.predicate('c','$1')}
+      ORDER BY c.created_at DESC`,[scope.current().ctx.instituteId]
   );
   res.json({ data: result.rows });
 }));
@@ -298,10 +281,8 @@ router.post('/:id/offers/:offerId/import', asyncHandler(async (req, res) => {
   const validation = service.validateImportRows(parsed.rows, columnMap);
   const invalid = validation.filter(row => !row.valid);
   if (invalid.length) return res.status(400).json({ message: 'Import contains validation errors', errors: invalid });
-  const client = await pool.connect();
+  const client = pool;
   const saved = [];
-  try {
-    await client.query('BEGIN');
     if (option === 'REPLACE') await client.query('DELETE FROM procurement_evaluation_offer_test_costs WHERE evaluation_case_id = $1 AND offer_id = $2', [req.params.id, req.params.offerId]);
     for (const row of validation) {
       const item = row.item;
@@ -315,8 +296,7 @@ router.post('/:id/offers/:offerId/import', asyncHandler(async (req, res) => {
       const result = await client.query(`INSERT INTO procurement_evaluation_offer_test_costs (${fields.join(',')}) VALUES (${fields.map((_, i) => '$' + (i + 1)).join(',')}) ON CONFLICT (offer_id, test_id) DO UPDATE SET ${fields.filter(f => !['evaluation_case_id','offer_id','test_id'].includes(f)).map(f => `${f}=EXCLUDED.${f}`).join(', ')}, updated_at=CURRENT_TIMESTAMP RETURNING *`, fields.map(f => data[f]));
       saved.push(result.rows[0]);
     }
-    await client.query('COMMIT');
-  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+
   await audit('procurement_evaluation.import', userId(req), req.params.id, { offerId: req.params.offerId, count: saved.length, option });
   res.json({ data: saved });
 }));
@@ -395,8 +375,7 @@ router.patch('/:id/finalize', asyncHandler(async (req, res) => {
 
 
 router.patch('/:id/reopen', asyncHandler(async (req, res) => {
-  const requesterRole = role(req);
-  if (!['admin', 'scm'].includes(requesterRole)) badRequest('Only Admin and SCM may reopen finalized evaluations');
+  forbidUnlessEdit(req);
   const result = await pool.query(`UPDATE procurement_evaluation_cases SET status = 'Draft', finalized_by = NULL, finalized_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'Finalized' RETURNING *`, [req.params.id]);
   if (result.rowCount === 0) notFound('Finalized evaluation not found');
   await audit('procurement_evaluation.reopen', userId(req), req.params.id);

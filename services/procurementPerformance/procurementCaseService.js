@@ -52,4 +52,22 @@ function instituteScope(user, requestedInstituteId) {
   return String(user.institute_id) === String(requestedInstituteId);
 }
 
-module.exports = { ensureCaseForRequestedItem, deriveProcurementCaseStatus, instituteScope, ELIGIBLE_REQUEST_STATES };
+// Assignment changes update only an existing active case's buyer projection.
+// Case creation, priority/complexity/workload and lifecycle remain with their owners.
+async function synchronizeCaseAssignments({ repository, request, owners, actorId }) {
+  const cases = await repository.lockAssignmentCases(request.id);
+  const changes = [];
+  for (const row of cases) {
+    if (row.institute_id == null || Number(row.institute_id)!==Number(request.institute_id) ||
+        Number(row.department_id)!==Number(request.department_id) || Number(row.item_request_id)!==Number(request.id))
+      throw Object.assign(new Error('Procurement case ownership is inconsistent'), { statusCode:409 });
+    if (['CLOSED','DELIVERED'].includes(row.case_status) || !owners.has(Number(row.requested_item_id))) continue;
+    const owner = owners.get(Number(row.requested_item_id));
+    if (Number(row.assigned_buyer_id || 0)===Number(owner || 0)) continue;
+    const after = await repository.updateCaseAssignee(row.id,owner,actorId);
+    changes.push({ before:row, after });
+  }
+  return changes;
+}
+
+module.exports = { synchronizeCaseAssignments, ensureCaseForRequestedItem, deriveProcurementCaseStatus, instituteScope, ELIGIBLE_REQUEST_STATES };

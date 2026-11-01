@@ -59,10 +59,13 @@ function normalizeQuotationLines(lines, requestedItems, currency = 'USD', compat
 
 const compareScaled = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 
-async function submitLinkedRfxResponse({ repository, event, supplierId, submittedBy, bidAmount, notes, responseData, lines }) {
+async function submitLinkedRfxResponse({ repository, event, supplierId, submittedBy, actor, bidAmount, notes, responseData, lines }) {
+  const ctx=await require('./rfxAuthorization').authorize(repository.client,actor,{eventId:event.id,requestId:event.request_id,supplierId});
+  await require('./rfxAuthorization').assertActiveSourcing(repository.client,ctx);
+  event=ctx.event; submittedBy=ctx.actor.id;
   const requestedItems = await repository.loadRequestedItems(event.request_id);
   const compatibilityIds = new Set();
-  for(const item of requestedItems){await assertReadyForCommand(repository.client,item,{id:submittedBy},'submit_quotation');if(isCompatibilityCandidate(item))compatibilityIds.add(String(item.id));}
+  for(const item of requestedItems){await assertReadyForCommand(repository.client,item,ctx.actor,'submit_quotation');if(isCompatibilityCandidate(item))compatibilityIds.add(String(item.id));}
   const quotation = normalizeQuotationLines(lines, requestedItems, 'USD', compatibilityIds);
   if (bidAmount !== undefined && bidAmount !== null && bidAmount !== '' && parseEight(quotation.total) !== parseEight(bidAmount)) throw fail('Header bid amount does not match authoritative quotation lines', 'RFX_QUOTATION_TOTAL_MISMATCH', 409);
   const response = await repository.insertResponse({ rfx_id: event.id, request_id: event.request_id, supplier_id: supplierId, submitted_by: submittedBy, bid_amount: quotation.total, currency: quotation.currency, notes, response_data: responseData });

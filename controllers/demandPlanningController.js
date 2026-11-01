@@ -1,6 +1,31 @@
 
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
+const withTransaction = require('../utils/withTransaction');
+const { writeAuditEvent } = require('../services/auditService');
+const { createPlanningAuthorization, has } = require('../services/planningAuthorizationService');
+const authority = createPlanningAuthorization();
+const audit = (client, actor, entityType, beforeData, afterData, action) => writeAuditEvent({
+  client, actorUserId: actor.id, instituteId: actor.institute_id, entityType,
+  entityId: afterData.id, action, beforeData, afterData,
+});
+const positiveInteger = (value, name, max = 3650) => {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > max) throw createHttpError(400, `${name} must be a positive integer no greater than ${max}`);
+  return n;
+};
+const nonNegative = (value, name) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) throw createHttpError(400, `${name} must be non-negative`);
+  return n;
+};
+async function inputScope(req, actor, db = pool) {
+  if (req.body?.department_id != null) await authority.department(actor, req.body.department_id, db);
+  const warehouseId = req.body?.warehouse_id ?? req.query?.warehouse_id;
+  if (warehouseId != null && warehouseId !== '') await authority.warehouse(actor, warehouseId, db);
+  return warehouseId == null || warehouseId === '' ? null : Number(warehouseId);
+}
+
 
 const DEFAULT_HISTORY_MONTHS = 12;
 const DEFAULT_PLANNING_SETTINGS = {
@@ -179,90 +204,43 @@ function applyAdvancedDemandAdjustments(forecast, options = {}) {
   });
 }
 
-async function fetchMonthlyDemand(itemName, months = DEFAULT_HISTORY_MONTHS) {
-  const { rows: tableCheck } = await pool.query(
-    "SELECT to_regclass('public.monthly_dispensing') AS table_name",
-  );
-
-  if (tableCheck?.[0]?.table_name) {
-    const { rows: dispensingRows } = await pool.query(
-      `SELECT TO_CHAR(month_start, 'YYYY-MM') AS bucket, COALESCE(SUM(quantity), 0) AS quantity
-         FROM monthly_dispensing
-        WHERE item_name ILIKE $1
-          AND month_start >= date_trunc('month', CURRENT_DATE) - ($2 || ' months')::INTERVAL
-        GROUP BY bucket
-        ORDER BY bucket`,
-      [itemName, months],
-    );
-
-    const normalized = dispensingRows.map(row => ({
-      bucket: row.bucket,
-      quantity: Number(row.quantity) || 0,
-    }));
-
-    if (normalized.length) {
-      return { history: normalized, source: 'monthly_dispensing' };
-    }
-  }
-
+// Name-only monthly_dispensing has no trusted institute/department ownership.
+// Use owned request history; never infer an institute from facility-name text or
+// the current placement of a historical importer.
+const demandScope = `r.institute_id=$3 AND ($4::boolean OR r.department_id=ANY($5::int[]))
+  AND ($6::integer IS NULL OR r.warehouse_id=$6)
+  AND (r.warehouse_id IS NULL OR EXISTS(SELECT 1 FROM warehouses w LEFT JOIN departments wd ON wd.id=w.department_id WHERE w.id=r.warehouse_id AND w.institute_id=$3 AND (w.department_id IS NULL OR wd.institute_id=w.institute_id)
+    AND ($7::boolean OR w.id=ANY($8::int[]) OR w.department_id=$9)))
+  AND ($10::integer IS NULL OR r.department_id=$10)`;
+const demandParams = (itemName, period, actor, warehouseId, departmentId) => [itemName, period,
+  actor.institute_id, has(actor,'planning.cross-department'), actor.departmentIds, warehouseId,
+  has(actor,'planning.cross-warehouse'), actor.warehouseIds, actor.department_id || null, departmentId || null];
+async function fetchMonthlyDemand(itemName, months, actor, warehouseId, departmentId) {
   const { rows } = await pool.query(
-    `SELECT TO_CHAR(r.created_at, 'YYYY-MM') AS bucket, COALESCE(SUM(ri.quantity), 0) AS quantity
-     FROM requested_items ri
-     JOIN requests r ON ri.request_id = r.id
-     WHERE ri.item_name ILIKE $1
-       AND r.created_at >= (CURRENT_DATE - ($2 || ' months')::INTERVAL)
-     GROUP BY bucket
-     ORDER BY bucket`,
-    [itemName, months]
-  );
-
-  return {
-    history: rows.map(row => ({ bucket: row.bucket, quantity: Number(row.quantity) || 0 })),
-    source: 'requests',
-  };
+    `SELECT TO_CHAR(r.created_at,'YYYY-MM') AS bucket,COALESCE(SUM(ri.quantity),0) AS quantity
+     FROM requested_items ri JOIN requests r ON r.id=ri.request_id
+     JOIN departments d ON d.id=r.department_id AND d.institute_id=r.institute_id
+     WHERE ri.item_name ILIKE $1 AND r.created_at >= CURRENT_DATE-($2 || ' months')::interval AND ${demandScope}
+     GROUP BY bucket ORDER BY bucket`, demandParams(itemName, months, actor, warehouseId, departmentId));
+  return { history: rows.map(row => ({ bucket: row.bucket, quantity: Number(row.quantity) || 0 })), source: 'requests' };
 }
-
-async function fetchDailyDemand(itemName, days = 120) {
+async function fetchDailyDemand(itemName, days, actor, warehouseId, departmentId) {
   const { rows } = await pool.query(
-    `SELECT r.created_at::date AS bucket_date, COALESCE(SUM(ri.quantity), 0) AS quantity
-     FROM requested_items ri
-     JOIN requests r ON ri.request_id = r.id
-     WHERE ri.item_name ILIKE $1
-       AND r.created_at >= (CURRENT_DATE - ($2 || ' days')::INTERVAL)
-     GROUP BY bucket_date
-     ORDER BY bucket_date`,
-    [itemName, days]
-  );
+    `SELECT r.created_at::date AS bucket_date,COALESCE(SUM(ri.quantity),0) AS quantity
+     FROM requested_items ri JOIN requests r ON r.id=ri.request_id
+     JOIN departments d ON d.id=r.department_id AND d.institute_id=r.institute_id
+     WHERE ri.item_name ILIKE $1 AND r.created_at >= CURRENT_DATE-($2 || ' days')::interval AND ${demandScope}
+     GROUP BY bucket_date ORDER BY bucket_date`, demandParams(itemName, days, actor, warehouseId, departmentId));
   return rows.map(row => ({ day: row.bucket_date, quantity: Number(row.quantity) || 0 }));
 }
-
-async function ensurePlanningSettingsTable() {
-  await pool.query(`CREATE TABLE IF NOT EXISTS planning_settings (
-    id BIGSERIAL PRIMARY KEY,
-    warehouse_id BIGINT NULL,
-    forecast_horizon_months INTEGER NOT NULL DEFAULT 6,
-    forecast_window_size INTEGER NOT NULL DEFAULT 3,
-    safety_lead_time_days INTEGER NOT NULL DEFAULT 14,
-    safety_review_period_days INTEGER NOT NULL DEFAULT 7,
-    demand_history_days INTEGER NOT NULL DEFAULT 120,
-    demand_history_months INTEGER NOT NULL DEFAULT 12,
-    safety_history_days INTEGER NOT NULL DEFAULT 180,
-    mrp_horizon_days INTEGER NOT NULL DEFAULT 84,
-    mrp_bucket_days INTEGER NOT NULL DEFAULT 7,
-    updated_by BIGINT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )`);
-  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS planning_settings_warehouse_key ON planning_settings ((COALESCE(warehouse_id, -1)))');
+async function ensurePlanningSettingsTable(db = pool) {
+  const result = await db.query(`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='planning_settings' AND column_name='institute_id') AND to_regclass('public.planning_settings_institute_warehouse_key') IS NOT NULL AS planning_scope_available`);
+  if (result.rows[0]?.planning_scope_available !== true) throw Object.assign(createHttpError(503, 'Apply the complete manual SQL 056 planning authorization patch before using planning defaults'), { code: 'PLANNING_SCOPE_SCHEMA_REQUIRED' });
 }
-
-async function getPlanningSettings(warehouseId = null) {
-  await ensurePlanningSettingsTable();
-  const { rows } = await pool.query(
-    `SELECT * FROM planning_settings WHERE COALESCE(warehouse_id, -1) = COALESCE($1::BIGINT, -1) LIMIT 1`,
-    [warehouseId || null],
-  );
-  return { ...DEFAULT_PLANNING_SETTINGS, ...(rows[0] || {}) };
+async function getPlanningSettings(warehouseId, actor, db = pool) {
+  await ensurePlanningSettingsTable(db);
+  const { rows } = await db.query('SELECT * FROM planning_settings WHERE institute_id=$1 AND COALESCE(warehouse_id,-1)=COALESCE($2::bigint,-1) LIMIT 1', [actor.institute_id, warehouseId]);
+  return { ...DEFAULT_PLANNING_SETTINGS, ...(rows[0] || {}), defaults_scope: rows.length ? 'institute_owned' : 'built_in' };
 }
 
 const getDemandForecast = async (req, res, next) => {
@@ -286,11 +264,13 @@ const getDemandForecast = async (req, res, next) => {
   }
 
   try {
-    const settings = await getPlanningSettings(warehouseId);
+    const actor = await authority.actor(req.user);
+    await inputScope(req, actor);
+    const settings = await getPlanningSettings(warehouseId, actor);
     const horizonMonths = providedHorizonMonths ?? settings.forecast_horizon_months;
     const windowSize = providedWindowSize ?? settings.forecast_window_size;
-    const { history, source: historySource } = await fetchMonthlyDemand(itemName, settings.demand_history_months || DEFAULT_HISTORY_MONTHS);
-    const horizon = Number(horizonMonths);
+    const { history, source: historySource } = await fetchMonthlyDemand(itemName, settings.demand_history_months || DEFAULT_HISTORY_MONTHS, actor, warehouseId, req.body.department_id);
+    const horizon = positiveInteger(horizonMonths, 'horizon_months', 120);
     if (Number.isNaN(horizon) || horizon <= 0) {
       return next(createHttpError(400, 'horizon_months must be a positive number'));
     }
@@ -332,7 +312,7 @@ const getDemandForecast = async (req, res, next) => {
     });
   } catch (err) {
     console.error('❌ Demand forecast failed:', err);
-    next(createHttpError(500, 'Failed to generate demand forecast'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to generate demand forecast'));
   }
 };
 
@@ -349,10 +329,12 @@ const calculateSafetyStock = async (req, res, next) => {
   }
 
   try {
-    const settings = await getPlanningSettings(req.body.warehouse_id || null);
+    const actor = await authority.actor(req.user);
+    const warehouseId = await inputScope(req, actor);
+    const settings = await getPlanningSettings(warehouseId, actor);
     const leadTimeDays = req.body.lead_time_days ?? settings.safety_lead_time_days;
     const reviewPeriodDays = req.body.review_period_days ?? settings.safety_review_period_days;
-    const dailyDemand = await fetchDailyDemand(itemName, settings.safety_history_days || 180);
+    const dailyDemand = await fetchDailyDemand(itemName, settings.safety_history_days || 180, actor, warehouseId, req.body.department_id);
     const dailyValues = dailyDemand.map(entry => entry.quantity);
     const avgDaily = mean(dailyValues);
     const stdDaily = std(dailyValues);
@@ -379,7 +361,7 @@ const calculateSafetyStock = async (req, res, next) => {
     });
   } catch (err) {
     console.error('❌ Safety stock calculation failed:', err);
-    next(createHttpError(500, 'Failed to calculate safety stock'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to calculate safety stock'));
   }
 };
 
@@ -472,9 +454,18 @@ const runMrp = async (req, res, next) => {
   }
 
   try {
-    const settings = await getPlanningSettings(warehouseId);
+    const actor = await authority.actor(req.user);
+    await inputScope(req, actor);
+    const settings = await getPlanningSettings(warehouseId, actor);
     const horizonDays = providedHorizonDays ?? settings.mrp_horizon_days;
     const bucketDays = providedBucketDays ?? settings.mrp_bucket_days;
+    positiveInteger(horizonDays, 'horizon_days');
+    positiveInteger(bucketDays, 'bucket_days');
+    for (const item of items) {
+      if (item.department_id) await authority.department(actor, item.department_id);
+      if (item.warehouse_id) await authority.warehouse(actor, item.warehouse_id);
+      if (item.stock_item_id) await authority.stock(actor, item.stock_item_id, { warehouseId: item.warehouse_id || warehouseId, departmentId: item.department_id || actor.department_id });
+    }
     const plans = items.map(item => scheduleMrp({ ...item, horizon_days: horizonDays, bucket_days: bucketDays }));
     const plannedOrders = plans.flatMap(plan => plan.planned_orders);
 
@@ -489,195 +480,93 @@ const runMrp = async (req, res, next) => {
     });
   } catch (err) {
     console.error('❌ MRP run failed:', err);
-    next(createHttpError(500, 'Failed to run MRP/DRP netting'));
+    next(err.statusCode ? err : createHttpError(500, 'Failed to run MRP/DRP netting'));
   }
 };
 
 const saveReplenishmentPolicy = async (req, res, next) => {
-  const {
-    warehouse_id: warehouseId,
-    stock_item_id: stockItemId,
-    reorder_point: reorderPoint = 0,
-    safety_stock: safetyStock = 0,
-    lead_time_days: leadTimeDays = 14,
-    review_period_days: reviewPeriodDays = 7,
-    lot_size: lotSize = 0,
-    is_active: isActive = true,
-  } = req.body;
-
-  if (!warehouseId || !stockItemId) {
-    return next(createHttpError(400, 'warehouse_id and stock_item_id are required'));
-  }
-
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO warehouse_replenishment_policies (
-        warehouse_id,
-        stock_item_id,
-        reorder_point,
-        safety_stock,
-        lead_time_days,
-        review_period_days,
-        lot_size,
-        is_active,
-        updated_by
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (warehouse_id, stock_item_id)
-      DO UPDATE SET
-        reorder_point = EXCLUDED.reorder_point,
-        safety_stock = EXCLUDED.safety_stock,
-        lead_time_days = EXCLUDED.lead_time_days,
-        review_period_days = EXCLUDED.review_period_days,
-        lot_size = EXCLUDED.lot_size,
-        is_active = EXCLUDED.is_active,
-        updated_by = EXCLUDED.updated_by,
-        updated_at = CURRENT_TIMESTAMP
-      RETURNING *`,
-      [
-        warehouseId,
-        stockItemId,
-        Number(reorderPoint),
-        Number(safetyStock),
-        Number(leadTimeDays),
-        Number(reviewPeriodDays),
-        Number(lotSize),
-        Boolean(isActive),
-        req.user?.id || null,
-      ],
-    );
-
-    res.json({ policy: rows[0] });
-  } catch (err) {
-    console.error('❌ Failed to save replenishment policy:', err);
-    next(createHttpError(500, 'Failed to save replenishment policy'));
-  }
+    const policy = await withTransaction(async client => {
+      const actor = await authority.actor(req.user, 'replenish', client);
+      const w = await authority.warehouse(actor, req.body.warehouse_id, client, true);
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended('planning-warehouse:'||$1::text,0))", [w.id]);
+      await authority.stock(actor, req.body.stock_item_id, { warehouseId: w.id }, client);
+      const before = (await client.query('SELECT * FROM warehouse_replenishment_policies WHERE warehouse_id=$1 AND stock_item_id=$2 FOR UPDATE', [w.id, req.body.stock_item_id])).rows[0] || null;
+      const input = { reorder_point: 0, safety_stock: 0, lead_time_days: 14, review_period_days: 7, lot_size: 0, is_active: true, ...req.body };
+      if (typeof input.is_active !== 'boolean') throw createHttpError(400, 'is_active must be a boolean');
+      const { rows } = await client.query(`INSERT INTO warehouse_replenishment_policies(warehouse_id,stock_item_id,reorder_point,safety_stock,lead_time_days,review_period_days,lot_size,is_active,updated_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(warehouse_id,stock_item_id) DO UPDATE SET
+        reorder_point=EXCLUDED.reorder_point,safety_stock=EXCLUDED.safety_stock,lead_time_days=EXCLUDED.lead_time_days,
+        review_period_days=EXCLUDED.review_period_days,lot_size=EXCLUDED.lot_size,is_active=EXCLUDED.is_active,updated_by=EXCLUDED.updated_by,updated_at=now() RETURNING *`,
+      [w.id, req.body.stock_item_id, nonNegative(input.reorder_point,'reorder_point'), nonNegative(input.safety_stock,'safety_stock'),
+        nonNegative(input.lead_time_days,'lead_time_days'), nonNegative(input.review_period_days,'review_period_days'), nonNegative(input.lot_size,'lot_size'), input.is_active, actor.id]);
+      await audit(client, actor, 'warehouse_replenishment_policy', before, rows[0], 'planning.replenishment.policy.saved');
+      return rows[0];
+    });
+    res.json({ policy });
+  } catch (err) { next(err); }
 };
-
 const runReplenishmentPlanner = async (req, res, next) => {
-  const { warehouse_id: warehouseId } = req.body;
-
-  if (!warehouseId) {
-    return next(createHttpError(400, 'warehouse_id is required'));
-  }
-
   try {
-    const { rows: policies } = await pool.query(
-      `SELECT
-        p.warehouse_id,
-        p.stock_item_id,
-        p.reorder_point,
-        p.safety_stock,
-        p.lead_time_days,
-        p.review_period_days,
-        p.lot_size,
-        s.quantity AS current_quantity
-      FROM warehouse_replenishment_policies p
-      JOIN warehouse_stock_levels s
-        ON s.warehouse_id = p.warehouse_id
-       AND s.stock_item_id = p.stock_item_id
-      WHERE p.warehouse_id = $1
-        AND p.is_active = true`,
-      [warehouseId],
-    );
-
-    const tasks = [];
-
-    for (const policy of policies) {
-      const currentQuantity = Number(policy.current_quantity || 0);
-      const reorderPoint = Number(policy.reorder_point || 0);
-      const safetyStock = Number(policy.safety_stock || 0);
-
-      if (currentQuantity > reorderPoint) {
-        continue;
+    const result = await withTransaction(async client => {
+      const actor = await authority.actor(req.user, 'replenish', client);
+      const w = await authority.warehouse(actor, req.body.warehouse_id, client, true);
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended('planning-warehouse:'||$1::text,0))", [w.id]);
+      const policies = (await client.query(`SELECT p.*,(SELECT COALESCE(SUM(s.quantity),0) FROM warehouse_stock_levels s WHERE s.warehouse_id=p.warehouse_id AND s.stock_item_id=p.stock_item_id) AS current_quantity FROM warehouse_replenishment_policies p WHERE p.warehouse_id=$1 AND p.is_active=true ORDER BY p.id FOR SHARE OF p`, [w.id])).rows;
+      const tasks = [];
+      for (const p of policies) {
+        await authority.stock(actor, p.stock_item_id, { warehouseId: w.id }, client);
+        if (Number(p.current_quantity) > Number(p.reorder_point)) continue;
+        const existing = (await client.query("SELECT * FROM warehouse_replenishment_tasks WHERE warehouse_id=$1 AND stock_item_id=$2 AND status IN ('open','planned','ordered') ORDER BY id LIMIT 1 FOR UPDATE", [w.id, p.stock_item_id])).rows[0];
+        if (existing) { tasks.push(existing); continue; }
+        const required = Number(p.reorder_point)+Number(p.safety_stock)-Number(p.current_quantity);
+        const quantity = Number(p.lot_size)>0 ? Math.ceil(required/Number(p.lot_size))*Number(p.lot_size) : required;
+        const dueDate = new Date(); dueDate.setDate(dueDate.getDate()+Number(p.lead_time_days || 0));
+        const task = (await client.query(`INSERT INTO warehouse_replenishment_tasks(warehouse_id,stock_item_id,current_quantity,reorder_point,safety_stock,suggested_quantity,due_date,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+          [w.id,p.stock_item_id,p.current_quantity,p.reorder_point,p.safety_stock,Number(quantity.toFixed(2)),dueDate.toISOString().slice(0,10),actor.id])).rows[0];
+        await audit(client, actor, 'warehouse_replenishment_task', null, task, 'planning.replenishment.task.generated');
+        tasks.push(task);
       }
-
-      const required = reorderPoint + safetyStock - currentQuantity;
-      const lotSize = Number(policy.lot_size || 0);
-      const suggestedQuantity = lotSize > 0 ? Math.ceil(required / lotSize) * lotSize : required;
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + Number(policy.lead_time_days || 0));
-
-      const { rows: inserted } = await pool.query(
-        `INSERT INTO warehouse_replenishment_tasks (
-          warehouse_id,
-          stock_item_id,
-          current_quantity,
-          reorder_point,
-          safety_stock,
-          suggested_quantity,
-          due_date,
-          created_by
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING *`,
-        [
-          policy.warehouse_id,
-          policy.stock_item_id,
-          currentQuantity,
-          reorderPoint,
-          safetyStock,
-          Number(suggestedQuantity.toFixed(2)),
-          dueDate.toISOString().slice(0, 10),
-          req.user?.id || null,
-        ],
-      );
-
-      tasks.push(inserted[0]);
-    }
-
-    res.json({ warehouse_id: Number(warehouseId), tasks });
-  } catch (err) {
-    console.error('❌ Replenishment planner failed:', err);
-    next(createHttpError(500, 'Failed to run replenishment planner'));
-  }
+      return { warehouse_id: w.id, tasks };
+    });
+    res.json(result);
+  } catch (err) { next(err); }
 };
-
-module.exports = {
-  getDemandForecast,
-  calculateSafetyStock,
-  runMrp,
-  getPlanningDefaults: async (req, res, next) => {
-    try {
-      const warehouseId = req.query.warehouse_id ? Number(req.query.warehouse_id) : null;
-      const settings = await getPlanningSettings(Number.isNaN(warehouseId) ? null : warehouseId);
-      res.json({ settings });
-    } catch (err) {
-      console.error('❌ Failed to fetch planning defaults:', err);
-      next(createHttpError(500, 'Failed to fetch planning defaults'));
-    }
-  },
-  savePlanningDefaults: async (req, res, next) => {
-    try {
-      await ensurePlanningSettingsTable();
-      const warehouseId = req.body.warehouse_id ?? null;
-      const merged = { ...DEFAULT_PLANNING_SETTINGS, ...req.body };
-      const { rows } = await pool.query(
-        `INSERT INTO planning_settings (
-          warehouse_id, forecast_horizon_months, forecast_window_size, safety_lead_time_days, safety_review_period_days,
-          demand_history_days, demand_history_months, safety_history_days, mrp_horizon_days, mrp_bucket_days, updated_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-        ON CONFLICT ((COALESCE(warehouse_id, -1))) DO UPDATE SET
-          forecast_horizon_months = EXCLUDED.forecast_horizon_months,
-          forecast_window_size = EXCLUDED.forecast_window_size,
-          safety_lead_time_days = EXCLUDED.safety_lead_time_days,
-          safety_review_period_days = EXCLUDED.safety_review_period_days,
-          demand_history_days = EXCLUDED.demand_history_days,
-          demand_history_months = EXCLUDED.demand_history_months,
-          safety_history_days = EXCLUDED.safety_history_days,
-          mrp_horizon_days = EXCLUDED.mrp_horizon_days,
-          mrp_bucket_days = EXCLUDED.mrp_bucket_days,
-          updated_by = EXCLUDED.updated_by,
-          updated_at = CURRENT_TIMESTAMP
-        RETURNING *`,
-        [warehouseId, merged.forecast_horizon_months, merged.forecast_window_size, merged.safety_lead_time_days, merged.safety_review_period_days, merged.demand_history_days, merged.demand_history_months, merged.safety_history_days, merged.mrp_horizon_days, merged.mrp_bucket_days, req.user?.id || null],
-      );
-      res.json({ settings: rows[0] });
-    } catch (err) {
-      console.error('❌ Failed to save planning defaults:', err);
-      next(createHttpError(500, 'Failed to save planning defaults'));
-    }
-  },
-  saveReplenishmentPolicy,
-  runReplenishmentPlanner,
+const getPlanningDefaults = async (req,res,next) => {
+  try {
+    const actor = await authority.actor(req.user);
+    const warehouseId = await inputScope(req, actor);
+    res.json({ settings: await getPlanningSettings(warehouseId, actor) });
+  } catch (err) { next(err); }
 };
+const savePlanningDefaults = async (req,res,next) => {
+  try {
+    const settings = await withTransaction(async client => {
+      const actor = await authority.actor(req.user, 'manage', client);
+      const warehouseId = req.body.warehouse_id == null ? null : (await authority.warehouse(actor, req.body.warehouse_id, client, true)).id;
+      if (warehouseId == null && !(has(actor,'planning.cross-department') && has(actor,'planning.cross-warehouse')))
+        throw createHttpError(403, 'Institute-wide defaults require institute-wide planning scope');
+      await ensurePlanningSettingsTable(client);
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended('planning-defaults:'||$1::text||':'||COALESCE($2::text,'global'),0))", [actor.institute_id,warehouseId]);
+      const before = (await client.query('SELECT * FROM planning_settings WHERE institute_id=$1 AND COALESCE(warehouse_id,-1)=COALESCE($2::bigint,-1) FOR UPDATE', [actor.institute_id,warehouseId])).rows[0] || null;
+      const input = { ...DEFAULT_PLANNING_SETTINGS, ...req.body };
+      const names = Object.keys(DEFAULT_PLANNING_SETTINGS);
+      const values = names.map(name => {
+        if (['safety_lead_time_days','safety_review_period_days'].includes(name)) {
+          const n = nonNegative(input[name],name);
+          if (!Number.isInteger(n) || n>3650) throw createHttpError(400, `${name} must be an integer no greater than 3650`);
+          return n;
+        }
+        return positiveInteger(input[name], name, name.includes('months') ? 120 : 3650);
+      });
+      const row = (await client.query(`INSERT INTO planning_settings(institute_id,warehouse_id,forecast_horizon_months,forecast_window_size,safety_lead_time_days,safety_review_period_days,demand_history_days,demand_history_months,safety_history_days,mrp_horizon_days,mrp_bucket_days,updated_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ON CONFLICT(institute_id,(COALESCE(warehouse_id,-1))) WHERE institute_id IS NOT NULL DO UPDATE SET
+        forecast_horizon_months=EXCLUDED.forecast_horizon_months,forecast_window_size=EXCLUDED.forecast_window_size,safety_lead_time_days=EXCLUDED.safety_lead_time_days,safety_review_period_days=EXCLUDED.safety_review_period_days,demand_history_days=EXCLUDED.demand_history_days,demand_history_months=EXCLUDED.demand_history_months,safety_history_days=EXCLUDED.safety_history_days,mrp_horizon_days=EXCLUDED.mrp_horizon_days,mrp_bucket_days=EXCLUDED.mrp_bucket_days,updated_by=EXCLUDED.updated_by,updated_at=now() RETURNING *`,
+        [actor.institute_id,warehouseId,...values,actor.id])).rows[0];
+      await audit(client,actor,'planning_settings',before,row,'planning.defaults.saved'); return row;
+    });
+    res.json({ settings });
+  } catch (err) { next(err); }
+};
+module.exports = { getDemandForecast, calculateSafetyStock, runMrp, getPlanningDefaults, savePlanningDefaults, saveReplenishmentPolicy, runReplenishmentPlanner };

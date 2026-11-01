@@ -2,7 +2,7 @@
 // technical/RFx/award/PO services run unchanged. BEGIN simulates serial row locks.
 function fixture(pool, repositoryFactory) {
   const clone = value => structuredClone(value);
-  const scm = { id: 9, institute_id: 7, department_id: 12, role: 'SCM', hasPermission: () => true };
+  const scm = { id: 9, institute_id: 7, department_id: 12, role: 'SCM', permissions:['rfx.manage','procure-to-pay.purchase-orders.manage'],hasPermission: () => true };
   const reviewer = { id: 10, institute_id: 7, department_id: 11, role: 'HOD', hasPermission: () => false };
   let state = {
     request: { id: 2, institute_id: 7, department_id: 11, request_type: 'Non-Stock', status: 'Approved' },
@@ -16,6 +16,12 @@ function fixture(pool, repositoryFactory) {
   const query = async (raw, p = []) => {
     const sql = raw.replace(/\s+/g, ' ').trim();
     if (/^(CREATE|ALTER)\b/.test(sql)) return rows([]); // existing initializers, never executed on a DB
+    if (sql.startsWith('SELECT id FROM rfx_responses WHERE rfx_id=')) return rows(state.response?[{id:state.response.id}]:[]);
+    if (sql.startsWith('SELECT * FROM rfx_events')) return rows(Number(p[0])===state.event.id?[state.event]:[]);
+    if (sql.startsWith('SELECT * FROM rfx_responses')) return rows(state.response&&Number(p[0])===state.response.id?[state.response]:[]);
+    if (sql.startsWith('SELECT * FROM rfx_response_items WHERE id=')) return rows(state.quote&&Number(p[0])===state.quote.id?[state.quote]:[]);
+    if (sql.startsWith('SELECT q.*,ri.request_id AS item_request_id')) return rows(state.quote?[{...state.quote,item_request_id:state.item.request_id}]:[]);
+    if (sql.startsWith('SELECT id FROM approvals')) return rows([]);
     if (sql.includes('required.table_name')) return rows([]);
     if (sql.includes('technical_review_available')) return rows([{ technical_review_available: true }]);
     if (sql.includes('AS available')) return rows([{ available: true }]);

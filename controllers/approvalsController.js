@@ -644,14 +644,6 @@ const handleApprovalDecision = async (req, res, next) => {
         },
       });
 
-      if (request.requester_email) {
-        await sendEmail(
-          request.requester_email,
-          `Your purchase request ${approval.request_id} has been ${newStatus}`,
-          `${requesterMessage}\nLog in to view the full details.`,
-        );
-      }
-
       if (newStatus === 'Approved') {
         const autoAssignment = await applyAutoAssignmentForApprovedRequest(
           client,
@@ -665,7 +657,17 @@ const handleApprovalDecision = async (req, res, next) => {
         if (autoAssignment?.assigned_request) {
           request.assigned_to = autoAssignment.assigned_request.assigned_to;
         }
+      }
 
+      if (request.requester_email) {
+        await sendEmail(
+          request.requester_email,
+          `Your purchase request ${approval.request_id} has been ${newStatus}`,
+          `${requesterMessage}\nLog in to view the full details.`,
+        );
+      }
+
+      if (newStatus === 'Approved') {
         if (
           request.request_type === 'Maintenance' &&
           request.initiated_by_technician_id &&

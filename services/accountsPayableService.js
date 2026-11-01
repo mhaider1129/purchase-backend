@@ -1,4 +1,6 @@
 'use strict';
+const { authorizeCommand } = require('./p2pAuthorization');
+
 
 const crypto = require('crypto');
 const { validateAccountingEntry } = require('./accountingEntryValidation');
@@ -20,6 +22,8 @@ const createPayableFromVerifiedInvoice = ({ repository, requestId, invoiceId, ac
   const key = String(idempotencyKey || '').trim();
   if (!key) throw fail('AP idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
   return repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'finance.voucher.create', {requestId,invoiceId,accountingLines})).actor;
     await tx.lockApOperation(key);
     const invoice = await tx.lockInvoice(invoiceId);
     if (!invoice) throw fail('Invoice not found', 'INVOICE_NOT_FOUND', 404);
@@ -27,6 +31,7 @@ const createPayableFromVerifiedInvoice = ({ repository, requestId, invoiceId, ac
     const payloadFingerprint = fingerprint({ invoiceId: String(invoiceId), accountingLines });
     const retry = await tx.findApVoucherByIdempotency(key);
     if (retry) {
+      await authorizeCommand(tx,actor,'finance.voucher.create',{requestId:invoice.request_id,invoiceId:invoice.id,voucherId:retry.id});
       if (retry.payload_fingerprint !== payloadFingerprint) throw fail('Idempotency key was used with a different AP payload', 'IDEMPOTENCY_CONFLICT', 409);
       return { voucher: retry, payable: await tx.findPayableByInvoice(invoice.id), idempotent: true };
     }
@@ -38,13 +43,15 @@ const createPayableFromVerifiedInvoice = ({ repository, requestId, invoiceId, ac
     for (const [index, line] of accountingLines.entries()) await tx.insertApVoucherLine({ ...line, ap_voucher_id: voucher.id, line_number: index + 1 });
     await tx.updateInvoiceLifecycle(invoice.id, 'AP_VOUCHER_CREATED');
     if (tx.linkDocuments) await tx.linkDocuments(invoice.request_id, 'AP_INVOICE', invoice.id, 'AP_VOUCHER', voucher.id, actor.id);
-    await auditService.writeAuditEvent({ client: tx.client, entityType: 'ap_voucher', entityId: voucher.id, requestId: invoice.request_id, action: 'AP_VOUCHER_CREATED', actorUserId: actor.id, metadata: totals });
+    await auditService.writeAuditEvent({ client: tx.client, entityType: 'ap_voucher', entityId: voucher.id, requestId: invoice.request_id, instituteId: tx.financialContext?.instituteId, action: 'AP_VOUCHER_CREATED', actorUserId: actor.id,beforeData:null,afterData:{voucher_status:voucher.voucher_status,total_amount:voucher.total_amount}, metadata: totals });
     await outbox.enqueueNotification(tx.client, { type: 'AP_VOUCHER_CREATED', entityType: 'ap_voucher', entityId: voucher.id, payload: { invoice_id: invoice.id }, idempotencyKey: `ap-voucher-created:${voucher.id}` });
     return { voucher, payable: null, idempotent: false };
   });
 };
 
 const verifyApVoucher = ({ repository, voucherId, actor, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'finance.voucher.verify', {voucherId})).actor;
   const voucher = await tx.lockApVoucher(voucherId);
   if (!voucher) throw fail('AP voucher not found', 'AP_VOUCHER_NOT_FOUND', 404);
   if (String(voucher.voucher_status).toLowerCase() !== 'draft') throw fail('Only a draft voucher can be verified', 'AP_VOUCHER_NOT_DRAFT', 409);
@@ -52,7 +59,7 @@ const verifyApVoucher = ({ repository, voucherId, actor, auditService = defaultA
   await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
   const totals = validateLines(voucher.lines, invoice.total_amount);
   const verified = await tx.markVoucherVerified(voucher.id, actor.id);
-  await auditService.writeAuditEvent({ client: tx.client, entityType: 'ap_voucher', entityId: voucher.id, requestId: voucher.request_id, action: 'AP_VOUCHER_VERIFIED', actorUserId: actor.id, metadata: totals });
+  await auditService.writeAuditEvent({ client: tx.client, entityType: 'ap_voucher', entityId: voucher.id, requestId: voucher.request_id, instituteId: tx.financialContext?.instituteId, action: 'AP_VOUCHER_VERIFIED', actorUserId: actor.id,beforeData:{voucher_status:voucher.voucher_status},afterData:{voucher_status:verified.voucher_status}, metadata: totals });
   await outbox.enqueueNotification(tx.client, { type: 'AP_VOUCHER_VERIFIED', entityType: 'ap_voucher', entityId: voucher.id, payload: { invoice_id: invoice.id }, idempotencyKey: `ap-voucher-verified:${voucher.id}` });
   return { voucher: verified };
 });

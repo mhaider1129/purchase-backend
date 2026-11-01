@@ -1,3 +1,4 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 'use strict';
 const { submitSupplierInvoice, fingerprintInvoice, decideMatchOverride } = require('../services/supplierInvoiceService');
 const { matchInvoice } = require('../services/invoiceMatchingService');

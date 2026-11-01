@@ -1,3 +1,5 @@
+jest.mock('../services/rfxAuthorization',()=>({assertActiveSourcing:async()=>{},authorizeAward:async(_tx,actor)=>({actor,instituteId:actor?.institute_id||1}),authorize:async(_db,actor,refs)=>({actor:actor||{id:1},event:{id:refs.eventId,request_id:refs.requestId}}),missing:()=>Object.assign(new Error('Sourcing reference not found'),{statusCode:404})}));
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 'use strict';
 const legacyTechnicalReviewClient=require('./helpers/legacyTechnicalReviewClient');
 

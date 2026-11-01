@@ -1,10 +1,11 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 'use strict';
 const service = require('../services/purchaseOrderService');
 
 const actor = { id: 9 };
 const line = { id: 1, award_id: 2, requested_item_id: 3, price_source_type: 'QUOTATION', price_source_id: 4, quantity: '70', unit_price: '1' };
 const harness = ({ status='PO_APPROVED', allocated='100', receipts=false, auditFails=false, outboxFails=false }={}) => {
-  let state = { po:{ id:1, request_id:5, supplier_id:6, currency:'USD', status, approved_at: status==='PO_APPROVED' ? new Date() : null, approved_by: status==='PO_APPROVED' ? 8 : null }, commitments:[], audits:[], outbox:[] };
+  let state = { po:{ created_by:6,id:1, request_id:5, supplier_id:6, currency:'USD', status, approved_at: status==='PO_APPROVED' ? new Date() : null, approved_by: status==='PO_APPROVED' ? 8 : null }, commitments:[], audits:[], outbox:[] };
   const tx = {
     client:{ query: async () => ({rows:[{}]}) }, lockPurchaseOrder:async()=>state.po, loadPurchaseOrder:async()=>({...state.po,lines:[line]}), loadPurchaseOrderLines:async()=>[line], loadSupplierEligibilityFacts:async()=>({supplier:{status:'active'},complianceBlocked:false,evaluationFacts:[],deferredChecks:[]}),
     resolveBudgetEnvelope:async()=>({id:2}), lockBudgetEnvelope:async()=>({id:2,allocated_amount:allocated,consumed_amount:'0'}), sumActiveEncumbrances:async()=>state.commitments.filter(x=>x.state==='ACTIVE').reduce((n,x)=>n+Number(x.amount),0).toString(), findCommitmentByIdempotency:async k=>state.commitments.find(x=>x.idempotency_key===k),

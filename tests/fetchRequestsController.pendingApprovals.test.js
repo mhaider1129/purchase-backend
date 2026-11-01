@@ -17,7 +17,7 @@ describe('fetchRequestsController.getPendingApprovals', () => {
     ];
     pool.query.mockResolvedValue({ rows: approvals });
 
-    const req = { user: { id: 7 } };
+    const req = { user: { id: 7,institute_id:1 } };
     const res = { json: jest.fn() };
     const next = jest.fn();
 
@@ -25,12 +25,14 @@ describe('fetchRequestsController.getPendingApprovals', () => {
 
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining("a.status IN ('Pending', 'On Hold')"),
-      [7],
+      [7,1],
     );
     const pendingApprovalsQuery = pool.query.mock.calls.find(([sql]) =>
       sql.includes("a.status IN ('Pending', 'On Hold')"),
     )?.[0];
     expect(pendingApprovalsQuery).toContain('a.status AS approval_status');
+    expect(pendingApprovalsQuery).toContain('r.institute_id=$2');
+    expect(pendingApprovalsQuery).toContain('budget_department.institute_id=r.institute_id');
     expect(res.json).toHaveBeenCalledWith(approvals);
     expect(next).not.toHaveBeenCalled();
   });

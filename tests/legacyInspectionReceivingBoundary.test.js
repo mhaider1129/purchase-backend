@@ -1,3 +1,4 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 // Canonical disposition application remains the only release path. Stub the
 // authorized task reader and schema check, exercise real quantity/posting logic.
 jest.mock('../services/technicalReviewProfiles', () => ({ requireSchema: jest.fn(), history: jest.fn() }));

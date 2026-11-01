@@ -1,3 +1,4 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 'use strict';
 
 const { createGoodsReceipt, fingerprint, scaledBigIntToDecimalString } = require('../services/goodsReceiptService');

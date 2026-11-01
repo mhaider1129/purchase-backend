@@ -1,3 +1,4 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 const legacyTechnicalReviewClient=require('./helpers/legacyTechnicalReviewClient');
 const { evaluateSupplierEligibility } = require('../services/supplierEligibilityService');
 const { selectPrice } = require('../services/procurementPricingService');

@@ -17,7 +17,7 @@ const { createAward } = require('../services/procurementAwardService');
 const poService = require('../services/purchaseOrderService');
 const { createGoodsReceipt } = require('../services/goodsReceiptService');
 const invoiceService = require('../services/supplierInvoiceService');
-const { verifyInvoiceForFinance } = require('../services/financeVerificationService');
+const { verifyInvoiceForFinance,verifyRequestForFinance } = require('../services/financeVerificationService');
 const apService = require('../services/accountsPayableService');
 const { postApVoucher } = require('../services/apPostingService');
 const { postPayment } = require('../services/paymentService');
@@ -65,12 +65,12 @@ async function createCase({ inventory = false, quantity = '10', price = '100', o
     // the current award-to-PO API; this branch tests receiving onward only.
     await pool.query("UPDATE purchase_order_items SET line_type='INVENTORY' WHERE purchase_order_id=$1", [po.id]);
   }
-  return { request, budget, item, award, po, line: po.lines[0], actor, warehouse, stock };
+  return { department,request, budget, item, award, po, line: po.lines[0], actor, warehouse, stock };
 }
 
 async function issue(c) {
   await poService.submitPurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: c.actor });
-  await poService.approvePurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: c.actor });
+  await poService.approvePurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: {...c.actor,id:2} });
   return poService.releasePurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: c.actor });
 }
 const receiptArgs = (c, quantity, idempotencyKey = key('receipt')) => ({ repository,
@@ -171,7 +171,7 @@ test('PO issue rejects missing approval and insufficient budget without partial 
   await assert.rejects(poService.releasePurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: c.actor }), { code: 'INVALID_PO_TRANSITION' });
   await pool.query('UPDATE budget_envelopes SET allocated_amount=999 WHERE id=$1', [c.budget.id]);
   await poService.submitPurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: c.actor });
-  await poService.approvePurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: c.actor });
+  await poService.approvePurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: {...c.actor,id:2} });
   const before = await snapshot();
   await assert.rejects(poService.releasePurchaseOrder({ repository, purchaseOrderId: c.po.id, actor: c.actor }), { code: 'BUDGET_INSUFFICIENT' });
   assert.deepEqual(await snapshot(), before);
@@ -187,7 +187,7 @@ test('concurrent inventory receipt retries create one receipt, movement and allo
   assert.equal((await one('SELECT COUNT(*)::int count FROM inventory_transactions WHERE stock_item_id=$1', [c.stock.id])).count, 1);
   assert.equal((await one('SELECT COUNT(*)::int count FROM inventory_transaction_allocations WHERE stock_item_id=$1', [c.stock.id])).count, 1);
   const before = await snapshot();
-  await assert.rejects(createGoodsReceipt({ ...args, requestId: c.request.id + 1000 }), { code: 'REQUEST_SCOPE_MISMATCH' });
+  await assert.rejects(createGoodsReceipt({ ...args, requestId: c.request.id + 1000 }), { statusCode:404 });
   await assert.rejects(createGoodsReceipt({ ...args, lines: [{ ...args.lines[0], received_quantity: '7' }] }), { code: 'IDEMPOTENCY_CONFLICT' });
   assert.deepEqual(await snapshot(), before);
 });
@@ -200,11 +200,15 @@ test('concurrent receipts cannot exceed ordered quantity or inflate stock', asyn
   assert.equal((await one('SELECT available_quantity FROM stock_items WHERE id=$1', [c.stock.id])).available_quantity, '6.0000');
 });
 
-test('inventory permissions and institute scope are enforced with full rollback', async () => {
+test('inventory permissions and institute scope are enforced from persisted authority with full rollback', async () => {
   const c = await createCase({ inventory: true }); await issue(c);
   const before = await snapshot();
-  await assert.rejects(createGoodsReceipt({ ...receiptArgs(c, '1'), actor: { id: 1, institute_id: 1, warehouse_id: c.warehouse.id, permissions: [] } }), { code: 'INVENTORY_PERMISSION_DENIED' });
-  await assert.rejects(createGoodsReceipt({ ...receiptArgs(c, '1'), actor: { ...c.actor, institute_id: 2 } }), { statusCode: 403 });
+  await pool.query("DELETE FROM user_permissions WHERE user_id=1 AND permission_id=(SELECT id FROM permissions WHERE code='procure-to-pay.receipts.manage')");
+  try { await assert.rejects(createGoodsReceipt(receiptArgs(c,'1')), { statusCode:403 }); }
+  finally { await pool.query("INSERT INTO user_permissions SELECT 1,id FROM permissions WHERE code='procure-to-pay.receipts.manage'"); }
+  await pool.query('UPDATE users SET institute_id=2 WHERE id=1');
+  try { await assert.rejects(createGoodsReceipt(receiptArgs(c,'1')), { statusCode:404 }); }
+  finally { await pool.query('UPDATE users SET institute_id=1 WHERE id=1'); }
   assert.deepEqual(await snapshot(), before);
 });
 
@@ -297,6 +301,8 @@ test('partial fulfilment releases unused commitment without claiming receipt com
 
 test('read-only baseline executes real catalog and reconciliation SQL without changing evidence', async () => {
   const c = await postedCase();
+  // Deliberately seed historical bad approval evidence; active commands now refuse it.
+  await pool.query('UPDATE purchase_orders SET approved_by=created_by WHERE id=$1',[c.po.id]);
   const paid = await postPayment(paymentArgs(c, c.payable, '30'));
   // Deliberate corrupt/legacy candidates exist only in the runner-created database.
   await pool.query('UPDATE ap_payables SET open_balance=69 WHERE id=$1', [c.payable.id]);
@@ -447,7 +453,8 @@ test('free-text and legacy award-to-PO flow works during rollout; strict re-enab
   await changeIdentityPolicy(false);
   try {
     for(const mode of ['free_text',null]) {
-      const request=await one("INSERT INTO requests(status) VALUES('Approved') RETURNING *");
+      const department=await one('INSERT INTO departments DEFAULT VALUES RETURNING *');
+      const request=await one("INSERT INTO requests(department_id,status) VALUES($1,'Approved') RETURNING *",[department.id]);
       const item=await one("INSERT INTO requested_items(request_id,item_name,quantity,unit_of_measure,request_mode,catalog_status,stocking_policy) VALUES($1,'Original description',2,'Piece',$2,'pending_mapping','non_stock') RETURNING *",[request.id,mode]);
       const actor={id:1};
       const award=await createAward({repository,requestItem:item,supplier:{id:1},actor,input:{awarded_quantity:'2',unit_price:'10',currency:'USD',source_type:'DIRECT_PROCUREMENT',selection_reason:'Temporary rollout',idempotency_key:key('compat')}});
@@ -567,4 +574,259 @@ test('workspace and steward queue resolution lock consistently and close the sam
   assert.equal(resolved.status,'resolved');assert.equal(resolved.resolved_generic_item_id,generic.id);
   const line=await one('SELECT * FROM requested_items WHERE id=$1',[item.id]);
   assert.equal(line.generic_item_id,generic.id);assert.equal(line.request_mode,'generic_item');assert.equal(line.item_name,'Original requester wording');assert.equal(line.quantity,2);
+});
+
+// AUD-002: real SQL, persisted grants, two institutes, canonical business writers.
+const {authorizeCommand}=require('../services/p2pAuthorization');
+const {predicate,flowPredicate}=require('../services/p2pReadScope');
+const p2pController=require('../controllers/procureToPayController');
+const budgetController=require('../controllers/budgetControlController');
+const call=async(handler,{user={id:1},params={},query={},body={}}={})=>{
+  let error,payload,status=200;
+  const res={set(){return this;},status(value){status=value;return this;},json(value){payload=value;return this;}};
+  await handler({user,params,query,body,get:()=>null},res,e=>{error=e;});
+  return {error,payload,status};
+};
+const foreign=async c=>{
+  await pool.query('UPDATE departments SET institute_id=2 WHERE id=$1',[c.department.id]);
+  await pool.query('UPDATE requests SET institute_id=2 WHERE id=$1',[c.request.id]);
+};
+const access=async(actor,permission,refs)=>repository.withTransaction(tx=>authorizeCommand(tx,actor,permission,refs));
+
+test('AUD-002 same-institute PO creation records institute audit despite forged actor/body ownership',async()=>{
+  const c=await createCase();
+  const audit=await one("SELECT details FROM audit_logs WHERE action='PO_CREATED' AND target_id=$1",[String(c.po.id)]);
+  assert.equal(audit.details.instituteId,1);
+  const result=await access({...c.actor,institute_id:999,role:'Admin'},'procure-to-pay.purchase-orders.manage',{purchaseOrderId:c.po.id});
+  assert.equal(result.instituteId,1);assert.equal(result.actor.institute_id,1);
+});
+test('AUD-002 anonymous, inactive and role-only actors have no financial command authority',async()=>{
+  const c=await createCase();
+  for(const [actor,statusCode] of [[null,401],[{id:3,role:'SCM',permissions:['finance.payment.manage']},403],[{id:5,role:'Admin'},403],[{id:6},403]])
+    await assert.rejects(access(actor,'procure-to-pay.purchase-orders.manage',{purchaseOrderId:c.po.id}),{statusCode});
+});
+test('AUD-002 foreign PO detail and approval fail without metadata disclosure',async()=>{
+  const c=await createCase();await foreign(c);
+  const read=await call(p2pController.getPurchaseOrderDetail,{params:{poId:c.po.id}});
+  assert.equal(read.error.statusCode,404);assert.equal(read.payload,undefined);
+  await assert.rejects(poService.approvePurchaseOrder({repository,purchaseOrderId:c.po.id,actor:{id:2}}),{statusCode:404});
+});
+test('AUD-002 request/inventory overrides and institute scope do not grant finance cross-institute authority',async()=>{
+  const c=await createCase();await foreign(c);
+  await pool.query("INSERT INTO permissions(code) VALUES('requests.cross-institute'),('inventory.cross-institute') ON CONFLICT DO NOTHING");
+  await pool.query("INSERT INTO user_permissions SELECT 1,id FROM permissions WHERE code IN('requests.cross-institute','inventory.cross-institute')");
+  await pool.query("INSERT INTO data_scopes(code) VALUES('institute_ids') ON CONFLICT DO NOTHING");
+  await pool.query("INSERT INTO user_data_scopes SELECT 1,id,'2' FROM data_scopes WHERE code='institute_ids'");
+  await assert.rejects(access({id:1},'finance.verify',{purchaseOrderId:c.po.id}),{statusCode:404});
+});
+test('AUD-002 unauthorized receipt cannot mutate or return an idempotent document',async()=>{
+  const c=await createCase();await issue(c);const args=receiptArgs(c,'1');await createGoodsReceipt(args);const before=await snapshot();
+  await assert.rejects(createGoodsReceipt({...args,actor:{id:3}}),{statusCode:403});assert.deepEqual(await snapshot(),before);
+});
+test('AUD-002 foreign invoice matching and finance verification are denied',async()=>{
+  const c=await createCase();await issue(c);const inv=await invoice(c,'1');await foreign(c);
+  await assert.rejects(invoiceService.runInvoiceMatch({repository,requestId:c.request.id,invoiceId:inv.id,actor:{id:1}}),{statusCode:404});
+  await assert.rejects(verifyInvoiceForFinance({repository,invoiceId:inv.id,actor:{id:1}}),{statusCode:404});
+});
+test('AUD-002 local request cannot be used as an alias for a foreign invoice',async()=>{
+  const local=await createCase(),other=await createCase();await issue(other);const inv=await invoice(other,'1');await foreign(other);
+  await assert.rejects(invoiceService.runInvoiceMatch({repository,requestId:local.request.id,invoiceId:inv.id,actor:local.actor}),{statusCode:404});
+});
+test('AUD-002 invoice matching rejects a foreign receipt grafted through a local PO line',async()=>{
+  const local=await createCase(),other=await createCase();await issue(local);await issue(other);const receipt=await createGoodsReceipt(receiptArgs(other,'1'));
+  await pool.query('UPDATE goods_receipt_items SET purchase_order_item_id=$1,requested_item_id=$2 WHERE goods_receipt_id=$3',[local.line.id,local.item.id,receipt.receipt.id]);
+  await foreign(other);
+  await assert.rejects(access(local.actor,'procure-to-pay.match.manage',{purchaseOrderId:local.po.id}),{statusCode:404});
+});
+test('AUD-002 local PO rejects a foreign requested-item child and list hides the inconsistent row',async()=>{
+  const local=await createCase(),other=await createCase();await foreign(other);
+  await pool.query('UPDATE purchase_order_items SET requested_item_id=$1 WHERE id=$2',[other.item.id,local.line.id]);
+  await assert.rejects(access(local.actor,'procure-to-pay.purchase-orders.manage',{purchaseOrderId:local.po.id}),{statusCode:404});
+  assert.equal((await pool.query(`SELECT po.id FROM purchase_orders po WHERE po.id=$1 AND ${predicate('purchaseOrder','po','$2')}`,[local.po.id,1])).rowCount,0);
+});
+test('AUD-002 foreign parent remains denied even if a child references local demand',async()=>{
+  const local=await createCase(),other=await createCase();await foreign(other);
+  await pool.query('UPDATE purchase_order_items SET requested_item_id=$1 WHERE id=$2',[local.item.id,other.line.id]);
+  await assert.rejects(access(local.actor,'procure-to-pay.purchase-orders.manage',{purchaseOrderId:other.po.id}),{statusCode:404});
+});
+test('AUD-002 foreign AP payable allocation and corrupt local-payable/foreign-PO chain are denied',async()=>{
+  const c=await postedCase();await foreign(c);
+  await assert.rejects(postPayment(paymentArgs({...c,actor:{id:1}},c.payable,'1')),{statusCode:404});
+  const local=await postedCase();await pool.query('UPDATE supplier_invoices SET purchase_order_id=$1 WHERE id=$2',[c.po.id,local.inv.id]);
+  await assert.rejects(postPayment(paymentArgs(local,local.payable,'1')),{statusCode:404});
+});
+test('AUD-002 unauthorized AP posting, voucher verification and payment execution are rejected',async()=>{
+  const c=await postedCase();
+  await assert.rejects(postApVoucher({repository,voucherId:c.voucher.id,actor:{id:3},idempotencyKey:key('denied-post')}),{statusCode:403});
+  await assert.rejects(apService.verifyApVoucher({repository,voucherId:c.voucher.id,actor:{id:3}}),{statusCode:403});
+  await assert.rejects(postPayment(paymentArgs({...c,actor:{id:3}},c.payable,'1')),{statusCode:403});
+});
+test('AUD-002 status-only payment approval remains disabled for authorized actors and forbidden for others',async()=>{
+  const args={params:{requestId:'1',paymentId:'1'},user:{id:1,permissions:['finance.payment.manage']}};
+  assert.equal((await call(p2pController.markPaid,args)).error.statusCode,410);
+  assert.equal((await call(p2pController.markPaymentPending,args)).error.statusCode,410);
+  assert.equal((await call(p2pController.markPaid,{...args,user:{id:3,role:'Finance'}})).error.statusCode,403);
+});
+test('AUD-002 PO self-approval and legacy self-approved issuance are denied without an admin exception',async()=>{
+  const c=await createCase();await poService.submitPurchaseOrder({repository,purchaseOrderId:c.po.id,actor:c.actor});
+  await assert.rejects(poService.approvePurchaseOrder({repository,purchaseOrderId:c.po.id,actor:c.actor}),{code:'PO_SELF_APPROVAL_DENIED'});
+  await pool.query("UPDATE purchase_orders SET status='PO_APPROVED',approved_at=NOW(),approved_by=created_by WHERE id=$1",[c.po.id]);
+  await assert.rejects(poService.releasePurchaseOrder({repository,purchaseOrderId:c.po.id,actor:c.actor}),{code:'PO_SELF_APPROVAL_DENIED'});
+});
+test('AUD-002 a foreign budget cannot be selected for a local PO commitment',async()=>{
+  const c=await createCase(),other=await createCase();await foreign(other);
+  await assert.rejects(access(c.actor,'procure-to-pay.purchase-orders.manage',{requestId:c.request.id,budgetId:other.budget.id}),{statusCode:404});
+  const altered={withTransaction:work=>repository.withTransaction(tx=>work({...tx,resolveBudgetEnvelope:async()=>other.budget}))};
+  await poService.submitPurchaseOrder({repository,purchaseOrderId:c.po.id,actor:c.actor});await poService.approvePurchaseOrder({repository,purchaseOrderId:c.po.id,actor:{id:2}});
+  await assert.rejects(poService.releasePurchaseOrder({repository:altered,purchaseOrderId:c.po.id,actor:c.actor}),{statusCode:404});
+});
+test('AUD-002 forged institute_id does not select budget ownership; foreign department cannot be written',async()=>{
+  const c=await createCase(),other=await createCase();await foreign(other);
+  const result=await call(budgetController.upsertDepartmentBudget,{body:{department_id:c.department.id,institute_id:2,fiscal_year:new Date().getUTCFullYear(),allocated_amount:'12000',currency:'USD'}});
+  assert.ifError(result.error);assert.equal(result.payload.data.department_id,c.department.id);
+  const denied=await call(budgetController.upsertDepartmentBudget,{body:{department_id:other.department.id,institute_id:1,fiscal_year:2026,allocated_amount:'1'}});
+  assert.equal(denied.error.statusCode,404);
+});
+test('AUD-002 budget viewer cannot configure envelopes and concurrent null-project updates do not duplicate',async()=>{
+  const c=await createCase();await pool.query("INSERT INTO user_permissions SELECT 3,id FROM permissions WHERE code='procure-to-pay.lifecycle.view'");
+  try {
+    const result=await call(budgetController.listDepartmentBudgets,{user:{id:3}});assert.ifError(result.error);
+    assert.equal((await call(budgetController.upsertDepartmentBudget,{user:{id:3},body:{department_id:c.department.id,fiscal_year:2026,allocated_amount:'1'}})).error.statusCode,403);
+  }finally{await pool.query('DELETE FROM user_permissions WHERE user_id=3');}
+  const body={department_id:c.department.id,fiscal_year:2031,allocated_amount:'90',currency:'USD'};
+  const results=await Promise.all([call(budgetController.upsertDepartmentBudget,{body}),call(budgetController.upsertDepartmentBudget,{body:{...body,department_id:'00'+body.department_id}})]);results.forEach(r=>assert.ifError(r.error));
+  assert.equal((await one('SELECT COUNT(*)::int n FROM budget_envelopes WHERE department_id=$1 AND fiscal_year=2031',[c.department.id])).n,1);
+});
+test('AUD-002 scoped reporting counts, pagination and export source exclude foreign financial documents',async()=>{
+  const c=await createCase(),other=await createCase();await foreign(other);
+  const result=await call(p2pController.listPurchaseOrders,{query:{request_id:other.request.id,page:1,page_size:1,institute_id:2}});
+  assert.ifError(result.error);assert.equal(result.payload.pagination.total,0);assert.deepEqual(result.payload.data,[]);
+  const allowed=await call(p2pController.listPurchaseOrders,{query:{request_id:c.request.id}});assert.ifError(allowed.error);assert.equal(allowed.payload.pagination.total,1);
+  const budgets=await call(budgetController.listDepartmentBudgets);assert.ifError(budgets.error);assert(!budgets.payload.data.some(r=>r.department_id===other.department.id));
+});
+test('AUD-002 all financial report predicates compile against real schema and typed flow rejects unrelated ID collisions',async()=>{
+  const kinds={request:'requests',purchaseOrder:'purchase_orders',receipt:'goods_receipts',invoice:'supplier_invoices',match:'invoice_match_results',voucher:'ap_vouchers',payable:'ap_payables',payment:'payment_records',budget:'budget_envelopes',commitment:'commitment_ledger',financePosting:'finance_postings',award:'procurement_awards'};
+  for(const [kind,table]of Object.entries(kinds)){const started=Date.now();await pool.query(`SELECT x.id FROM ${table} x WHERE ${predicate(kind,'x')}`,[1]);console.log(`Financial scope ${kind}: ${Date.now()-started}ms`);}
+  await pool.query(`SELECT dfl.id FROM document_flow_links dfl WHERE ${flowPredicate('dfl')}`,[1]);
+});
+test('AUD-002 lost permissions and moved institutes deny payment retries before persisted data is returned',async()=>{
+  const c=await postedCase(),args=paymentArgs(c,c.payable,'1');await postPayment(args);
+  await pool.query('UPDATE users SET institute_id=2 WHERE id=1');
+  try {await assert.rejects(postPayment(args),{statusCode:404});}finally{await pool.query('UPDATE users SET institute_id=1 WHERE id=1');}
+});
+test('AUD-002 receipt-only operator retains receiving reads without supplier-invoice disclosure',async()=>{
+  const c=await createCase();await issue(c);await invoice(c,'1');
+  await pool.query("INSERT INTO user_permissions SELECT 3,id FROM permissions WHERE code='procure-to-pay.receipts.manage'");
+  try {
+    const open=await call(p2pController.listOpenPosForReceipt,{user:{id:3}});assert.ifError(open.error);assert(open.payload.data.some(row=>row.id===c.po.id));
+    const detail=await call(p2pController.getPurchaseOrderDetail,{user:{id:3},params:{poId:c.po.id}});assert.ifError(detail.error);assert.deepEqual(detail.payload.invoices,[]);
+    const financial=await call(p2pController.listApInvoices,{user:{id:3}});assert.equal(financial.error.statusCode,403);
+  }finally{await pool.query('DELETE FROM user_permissions WHERE user_id=3');}
+});
+test('AUD-002 unauthorized financial cancellation cannot release another obligation',async()=>{
+  const c=await createCase();await issue(c);const before=await snapshot();
+  await assert.rejects(poService.cancelPurchaseOrder({repository,purchaseOrderId:c.po.id,reason:'forged reversal',actor:{id:3}}),{statusCode:403});
+  assert.deepEqual(await snapshot(),before);
+});
+test('AUD-002 budget audit failure rolls back the authorized configuration change',async()=>{
+  const c=await createCase();
+  await pool.query(`CREATE FUNCTION aud002_fail_budget_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action LIKE 'BUDGET_ENVELOPE_%' THEN RAISE EXCEPTION 'injected budget audit failure'; END IF;RETURN NEW; END $$;
+    CREATE TRIGGER aud002_budget_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION aud002_fail_budget_audit()`);
+  try {
+    const result=await call(budgetController.upsertDepartmentBudget,{body:{department_id:c.department.id,fiscal_year:new Date().getUTCFullYear(),allocated_amount:'777',currency:'USD'}});
+    assert(result.error);assert.equal((await one('SELECT allocated_amount FROM budget_envelopes WHERE id=$1',[c.budget.id])).allocated_amount,'10000.00');
+  }finally{await pool.query('DROP TRIGGER aud002_budget_audit ON audit_logs;DROP FUNCTION aud002_fail_budget_audit()');}
+});
+test('AUD-002 typed flow hides foreign references even when the flow row claims a local request',async()=>{
+  const c=await createCase(),other=await createCase();await foreign(other);
+  const row=await one("INSERT INTO document_flow_links(request_id,source_document_type,source_document_id,target_document_type,target_document_id,created_by) VALUES($1,'PURCHASE_ORDER',$2,'PURCHASE_ORDER',$3,1) RETURNING *",[c.request.id,String(other.po.id),String(c.po.id)]);
+  assert.equal((await pool.query(`SELECT dfl.id FROM document_flow_links dfl WHERE dfl.id=$1 AND ${flowPredicate('dfl','$2')}`,[row.id,1])).rowCount,0);
+});
+test('AUD-002 manual permission seed is repeatable and grants no user or role authority',async()=>{
+  const before=await one('SELECT (SELECT COUNT(*) FROM user_permissions)::int users,(SELECT COUNT(*) FROM role_permissions)::int roles');
+  const sql=fs.readFileSync(path.join(__dirname,'../sql/manual/058_financial_budget_authorization.sql'),'utf8');
+  await pool.query(sql);await pool.query(sql);
+  assert.equal((await one("SELECT COUNT(*)::int n FROM permissions WHERE code='finance.budget.manage'")).n,1);
+  assert.deepEqual(await one('SELECT (SELECT COUNT(*) FROM user_permissions)::int users,(SELECT COUNT(*) FROM role_permissions)::int roles'),before);
+});
+test('AUD-002 accounting source references cannot substitute another request for the authorized invoice root',async()=>{
+  const c=await createCase({quantity:'1'}),other=await createCase();await issue(c);await createGoodsReceipt(receiptArgs(c,'1'));const inv=await invoice(c,'1');
+  await invoiceService.runInvoiceMatch({repository,invoiceId:inv.id,actor:c.actor});await verifyInvoiceForFinance({repository,invoiceId:inv.id,actor:c.actor});
+  await assert.rejects(apService.createPayableFromVerifiedInvoice({repository,requestId:c.request.id,invoiceId:inv.id,actor:c.actor,idempotencyKey:key('foreign-accounting-ref'),accountingLines:[
+    {account_code:'EXP',debit_amount:'100',credit_amount:'0',reference_type:'REQUEST',reference_id:String(other.request.id)},
+    {account_code:'AP',debit_amount:'0',credit_amount:'100'},
+  ]}),{statusCode:404});
+});
+test('AUD-002 PO source references reject foreign RFx parents and preserve valid owned provenance',async()=>{
+  const c=await createCase({quantity:'10',orderedQuantity:'5'}),other=await createCase();await foreign(other);
+  const event=await one('INSERT INTO rfx_events(request_id) VALUES($1) RETURNING *',[c.request.id]);
+  const response=await one('INSERT INTO rfx_responses(rfx_id,request_id,supplier_id) VALUES($1,$2,1) RETURNING *',[event.id,c.request.id]);
+  const foreignEvent=await one('INSERT INTO rfx_events(request_id) VALUES($1) RETURNING *',[other.request.id]);
+  const foreignResponse=await one('INSERT INTO rfx_responses(rfx_id,request_id,supplier_id) VALUES($1,$2,1) RETURNING *',[foreignEvent.id,other.request.id]);
+  const args={repository,requestId:c.request.id,awardIds:[c.award.id],quantities:{[c.award.id]:'2'},actor:c.actor};
+  await assert.rejects(poService.createPurchaseOrderFromAwards({...args,input:{rfx_id:foreignEvent.id,rfx_response_id:foreignResponse.id}}),{statusCode:404});
+  const created=await poService.createPurchaseOrderFromAwards({...args,input:{rfx_id:event.id,rfx_response_id:response.id,institute_id:2}});
+  assert.equal(created.request_id,c.request.id);assert.equal(created.rfx_id,event.id);assert.equal(created.rfx_response_id,response.id);
+  await pool.query('UPDATE rfx_responses SET request_id=NULL WHERE id=$1',[response.id]);
+  await access(c.actor,'procure-to-pay.purchase-orders.manage',{purchaseOrderId:created.id});
+  await pool.query('UPDATE rfx_responses SET request_id=$1 WHERE id=$2',[other.request.id,response.id]);
+  await assert.rejects(access(c.actor,'procure-to-pay.purchase-orders.manage',{purchaseOrderId:created.id}),{statusCode:404});
+});
+test('AUD-002 request finance verification rolls back all invoice decisions on a later audit failure',async()=>{
+  const c=await createCase();await issue(c);await createGoodsReceipt(receiptArgs(c,'10'));
+  const first=await invoice(c,'5'),second=await invoice(c,'5');
+  await invoiceService.runInvoiceMatch({repository,invoiceId:first.id,actor:c.actor});await invoiceService.runInvoiceMatch({repository,invoiceId:second.id,actor:c.actor});
+  const before=await snapshot();let audits=0;
+  await assert.rejects(verifyRequestForFinance({repository,requestId:c.request.id,actor:c.actor,auditService:{writeAuditEvent:async event=>{
+    if(++audits===2)throw new Error('Injected second invoice audit failure');return require('../services/auditService').writeAuditEvent(event);
+  }}}),/Injected second invoice audit failure/);
+  assert.equal((await one('SELECT status FROM supplier_invoices WHERE id=$1',[first.id])).status,'MATCH_VERIFIED');
+  assert.equal((await one('SELECT status FROM supplier_invoices WHERE id=$1',[second.id])).status,'MATCH_VERIFIED');assert.deepEqual(await snapshot(),before);
+});
+test('AUD-002 concurrent reuse of a payment key across requests cannot return the other payment or deadlock on retry authorization',async()=>{
+  const a=await postedCase(),b=await postedCase(),sharedKey=key('cross-request-payment-key');
+  const results=await Promise.allSettled([postPayment(paymentArgs(a,a.payable,'1',sharedKey)),postPayment(paymentArgs(b,b.payable,'1',sharedKey))]);
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);const denied=results.find(r=>r.status==='rejected');assert.notEqual(denied.reason.code,'40P01');assert.equal(denied.reason.statusCode,404);
+  assert.equal((await one('SELECT COUNT(*)::int n FROM payment_records WHERE idempotency_key=$1',[sharedKey])).n,1);
+});
+test('AUD-002 technical disposition task must match the actual receipt request, institute and department',async()=>{
+  const c=await createCase();await issue(c);const receipt=await createGoodsReceipt(receiptArgs(c,'1'));
+  // Minimal actual task columns for the scope check; not a technical-engine fixture.
+  await pool.query('CREATE TABLE delivery_inspection_tasks(id BIGSERIAL PRIMARY KEY,receipt_item_id BIGINT,request_id INTEGER,institute_id INTEGER,department_id INTEGER)');
+  try{
+    const task=await one('INSERT INTO delivery_inspection_tasks(receipt_item_id,request_id,institute_id,department_id) VALUES($1,$2,1,$3) RETURNING *',[receipt.receipt.items[0].id,c.request.id,c.department.id]);
+    await access(c.actor,'procure-to-pay.receipts.manage',{taskId:task.id});
+    for(const column of ['request_id','institute_id','department_id']){
+      const original=task[column];await pool.query(`UPDATE delivery_inspection_tasks SET ${column}=99999 WHERE id=$1`,[task.id]);
+      await assert.rejects(access(c.actor,'procure-to-pay.receipts.manage',{taskId:task.id}),{statusCode:404});
+      await pool.query(`UPDATE delivery_inspection_tasks SET ${column}=$1 WHERE id=$2`,[original,task.id]);
+    }
+  }finally{await pool.query('DROP TABLE delivery_inspection_tasks');}
+});
+test('AUD-002 receiving warehouse ownership cannot contradict its department institute',async()=>{
+  const c=await createCase(),other=await createCase();await issue(c);await foreign(other);
+  await pool.query('UPDATE warehouses SET department_id=$1 WHERE id=$2',[other.department.id,c.warehouse.id]);
+  const args=receiptArgs(c,'1');args.lines=args.lines.map(line=>({...line,warehouse_id:c.warehouse.id}));
+  await assert.rejects(createGoodsReceipt(args),{statusCode:404});
+});
+test('AUD-002 missing accounting reference type cannot exploit SQL NULL logic to appear in financial reads',async()=>{
+  const c=await postedCase();
+  await pool.query('UPDATE ap_voucher_lines SET reference_type=NULL,reference_id=$1 WHERE ap_voucher_id=$2 AND line_number=1',[String(c.request.id),c.voucher.id]);
+  assert.equal((await pool.query(`SELECT v.id FROM ap_vouchers v WHERE v.id=$1 AND ${predicate('voucher','v','$2')}`,[c.voucher.id,1])).rowCount,0);
+  await assert.rejects(access(c.actor,'finance.payment.manage',{payableId:c.payable.id}),{statusCode:404});
+});
+test('AUD-002 lifecycle cannot disclose inventory from a foreign warehouse reference on a local request',async()=>{
+  const c=await createCase(),other=await createCase();await foreign(other);await pool.query('UPDATE warehouses SET institute_id=2 WHERE id=$1',[other.warehouse.id]);
+  await pool.query('UPDATE requests SET supply_warehouse_id=$1 WHERE id=$2',[other.warehouse.id,c.request.id]);
+  const result=await call(p2pController.getLifecycleDetail,{params:{requestId:c.request.id}});assert.equal(result.error.statusCode,404);assert.equal(result.payload,undefined);
+});
+test('AUD-002 legacy journal references require the actual owned invoice source rather than a local request label',async()=>{
+  const c=await postedCase(),other=await postedCase();await foreign(other);
+  const {invoiceJournalPredicate}=require('../services/p2pReadScope');
+  // Exercise the existing journal source fields without modifying financial history.
+  const candidates=[{source_type:'supplier_invoice',source_id:String(c.inv.id),request_id:c.request.id},{source_type:'supplier_invoice',source_id:String(other.inv.id),request_id:c.request.id},{source_type:'unknown',source_id:String(c.inv.id),request_id:c.request.id}];
+  for(const [index,row]of candidates.entries()){
+    const result=await pool.query(`SELECT 1 FROM (SELECT $1::text source_type,$2::text source_id,$3::integer request_id) journal_candidate WHERE ${invoiceJournalPredicate('journal_candidate','$4')}`,[row.source_type,row.source_id,row.request_id,1]);
+    assert.equal(result.rowCount,index===0?1:0);
+  }
 });

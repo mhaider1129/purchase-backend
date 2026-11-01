@@ -2,7 +2,7 @@
 // technical/RFx/award/PO services run unchanged. BEGIN simulates serial row locks.
 function fixture(pool, repositoryFactory) {
   const clone = value => structuredClone(value);
-  const scm = { id: 9, institute_id: 7, department_id: 12, role: 'SCM', hasPermission: () => true };
+  const scm = { id: 9, institute_id: 7, department_id: 12, role: 'SCM', permissions:['procure-to-pay.purchase-orders.manage'],hasPermission: () => true };
   const reviewer = { id: 10, institute_id: 7, department_id: 11, role: 'HOD', hasPermission: () => false };
   let state = {
     request: { id: 2, institute_id: 7, department_id: 11, request_type: 'Non-Stock', status: 'Approved' },

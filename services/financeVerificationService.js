@@ -1,4 +1,6 @@
 'use strict';
+const { authorizeCommand } = require('./p2pAuthorization');
+
 
 const supplierInvoiceService = require('./supplierInvoiceService');
 const defaultAudit = require('./auditService');
@@ -9,6 +11,8 @@ const INACTIVE = new Set(['CANCELLED', 'VOIDED', 'DECLINED', 'SUPERSEDED', 'REPL
 
 const verifyInvoiceForFinance = ({ repository, invoiceId, actor, auditService = defaultAudit, outbox = defaultOutbox }) =>
   repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'finance.verify', {invoiceId})).actor;
     const invoice = await tx.lockInvoice(invoiceId);
     if (!invoice) throw fail('Invoice not found', 'INVOICE_NOT_FOUND', 404);
     if (INACTIVE.has(String(invoice.status).toUpperCase())) throw fail('Invoice is not financially active', 'INVOICE_NOT_FINANCE_ELIGIBLE', 409);
@@ -18,13 +22,14 @@ const verifyInvoiceForFinance = ({ repository, invoiceId, actor, auditService = 
     await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
     if (tx.assertAccountingDimensions) await tx.assertAccountingDimensions(invoice, purchaseOrder);
     const updated = await tx.updateInvoiceLifecycle(invoice.id, 'FINANCE_VERIFIED');
-    await auditService.writeAuditEvent({ client: tx.client, entityType: 'supplier_invoice', entityId: invoice.id, requestId: invoice.request_id, action: 'FINANCE_VERIFIED', actorUserId: actor.id });
+    await auditService.writeAuditEvent({ client: tx.client, entityType: 'supplier_invoice', entityId: invoice.id, requestId: invoice.request_id, instituteId: tx.financialContext?.instituteId, action: 'FINANCE_VERIFIED', actorUserId: actor.id,beforeData:{status:invoice.status},afterData:{status:updated.status} });
     await outbox.enqueueNotification(tx.client, { type: 'FINANCE_VERIFIED', entityType: 'supplier_invoice', entityId: invoice.id, payload: { invoice_id: invoice.id }, idempotencyKey: `finance-verified:${invoice.id}` });
     return { invoice: updated, idempotent: false };
   });
 
-const verifyRequestForFinance = async ({ repository, requestId, actor, auditService, outbox }) => {
-  const readiness = await repository.loadRequestFinanceReadiness(requestId);
+const verifyRequestForFinance = async ({ repository, requestId, actor, auditService, outbox }) => repository.withTransaction(async tx => {
+  actor = (await authorizeCommand(tx,actor,'finance.verify',{requestId,wholeRequest:true})).actor;
+  const readiness = await tx.loadRequestFinanceReadiness(requestId);
   if (!readiness.activeInvoiceCount) throw fail('At least one financially active supplier invoice is required', 'NO_FINANCE_ELIGIBLE_INVOICES');
   if (readiness.unresolvedInvoiceIds.length) {
     const error = fail('All active invoices must have an approved effective match', 'REQUEST_FINANCE_NOT_READY', 409);
@@ -33,8 +38,8 @@ const verifyRequestForFinance = async ({ repository, requestId, actor, auditServ
   }
   const ids = readiness.approvedInvoiceIds;
   const invoices = [];
-  for (const invoiceId of ids) invoices.push((await verifyInvoiceForFinance({ repository, invoiceId, actor, auditService, outbox })).invoice);
+  for (const invoiceId of ids) invoices.push((await verifyInvoiceForFinance({ repository:{withTransaction:work=>work(tx)}, invoiceId, actor, auditService, outbox })).invoice);
   return { invoices };
-};
+});
 
 module.exports = { verifyInvoiceForFinance, verifyRequestForFinance, INACTIVE_INVOICE_STATES: INACTIVE };

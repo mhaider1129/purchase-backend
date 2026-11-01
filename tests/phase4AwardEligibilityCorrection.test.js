@@ -1,3 +1,4 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 'use strict';
 const legacyTechnicalReviewClient=require('./helpers/legacyTechnicalReviewClient');
 
@@ -52,7 +53,7 @@ test('compliance block prevents award while compliant supplier and deferred chec
 });
 
 const issueHarness = blocked => {
-  const po = { id: 1, request_id: 5, supplier_id: 6, currency: 'USD', status: 'PO_APPROVED', approved_at: new Date(), approved_by: 8 };
+  const po = { created_by:7,id: 1, request_id: 5, supplier_id: 6, currency: 'USD', status: 'PO_APPROVED', approved_at: new Date(), approved_by: 8 };
   const line = { id: 1, award_id: 2, requested_item_id: 3, price_source_type: 'QUOTATION', price_source_id: 4, quantity: '10', unit_price: '1' };
   const tx = {
     client: legacyTechnicalReviewClient(), lockPurchaseOrder: async () => po, loadPurchaseOrderLines: async () => [line], loadSupplierEligibilityFacts: async () => ({ supplier: { id: 6, status: 'active' }, complianceBlocked: blocked, evaluationFacts: [], deferredChecks: [] }), resolveBudgetEnvelope: async () => ({ id: 2 }), lockBudgetEnvelope: async () => ({ id: 2, allocated_amount: '100', consumed_amount: '0' }), sumActiveEncumbrances: async () => '0', findCommitmentByIdempotency: async () => null, insertEncumbrance: async row => ({ id: 3, ...row }), markPurchaseOrderIssued: async (_id, totals) => ({ ...po, status: 'PO_ISSUED', total_amount: totals.grand_total }) };

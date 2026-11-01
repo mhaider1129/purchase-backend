@@ -127,6 +127,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+  {code:'finance.budget.manage',name:'Manage financial budgets',description:'Configure budget envelopes within the actor institute; no posting, payment or cross-institute authority.'},
   { code: 'planning.view', name: 'View procurement planning', description: 'Read plans and advisory forecasts within authorized institute, department and warehouse scopes.' },
   { code: 'planning.manage', name: 'Prepare procurement plans', description: 'Upload plans, add plan items and links, and maintain planning defaults in authorized scopes; no approval or procurement authority.' },
   { code: 'replenishment.manage', name: 'Manage replenishment configuration', description: 'Maintain scoped replenishment policies and generate advisory tasks; no inventory or procurement posting authority.' },
@@ -413,7 +414,7 @@ const getAllPermissionCodes = async (database = pool) => {
   return rows.map(row => row.code);
 };
 
-const getPermissionsForUserId = async (userId, database = pool) => {
+const getPermissionsForUserId = async (userId, database = pool, options = {}) => {
   const { rows } = await database.query(
     `SELECT u.role,
             COALESCE(ARRAY_AGG(DISTINCT p.code ORDER BY p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
@@ -468,7 +469,7 @@ const getPermissionsForUserId = async (userId, database = pool) => {
   }, {});
   const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
 
-  if (normalizedRole === 'admin') {
+  if (normalizedRole === 'admin' && options.explicitGrants !== true) {
     const allPermissions = await getAllPermissionCodes(database);
     return { permissions: allPermissions, dataScopes, role, found: true };
   }

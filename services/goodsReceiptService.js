@@ -1,4 +1,6 @@
 "use strict";
+const { authorizeCommand } = require('./p2pAuthorization');
+
 
 const crypto = require("crypto");
 const createHttpError = require("../utils/httpError");
@@ -106,6 +108,8 @@ async function createGoodsReceipt({
   const payloadFingerprint = fingerprint(purchaseOrderId, lines);
 
   return repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'procure-to-pay.receipts.manage', {requestId,purchaseOrderId,poLineIds:lines.map(l=>l.purchase_order_item_id),warehouseIds:lines.map(l=>l.warehouse_id).filter(v=>v!=null)})).actor;
     await tx.lockGoodsReceiptOperation(key);
     const po = await tx.lockPurchaseOrder(Number(purchaseOrderId));
     if (!po) throw createHttpError(404, "Purchase order not found");
@@ -119,6 +123,7 @@ async function createGoodsReceipt({
       );
     const prior = await tx.findReceiptByIdempotency(key);
     if (prior) {
+      await authorizeCommand(tx,actor,'procure-to-pay.receipts.manage',{requestId:po.request_id,purchaseOrderId:po.id,receiptId:prior.id});
       if (prior.payload_fingerprint !== payloadFingerprint)
         throw Object.assign(
           createHttpError(
@@ -407,6 +412,8 @@ async function applyTechnicalDisposition({
       "Goods Receipt permission is required to apply technical disposition",
     );
   return repository.withTransaction(async (tx) => {
+
+  actor = (await authorizeCommand(tx, actor, 'procure-to-pay.receipts.manage', {taskId})).actor;
     await profiles.requireSchema(tx.client);
     await tx.client.query(
       "SELECT pg_advisory_xact_lock(hashtextextended('delivery-inspection:'||$1::text,0))",

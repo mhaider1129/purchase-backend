@@ -1,3 +1,4 @@
+jest.mock('../services/p2pAuthorization',()=>require('../tests/helpers/p2pDomainAuthorization'));
 'use strict';
 
 jest.mock('../services/supplierInvoiceService', () => ({ assertInvoiceMatchApproved: jest.fn(async () => true) }));

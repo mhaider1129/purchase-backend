@@ -1163,6 +1163,8 @@ const getPendingApprovals = async (req, res, next) => {
            ), 0) AS available_amount
          FROM budget_envelopes be
          WHERE be.department_id = r.department_id
+           AND r.institute_id=$2
+           AND EXISTS(SELECT 1 FROM departments budget_department WHERE budget_department.id=be.department_id AND budget_department.institute_id=r.institute_id)
            AND COALESCE(be.project_id::text, '') = COALESCE(r.project_id::text, '')
            AND be.fiscal_year = EXTRACT(YEAR FROM NOW())::integer
            AND be.currency = 'USD'
@@ -1175,7 +1177,7 @@ const getPendingApprovals = async (req, res, next) => {
          AND a.status IN ('Pending', 'On Hold')
          AND NOT ${completedRequestSql('r')}
          ORDER BY r.created_at DESC`,
-      [req.user.id],
+      [req.user.id,req.user.institute_id??null],
     );
     res.json(result.rows);
   } catch (err) {
@@ -1486,6 +1488,8 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
            ), 0) AS available_amount
          FROM budget_envelopes be
          WHERE be.department_id = r.department_id
+           AND r.institute_id=$2
+           AND EXISTS(SELECT 1 FROM departments budget_department WHERE budget_department.id=be.department_id AND budget_department.institute_id=r.institute_id)
            AND COALESCE(be.project_id::text, '') = COALESCE(r.project_id::text, '')
            AND be.fiscal_year = EXTRACT(YEAR FROM NOW())::integer
            AND be.currency = 'USD'
@@ -1504,7 +1508,7 @@ const getPendingMaintenanceApprovals = async (req, res, next) => {
          budget_snapshot.available_amount,
          budget_snapshot.currency
        ORDER BY r.created_at DESC`,
-      [req.user.id]
+      [req.user.id,req.user.institute_id??null]
     );
 
     res.json(rows);

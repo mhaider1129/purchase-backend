@@ -671,12 +671,15 @@ const awardRfxResponse = async (req, res, next) => {
       return next(createHttpError(404, 'Linked request not found'));
     }
 
+    const financialActor=(await require('../services/p2pAuthorization').authorizeCommand({client},req.user,'procure-to-pay.purchase-orders.manage',{requestId})).actor;
+
     const existingPo = await client.query(
       `SELECT * FROM purchase_orders WHERE rfx_id = $1 AND rfx_response_id = $2 ORDER BY id LIMIT 1`,
       [rfxId, responseId]
     );
 
     if (existingPo.rowCount > 0) {
+      await require('../services/p2pAuthorization').authorizeCommand({client},financialActor,'procure-to-pay.purchase-orders.manage',{requestId,purchaseOrderId:existingPo.rows[0].id});
       await client.query('COMMIT');
       return res.json({ message: 'Supplier award already recorded', rfx_id: rfxId, request_id: requestId,
         awarded_response_id: responseId, purchase_order: existingPo.rows[0], idempotent: true });
@@ -708,7 +711,7 @@ const awardRfxResponse = async (req, res, next) => {
     // transactions therefore compose without opening an independent connection.
     const repository = createConnectedP2PRepository(client);
     repository.withTransaction = async (work) => work(repository);
-    const actor = req.user;
+    const actor = financialActor;
     const awards = [];
     for (const priced of pricedItems) {
       const award = await createAward({ repository, requestItem: priced.requestItem,

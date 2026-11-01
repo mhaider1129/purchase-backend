@@ -246,14 +246,21 @@ const getProcurementEvents = async (requestId) => safeQuery(
   [requestId],
 );
 
-const getLinkedRecords = async (requestId) => {
+const getLinkedRecords = async (requestId,user) => {
+  const financial = require('../../services/p2pReadScope').withRead(user,async client => {
+    const [purchaseOrders,receipts,invoices]=await Promise.all([
+      client.query('SELECT po.id,po.po_number,po.status,po.total_amount,po.currency,po.supplier_name,po.created_at,po.updated_at FROM purchase_orders po WHERE po.request_id=$1 ORDER BY po.created_at DESC',[requestId]),
+      client.query('SELECT gr.id,gr.receipt_number,gr.received_at,gr.notes,gr.discrepancy_notes,gr.created_at,u.name AS received_by_name FROM goods_receipts gr LEFT JOIN users u ON u.id=gr.received_by WHERE gr.request_id=$1 ORDER BY gr.created_at DESC',[requestId]),
+      client.query('SELECT si.id,si.invoice_number,si.supplier,si.total_amount,si.currency,si.submitted_at,si.purchase_order_id FROM supplier_invoices si WHERE si.request_id=$1 ORDER BY si.submitted_at DESC',[requestId]),
+    ]);return {purchaseOrders:purchaseOrders.rows,receipts:receipts.rows,invoices:invoices.rows};
+  },{requestId}).catch(error=>{if([403,404].includes(error.statusCode))return {purchaseOrders:[],receipts:[],invoices:[]};throw error;});
   const [rfqs, quotations, purchaseOrders, grns, inspections, invoices, contracts] = await Promise.all([
     safeQuery('rfx_events', `SELECT id, title, rfx_type, status, due_date, created_at, updated_at FROM rfx_events WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
     safeQuery('rfx_responses', `SELECT rr.id, rr.rfx_id, rr.bid_amount, rr.status, rr.created_at, s.name AS supplier_name FROM rfx_responses rr LEFT JOIN suppliers s ON s.id = rr.supplier_id WHERE rr.request_id = $1 ORDER BY rr.created_at DESC`, [requestId]),
-    safeQuery('purchase_orders', `SELECT po.id, po.po_number, po.status, po.total_amount, po.currency, po.supplier_name, po.created_at, po.updated_at FROM purchase_orders po WHERE po.request_id = $1 ORDER BY po.created_at DESC`, [requestId]),
-    safeQuery('goods_receipts', `SELECT gr.id, gr.receipt_number, gr.received_at, gr.notes, gr.discrepancy_notes, gr.created_at, u.name AS received_by_name FROM goods_receipts gr LEFT JOIN users u ON u.id = gr.received_by WHERE gr.request_id = $1 ORDER BY gr.created_at DESC`, [requestId]),
+    financial.then(value=>value.purchaseOrders),
+    financial.then(value=>value.receipts),
     safeQuery('technical_inspections', `SELECT id, item_name, supplier_name, inspection_date, acceptance_status, acceptance_notes, created_at FROM technical_inspections WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
-    safeQuery('supplier_invoices', `SELECT si.id, si.invoice_number, si.supplier, si.total_amount, si.currency, si.submitted_at, si.purchase_order_id FROM supplier_invoices si WHERE si.request_id = $1 ORDER BY si.submitted_at DESC`, [requestId]),
+    financial.then(value=>value.invoices),
     safeQuery('contracts', `SELECT id, title, vendor, reference_number, contract_value, status, start_date, end_date, created_at FROM contracts WHERE source_request_id = $1 ORDER BY created_at DESC`, [requestId]),
   ]);
 
@@ -485,7 +492,7 @@ const getFullRequestDetails = async (req, res, next) => {
       getApprovals(requestId),
       getItems(requestId),
       getProcurementEvents(requestId),
-      getLinkedRecords(requestId),
+      getLinkedRecords(requestId,req.user),
       getAttachments(requestId,req.user),
       getCommunicationNotes(requestId),
       getAuditLogs(requestId),

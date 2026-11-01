@@ -1,14 +1,14 @@
 -- Focused disposable test contract, not a production migration or schema dump.
 -- Columns/constraints follow the connected P2P and inventory repositories, SQL
 -- 004/006/031 and their later UOM/identity fields. Unused domains are omitted.
-CREATE TABLE users (id SERIAL PRIMARY KEY);
-CREATE TABLE departments (id SERIAL PRIMARY KEY);
+CREATE TABLE users (id SERIAL PRIMARY KEY,role TEXT DEFAULT 'Finance',institute_id INTEGER DEFAULT 1,department_id INTEGER,warehouse_id INTEGER,is_active BOOLEAN DEFAULT TRUE);
+CREATE TABLE departments (id SERIAL PRIMARY KEY,name TEXT DEFAULT 'Fixture department',institute_id INTEGER DEFAULT 1);
 CREATE TABLE suppliers (id SERIAL PRIMARY KEY, name TEXT, status TEXT NOT NULL);
 CREATE TABLE supplier_compliance_artifacts (id BIGSERIAL PRIMARY KEY, supplier_id INTEGER REFERENCES suppliers,
   artifact_type TEXT, name TEXT, expiry_date DATE, status TEXT, blocked BOOLEAN);
 CREATE TABLE supplier_evaluations (id BIGSERIAL PRIMARY KEY, supplier_id INTEGER REFERENCES suppliers,
   evaluation_date DATE, overall_score NUMERIC, compliance_score NUMERIC, weighted_overall_score NUMERIC);
-CREATE TABLE requests (id SERIAL PRIMARY KEY, institute_id INTEGER, department_id INTEGER REFERENCES departments, project_id INTEGER, status TEXT);
+CREATE TABLE requests (id SERIAL PRIMARY KEY, institute_id INTEGER DEFAULT 1, department_id INTEGER REFERENCES departments, project_id UUID, status TEXT);
 CREATE TABLE item_uom (id SERIAL PRIMARY KEY, name TEXT, uom_code TEXT, is_active BOOLEAN DEFAULT TRUE);
 CREATE TABLE generic_items (id BIGSERIAL PRIMARY KEY, base_uom_id INTEGER REFERENCES item_uom,
   inventory_uom_id INTEGER REFERENCES item_uom, lifecycle_status TEXT, is_active BOOLEAN,
@@ -58,7 +58,7 @@ CREATE TABLE purchase_order_items (id BIGSERIAL PRIMARY KEY, purchase_order_id B
   source_uom_id INTEGER REFERENCES item_uom, source_uom TEXT, base_uom_id INTEGER REFERENCES item_uom,
   base_uom TEXT, conversion_factor NUMERIC(18,4));
 CREATE TABLE budget_envelopes (id BIGSERIAL PRIMARY KEY, department_id INTEGER REFERENCES departments,
-  project_id INTEGER, fiscal_year INTEGER, currency TEXT, allocated_amount NUMERIC(14,2), consumed_amount NUMERIC(14,2) DEFAULT 0);
+  project_id UUID, fiscal_year INTEGER, currency TEXT, allocated_amount NUMERIC(14,2), consumed_amount NUMERIC(14,2) DEFAULT 0);
 CREATE TABLE goods_receipts (id BIGSERIAL PRIMARY KEY, purchase_order_id BIGINT REFERENCES purchase_orders,
   request_id INTEGER REFERENCES requests, idempotency_key TEXT UNIQUE, payload_fingerprint TEXT,
   receipt_number TEXT UNIQUE, warehouse_location TEXT, received_at TIMESTAMPTZ, received_by INTEGER REFERENCES users,
@@ -154,3 +154,34 @@ CREATE TABLE inventory_transaction_allocations (id BIGSERIAL PRIMARY KEY,
 INSERT INTO users DEFAULT VALUES;
 INSERT INTO suppliers(name,status) VALUES ('Integration supplier','active');
 INSERT INTO item_uom(name,uom_code) VALUES ('Each','EA');
+
+-- Explicit grants for security-aware disposable integrations; no role shortcut.
+CREATE TABLE projects(id UUID PRIMARY KEY,name TEXT,is_active BOOLEAN DEFAULT TRUE);
+CREATE TABLE permissions(id SERIAL PRIMARY KEY,code TEXT UNIQUE,name TEXT,description TEXT);
+CREATE TABLE roles(id SERIAL PRIMARY KEY,name TEXT UNIQUE);
+CREATE TABLE user_permissions(user_id INTEGER,permission_id INTEGER);
+CREATE TABLE role_permissions(role_id INTEGER,permission_id INTEGER);
+CREATE TABLE data_scopes(id SERIAL PRIMARY KEY,code TEXT UNIQUE);
+CREATE TABLE user_data_scopes(user_id INTEGER,data_scope_id INTEGER,scope_value TEXT);
+CREATE TABLE role_data_scopes(role_id INTEGER,data_scope_id INTEGER,scope_value TEXT);
+ALTER TABLE suppliers ADD COLUMN institute_id INTEGER;
+ALTER TABLE supplier_invoices ADD COLUMN receipt_id BIGINT;
+ALTER TABLE ap_voucher_lines ADD COLUMN cost_center_id INTEGER;
+CREATE TABLE finance_cost_centers(id SERIAL PRIMARY KEY,department_id INTEGER,project_id UUID,is_active BOOLEAN DEFAULT TRUE);
+INSERT INTO users(id,role,institute_id,is_active) VALUES(2,'Finance',1,true),(3,'SCM',1,true),(4,'Finance',2,true),(5,'Admin',1,true),(6,'Finance',1,false);
+INSERT INTO permissions(code) SELECT unnest(ARRAY['procure-to-pay.lifecycle.view','procure-to-pay.purchase-orders.manage','procure-to-pay.receipts.manage','procure-to-pay.invoices.manage','procure-to-pay.match.manage','finance.verify','finance.voucher.create','finance.voucher.verify','finance.post-ledger','finance.payment.manage','finance.override-mismatch','finance.budget.manage','inventory.receive','inventory.cross-warehouse']);
+INSERT INTO user_permissions SELECT u.id,p.id FROM users u CROSS JOIN permissions p WHERE u.id IN(1,2,4,6);
+
+ALTER TABLE supplier_invoices ADD COLUMN supplier TEXT;
+ALTER TABLE supplier_invoices ADD COLUMN submitted_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE purchase_orders ADD COLUMN supplier_name TEXT;
+ALTER TABLE purchase_orders ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE budget_envelopes ADD COLUMN created_by INTEGER;
+ALTER TABLE budget_envelopes ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE TABLE rfx_events(id BIGSERIAL PRIMARY KEY,request_id INTEGER REFERENCES requests);
+CREATE TABLE rfx_responses(id BIGSERIAL PRIMARY KEY,rfx_id BIGINT REFERENCES rfx_events,request_id INTEGER REFERENCES requests,supplier_id INTEGER REFERENCES suppliers);
+
+ALTER TABLE warehouses ADD COLUMN department_id INTEGER REFERENCES departments;
+
+ALTER TABLE requests ADD COLUMN supply_warehouse_id INTEGER REFERENCES warehouses;

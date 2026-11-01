@@ -53,10 +53,12 @@ test('malformed authorization data fails closed',async()=>{
 test('linked request warehouse must be authorized even when its department is permitted',async()=>{
  const a=await access.actor({id:13});
  const request=f.state.requests.find(r=>r.id===31);
- request.warehouse_id=11;
+ request.supply_warehouse_id=11;
  await expect(access.requestedItem(a,41,2)).rejects.toMatchObject({statusCode:404});
- request.warehouse_id=20;
+ request.supply_warehouse_id=20;
  await expect(access.requestedItem(a,41,2)).rejects.toMatchObject({statusCode:404});
- request.warehouse_id=10;
+ request.supply_warehouse_id=10;
  await expect(access.requestedItem(a,41,2)).resolves.toMatchObject({id:41});
+ expect(pool.query.mock.calls.some(([sql])=>sql.includes('r.supply_warehouse_id AS request_warehouse_id'))).toBe(true);
+ expect(pool.query.mock.calls.some(([sql])=>sql.includes('r.warehouse_id AS request_warehouse_id'))).toBe(false);
 });

@@ -12,6 +12,7 @@
     "dev": "nodemon app.js",
     "test": "jest",
     "test:p2p-postgres": "node scripts/runP2PPostgresIntegration.js",
+    "test:backend-contract-refresh": "node scripts/testBackendContractRefresh.js",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
     "migrate:create": "node-pg-migrate create",

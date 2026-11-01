@@ -12,8 +12,10 @@ test('022 adds all three canonical Item Master levels without mutating legacy ro
   expect(sql).not.toMatch(/UPDATE public\.contract_items/);
 });
 
-test('runtime Contract table definition includes canonical identity for clean databases', () => {
+test('manual schema installs canonical identity and runtime uses the canonical validator', () => {
   const controller = fs.readFileSync(path.join(__dirname, '../controllers/contractsController.js'), 'utf8');
-  for (const column of ['generic_item_id BIGINT', 'approved_product_id BIGINT', 'supplier_catalog_item_id BIGINT']) expect(controller).toContain(column);
+  const schema=fs.readFileSync(path.join(__dirname,'../sql/manual/059_backend_contract_refresh.sql'),'utf8');
+  for (const column of ['generic_item_id','approved_product_id','supplier_catalog_item_id']) expect(schema).toContain(column);
+  expect(controller).toContain('const ensureContractsTable = contractBoundary.ensureSchema');
   expect(controller).toContain('validateContractItemIdentity(client, b, contract, { required: true })');
 });

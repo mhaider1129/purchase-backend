@@ -1,5 +1,6 @@
 
-const pool = require('../config/db');
+const contractBoundary = require('../services/contractAuthorizationService');
+const pool = contractBoundary.db;
 const createHttpError = require('../utils/httpError');
 
 const OBLIGATION_STATUSES = new Set(['Pending', 'Completed', 'Overdue', 'Cancelled']);
@@ -13,151 +14,7 @@ const PROCUREMENT_METHODS = new Set([
   'Annual Bid',
 ]);
 
-const ensureGovernanceTables = (() => {
-  let ensured = false;
-  let ensuringPromise = null;
-
-  return async () => {
-    if (ensured) return;
-    if (!ensuringPromise) {
-      ensuringPromise = (async () => {
-        await pool.query(`ALTER TABLE contracts
-          ADD COLUMN IF NOT EXISTS is_framework_agreement BOOLEAN NOT NULL DEFAULT FALSE,
-          ADD COLUMN IF NOT EXISTS framework_ceiling_value NUMERIC(14,2),
-          ADD COLUMN IF NOT EXISTS framework_remaining_balance NUMERIC(14,2),
-          ADD COLUMN IF NOT EXISTS framework_start_date DATE,
-          ADD COLUMN IF NOT EXISTS framework_end_date DATE,
-          ADD COLUMN IF NOT EXISTS procurement_method TEXT,
-          ADD COLUMN IF NOT EXISTS reserve_budget_on_activation BOOLEAN NOT NULL DEFAULT FALSE,
-          ADD COLUMN IF NOT EXISTS committed_value NUMERIC(14,2),
-          ADD COLUMN IF NOT EXISTS block_overspend BOOLEAN NOT NULL DEFAULT FALSE`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_templates (
-          id SERIAL PRIMARY KEY,
-          template_name TEXT NOT NULL,
-          contract_category TEXT,
-          contract_type TEXT,
-          default_currency TEXT,
-          default_sections JSONB,
-          default_clauses JSONB,
-          default_alert_rules JSONB,
-          is_active BOOLEAN NOT NULL DEFAULT TRUE,
-          created_by INTEGER,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_clauses (
-          id SERIAL PRIMARY KEY,
-          clause_type TEXT,
-          clause_title TEXT NOT NULL,
-          clause_content TEXT NOT NULL,
-          clause_version INTEGER NOT NULL DEFAULT 1,
-          language TEXT,
-          is_active BOOLEAN NOT NULL DEFAULT TRUE,
-          created_by INTEGER,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_clause_assignments (
-          id SERIAL PRIMARY KEY,
-          contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          clause_id INTEGER NOT NULL REFERENCES contract_clauses(id) ON DELETE CASCADE,
-          custom_override_content TEXT,
-          sort_order INTEGER NOT NULL DEFAULT 1,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_obligations (
-          id SERIAL PRIMARY KEY,
-          contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          obligation_type TEXT,
-          title TEXT NOT NULL,
-          description TEXT,
-          responsible_party TEXT,
-          due_date DATE,
-          status TEXT NOT NULL DEFAULT 'Pending',
-          completion_notes TEXT,
-          completed_at TIMESTAMPTZ,
-          proof_attachment_id INTEGER,
-          created_by INTEGER,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_sla_events (
-          id SERIAL PRIMARY KEY,
-          contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          event_type TEXT,
-          response_time_minutes INTEGER,
-          resolution_time_minutes INTEGER,
-          target_response_minutes INTEGER,
-          target_resolution_minutes INTEGER,
-          breached BOOLEAN NOT NULL DEFAULT FALSE,
-          notes TEXT,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_negotiations (
-          id SERIAL PRIMARY KEY,
-          contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          negotiation_round INTEGER NOT NULL,
-          discussion_summary TEXT,
-          requested_changes JSONB,
-          approved_changes JSONB,
-          rejected_changes JSONB,
-          negotiated_value NUMERIC(14,2),
-          negotiated_terms JSONB,
-          created_by INTEGER,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_legal_reviews (
-          id SERIAL PRIMARY KEY,
-          contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          reviewer_id INTEGER,
-          legal_risk_level TEXT,
-          flagged_clauses JSONB,
-          approved_clauses JSONB,
-          comments TEXT,
-          governing_law TEXT,
-          jurisdiction TEXT,
-          approved BOOLEAN,
-          reviewed_at TIMESTAMPTZ
-        )`);
-
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_payments (
-          id SERIAL PRIMARY KEY,
-          contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          amount NUMERIC(14,2) NOT NULL,
-          currency TEXT,
-          payment_date TIMESTAMPTZ NOT NULL,
-          notes TEXT,
-          created_by INTEGER,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_versions (
-          id SERIAL PRIMARY KEY,
-          contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          version_number INTEGER NOT NULL,
-          snapshot JSONB NOT NULL,
-          change_summary TEXT,
-          created_by INTEGER,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`);
-
-        ensured = true;
-      })().finally(() => {
-        ensuringPromise = null;
-      });
-    }
-
-    await ensuringPromise;
-  };
-})();
+const ensureGovernanceTables = contractBoundary.ensureSchema;
 
 const parseId = (value, label = 'id') => {
   const parsed = Number(value);
@@ -675,3 +532,6 @@ module.exports = {
   listContractPayments,
   createContractPayment,
 };
+for (const [name,handler] of Object.entries(module.exports)) {
+  if (name!=='ensureGovernanceTables') module.exports[name]=contractBoundary.wrap(name,handler,undefined,{library:/Template|Clause/.test(name)});
+}

@@ -159,13 +159,15 @@ const getApprovals = async (requestId) => safeQuery(
   [requestId],
 );
 
-const getItems = async (requestId) => {
+const getItems = async (requestId,user) => {
   await ensureRequestedItemApprovalColumns();
   await ensureRequestedItemReceivedColumns();
   await ensureRequestedItemAssignmentColumns();
   await ensureRequestedItemFinancialsTable();
   const hasProcurementEvents = await tableExists('procurement_item_events');
   const hasContracts = await tableExists('contracts');
+  const contractPolicy=require('../../services/contractAuthorizationService');
+  const contractScope=hasContracts?contractPolicy.predicate(await contractPolicy.actor(user,pool)):'FALSE';
 
   return safeQuery(
     'requested_items',
@@ -194,12 +196,12 @@ const getItems = async (requestId) => {
             COALESCE(pie.latest_note, ri.procurement_comment) AS latest_note,
             ri.assigned_to,
             assigned.name AS assigned_to_name,
-            rif.contract_id,
+            ${hasContracts?'c.id':'NULL::integer'} AS contract_id,
             ${hasContracts ? 'c.vendor' : 'NULL::text'} AS supplier_name,
             ${hasContracts ? 'c.supplier_id' : 'NULL::integer'} AS supplier_id
      FROM public.requested_items ri
      LEFT JOIN public.requested_item_financials rif ON rif.requested_item_id = ri.id
-     ${hasContracts ? 'LEFT JOIN contracts c ON c.id = rif.contract_id' : ''}
+     ${hasContracts ? `LEFT JOIN contracts c ON c.id = rif.contract_id AND ${contractScope}` : ''}
      LEFT JOIN users assigned ON assigned.id = ri.assigned_to
      LEFT JOIN LATERAL (
        ${hasProcurementEvents ? `SELECT COUNT(*)::int AS procurement_events_count,
@@ -267,7 +269,7 @@ const getLinkedRecords = async (requestId,user) => {
     financial.then(value=>value.receipts),
     safeQuery('technical_inspections', `SELECT id, item_name, supplier_name, inspection_date, acceptance_status, acceptance_notes, created_at FROM technical_inspections WHERE request_id = $1 ORDER BY created_at DESC`, [requestId]),
     financial.then(value=>value.invoices),
-    safeQuery('contracts', `SELECT id, title, vendor, reference_number, contract_value, status, start_date, end_date, created_at FROM contracts WHERE source_request_id = $1 ORDER BY created_at DESC`, [requestId]),
+    (async()=>{ const policy=require('../../services/contractAuthorizationService'); const a=await policy.actor(user,pool); return safeQuery('contracts',`SELECT c.id,c.title,c.vendor,c.reference_number,c.contract_value,c.status,c.start_date,c.end_date,c.created_at FROM contracts c WHERE c.source_request_id=$1 AND ${policy.predicate(a)} ORDER BY c.created_at DESC`,[requestId]); })().catch(error=>{if([403,404].includes(error.statusCode))return [];throw error;}),
   ]);
 
   return { rfqs, quotations, purchase_orders: purchaseOrders, grns, inspections, invoices, payments: [], contracts };
@@ -307,7 +309,11 @@ const getCommunicationNotes = async (requestId) => safeQuery(
   [requestId],
 );
 
-const getAuditLogs = async (requestId) => safeQuery(
+const getAuditLogs = async (requestId,user) => {
+ const policy=require('../../services/contractAuthorizationService');
+ const actor=await policy.actor(user,pool);
+ const contractScope=actor.hasPermission('contracts.manage')&&actor.hasPermission('procure-to-pay.lifecycle.view')?`(${policy.predicate(actor)} AND ${policy.ownerSql('c')}=${Number(actor.institute_id)})`:'FALSE';
+ return safeQuery(
   'audit_logs',
   `SELECT al.id,
           COALESCE(al.action_type, al.action) AS action,
@@ -320,12 +326,15 @@ const getAuditLogs = async (requestId) => safeQuery(
    FROM audit_logs al
    LEFT JOIN users actor ON actor.id = al.actor_id
    LEFT JOIN users usr ON usr.id = al.user_id
-   WHERE (LOWER(COALESCE(al.target_type, '')) IN ('request', 'requests', 'purchase_request') AND al.target_id = $1)
+   WHERE ((LOWER(COALESCE(al.target_type, '')) IN ('request', 'requests', 'purchase_request') AND al.target_id = $1)
       OR al.description ILIKE $2
-      OR al.details::text ILIKE $2
+      OR al.details::text ILIKE $2)
+     AND al.target_type IS DISTINCT FROM 'contract_library'
+     AND (al.target_type IS DISTINCT FROM 'contract' OR EXISTS(SELECT 1 FROM contracts c WHERE c.id::text=al.target_id AND ${contractScope}))
    ORDER BY al.created_at DESC, al.id DESC`,
   [requestId, `%${requestId}%`],
 ).then((rows) => rows.map((row) => ({ ...row, details: parseAuditDetails(row.details), before_values: row.before_values || null, after_values: row.after_values || null })));
+};
 
 const timelineEvent = ({ id, event_type, title, description, actor_name, event_time, status, linked_record_type, linked_record_id }) => ({
   id: String(id),
@@ -496,12 +505,12 @@ const getFullRequestDetails = async (req, res, next) => {
 
     const [approvals, items, procurementEvents, linkedRecords, attachments, communicationNotes, auditLogs] = await Promise.all([
       getApprovals(requestId),
-      getItems(requestId),
+      getItems(requestId,req.user),
       getProcurementEvents(requestId),
       getLinkedRecords(requestId,req.user),
       getAttachments(requestId,req.user),
       getCommunicationNotes(requestId),
-      getAuditLogs(requestId),
+      getAuditLogs(requestId,req.user),
     ]);
 
     const summary = buildRequestSummary(request, approvals, items);

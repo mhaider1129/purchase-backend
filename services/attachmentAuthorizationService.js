@@ -167,49 +167,11 @@ function createAttachmentAuthorization(
     };
   }
   async function contract(a, id, action = "read", db = database) {
-    if (!positive(id)) throw denied();
-    const c = (
-      await db.query(
-        `SELECT c.*,to_jsonb(c)->>'institute_id' AS explicit_institute_id,r.institute_id AS request_institute_id,d.institute_id AS department_institute_id,u.institute_id AS creator_institute_id FROM contracts c LEFT JOIN requests r ON r.id=c.source_request_id LEFT JOIN departments d ON d.id=c.end_user_department_id LEFT JOIN users u ON u.id=c.created_by WHERE c.id=$1`,
-        [id],
-      )
-    ).rows[0];
-    if (!c) throw denied();
-    // Use actual business provenance. Conflicting/unknown legacy ownership fails closed.
-    const scopes = [
-      c.explicit_institute_id,
-      c.request_institute_id,
-      c.department_institute_id,
-    ].filter((x) => x != null);
-    // Creator identity is a legacy fallback, not an override of explicit business
-    // ownership (a properly authorized cross-institute actor may create a file).
-    if (!scopes.length && c.creator_institute_id != null)
-      scopes.push(c.creator_institute_id);
-    if (!scopes.length || new Set(scopes.map(String)).size !== 1)
-      throw denied();
-    institute(a, scopes[0]);
-    const manager = has(a, "contracts.manage");
-    const reviews = await optional(
-      db,
-      "contract_approvals",
-      "SELECT * FROM contract_approvals WHERE contract_id=$1 AND (is_active OR status IN ('Approved','Rejected'))",
-      [id],
-    );
-    const reviewer = reviews.some(
-      (step) =>
-        (!step.reviewer_department_id ||
-          String(step.reviewer_department_id) === String(a.department_id)) &&
-        require("../policies/contractApprovalPolicy").canUserDecideContractStep(
-          a,
-          step,
-        ),
-    );
-    const related = [c.created_by, c.contract_manager_id].some(
-      (x) => String(x) === String(a.id),
-    );
-    if (action === "delete" ? !manager : !(manager || related || reviewer))
-      throw denied();
-    return c;
+    const policy=require('./contractAuthorizationService');
+    try {
+      const fresh=await policy.actor(a,db,lookupPermissions);
+      return await policy.root(db,fresh,id,action==='delete'?'manage':'read');
+    } catch(error) { if ([401,403,404].includes(error.statusCode)) throw denied(); throw error; }
   }
   // Plan aliases and file routes share the planning object/capability policy;
   // ordinary request permissions must not become an alternate plan-file grant.
@@ -220,7 +182,7 @@ function createAttachmentAuthorization(
   }
   async function plan(a, id, action = 'read', db = database) {
     const planning = require('./planningAuthorizationService').createPlanningAuthorization(database, lookupPermissions);
-    try { return await planning.plan(await planning.actor(a,action==='read'?'read':'manage',db),id,action==='read'?'read':'manage',db); }
+    try { return await planning.plan(await planning.actor(a,action==='delete'?'manage':'read',db),id,action==='delete'?'manage':'read',db); }
     catch (e) { if ([401,403,404].includes(e.statusCode)) throw denied(); throw e; }
   }
   async function parent(a, spec, action = "read", db = database) {

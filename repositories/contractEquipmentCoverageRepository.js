@@ -11,14 +11,7 @@ class ContractEquipmentCoverageRepository {
   async contract(id, instituteId) {
     const result = await this.db.query(`SELECT c.id,c.title,c.reference_number,c.status,c.start_date,c.end_date,c.supplier_id
       FROM contracts c
-      LEFT JOIN users creator ON creator.id=c.created_by
-      LEFT JOIN departments owner_department ON owner_department.id=c.end_user_department_id
-      LEFT JOIN users manager ON manager.id=c.contract_manager_id
-      WHERE c.id=$1
-        AND COALESCE(creator.institute_id,owner_department.institute_id,manager.institute_id)=$2
-        AND (creator.institute_id IS NULL OR creator.institute_id=$2)
-        AND (owner_department.institute_id IS NULL OR owner_department.institute_id=$2)
-        AND (manager.institute_id IS NULL OR manager.institute_id=$2)
+      WHERE c.id=$1 AND ${require('../services/contractAuthorizationService').ownerSql('c')}=$2 AND ${require('../services/contractAuthorizationService').ownership('c')}
       FOR SHARE OF c`, [id, instituteId]);
     return result.rows[0] || null;
   }
@@ -26,7 +19,7 @@ class ContractEquipmentCoverageRepository {
     const result = await this.db.query(`SELECT coverage.*,c.title contract_title,c.reference_number,c.status contract_status,
       c.start_date contract_start,c.end_date contract_end,c.supplier_id
       FROM contract_equipment_coverage coverage JOIN contracts c ON c.id=coverage.contract_id
-      WHERE coverage.equipment_id=$1 AND coverage.institute_id=$2
+      WHERE coverage.equipment_id=$1 AND coverage.institute_id=$2 AND ${require('../services/contractAuthorizationService').ownerSql('c')}=$2 AND ${require('../services/contractAuthorizationService').ownership('c')}
       ORDER BY coverage.coverage_start DESC,coverage.id DESC`, [equipmentId, instituteId]);
     return result.rows;
   }

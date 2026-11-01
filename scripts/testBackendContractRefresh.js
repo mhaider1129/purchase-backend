@@ -123,6 +123,14 @@ async function run() {
         "ARRAY[]::text[]",
       ),
     );
+    if (process.argv.includes('--contracts')) {
+      await client.query(read(schemaFile));
+      await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
+      await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
+      await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
+      await require('../integration/contracts.postgres').run(client,url);
+      return;
+    }
     const columns = async () =>
       (
         await client.query(

@@ -1,13 +1,9 @@
-const pool = require('../config/db');
+const contractBoundary = require('../services/contractAuthorizationService');
+const pool = contractBoundary.db;
 const createHttpError = require('../utils/httpError');
 const { ensureContractEvaluationsTable } = require('./contractEvaluationsController');
-const { ensureEvaluationCriteriaTable } = require('../utils/evaluationCriteriaSeeder');
-const {
-  ensureSuppliersTable,
-  findOrCreateSupplierByName,
-  getSupplierById,
-} = require('./suppliersController');
-const { getComplianceStatusBySupplierIds } = require('./supplierSrmController');
+const { getComplianceStatusBySupplierIds: supplierCompliance } = require('./supplierSrmController');
+const getComplianceStatusBySupplierIds = ids => supplierCompliance(ids,pool);
 const { validateContractItemIdentity } = require('../services/contractItemIdentityService');
 
 const CONTRACT_STATUSES = [
@@ -247,7 +243,7 @@ const fetchActiveUsersByRoles = async (client, roles = []) => {
   const { rows } = await client.query(
     `SELECT id, name, email, role, department_id
        FROM users
-      WHERE is_active = TRUE
+      WHERE institute_id = ${contractBoundary.instituteSql()} AND is_active = TRUE
         AND UPPER(role) = ANY($1::TEXT[])
       ORDER BY ARRAY_POSITION($1::TEXT[], UPPER(role)), id`,
     [normalizedRoles]
@@ -272,7 +268,7 @@ const fetchHodsForDepartments = async (client, departmentIds = []) => {
   const { rows } = await client.query(
     `SELECT id, name, email, role, department_id
        FROM users
-      WHERE is_active = TRUE
+      WHERE institute_id = ${contractBoundary.instituteSql()} AND is_active = TRUE
         AND UPPER(role) = 'HOD'
         AND department_id = ANY($1::INT[])`,
     [normalized]
@@ -312,7 +308,7 @@ const fetchContractManagerEvaluator = async (client, contractManagerId) => {
   const { rows } = await client.query(
     `SELECT id, name, email, role, department_id
        FROM users
-      WHERE id = $1
+      WHERE institute_id = ${contractBoundary.instituteSql()} AND id = $1
         AND is_active = TRUE
       LIMIT 1`,
     [parsedId]
@@ -326,7 +322,7 @@ const fetchOhsEvaluators = async client => {
     `SELECT u.id, u.name, u.email, u.role, u.department_id
        FROM users u
        JOIN departments d ON d.id = u.department_id
-      WHERE u.is_active = TRUE
+      WHERE u.institute_id = ${contractBoundary.instituteSql()} AND u.is_active = TRUE
         AND UPPER(u.role) = 'HOD'
         AND (
           LOWER(d.type) = 'ohs' OR
@@ -542,616 +538,21 @@ const getEvaluationCandidates = async (req, res, next) => {
   }
 };
 
-const ensureContractsTable = (() => {
-  let tableEnsured = false;
-  let referenceIndexStatus = 'pending'; // 'pending' | 'ensured' | 'skipped';
-  let foreignKeyEnsured = false;
-  let assignmentColumnsEnsured = false;
-  let endUserForeignKeyEnsured = false;
-  let contractManagerForeignKeyEnsured = false;
-  let linkageColumnsEnsured = false;
-  let supplierForeignKeyEnsured = false;
-  let requestForeignKeyEnsured = false;
-  let amountPaidColumnEnsured = false;
-  let signingDateColumnEnsured = false;
-  let contractSectionsColumnsEnsured = false;
-  let ensuringPromise = null;
-
-  const ensureTableStructure = async () => {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS contracts (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        vendor TEXT NOT NULL,
-        reference_number TEXT,
-        start_date DATE,
-        signing_date DATE,
-        end_date DATE,
-        contract_value NUMERIC(14, 2),
-        amount_paid NUMERIC(14, 2) DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'draft',
-        description TEXT,
-        delivery_terms TEXT,
-        warranty_terms TEXT,
-        performance_management TEXT,
-        commercial_terms TEXT,
-        compliance_legal_terms TEXT,
-        financial_payment_control TEXT,
-        risk_dispute_management TEXT,
-        digital_attachments_tracking TEXT,
-        institute TEXT,
-        contract_category TEXT,
-        renewal_type TEXT,
-        renewal_notice_days INTEGER,
-        contract_owner TEXT,
-        currency TEXT,
-        estimated_contract_value NUMERIC(14,2),
-        actual_consumed_value NUMERIC(14,2),
-        first_party TEXT,
-        second_party TEXT,
-        authorized_signatory TEXT,
-        vendor_contact_person TEXT,
-        vendor_contact_email TEXT,
-        vendor_contact_phone TEXT,
-        vendor_tax_id TEXT,
-        vendor_address TEXT,
-        scope_summary TEXT,
-        deliverables TEXT,
-        technical_specifications TEXT,
-        service_coverage TEXT,
-        exclusions TEXT,
-        sla_requirements TEXT,
-        payment_terms_details TEXT,
-        delivery_logistics_details TEXT,
-        sla_details TEXT,
-        penalties_incentives TEXT,
-        change_management_terms TEXT,
-        termination_exit_terms TEXT,
-        alert_rules TEXT,
-        supplier_id INTEGER,
-        source_request_id INTEGER,
-        end_user_department_id INTEGER,
-        contract_manager_id INTEGER,
-        technical_department_ids JSONB,
-        main_technical_department_id INTEGER,
-        secondary_technical_reviews JSONB NOT NULL DEFAULT '[]'::jsonb,
-        is_historical_contract BOOLEAN NOT NULL DEFAULT FALSE,
-        clm_additional_payload JSONB,
-        created_by INTEGER,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-
-    tableEnsured = true;
-  };
-
-  const ensureAssignmentColumns = async () => {
-    if (assignmentColumnsEnsured) {
-      return;
-    }
-
-    await pool.query(`
-      ALTER TABLE contracts
-        ADD COLUMN IF NOT EXISTS end_user_department_id INTEGER,
-        ADD COLUMN IF NOT EXISTS contract_manager_id INTEGER,
-        ADD COLUMN IF NOT EXISTS technical_department_ids JSONB,
-        ADD COLUMN IF NOT EXISTS main_technical_department_id INTEGER,
-        ADD COLUMN IF NOT EXISTS secondary_technical_reviews JSONB NOT NULL DEFAULT '[]'::jsonb,
-        ADD COLUMN IF NOT EXISTS is_historical_contract BOOLEAN NOT NULL DEFAULT FALSE
-    `);
-
-    assignmentColumnsEnsured = true;
-  };
-
-  const ensureSigningDateColumn = async () => {
-    if (signingDateColumnEnsured) {
-      return;
-    }
-
-    await pool.query(`
-      ALTER TABLE contracts
-        ADD COLUMN IF NOT EXISTS signing_date DATE
-    `);
-
-    signingDateColumnEnsured = true;
-  };
-
-  const ensureAmountPaidColumn = async () => {
-    if (amountPaidColumnEnsured) {
-      return;
-    }
-
-    try {
-      await pool.query(`
-        ALTER TABLE contracts
-          ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(14, 2) DEFAULT 0
-      `);
-      amountPaidColumnEnsured = true;
-    } catch (err) {
-      if (err?.code === '42P01') {
-        console.warn('⚠️ Contracts table missing; will retry ensuring amount_paid column later.');
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  const ensureLinkageColumns = async () => {
-    if (linkageColumnsEnsured) {
-      return;
-    }
-
-    await pool.query(`
-      ALTER TABLE contracts
-        ADD COLUMN IF NOT EXISTS supplier_id INTEGER,
-        ADD COLUMN IF NOT EXISTS source_request_id INTEGER
-    `);
-
-    linkageColumnsEnsured = true;
-  };
-
-  const ensureContractSectionColumns = async () => {
-    if (contractSectionsColumnsEnsured) {
-      return;
-    }
-
-    await pool.query(`
-      ALTER TABLE contracts
-        ADD COLUMN IF NOT EXISTS commercial_terms TEXT,
-        ADD COLUMN IF NOT EXISTS compliance_legal_terms TEXT,
-        ADD COLUMN IF NOT EXISTS financial_payment_control TEXT,
-        ADD COLUMN IF NOT EXISTS risk_dispute_management TEXT,
-        ADD COLUMN IF NOT EXISTS digital_attachments_tracking TEXT,
-        ADD COLUMN IF NOT EXISTS institute TEXT,
-        ADD COLUMN IF NOT EXISTS contract_category TEXT,
-        ADD COLUMN IF NOT EXISTS renewal_type TEXT,
-        ADD COLUMN IF NOT EXISTS renewal_notice_days INTEGER,
-        ADD COLUMN IF NOT EXISTS contract_owner TEXT,
-        ADD COLUMN IF NOT EXISTS currency TEXT,
-        ADD COLUMN IF NOT EXISTS estimated_contract_value NUMERIC(14,2),
-        ADD COLUMN IF NOT EXISTS actual_consumed_value NUMERIC(14,2),
-        ADD COLUMN IF NOT EXISTS first_party TEXT,
-        ADD COLUMN IF NOT EXISTS second_party TEXT,
-        ADD COLUMN IF NOT EXISTS authorized_signatory TEXT,
-        ADD COLUMN IF NOT EXISTS vendor_contact_person TEXT,
-        ADD COLUMN IF NOT EXISTS vendor_contact_email TEXT,
-        ADD COLUMN IF NOT EXISTS vendor_contact_phone TEXT,
-        ADD COLUMN IF NOT EXISTS vendor_tax_id TEXT,
-        ADD COLUMN IF NOT EXISTS vendor_address TEXT,
-        ADD COLUMN IF NOT EXISTS scope_summary TEXT,
-        ADD COLUMN IF NOT EXISTS deliverables TEXT,
-        ADD COLUMN IF NOT EXISTS technical_specifications TEXT,
-        ADD COLUMN IF NOT EXISTS service_coverage TEXT,
-        ADD COLUMN IF NOT EXISTS exclusions TEXT,
-        ADD COLUMN IF NOT EXISTS sla_requirements TEXT,
-        ADD COLUMN IF NOT EXISTS payment_terms_details TEXT,
-        ADD COLUMN IF NOT EXISTS delivery_logistics_details TEXT,
-        ADD COLUMN IF NOT EXISTS sla_details TEXT,
-        ADD COLUMN IF NOT EXISTS penalties_incentives TEXT,
-        ADD COLUMN IF NOT EXISTS change_management_terms TEXT,
-        ADD COLUMN IF NOT EXISTS termination_exit_terms TEXT,
-        ADD COLUMN IF NOT EXISTS alert_rules TEXT
-    `);
-
-    await pool.query(`
-      ALTER TABLE contracts
-        ADD COLUMN IF NOT EXISTS clm_additional_payload JSONB
-    `);
-
-    contractSectionsColumnsEnsured = true;
-  };
-
-  const ensureReferenceNumberIndex = async () => {
-    if (referenceIndexStatus !== 'pending') {
-      return;
-    }
-
-    try {
-      await pool.query(
-        `CREATE UNIQUE INDEX IF NOT EXISTS contracts_reference_number_idx
-           ON contracts(reference_number)
-           WHERE reference_number IS NOT NULL`
-      );
-      referenceIndexStatus = 'ensured';
-    } catch (err) {
-      if (err?.code === '23505') {
-        console.warn(
-          '⚠️ Skipping unique index contracts_reference_number_idx because duplicate reference numbers exist.'
-        );
-        referenceIndexStatus = 'skipped';
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  const ensureCreatedByForeignKey = async () => {
-    if (foreignKeyEnsured) {
-      return;
-    }
-
-    try {
-      await pool.query(`
-        ALTER TABLE contracts
-          ADD CONSTRAINT contracts_created_by_fkey
-          FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
-      `);
-      foreignKeyEnsured = true;
-    } catch (err) {
-      if (err?.code === '42710') {
-        // Constraint already exists
-        foreignKeyEnsured = true;
-      } else if (err?.code === '42P01') {
-        // users table does not exist yet; try again on the next invocation
-        console.warn(
-          '⚠️ Skipping contracts.created_by foreign key creation because users table is missing.'
-        );
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  const ensureEndUserForeignKey = async () => {
-    if (endUserForeignKeyEnsured) {
-      return;
-    }
-
-    try {
-      await pool.query(`
-        ALTER TABLE contracts
-          ADD CONSTRAINT contracts_end_user_department_id_fkey
-          FOREIGN KEY (end_user_department_id) REFERENCES departments(id) ON DELETE SET NULL
-      `);
-      endUserForeignKeyEnsured = true;
-    } catch (err) {
-      if (err?.code === '42710') {
-        endUserForeignKeyEnsured = true;
-      } else if (err?.code === '42P01') {
-        console.warn('⚠️ Departments table missing; will retry ensuring end user foreign key later.');
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  const ensureContractManagerForeignKey = async () => {
-    if (contractManagerForeignKeyEnsured) {
-      return;
-    }
-
-    try {
-      await pool.query(`
-        ALTER TABLE contracts
-          ADD CONSTRAINT contracts_contract_manager_id_fkey
-          FOREIGN KEY (contract_manager_id) REFERENCES users(id) ON DELETE SET NULL
-      `);
-      contractManagerForeignKeyEnsured = true;
-    } catch (err) {
-      if (err?.code === '42710') {
-        contractManagerForeignKeyEnsured = true;
-      } else if (err?.code === '42P01') {
-        console.warn('⚠️ Users table missing; will retry ensuring contract manager foreign key later.');
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  const ensureSupplierForeignKey = async () => {
-    if (supplierForeignKeyEnsured) {
-      return;
-    }
-
-    try {
-      await ensureSuppliersTable();
-      await pool.query(`
-        ALTER TABLE contracts
-          ADD CONSTRAINT contracts_supplier_id_fkey
-          FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE RESTRICT
-      `);
-      supplierForeignKeyEnsured = true;
-    } catch (err) {
-      if (err?.code === '42710') {
-        supplierForeignKeyEnsured = true;
-      } else if (err?.code === '42P01') {
-        console.warn('⚠️ Suppliers table missing; will retry ensuring supplier foreign key later.');
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  const ensureSourceRequestForeignKey = async () => {
-    if (requestForeignKeyEnsured) {
-      return;
-    }
-
-    try {
-      await pool.query(`
-        ALTER TABLE contracts
-          ADD CONSTRAINT contracts_source_request_id_fkey
-          FOREIGN KEY (source_request_id) REFERENCES requests(id) ON DELETE RESTRICT
-      `);
-      requestForeignKeyEnsured = true;
-    } catch (err) {
-      if (err?.code === '42710') {
-        requestForeignKeyEnsured = true;
-      } else if (err?.code === '42P01') {
-        console.warn('⚠️ Requests table missing; will retry ensuring source request foreign key later.');
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  return async () => {
-    const indexSatisfied = referenceIndexStatus === 'ensured' || referenceIndexStatus === 'skipped';
-    const constraintsSatisfied =
-      tableEnsured &&
-      indexSatisfied &&
-      foreignKeyEnsured &&
-      assignmentColumnsEnsured &&
-      amountPaidColumnEnsured &&
-      signingDateColumnEnsured &&
-      contractSectionsColumnsEnsured &&
-      endUserForeignKeyEnsured &&
-      contractManagerForeignKeyEnsured &&
-      linkageColumnsEnsured &&
-      supplierForeignKeyEnsured &&
-      requestForeignKeyEnsured;
-
-    if (constraintsSatisfied) {
-      return;
-    }
-
-    if (!ensuringPromise) {
-      ensuringPromise = (async () => {
-        try {
-          if (!tableEnsured) {
-            await ensureTableStructure();
-          }
-
-          if (!assignmentColumnsEnsured) {
-            await ensureAssignmentColumns();
-          }
-
-          if (!amountPaidColumnEnsured) {
-            await ensureAmountPaidColumn();
-          }
-
-          if (!signingDateColumnEnsured) {
-            await ensureSigningDateColumn();
-          }
-
-          if (!linkageColumnsEnsured) {
-            await ensureLinkageColumns();
-          }
-
-          if (!contractSectionsColumnsEnsured) {
-            await ensureContractSectionColumns();
-          }
-
-          await ensureReferenceNumberIndex();
-
-          if (!foreignKeyEnsured) {
-            await ensureCreatedByForeignKey();
-          }
-
-          if (!endUserForeignKeyEnsured) {
-            await ensureEndUserForeignKey();
-          }
-
-          if (!contractManagerForeignKeyEnsured) {
-            await ensureContractManagerForeignKey();
-          }
-
-          if (!supplierForeignKeyEnsured) {
-            await ensureSupplierForeignKey();
-          }
-
-          if (!requestForeignKeyEnsured) {
-            await ensureSourceRequestForeignKey();
-          }
-        } catch (err) {
-          console.error('❌ Failed to ensure contracts table exists:', err);
-          throw err;
-        } finally {
-          ensuringPromise = null;
-        }
-      })();
-    }
-
-    await ensuringPromise;
-  };
-})();
-
-const ensureContractsPhaseTwoTables = (() => {
-  let ensured = false;
-  let ensuringPromise = null;
-
-  return async () => {
-    if (ensured) return;
-    if (!ensuringPromise) {
-      ensuringPromise = (async () => {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contract_amendments (
-            id SERIAL PRIMARY KEY,
-            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-            amendment_number INTEGER NOT NULL,
-            amendment_date DATE,
-            change_summary TEXT,
-            revised_value NUMERIC(14,2),
-            revised_expiry DATE,
-            approved_by INTEGER,
-            snapshot JSONB,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contract_alerts (
-            id SERIAL PRIMARY KEY,
-            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-            alert_type TEXT NOT NULL,
-            threshold_value TEXT,
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            last_triggered_at TIMESTAMPTZ,
-            metadata JSONB,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contract_approvals (
-            id SERIAL PRIMARY KEY,
-            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-            workflow_level INTEGER NOT NULL DEFAULT 1,
-            is_active_level BOOLEAN NOT NULL DEFAULT FALSE,
-            stage TEXT NOT NULL,
-            reviewer_role TEXT,
-            reviewer_id INTEGER,
-            decision TEXT,
-            comments TEXT,
-            assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            decided_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS workflow_level INTEGER NOT NULL DEFAULT 1`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS is_active_level BOOLEAN NOT NULL DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS reviewer_role TEXT`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS approval_level INTEGER NOT NULL DEFAULT 1`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'Pending'`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS reviewer_department_id INTEGER`);
-        await pool.query(`ALTER TABLE contract_approvals ADD COLUMN IF NOT EXISTS review_sections JSONB NOT NULL DEFAULT '[]'::jsonb`);
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contract_items (
-            id SERIAL PRIMARY KEY,
-            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-            item_id INTEGER,
-            generic_item_id BIGINT REFERENCES generic_items(id) ON DELETE RESTRICT,
-            approved_product_id BIGINT REFERENCES approved_products(id) ON DELETE RESTRICT,
-            supplier_catalog_item_id BIGINT REFERENCES supplier_catalog_items(id) ON DELETE RESTRICT,
-            item_name TEXT NOT NULL,
-            generic_name TEXT,
-            brand_name TEXT,
-            unit TEXT,
-            contracted_price NUMERIC(14,2),
-            currency TEXT,
-            minimum_order_quantity NUMERIC(14,2),
-            lead_time_days INTEGER,
-            warranty_terms TEXT,
-            requested_quantity NUMERIC(14,2),
-            delivered_quantity NUMERIC(14,2) NOT NULL DEFAULT 0,
-            price_valid_from DATE,
-            price_valid_to DATE,
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            notes TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-        await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS item_id INTEGER`);
-        await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS requested_quantity NUMERIC(14,2)`);
-        await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS delivered_quantity NUMERIC(14,2) NOT NULL DEFAULT 0`);
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contract_required_documents (
-            id SERIAL PRIMARY KEY,
-            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-            document_type TEXT NOT NULL,
-            is_uploaded BOOLEAN NOT NULL DEFAULT FALSE,
-            attachment_id INTEGER,
-            notes TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE(contract_id, document_type)
-          )
-        `);
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contract_logs (
-            id SERIAL PRIMARY KEY,
-            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-            action TEXT NOT NULL,
-            actor_id INTEGER,
-            details JSONB,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-        await pool.query(`CREATE SEQUENCE IF NOT EXISTS contract_logs_id_seq`);
-        await pool.query(`ALTER SEQUENCE contract_logs_id_seq OWNED BY contract_logs.id`);
-        await pool.query(`ALTER TABLE contract_logs ALTER COLUMN id SET DEFAULT nextval('contract_logs_id_seq'::regclass)`);
-        await pool.query(`SELECT setval('contract_logs_id_seq', COALESCE((SELECT MAX(id) FROM contract_logs), 0) + 1, false)`);
-        ensured = true;
-      })().finally(() => {
-        ensuringPromise = null;
-      });
-    }
-    await ensuringPromise;
-  };
-})();
-
 const CONTRACT_DOCUMENT_TYPES = ['draft', 'signed_contract', 'amendment', 'invoice', 'supporting_document', 'legal_review', 'technical_attachment', 'financial_attachment', 'other'];
+const evaluateContractInvoiceMatching = ({invoice, contract, previousInvoices=[], payments=[]}) => { const flags=[]; const amt=Number(invoice.amount||0), retention=Number(invoice.retention_amount||0), penalty=Number(invoice.penalty_amount||0), tax=Number(invoice.tax_amount||0), discount=Number(invoice.discount_amount||0); const net=Number((amt+tax-discount-retention-penalty).toFixed(2));
+ if(!contract) flags.push('missing_contract'); if(!invoice.supplier_id) flags.push('missing_supplier'); if(!invoice.invoice_date) flags.push('missing_invoice_date'); if(amt<=0) flags.push('negative_or_zero_invoice_amount'); if(retention>amt) flags.push('retention_amount_exceeds_invoice'); if(penalty>amt) flags.push('penalty_amount_exceeds_invoice');
+ if(invoice.due_date && invoice.invoice_date && new Date(invoice.due_date)<new Date(invoice.invoice_date)) flags.push('due_date_before_invoice_date');
+ if(previousInvoices.some(i=>i.invoice_number===invoice.invoice_number && Number(i.supplier_id||0)===Number(invoice.supplier_id||0) && Number(i.id||0)!==Number(invoice.id||0))) flags.push('duplicate_invoice_number');
+ if(contract){ if(contract.end_date && invoice.invoice_date && new Date(invoice.invoice_date)>new Date(contract.end_date)) flags.push('expired_contract_billing'); if(!['active','expiring_soon','renewed'].includes(contract.status)) flags.push('inactive_or_invalid_contract_status'); if(contract.currency && invoice.currency && contract.currency!==invoice.currency) flags.push('currency_mismatch'); const cv=Number(contract.contract_value||0); const sum=previousInvoices.filter(i=>!['cancelled','rejected'].includes(i.status)).reduce((s,i)=>s+Number(i.net_payable_amount||0),0); const remaining=cv-sum; if(cv>0 && net>cv) flags.push('invoice_exceeds_contract_value'); if(cv>0 && net>remaining) flags.push('invoice_exceeds_remaining_contract_value'); if(contract.payment_period && invoice.invoice_date && invoice.due_date){ const maxDays=parseInt(String(contract.payment_period).match(/\d+/)?.[0]||'0',10); if(maxDays>0 && (new Date(invoice.due_date)-new Date(invoice.invoice_date))/86400000>maxDays) flags.push('payment_terms_exceeded'); } }
+ const paid=payments.filter(p=>p.status==='paid').reduce((s,p)=>s+Number(p.amount||0),0); if(net>0 && paid>=net) flags.push('already_fully_paid');
+ const severe=['duplicate_invoice_number','missing_contract','invoice_exceeds_contract_value','invoice_exceeds_remaining_contract_value','negative_or_zero_invoice_amount','retention_amount_exceeds_invoice','penalty_amount_exceeds_invoice']; const warning=['expired_contract_billing','inactive_or_invalid_contract_status','currency_mismatch','missing_invoice_date','due_date_before_invoice_date','payment_terms_exceeded','missing_supplier'];
+ const status=flags.some(f=>severe.includes(f))?'failed':(flags.some(f=>warning.includes(f))?'warning':'matched'); return { matching_status: status, matching_flags: flags, net_payable_amount: net }; };
 const CONTRACT_DOCUMENT_STATUSES = ['active', 'superseded', 'archived'];
-const ensureContractsPhaseThreeTables = (() => {
-  let ensured = false;
-  let ensuringPromise = null;
-  return async () => {
-    if (ensured) return;
-    if (!ensuringPromise) {
-      ensuringPromise = (async () => {
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_documents (
-          id BIGSERIAL PRIMARY KEY,
-          contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          document_type TEXT NOT NULL,
-          title TEXT,
-          description TEXT,
-          current_version_id BIGINT,
-          status TEXT NOT NULL DEFAULT 'active',
-          created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          CONSTRAINT contract_documents_document_type_check CHECK (document_type = ANY(ARRAY['draft','signed_contract','amendment','invoice','supporting_document','legal_review','technical_attachment','financial_attachment','other'])),
-          CONSTRAINT contract_documents_status_check CHECK (status = ANY(ARRAY['active','superseded','archived']))
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS contract_document_versions (
-          id BIGSERIAL PRIMARY KEY,
-          document_id BIGINT NOT NULL REFERENCES contract_documents(id) ON DELETE CASCADE,
-          contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-          version_number INTEGER NOT NULL,
-          file_name TEXT, file_url TEXT, storage_path TEXT, mime_type TEXT,
-          file_size BIGINT, checksum TEXT, uploaded_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
-          uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          is_current BOOLEAN NOT NULL DEFAULT FALSE,
-          notes TEXT,
-          UNIQUE(document_id, version_number)
-        )`);
-        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS contract_document_versions_one_current_idx ON contract_document_versions(document_id) WHERE is_current = TRUE`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS contract_documents_contract_id_idx ON contract_documents(contract_id)`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS contract_documents_document_type_idx ON contract_documents(document_type)`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS contract_document_versions_contract_id_idx ON contract_document_versions(contract_id)`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS contract_document_versions_document_id_idx ON contract_document_versions(document_id)`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS contract_document_versions_uploaded_at_idx ON contract_document_versions(uploaded_at DESC)`);
-        await pool.query(`ALTER TABLE contract_documents DROP CONSTRAINT IF EXISTS contract_documents_current_version_id_fkey`);
-        await pool.query(`ALTER TABLE contract_documents ADD CONSTRAINT contract_documents_current_version_id_fkey FOREIGN KEY (current_version_id) REFERENCES contract_document_versions(id) ON DELETE SET NULL`);
-        ensured = true;
-      })().finally(() => { ensuringPromise = null; });
-    }
-    await ensuringPromise;
-  };
-})();
+const ensureContractsTable = contractBoundary.ensureSchema;
 
-const runEnsureDdl = async (sql) => {
-  try {
-    await pool.query(sql);
-  } catch (err) {
-    if (err?.code === '42501' || err?.code === '42P07' || err?.code === '42710') return;
-    throw err;
-  }
-};
+const ensureContractsPhaseTwoTables = contractBoundary.ensureSchema;
+
+const ensureContractsPhaseThreeTables = contractBoundary.ensureSchema;
 
 const OBLIGATION_TYPES = ['general','payment','delivery','reporting','compliance','maintenance','warranty','sla','renewal','termination','documentation','other'];
 const OBLIGATION_RECURRENCES = ['none','daily','weekly','monthly','quarterly','semiannual','annual','custom'];
@@ -1159,76 +560,10 @@ const OBLIGATION_PRIORITIES = ['low','medium','high','critical'];
 const OBLIGATION_STATUSES = ['open','in_progress','completed','overdue','waived','cancelled'];
 const RENEWAL_STATUSES = ['pending','alerted','under_review','renewed','not_renewed','cancelled','completed'];
 const RENEWAL_DECISIONS = ['renew','do_not_renew','renegotiate','terminate','extend_temporarily'];
-const ensureContractsPhaseFourTables = (() => {
-  let ensured = false; let ensuringPromise = null;
-  return async () => {
-    if (ensured) return;
-    if (!ensuringPromise) ensuringPromise = (async () => {
-      await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_obligations (
-        id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, title TEXT NOT NULL, description TEXT,
-        obligation_type TEXT NOT NULL DEFAULT 'general', owner_user_id BIGINT, owner_department_id BIGINT,
-        due_date DATE, recurrence TEXT NOT NULL DEFAULT 'none', recurrence_interval INTEGER, next_due_date DATE, evidence_required BOOLEAN NOT NULL DEFAULT FALSE, evidence_document_id BIGINT,
-        priority TEXT NOT NULL DEFAULT 'medium', status TEXT NOT NULL DEFAULT 'open', completion_notes TEXT, completed_at TIMESTAMPTZ, completed_by BIGINT, created_by BIGINT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT contract_obligations_type_check CHECK (obligation_type = ANY(ARRAY['general','payment','delivery','reporting','compliance','maintenance','warranty','sla','renewal','termination','documentation','other'])),
-        CONSTRAINT contract_obligations_recurrence_check CHECK (recurrence = ANY(ARRAY['none','daily','weekly','monthly','quarterly','semiannual','annual','custom'])),
-        CONSTRAINT contract_obligations_priority_check CHECK (priority = ANY(ARRAY['low','medium','high','critical'])),
-        CONSTRAINT contract_obligations_status_check CHECK (status = ANY(ARRAY['open','in_progress','completed','overdue','waived','cancelled']))
-      )`);
-      await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_renewal_events (
-        id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, renewal_type TEXT, renewal_date DATE, notice_days INTEGER NOT NULL DEFAULT 90, alert_date DATE,
-        status TEXT NOT NULL DEFAULT 'pending', decision TEXT, decision_notes TEXT, decided_by BIGINT, decided_at TIMESTAMPTZ, created_by BIGINT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT contract_renewal_events_status_check CHECK (status = ANY(ARRAY['pending','alerted','under_review','renewed','not_renewed','cancelled','completed'])),
-        CONSTRAINT contract_renewal_events_decision_check CHECK (decision IS NULL OR decision = ANY(ARRAY['renew','do_not_renew','renegotiate','terminate','extend_temporarily']))
-      )`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS owner_user_id BIGINT`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS owner_department_id BIGINT`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS recurrence TEXT NOT NULL DEFAULT 'none'`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS next_due_date DATE`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS evidence_required BOOLEAN NOT NULL DEFAULT FALSE`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS evidence_document_id BIGINT`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'medium'`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS completed_by BIGINT`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-      await runEnsureDdl(`ALTER TABLE contract_obligations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_contract_id_idx ON contract_obligations(contract_id)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_owner_user_id_idx ON contract_obligations(owner_user_id)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_due_date_idx ON contract_obligations(due_date)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_status_idx ON contract_obligations(status)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_obligations_next_due_date_idx ON contract_obligations(next_due_date)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_contract_id_idx ON contract_renewal_events(contract_id)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_alert_date_idx ON contract_renewal_events(alert_date)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_renewal_date_idx ON contract_renewal_events(renewal_date)`);
-      await runEnsureDdl(`CREATE INDEX IF NOT EXISTS contract_renewal_events_status_idx ON contract_renewal_events(status)`);
-      ensured = true;
-    })().finally(()=>{ensuringPromise=null;});
-    await ensuringPromise;
-  };
-})();
+const ensureContractsPhaseFourTables = contractBoundary.ensureSchema;
 
 const recordContractLog = async (client, { contractId, action, actorId = null, details = null }) => {
-  const values = [contractId, action, actorId, details ? JSON.stringify(details) : null];
-  try {
-    await client.query(
-      `INSERT INTO contract_logs (contract_id, action, actor_id, details)
-       VALUES ($1, $2, $3, $4)`,
-      values
-    );
-  } catch (err) {
-    const isDuplicatePrimaryKey = err?.code === '23505' && err?.constraint === 'contract_logs_pkey';
-    if (!isDuplicatePrimaryKey) {
-      throw err;
-    }
-
-    await client.query(`SELECT setval('contract_logs_id_seq', COALESCE((SELECT MAX(id) FROM contract_logs), 0) + 1, false)`);
-    await client.query(
-      `INSERT INTO contract_logs (contract_id, action, actor_id, details)
-       VALUES ($1, $2, $3, $4)`,
-      values
-    );
-  }
+  await client.query('INSERT INTO contract_logs (contract_id,action,actor_id,details) VALUES ($1,$2,$3,$4)',[contractId,action,actorId,details ? JSON.stringify(details) : null]);
 };
 
 const normalizeStatus = (value) => {
@@ -1313,22 +648,17 @@ const parseAmountPaid = (value) => {
 };
 
 const resolveSupplier = async (client, { supplierId, vendorName }) => {
-  const normalizedVendor = normalizeText(vendorName);
-
-  if (!supplierId && !normalizedVendor) {
-    throw createHttpError(400, 'vendor is required');
-  }
-
+  const instituteId = Number(contractBoundary.instituteSql());
   if (supplierId) {
-    await ensureSuppliersTable();
-    const supplier = await getSupplierById(client, supplierId);
-    if (!supplier) {
-      throw createHttpError(404, `Supplier with id ${supplierId} was not found`);
-    }
+    const supplier=(await client.query('SELECT * FROM suppliers WHERE id=$1 AND (institute_id IS NULL OR institute_id=$2) FOR SHARE',[supplierId,instituteId])).rows[0];
+    if (!supplier) throw createHttpError(404,'Supplier not found');
     return supplier;
   }
-
-  return findOrCreateSupplierByName(client, normalizedVendor);
+  const name=normalizeText(vendorName);
+  if (!name) throw createHttpError(400,'vendor is required');
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`contract-supplier:${instituteId}:${name.toLowerCase()}`]);
+  const existing=(await client.query('SELECT * FROM suppliers WHERE LOWER(name)=LOWER($1) AND (institute_id IS NULL OR institute_id=$2) ORDER BY institute_id NULLS LAST,id LIMIT 1 FOR SHARE',[name,instituteId])).rows[0];
+  return existing || (await client.query('INSERT INTO suppliers(name,institute_id) VALUES($1,$2) RETURNING *',[name,instituteId])).rows[0];
 };
 
 const canManageContracts = (req) =>
@@ -1474,7 +804,7 @@ const listContracts = async (req, res, next) => {
     await ensureContractsPhaseTwoTables();
     await ensureContractsPhaseFiveTables();
 
-    const filters = [];
+    const filters = [contractBoundary.scope('c')];
     const values = [];
 
     const requestedStatus = req.query.status;
@@ -1845,7 +1175,7 @@ const createContract = async (req, res, next) => {
 
     await client.query('SAVEPOINT contract_evaluation_bootstrap');
     try {
-      await ensureEvaluationCriteriaTable();
+      await contractBoundary.ensureSchema();
       await ensureContractEvaluationsTable();
       const { rows: criteria } = await client.query('SELECT * FROM evaluation_criteria');
       for (const criterion of criteria) {
@@ -2496,7 +1826,7 @@ const renewContract = async (req, res, next) => {
   try {
     await ensureContractsTable();
     await ensureContractsPhaseTwoTables();
-    const { rows: currentRows } = await pool.query('SELECT id, status, renewal_notice_days, supplier_id FROM contracts WHERE id=$1', [contractId]);
+    const { rows: currentRows } = await pool.query('SELECT id, status, renewal_notice_days, supplier_id, source_request_id FROM contracts WHERE id=$1', [contractId]);
     if (!currentRows.length) return next(createHttpError(404, 'Contract not found'));
     const validatedStatus = ensureValidStatusTransition({ currentStatus: currentRows[0].status, nextStatus: nextStatusRaw, allowArchivedSource: false });
 
@@ -2818,7 +2148,7 @@ const findDepartmentReviewerCandidate = async (client, departmentId, { activeOnl
   const { rows } = await client.query(
     `SELECT id, is_active, role, department_id
        FROM users
-      WHERE department_id = $1
+      WHERE institute_id = ${contractBoundary.instituteSql()} AND department_id = $1
         AND ($2::BOOLEAN = FALSE OR is_active = TRUE)
       ORDER BY is_active DESC,
                CASE WHEN LOWER(TRIM(role)) = 'hod' THEN 0 ELSE 1 END,
@@ -2844,7 +2174,7 @@ const getApprovalStepActiveReviewer = async (client, approvalStep = {}) => {
     const { rows } = await client.query(
       `SELECT id
          FROM users
-        WHERE id = $1
+        WHERE institute_id = ${contractBoundary.instituteSql()} AND id = $1
           AND is_active = TRUE
           ${departmentFilter}
         LIMIT 1`,
@@ -2867,7 +2197,7 @@ const getApprovalStepActiveReviewer = async (client, approvalStep = {}) => {
   const { rows } = await client.query(
     `SELECT id
        FROM users
-      WHERE is_active = TRUE
+      WHERE institute_id = ${contractBoundary.instituteSql()} AND is_active = TRUE
         AND LOWER(TRIM(role)) = ANY($1::TEXT[])
       ORDER BY id ASC
       LIMIT 1`,
@@ -2893,7 +2223,7 @@ const getApprovalStepReviewerCandidate = async (client, approvalStep = {}) => {
     const { rows: assignedRows } = await client.query(
       `SELECT id, is_active
          FROM users
-        WHERE id = $1
+        WHERE institute_id = ${contractBoundary.instituteSql()} AND id = $1
           AND LOWER(TRIM(role)) = ANY($2::TEXT[])
         LIMIT 1`,
       [reviewerId, aliases]
@@ -2906,7 +2236,7 @@ const getApprovalStepReviewerCandidate = async (client, approvalStep = {}) => {
   const { rows } = await client.query(
     `SELECT id, is_active
        FROM users
-      WHERE LOWER(TRIM(role)) = ANY($1::TEXT[])
+      WHERE institute_id = ${contractBoundary.instituteSql()} AND LOWER(TRIM(role)) = ANY($1::TEXT[])
       ORDER BY is_active DESC, id ASC
       LIMIT 1`,
     [aliases]
@@ -3016,18 +2346,6 @@ const reconcileContractApprovalWorkflow = async (client, contractId) => {
   await activateNextResolvableContractApproval(client, contractId, 0);
 };
 
-const reconcileContractsUnderReview = async (client) => {
-  const { rows } = await client.query(
-    `SELECT id
-       FROM contracts
-      WHERE status IN ('under_review', 'legal_review', 'technical_review', 'finance_review', 'executive_approval')`
-  );
-
-  for (const row of rows) {
-    await reconcileContractApprovalWorkflow(client, row.id);
-  }
-};
-
 const submitContractReview = async (req, res, next) => {
   const contractId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
@@ -3059,7 +2377,7 @@ const listPendingContractApprovals = async (req, res, next) => {
   try {
     await ensureContractsPhaseTwoTables();
     const client = pool;
-    await reconcileContractsUnderReview(client);
+
     const role = normalizeUserRole(req.user?.role);
     const userId = Number(req.user?.id);
     const roleKeys = Object.entries(ROLE_ALIASES)
@@ -3071,7 +2389,7 @@ const listPendingContractApprovals = async (req, res, next) => {
       `SELECT ca.id AS approval_id, ca.contract_id, ca.approval_level, ca.stage, ca.reviewer_role, ca.reviewer_department_id, ca.status, c.title AS contract_title
          FROM contract_approvals ca
          JOIN contracts c ON c.id = ca.contract_id
-        WHERE ca.is_active = TRUE
+        WHERE ${contractBoundary.scope('c')} AND (ca.reviewer_department_id IS NULL OR ca.reviewer_department_id=${contractBoundary.departmentSql()}) AND ca.is_active = TRUE
           AND ca.status = 'Pending'
           AND (ca.reviewer_id = $1 OR (ca.reviewer_id IS NULL AND ca.reviewer_role = ANY($2::TEXT[])))
         ORDER BY ca.created_at ASC`,
@@ -3088,7 +2406,7 @@ const listContractApprovals = async (req, res, next) => {
   if (!Number.isInteger(contractId)) return next(createHttpError(400, 'Invalid contract id'));
   try {
     await ensureContractsPhaseTwoTables();
-    await reconcileContractApprovalWorkflow(pool, contractId);
+    if (canManageContracts(req)) await reconcileContractApprovalWorkflow(pool, contractId);
     const { rows } = await pool.query(`SELECT id, contract_id, approval_level, stage, reviewer_role, reviewer_department_id, reviewer_id, review_sections, status, comments, is_active, decided_at, created_at
       FROM contract_approvals WHERE contract_id=$1 ORDER BY approval_level`, [contractId]);
     res.json(rows);
@@ -3099,13 +2417,13 @@ const listContractApprovals = async (req, res, next) => {
 
 
 const listContractApprovalStageMonitor = async (req, res, next) => {
-  if (normalizeUserRole(req.user?.role) !== 'scm') {
+  if (!canManageContracts(req)) {
     return next(createHttpError(403, 'Only SCM users can view the contract approval stage monitor'));
   }
 
   try {
     await ensureContractsPhaseTwoTables();
-    await reconcileContractsUnderReview(pool);
+
     const { rows } = await pool.query(
       `SELECT
           c.id AS contract_id,
@@ -3134,6 +2452,7 @@ const listContractApprovalStageMonitor = async (req, res, next) => {
          LEFT JOIN contract_approvals ca ON ca.contract_id = c.id
          LEFT JOIN users reviewer ON reviewer.id = ca.reviewer_id
          LEFT JOIN departments reviewer_department ON reviewer_department.id = ca.reviewer_department_id
+        WHERE ${contractBoundary.scope('c')}
         ORDER BY c.updated_at DESC NULLS LAST, c.id DESC, ca.approval_level ASC NULLS LAST, ca.id ASC NULLS LAST`
     );
 
@@ -3228,7 +2547,7 @@ const decideContractApproval = async (req, res, next) => {
 };
 
 const assertContractExists = async (client, contractId) => {
-  const { rows } = await client.query('SELECT id, contract_value, estimated_contract_value, actual_consumed_value, amount_paid, status, end_date, renewal_notice_days, supplier_id FROM contracts WHERE id=$1', [contractId]);
+  const { rows } = await client.query('SELECT id, contract_value, estimated_contract_value, actual_consumed_value, amount_paid, status, end_date, renewal_notice_days, supplier_id, source_request_id FROM contracts WHERE id=$1', [contractId]);
   if (!rows.length) throw createHttpError(404, 'Contract not found');
   return rows[0];
 };
@@ -3241,6 +2560,7 @@ const listActiveContractItems = async (req, res, next) => {
     const search = normalizeText(req.query.search);
     const values = [];
     const filters = [
+      contractBoundary.scope('c'),
       'ci.is_active = TRUE',
       "c.status IN ('active', 'renewed', 'expiring_soon')",
       '(ci.price_valid_from IS NULL OR ci.price_valid_from <= CURRENT_DATE)',
@@ -3356,8 +2676,8 @@ const getContractConsumption = async (req, res, next) => {
   try {
     const c = await assertContractExists(pool, contractId);
     // Only this canonical P2P read is secured here. Contract financial writers
-    // and their historical balances remain separate AUD-001/AUD-005 work.
-    const linked = c.source_request_id == null ? [{rows:[]},{rows:[]},{rows:[]}] : await require('../services/p2pReadScope').withRead(req.user,async(client,actor,predicate)=>{
+    // and their historical balances remain separate AUD-001 work.
+    const linked = c.source_request_id == null ? [{rows:[]},{rows:[]},{rows:[]}] : await require('../services/p2pReadScope').withClientRead(pool,req.user,async(client,actor,predicate)=>{
       const query=(kind,table,columns)=>client.query(`SELECT ${columns} FROM ${table} financial_doc WHERE (to_jsonb(financial_doc)->>'contract_id')=$1::text AND financial_doc.request_id=$3 AND ${predicate(kind,'financial_doc','$2')}`,[String(contractId),actor.institute_id,c.source_request_id]);
       return Promise.all([query('purchaseOrder','purchase_orders','id,po_number,total_amount'),query('invoice','supplier_invoices','id,invoice_number,total_amount'),query('voucher','ap_vouchers','id,voucher_number,total_amount')]);
     },{requestId:c.source_request_id}).catch(error=>{if([403,404].includes(error.statusCode))return [{rows:[]},{rows:[]},{rows:[]}];throw error;});
@@ -3549,7 +2869,7 @@ const ensurePendingRenewalEvent = async (client, { contractId, renewalDate, noti
   }
 };
 const canMutateObligation = (req, row) => canManageContracts(req) || Number(row?.owner_user_id) === Number(req.user?.id);
-const listContractObligations = async (req,res,next)=>{ const contractId=Number(req.params.id); if(!Number.isInteger(contractId)) return next(createHttpError(400,'Invalid contract id')); try{ await ensureContractsPhaseFourTables(); const c=['contract_id=$1']; const v=[contractId];
+const listContractObligations = async (req,res,next)=>{ const contractId=Number(req.params.id); if(!Number.isInteger(contractId)) return next(createHttpError(400,'Invalid contract id')); try{ await ensureContractsPhaseFourTables(); const c=['contract_id=$1',contractBoundary.obligationScope()]; const v=[contractId];
   for (const [k,col] of [['status','status'],['owner_user_id','owner_user_id'],['obligation_type','obligation_type']]) if (req.query?.[k]) { v.push(req.query[k]); c.push(`${col}=$${v.length}`); }
   if (req.query?.due_from){ v.push(req.query.due_from); c.push(`due_date >= $${v.length}`);} if(req.query?.due_to){ v.push(req.query.due_to); c.push(`due_date <= $${v.length}`);}
   const {rows}=await pool.query(`SELECT * FROM contract_obligations WHERE ${c.join(' AND ')} ORDER BY due_date NULLS LAST, id DESC`,v); res.json(rows.map(withComputedOverdueStatus)); }catch(err){next(createHttpError(500,'Failed to list obligations'));}};
@@ -3566,20 +2886,21 @@ const patchContractObligation = async (req,res,next)=>{ if(!canManageContracts(r
     const {rows}=await pool.query(`UPDATE contract_obligations SET title=COALESCE($1,title),description=COALESCE($2,description),obligation_type=COALESCE($3,obligation_type),owner_user_id=COALESCE($4,owner_user_id),owner_department_id=COALESCE($5,owner_department_id),due_date=COALESCE($6,due_date),recurrence=COALESCE($7,recurrence),recurrence_interval=COALESCE($8,recurrence_interval),next_due_date=$9,evidence_required=COALESCE($10,evidence_required),evidence_document_id=COALESCE($11,evidence_document_id),priority=COALESCE($12,priority),status=COALESCE($13,status),updated_at=NOW() WHERE id=$14 RETURNING *`,
       [normalizeText(b.title)||null,normalizeText(b.description)||null,b.obligation_type||null,b.owner_user_id||null,b.owner_department_id||null,b.due_date||null,b.recurrence||null,b.recurrence_interval||null,nextDueDate,b.evidence_required,b.evidence_document_id||null,b.priority||null,b.status||null,obligationId]);
     await recordContractLog(pool,{contractId,action:'contract_obligation_updated',actorId:req.user?.id||null,details:{obligation_id:obligationId}}); res.json(withComputedOverdueStatus(rows[0])); }catch{ next(createHttpError(500,'Failed to update obligation')); }};
-const completeContractObligation = async (req,res,next)=>{ const contractId=Number(req.params.id),obligationId=Number(req.params.obligationId); const client=await pool.connect(); try{ await client.query('BEGIN'); const {rows}=await client.query('SELECT * FROM contract_obligations WHERE id=$1 AND contract_id=$2 FOR UPDATE',[obligationId,contractId]); if(!rows.length) return next(createHttpError(404,'Obligation not found')); const o=rows[0]; if(!canMutateObligation(req,o)) return next(createHttpError(403,'Not authorized'));
+const completeContractObligation = async (req,res,next)=>{ const contractId=Number(req.params.id),obligationId=Number(req.params.obligationId); const client=await pool.connect(); try{ await client.query('BEGIN'); const {rows}=await client.query('SELECT * FROM contract_obligations WHERE id=$1 AND contract_id=$2 FOR UPDATE',[obligationId,contractId]); if(!rows.length) return next(createHttpError(404,'Obligation not found')); const o=rows[0]; if(o.status==='completed'){ await client.query('COMMIT'); return res.json({message:'Obligation completed'}); } if(!canMutateObligation(req,o)) return next(createHttpError(403,'Not authorized'));
   await client.query(`UPDATE contract_obligations SET status='completed', completion_notes=$1, completed_at=NOW(), completed_by=$2, updated_at=NOW() WHERE id=$3`,[normalizeText(req.body?.completion_notes)||null,req.user?.id||null,obligationId]);
-  if(o.recurrence && o.recurrence!=='none' && o.next_due_date){ const n=calculateNextDueDate({dueDate:o.next_due_date,recurrence:o.recurrence,recurrenceInterval:o.recurrence_interval}); await client.query(`INSERT INTO contract_obligations (contract_id,title,description,obligation_type,owner_user_id,owner_department_id,due_date,recurrence,recurrence_interval,next_due_date,evidence_required,evidence_document_id,priority,status,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'open',$14)`,[o.contract_id,o.title,o.description,o.obligation_type,o.owner_user_id,o.owner_department_id,o.next_due_date,o.recurrence,o.recurrence_interval,n,o.evidence_required,o.evidence_document_id,o.priority,req.user?.id||null]); }
+  if(o.recurrence && o.recurrence!=='none' && o.next_due_date){ const n=calculateNextDueDate({dueDate:o.next_due_date,recurrence:o.recurrence,recurrenceInterval:o.recurrence_interval}); await client.query(`INSERT INTO contract_obligations (contract_id,title,description,obligation_type,owner_user_id,owner_department_id,due_date,recurrence,recurrence_interval,next_due_date,evidence_required,evidence_document_id,priority,status,created_by,generated_from_obligation_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'open',$14,$15) ON CONFLICT (generated_from_obligation_id) WHERE generated_from_obligation_id IS NOT NULL DO NOTHING`,[o.contract_id,o.title,o.description,o.obligation_type,o.owner_user_id,o.owner_department_id,o.next_due_date,o.recurrence,o.recurrence_interval,n,o.evidence_required,o.evidence_document_id,o.priority,req.user?.id||null,o.id]); }
   await recordContractLog(client,{contractId,action:'contract_obligation_completed',actorId:req.user?.id||null,details:{obligation_id:obligationId}}); await client.query('COMMIT'); res.json({message:'Obligation completed'});}catch(e){await client.query('ROLLBACK').catch(()=>{}); next(createHttpError(500,'Failed to complete obligation'));}finally{client.release();}};
 const waiveContractObligation = async (req,res,next)=>{ const contractId=Number(req.params.id),obligationId=Number(req.params.obligationId); if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); try{ const {rows}=await pool.query(`UPDATE contract_obligations SET status='waived', completion_notes=$1, updated_at=NOW() WHERE id=$2 AND contract_id=$3 RETURNING *`,[normalizeText(req.body?.notes)||null,obligationId,contractId]); if(!rows.length) return next(createHttpError(404,'Obligation not found')); await recordContractLog(pool,{contractId,action:'contract_obligation_waived',actorId:req.user?.id||null,details:{obligation_id:obligationId}}); res.json(rows[0]); }catch{ next(createHttpError(500,'Failed')); }};
 const cancelContractObligation = async (req,res,next)=>{ const contractId=Number(req.params.id),obligationId=Number(req.params.obligationId); if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); try{ const {rows}=await pool.query(`UPDATE contract_obligations SET status='cancelled', completion_notes=$1, updated_at=NOW() WHERE id=$2 AND contract_id=$3 RETURNING *`,[normalizeText(req.body?.notes)||null,obligationId,contractId]); if(!rows.length) return next(createHttpError(404,'Obligation not found')); await recordContractLog(pool,{contractId,action:'contract_obligation_cancelled',actorId:req.user?.id||null,details:{obligation_id:obligationId}}); res.json(rows[0]); }catch{ next(createHttpError(500,'Failed')); }};
-const listDueSoonContractObligations = async (req,res,next)=>{ try{ await ensureContractsPhaseFourTables(); const days=Math.max(1,Number(req.query?.days)||30); const {rows}=await pool.query(`SELECT * FROM contract_obligations WHERE status IN ('open','in_progress','overdue') AND due_date IS NOT NULL AND due_date <= CURRENT_DATE + ($1::int * INTERVAL '1 day') ORDER BY due_date ASC`,[days]); res.json(rows.map(withComputedOverdueStatus)); }catch{ next(createHttpError(500,'Failed')); }};
+const listDueSoonContractObligations = async (req,res,next)=>{ try{ await ensureContractsPhaseFourTables(); const days=Math.max(1,Number(req.query?.days)||30); const {rows}=await pool.query(`SELECT * FROM contract_obligations WHERE contract_id IN (SELECT c.id FROM contracts c WHERE ${contractBoundary.scope('c')}) AND ${contractBoundary.obligationScope()} AND status IN ('open','in_progress','overdue') AND due_date IS NOT NULL AND due_date <= CURRENT_DATE + ($1::int * INTERVAL '1 day') ORDER BY due_date ASC`,[days]); res.json(rows.map(withComputedOverdueStatus)); }catch{ next(createHttpError(500,'Failed')); }};
 const listContractRenewalEvents = async (req,res,next)=>{ const contractId=Number(req.params.id); try{ await ensureContractsPhaseFourTables(); const {rows}=await pool.query('SELECT * FROM contract_renewal_events WHERE contract_id=$1 ORDER BY renewal_date DESC NULLS LAST',[contractId]); res.json(rows);}catch{next(createHttpError(500,'Failed'));}};
 const createContractRenewalEvent = async (req,res,next)=>{ if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); const contractId=Number(req.params.id); const b=req.body||{}; try{ const nd=Number(b.notice_days||90); const ad=b.renewal_date?addDaysToDate(b.renewal_date,-nd):null; const {rows}=await pool.query(`INSERT INTO contract_renewal_events (contract_id,renewal_type,renewal_date,notice_days,alert_date,status,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,[contractId,normalizeText(b.renewal_type)||null,b.renewal_date||null,nd,ad,normalizeText(b.status||'pending').toLowerCase(),req.user?.id||null]); await recordContractLog(pool,{contractId,action:'contract_renewal_event_created',actorId:req.user?.id||null,details:{renewal_event_id:rows[0].id}}); res.status(201).json(rows[0]); }catch{ next(createHttpError(500,'Failed')); }};
 const updateContractRenewalEvent = async (req,res,next)=>{ if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); const contractId=Number(req.params.id), renewalEventId=Number(req.params.renewalEventId); const b=req.body||{}; try{ const nd=Number(b.notice_days||90); const ad=b.renewal_date?addDaysToDate(b.renewal_date,-nd):null; const {rows}=await pool.query(`UPDATE contract_renewal_events SET renewal_type=COALESCE($1,renewal_type),renewal_date=COALESCE($2,renewal_date),notice_days=COALESCE($3,notice_days),alert_date=COALESCE($4,alert_date),status=COALESCE($5,status),decision_notes=COALESCE($6,decision_notes),updated_at=NOW() WHERE id=$7 AND contract_id=$8 RETURNING *`,[normalizeText(b.renewal_type)||null,b.renewal_date||null,b.notice_days||null,ad,b.status||null,normalizeText(b.decision_notes)||null,renewalEventId,contractId]); if(!rows.length) return next(createHttpError(404,'Renewal event not found')); await recordContractLog(pool,{contractId,action:'contract_renewal_event_updated',actorId:req.user?.id||null,details:{renewal_event_id:renewalEventId}}); res.json(rows[0]); }catch{ next(createHttpError(500,'Failed')); }};
 const decideContractRenewalEvent = async (req,res,next)=>{ if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); const contractId=Number(req.params.id), renewalEventId=Number(req.params.renewalEventId); const d=normalizeText(req.body?.decision).toLowerCase(); const map={renew:'renewed',do_not_renew:'not_renewed',renegotiate:'under_review',terminate:'completed',extend_temporarily:'under_review'}; if(!RENEWAL_DECISIONS.includes(d)) return next(createHttpError(400,'Invalid decision')); try{ const {rows}=await pool.query(`UPDATE contract_renewal_events SET decision=$1,decision_notes=$2,decided_by=$3,decided_at=NOW(),status=$4,updated_at=NOW() WHERE id=$5 AND contract_id=$6 RETURNING *`,[d,normalizeText(req.body?.decision_notes)||null,req.user?.id||null,map[d],renewalEventId,contractId]); if(!rows.length) return next(createHttpError(404,'Renewal event not found')); await recordContractLog(pool,{contractId,action:'contract_renewal_decision_recorded',actorId:req.user?.id||null,details:{renewal_event_id:renewalEventId,decision:d}}); res.json(rows[0]); }catch{ next(createHttpError(500,'Failed')); }};
-const listDueSoonContractRenewals = async (req,res,next)=>{ try{ const days=Math.max(1,Number(req.query?.days)||90); const {rows}=await pool.query(`SELECT * FROM contract_renewal_events WHERE alert_date IS NOT NULL AND alert_date <= CURRENT_DATE + ($1::int * INTERVAL '1 day') ORDER BY alert_date ASC`,[days]); res.json(rows);}catch{ next(createHttpError(500,'Failed')); }};
-const ensureContractsPhaseSixTables = (()=>{let ensured=false,p=null; return async()=>{ if(ensured) return; if(!p) p=(async()=>{ await pool.query(`CREATE TABLE IF NOT EXISTS contract_risk_assessments (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, risk_score INTEGER NOT NULL DEFAULT 0, risk_level TEXT NOT NULL DEFAULT 'low', risk_factors JSONB NOT NULL DEFAULT '[]'::jsonb, assessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), assessed_by BIGINT REFERENCES users(id) ON DELETE SET NULL, assessment_source TEXT NOT NULL DEFAULT 'system', notes TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), CONSTRAINT contract_risk_assessments_level_check CHECK (risk_level IN ('low','medium','high','critical')), CONSTRAINT contract_risk_assessments_source_check CHECK (assessment_source IN ('system','manual','ai','scheduled')))`); await pool.query(`CREATE INDEX IF NOT EXISTS contract_risk_assessments_contract_id_idx ON contract_risk_assessments(contract_id)`); await pool.query(`CREATE INDEX IF NOT EXISTS contract_risk_assessments_risk_level_idx ON contract_risk_assessments(risk_level)`); await pool.query(`CREATE INDEX IF NOT EXISTS contract_risk_assessments_assessed_at_idx ON contract_risk_assessments(assessed_at DESC)`); ensured=true; })().finally(()=>p=null); await p; };})();
-const ensureContractsPhaseSevenTables = (()=>{let ensured=false,p=null; return async()=>{ if(ensured) return; if(!p) p=(async()=>{ await pool.query(`CREATE TABLE IF NOT EXISTS contract_ai_extractions (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, document_id BIGINT REFERENCES contract_documents(id) ON DELETE SET NULL, document_version_id BIGINT REFERENCES contract_document_versions(id) ON DELETE SET NULL, extraction_status TEXT NOT NULL DEFAULT 'pending', provider TEXT, model TEXT, extracted_parties JSONB NOT NULL DEFAULT '{}'::jsonb, extracted_dates JSONB NOT NULL DEFAULT '{}'::jsonb, extracted_value JSONB NOT NULL DEFAULT '{}'::jsonb, extracted_payment_terms JSONB NOT NULL DEFAULT '{}'::jsonb, extracted_renewal_clause JSONB NOT NULL DEFAULT '{}'::jsonb, extracted_termination_clause JSONB NOT NULL DEFAULT '{}'::jsonb, extracted_obligations JSONB NOT NULL DEFAULT '[]'::jsonb, extracted_risks JSONB NOT NULL DEFAULT '[]'::jsonb, summary TEXT, confidence_score NUMERIC(5,2), raw_json JSONB NOT NULL DEFAULT '{}'::jsonb, error_message TEXT, created_by BIGINT REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), CONSTRAINT contract_ai_extractions_status_check CHECK (extraction_status IN ('pending','processing','completed','failed','skipped')))`); await pool.query(`CREATE INDEX IF NOT EXISTS contract_ai_extractions_contract_id_idx ON contract_ai_extractions(contract_id)`); await pool.query(`CREATE INDEX IF NOT EXISTS contract_ai_extractions_status_idx ON contract_ai_extractions(extraction_status)`); ensured=true; })().finally(()=>p=null); await p; };})();
+const listDueSoonContractRenewals = async (req,res,next)=>{ try{ const days=Math.max(1,Number(req.query?.days)||90); const {rows}=await pool.query(`SELECT * FROM contract_renewal_events WHERE contract_id IN (SELECT c.id FROM contracts c WHERE ${contractBoundary.scope('c')}) AND alert_date IS NOT NULL AND alert_date <= CURRENT_DATE + ($1::int * INTERVAL '1 day') ORDER BY alert_date ASC`,[days]); res.json(rows);}catch{ next(createHttpError(500,'Failed')); }};
+const ensureContractsPhaseSixTables = contractBoundary.ensureSchema;
+
+const ensureContractsPhaseSevenTables = contractBoundary.ensureSchema;
 const hasAiProviderConfig = ()=>Boolean(process.env.OPENAI_API_KEY || (process.env.AI_PROVIDER && process.env.AI_MODEL));
 const runAiExtractionPlaceholder = async ({ contractId }) => ({ provider: process.env.AI_PROVIDER || 'placeholder', model: process.env.AI_MODEL || 'placeholder', summary: `AI extraction placeholder for contract ${contractId}.`, extracted_parties:{}, extracted_dates:{}, extracted_value:{}, extracted_payment_terms:{}, extracted_renewal_clause:{}, extracted_termination_clause:{}, extracted_obligations:[], extracted_risks:[], raw_json:{ placeholder:true }, confidence_score:null });
 const factor=(code,label,severity,points,explanation,recommended_action)=>({code,label,severity,points,explanation,recommended_action});
@@ -3609,41 +2930,8 @@ const INVOICE_STATUSES = ['pending','under_review','approved','partially_paid','
 const MATCHING_STATUSES = ['not_checked','matched','warning','failed'];
 const PAYMENT_STATUSES = ['pending','approved','paid','rejected','cancelled'];
 const CONSUMPTION_SOURCES = ['manual','invoice','purchase_order','goods_receipt','service_entry','adjustment'];
-const ensureContractsPhaseFiveTables = (() => { let ensured=false; let p=null; return async()=>{ if(ensured) return; if(!p) p=(async()=>{
-  await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_invoices (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, supplier_id BIGINT, invoice_number TEXT NOT NULL, invoice_date DATE, due_date DATE, received_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0, discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0, retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0, penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0, net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', matching_status TEXT NOT NULL DEFAULT 'not_checked', matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb, notes TEXT, document_id BIGINT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS supplier_id BIGINT`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS invoice_number TEXT`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS invoice_date DATE`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS due_date DATE`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS received_date DATE`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS retention_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS penalty_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS net_payable_amount NUMERIC(18,2) NOT NULL DEFAULT 0`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS matching_status TEXT NOT NULL DEFAULT 'not_checked'`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS matching_flags JSONB NOT NULL DEFAULT '[]'::jsonb`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS notes TEXT`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS document_id BIGINT`);
-  await runEnsureDdl(`ALTER TABLE contract_invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-  await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_payments (id BIGSERIAL PRIMARY KEY, contract_id BIGINT REFERENCES contracts(id) ON DELETE SET NULL, invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, payment_reference TEXT, payment_date DATE, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', method TEXT, status TEXT NOT NULL DEFAULT 'pending', notes TEXT, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL`);
-  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS payment_reference TEXT`);
-  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS method TEXT`);
-  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`);
-  await runEnsureDdl(`ALTER TABLE contract_payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-  await runEnsureDdl(`CREATE TABLE IF NOT EXISTS contract_consumption (id BIGSERIAL PRIMARY KEY, contract_id BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE, source_type TEXT NOT NULL DEFAULT 'manual', source_id BIGINT, consumption_date DATE NOT NULL DEFAULT CURRENT_DATE, description TEXT, amount NUMERIC(18,2) NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'IQD', invoice_id BIGINT REFERENCES contract_invoices(id) ON DELETE SET NULL, created_by BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  for (const q of [`CREATE INDEX IF NOT EXISTS contract_invoices_contract_id_idx ON contract_invoices(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_supplier_id_idx ON contract_invoices(supplier_id)`,`CREATE INDEX IF NOT EXISTS contract_invoices_invoice_number_idx ON contract_invoices(invoice_number)`,`CREATE INDEX IF NOT EXISTS contract_invoices_status_idx ON contract_invoices(status)`,`CREATE INDEX IF NOT EXISTS contract_invoices_matching_status_idx ON contract_invoices(matching_status)`,`CREATE INDEX IF NOT EXISTS contract_payments_contract_id_idx ON contract_payments(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_invoice_id_idx ON contract_payments(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_payments_status_idx ON contract_payments(status)`,`CREATE INDEX IF NOT EXISTS contract_consumption_contract_id_idx ON contract_consumption(contract_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_invoice_id_idx ON contract_consumption(invoice_id)`,`CREATE INDEX IF NOT EXISTS contract_consumption_consumption_date_idx ON contract_consumption(consumption_date)`]) await runEnsureDdl(q);
-  ensured=true; })().finally(()=>p=null); await p; };})();
-const evaluateContractInvoiceMatching = ({invoice, contract, previousInvoices=[], payments=[]}) => { const flags=[]; const amt=Number(invoice.amount||0), retention=Number(invoice.retention_amount||0), penalty=Number(invoice.penalty_amount||0), tax=Number(invoice.tax_amount||0), discount=Number(invoice.discount_amount||0); const net=Number((amt+tax-discount-retention-penalty).toFixed(2));
- if(!contract) flags.push('missing_contract'); if(!invoice.supplier_id) flags.push('missing_supplier'); if(!invoice.invoice_date) flags.push('missing_invoice_date'); if(amt<=0) flags.push('negative_or_zero_invoice_amount'); if(retention>amt) flags.push('retention_amount_exceeds_invoice'); if(penalty>amt) flags.push('penalty_amount_exceeds_invoice');
- if(invoice.due_date && invoice.invoice_date && new Date(invoice.due_date)<new Date(invoice.invoice_date)) flags.push('due_date_before_invoice_date');
- if(previousInvoices.some(i=>i.invoice_number===invoice.invoice_number && Number(i.supplier_id||0)===Number(invoice.supplier_id||0) && Number(i.id||0)!==Number(invoice.id||0))) flags.push('duplicate_invoice_number');
- if(contract){ if(contract.end_date && invoice.invoice_date && new Date(invoice.invoice_date)>new Date(contract.end_date)) flags.push('expired_contract_billing'); if(!['active','expiring_soon','renewed'].includes(contract.status)) flags.push('inactive_or_invalid_contract_status'); if(contract.currency && invoice.currency && contract.currency!==invoice.currency) flags.push('currency_mismatch'); const cv=Number(contract.contract_value||0); const sum=previousInvoices.filter(i=>!['cancelled','rejected'].includes(i.status)).reduce((s,i)=>s+Number(i.net_payable_amount||0),0); const remaining=cv-sum; if(cv>0 && net>cv) flags.push('invoice_exceeds_contract_value'); if(cv>0 && net>remaining) flags.push('invoice_exceeds_remaining_contract_value'); if(contract.payment_period && invoice.invoice_date && invoice.due_date){ const maxDays=parseInt(String(contract.payment_period).match(/\d+/)?.[0]||'0',10); if(maxDays>0 && (new Date(invoice.due_date)-new Date(invoice.invoice_date))/86400000>maxDays) flags.push('payment_terms_exceeded'); } }
- const paid=payments.filter(p=>p.status==='paid').reduce((s,p)=>s+Number(p.amount||0),0); if(net>0 && paid>=net) flags.push('already_fully_paid');
- const severe=['duplicate_invoice_number','missing_contract','invoice_exceeds_contract_value','invoice_exceeds_remaining_contract_value','negative_or_zero_invoice_amount','retention_amount_exceeds_invoice','penalty_amount_exceeds_invoice']; const warning=['expired_contract_billing','inactive_or_invalid_contract_status','currency_mismatch','missing_invoice_date','due_date_before_invoice_date','payment_terms_exceeded','missing_supplier'];
- const status=flags.some(f=>severe.includes(f))?'failed':(flags.some(f=>warning.includes(f))?'warning':'matched'); return { matching_status: status, matching_flags: flags, net_payable_amount: net }; };
+const ensureContractsPhaseFiveTables = contractBoundary.ensureSchema;
+
 const listContractInvoices = async (req,res,next)=>{ try{ await ensureContractsPhaseFiveTables(); const {rows}=await pool.query('SELECT * FROM contract_invoices WHERE contract_id=$1 ORDER BY created_at DESC',[Number(req.params.id)]); res.json(rows);}catch{next(createHttpError(500,'Failed'));}};
 const createContractInvoice = async (req,res,next)=>{ if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); const contractId=Number(req.params.id); const b=req.body||{}; if(!normalizeText(b.invoice_number)) return next(createHttpError(400,'invoice_number required')); if(Number(b.amount)<=0) return next(createHttpError(400,'amount must be > 0')); try{ await ensureContractsPhaseFiveTables(); const {rows:c}=await pool.query('SELECT * FROM contracts WHERE id=$1',[contractId]); const contract=c[0]||null; const supplierId=b.supplier_id || contract?.supplier_id || null; const dueDate=b.due_date || null; const invoice={...b,contract_id:contractId,supplier_id:supplierId,due_date:dueDate}; const {rows:prev}=await pool.query('SELECT * FROM contract_invoices WHERE contract_id=$1',[contractId]); const match=evaluateContractInvoiceMatching({invoice,contract,previousInvoices:prev,payments:[]}); const {rows}=await pool.query(`INSERT INTO contract_invoices (contract_id,supplier_id,invoice_number,invoice_date,due_date,received_date,amount,currency,tax_amount,discount_amount,retention_amount,penalty_amount,net_payable_amount,status,matching_status,matching_flags,notes,document_id,created_by,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,NOW()) RETURNING *`,[contractId,supplierId,normalizeText(b.invoice_number),b.invoice_date||null,dueDate,b.received_date||null,b.amount,b.currency||contract?.currency||'IQD',b.tax_amount||0,b.discount_amount||0,b.retention_amount||0,b.penalty_amount||0,match.net_payable_amount,b.status||'pending',match.matching_status,JSON.stringify(match.matching_flags),normalizeText(b.notes)||null,b.document_id||null,req.user?.id||null]); await recordContractLog(pool,{contractId,action:'contract_invoice_created',actorId:req.user?.id||null,details:{invoice_id:rows[0].id,matching_status:match.matching_status}}); res.status(201).json(rows[0]); }catch(e){next(createHttpError(500,'Failed'));}};
 const getContractInvoice = async (req,res,next)=>{ const contractId=Number(req.params.id), invoiceId=Number(req.params.invoiceId); try{ const {rows}=await pool.query('SELECT * FROM contract_invoices WHERE id=$1 AND contract_id=$2',[invoiceId,contractId]); if(!rows.length) return next(createHttpError(404,'Invoice not found')); const pays=await pool.query('SELECT * FROM contract_payments WHERE invoice_id=$1 ORDER BY created_at DESC',[invoiceId]); const cons=await pool.query('SELECT * FROM contract_consumption WHERE invoice_id=$1 ORDER BY consumption_date DESC',[invoiceId]); res.json({...rows[0],payments:pays.rows,consumption:cons.rows}); }catch{next(createHttpError(500,'Failed'));}};
@@ -3660,19 +2948,23 @@ const updateContractPaymentStatus = async (req,res,next)=>{ if(!canManageContrac
 const listContractConsumptionEntries = async (req,res,next)=>{ try{ const {rows}=await pool.query('SELECT c.*, i.invoice_number FROM contract_consumption c LEFT JOIN contract_invoices i ON i.id=c.invoice_id WHERE c.contract_id=$1 ORDER BY c.consumption_date DESC',[Number(req.params.id)]); res.json(rows);}catch{next(createHttpError(500,'Failed'));}};
 const createContractConsumptionEntry = async (req,res,next)=>{ if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); const contractId=Number(req.params.id), b=req.body||{}; if(Number(b.amount)<=0) return next(createHttpError(400,'amount must be > 0')); if(b.source_type && !CONSUMPTION_SOURCES.includes(b.source_type)) return next(createHttpError(400,'Invalid source_type')); try{ const {rows}=await pool.query(`INSERT INTO contract_consumption (contract_id,source_type,source_id,consumption_date,description,amount,currency,invoice_id,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,[contractId,b.source_type||'manual',b.source_id||null,b.consumption_date||null,normalizeText(b.description)||null,b.amount,b.currency||'IQD',b.invoice_id||null,req.user?.id||null]); await pool.query('UPDATE contracts SET actual_consumed_value = COALESCE((SELECT SUM(amount) FROM contract_consumption WHERE contract_id=$1),0), updated_at=NOW() WHERE id=$1',[contractId]); await recordContractLog(pool,{contractId,action:'contract_consumption_created',actorId:req.user?.id||null,details:{consumption_id:rows[0].id}}); res.status(201).json(rows[0]); }catch{next(createHttpError(500,'Failed'));}};
 const getContractFinancialSummary = async (req,res,next)=>{ const contractId=Number(req.params.id); try{ const c=(await pool.query('SELECT id, contract_value, currency FROM contracts WHERE id=$1',[contractId])).rows[0]; if(!c) return next(createHttpError(404,'Contract not found')); const inv=(await pool.query("SELECT * FROM contract_invoices WHERE contract_id=$1",[contractId])).rows; const pay=(await pool.query("SELECT * FROM contract_payments WHERE contract_id=$1",[contractId])).rows; const cons=(await pool.query("SELECT * FROM contract_consumption WHERE contract_id=$1",[contractId])).rows; const totalInvoiced=inv.reduce((s,i)=>s+Number(i.amount||0),0); const totalApproved=inv.filter(i=>['approved','partially_paid','paid'].includes(i.status)).reduce((s,i)=>s+Number(i.net_payable_amount||0),0); const totalPaid=pay.filter(p=>p.status==='paid').reduce((s,p)=>s+Number(p.amount||0),0); const totalConsumed=cons.reduce((s,x)=>s+Number(x.amount||0),0); res.json({contract_value:Number(c.contract_value||0),currency:c.currency||'IQD',total_invoiced:totalInvoiced,total_approved_invoiced:totalApproved,total_paid:totalPaid,total_consumed:totalConsumed,remaining_contract_value:Number(c.contract_value||0)-inv.filter(i=>!['cancelled','rejected'].includes(i.status)).reduce((s,i)=>s+Number(i.net_payable_amount||0),0),open_invoice_count:inv.filter(i=>['pending','under_review','approved','partially_paid'].includes(i.status)).length,disputed_invoice_count:inv.filter(i=>i.status==='disputed').length,matching_failed_count:inv.filter(i=>i.matching_status==='failed').length,matching_warning_count:inv.filter(i=>i.matching_status==='warning').length,payment_status_summary:pay.reduce((a,p)=>((a[p.status]=(a[p.status]||0)+1),a),{})}); }catch{next(createHttpError(500,'Failed'));}};
-const recalculateContractRisk = async (req,res,next)=>{ if(!canManageContracts(req)) return next(createHttpError(403,'Not authorized')); req.query={...(req.query||{}),persist:'true'}; const origJson=res.json.bind(res); res.json=async(data)=>{ await recordContractLog(pool,{contractId:Number(req.params.id),action:'contract_risk_recalculated',actorId:req.user?.id||null,details:{score:data.risk_score,level:data.risk_level,factor_count:(data.risk_factors||[]).length,notes:normalizeText(req.body?.notes)||null}}); return origJson(data); }; return getContractRisk(req,res,next); };
+const recalculateContractRisk = async (req,res,next)=>{
+  req.query={...(req.query||{}),persist:'true'};
+  await getContractRisk(req,res,next);
+  await recordContractLog(pool,{contractId:Number(req.params.id),action:'contract_risk_recalculated',actorId:req.user.id,details:{notes:normalizeText(req.body?.notes)||null}});
+};
 const getContractRiskHistory = async (req,res,next)=>{ try{ await ensureContractsPhaseSixTables(); const {rows}=await pool.query('SELECT * FROM contract_risk_assessments WHERE contract_id=$1 ORDER BY assessed_at DESC',[Number(req.params.id)]); res.json(rows);}catch{next(createHttpError(500,'Failed'));}};
-const getContractRiskDashboard = async (req,res,next)=>{ try{ await ensureContractsPhaseSixTables(); const limit=Math.max(1,Math.min(50,Number(req.query?.limit)||10)); const cond=[]; const vals=[]; if(req.query?.department_id){vals.push(req.query.department_id); cond.push(`c.end_user_department_id=$${vals.length}`);} if(req.query?.supplier_id){vals.push(req.query.supplier_id); cond.push(`c.supplier_id=$${vals.length}`);} if(req.query?.status){vals.push(req.query.status); cond.push(`c.status=$${vals.length}`);} const where=cond.length?`WHERE ${cond.join(' AND ')}`:''; const {rows}=await pool.query(`SELECT a.*, c.title, c.status AS contract_status FROM contract_risk_assessments a JOIN LATERAL (SELECT * FROM contract_risk_assessments x WHERE x.contract_id=a.contract_id ORDER BY x.assessed_at DESC LIMIT 1) z ON z.id=a.id JOIN contracts c ON c.id=a.contract_id ${where}` , vals); const filtered=req.query?.risk_level?rows.filter(r=>r.risk_level===req.query.risk_level):rows; const total=filtered.length||0; const count=l=>filtered.filter(r=>r.risk_level===l).length; const avg=total?Number((filtered.reduce((s,r)=>s+Number(r.risk_score||0),0)/total).toFixed(2)):0; const top=[...filtered].sort((a,b)=>Number(b.risk_score)-Number(a.risk_score)).slice(0,limit); const freq={}; for(const r of filtered){ for(const f of (Array.isArray(r.risk_factors)?r.risk_factors:[])) freq[f.code]=(freq[f.code]||0)+1; } const common=Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([code,count])=>({code,count}));
+const getContractRiskDashboard = async (req,res,next)=>{ try{ await ensureContractsPhaseSixTables(); const limit=Math.max(1,Math.min(50,Number(req.query?.limit)||10)); const cond=[contractBoundary.scope('c')]; const vals=[]; if(req.query?.department_id){vals.push(req.query.department_id); cond.push(`c.end_user_department_id=$${vals.length}`);} if(req.query?.supplier_id){vals.push(req.query.supplier_id); cond.push(`c.supplier_id=$${vals.length}`);} if(req.query?.status){vals.push(req.query.status); cond.push(`c.status=$${vals.length}`);} const where=cond.length?`WHERE ${cond.join(' AND ')}`:''; const {rows}=await pool.query(`SELECT a.*, c.title, c.status AS contract_status FROM contract_risk_assessments a JOIN LATERAL (SELECT * FROM contract_risk_assessments x WHERE x.contract_id=a.contract_id ORDER BY x.assessed_at DESC LIMIT 1) z ON z.id=a.id JOIN contracts c ON c.id=a.contract_id ${where}` , vals); const filtered=req.query?.risk_level?rows.filter(r=>r.risk_level===req.query.risk_level):rows; const total=filtered.length||0; const count=l=>filtered.filter(r=>r.risk_level===l).length; const avg=total?Number((filtered.reduce((s,r)=>s+Number(r.risk_score||0),0)/total).toFixed(2)):0; const top=[...filtered].sort((a,b)=>Number(b.risk_score)-Number(a.risk_score)).slice(0,limit); const freq={}; for(const r of filtered){ for(const f of (Array.isArray(r.risk_factors)?r.risk_factors:[])) freq[f.code]=(freq[f.code]||0)+1; } const common=Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([code,count])=>({code,count}));
     res.json({total_contracts:total,low_count:count('low'),medium_count:count('medium'),high_count:count('high'),critical_count:count('critical'),average_risk_score:avg,top_risky_contracts:top,most_common_risk_factors:common,financial_risk_count:common.filter(x=>x.code.includes('invoice')||x.code.includes('consumed')||x.code.includes('payment')).reduce((s,x)=>s+x.count,0),obligation_risk_count:common.filter(x=>x.code.includes('obligation')).reduce((s,x)=>s+x.count,0),document_risk_count:common.filter(x=>x.code.includes('document')).reduce((s,x)=>s+x.count,0),renewal_risk_count:common.filter(x=>x.code.includes('renewal')||x.code.includes('expiring')).reduce((s,x)=>s+x.count,0)}); }catch{next(createHttpError(500,'Failed'));}};
-const listHighRiskContracts = async (req,res,next)=>{ try{ const {rows}=await pool.query(`SELECT a.*, c.title FROM contract_risk_assessments a JOIN LATERAL (SELECT * FROM contract_risk_assessments x WHERE x.contract_id=a.contract_id ORDER BY x.assessed_at DESC LIMIT 1) z ON z.id=a.id JOIN contracts c ON c.id=a.contract_id WHERE a.risk_level IN ('high','critical') ORDER BY a.risk_score DESC`); res.json(rows.map(r=>({...r,main_factors:(r.risk_factors||[]).slice(0,3)}))); }catch{ next(createHttpError(500,'Failed')); }};
+const listHighRiskContracts = async (req,res,next)=>{ try{ const {rows}=await pool.query(`SELECT a.*, c.title FROM contract_risk_assessments a JOIN LATERAL (SELECT * FROM contract_risk_assessments x WHERE x.contract_id=a.contract_id ORDER BY x.assessed_at DESC LIMIT 1) z ON z.id=a.id JOIN contracts c ON c.id=a.contract_id WHERE ${contractBoundary.scope('c')} AND a.risk_level IN ('high','critical') ORDER BY a.risk_score DESC`); res.json(rows.map(r=>({...r,main_factors:(r.risk_factors||[]).slice(0,3)}))); }catch{ next(createHttpError(500,'Failed')); }};
 const requestContractAiExtraction = async (req,res,next)=>{ const contractId=Number(req.params.id); if(!Number.isInteger(contractId)) return next(createHttpError(400,'Invalid contract id')); let client; try{ await ensureContractsPhaseSevenTables(); client=await pool.connect(); await client.query('BEGIN'); const {rows:contracts}=await client.query('SELECT id FROM contracts WHERE id=$1',[contractId]); if(!contracts.length) return next(createHttpError(404,'Contract not found'));
   const base=[contractId, req.body?.document_id||null, req.body?.document_version_id||null, req.user?.id||null];
-  if(!hasAiProviderConfig()){ const {rows}=await client.query(`INSERT INTO contract_ai_extractions (contract_id,document_id,document_version_id,extraction_status,error_message,created_by,updated_at) VALUES ($1,$2,$3,'skipped',$4,$5,NOW()) RETURNING *`,[...base,'AI extraction is prepared but no provider is configured yet.']); await recordContractLog(client,{contractId,action:'contract_ai_extraction_skipped',actorId:req.user?.id||null,details:{extraction_id:rows[0].id}}); await client.query('COMMIT'); return res.status(501).json({message:'AI extraction is prepared but no provider is configured yet.', extraction:rows[0]}); }
+  if(!hasAiProviderConfig()){ const {rows}=await client.query(`INSERT INTO contract_ai_extractions (contract_id,document_id,document_version_id,extraction_status,error_message,created_by,updated_at) VALUES ($1,$2,$3,'skipped',$4,$5,NOW()) RETURNING *`,[base[0],base[1],base[2],'AI extraction is prepared but no provider is configured yet.',base[3]]); await recordContractLog(client,{contractId,action:'contract_ai_extraction_skipped',actorId:req.user?.id||null,details:{extraction_id:rows[0].id}}); await client.query('COMMIT'); return res.status(501).json({message:'AI extraction is prepared but no provider is configured yet.', extraction:rows[0]}); }
   const pending=(await client.query(`INSERT INTO contract_ai_extractions (contract_id,document_id,document_version_id,extraction_status,created_by,updated_at) VALUES ($1,$2,$3,'processing',$4,NOW()) RETURNING *`,base)).rows[0]; await recordContractLog(client,{contractId,action:'contract_ai_extraction_requested',actorId:req.user?.id||null,details:{extraction_id:pending.id}});
   const result=await runAiExtractionPlaceholder({contractId,documentId:pending.document_id,documentVersionId:pending.document_version_id});
   const completed=(await client.query(`UPDATE contract_ai_extractions SET extraction_status='completed',provider=$1,model=$2,extracted_parties=$3::jsonb,extracted_dates=$4::jsonb,extracted_value=$5::jsonb,extracted_payment_terms=$6::jsonb,extracted_renewal_clause=$7::jsonb,extracted_termination_clause=$8::jsonb,extracted_obligations=$9::jsonb,extracted_risks=$10::jsonb,summary=$11,confidence_score=$12,raw_json=$13::jsonb,updated_at=NOW() WHERE id=$14 RETURNING *`,[result.provider,result.model,JSON.stringify(result.extracted_parties||{}),JSON.stringify(result.extracted_dates||{}),JSON.stringify(result.extracted_value||{}),JSON.stringify(result.extracted_payment_terms||{}),JSON.stringify(result.extracted_renewal_clause||{}),JSON.stringify(result.extracted_termination_clause||{}),JSON.stringify(result.extracted_obligations||[]),JSON.stringify(result.extracted_risks||[]),result.summary||null,result.confidence_score,JSON.stringify(result.raw_json||{}),pending.id])).rows[0];
   await recordContractLog(client,{contractId,action:'contract_ai_extraction_completed',actorId:req.user?.id||null,details:{extraction_id:completed.id}}); await client.query('COMMIT'); res.status(201).json(completed);
- }catch(err){ if(client) await client.query('ROLLBACK').catch(()=>{}); try{ if(client){ await client.query(`INSERT INTO contract_ai_extractions (contract_id,document_id,document_version_id,extraction_status,error_message,created_by,updated_at) VALUES ($1,$2,$3,'failed',$4,$5,NOW())`,[Number(req.params.id)||null,req.body?.document_id||null,req.body?.document_version_id||null,err?.message||'Extraction failed',req.user?.id||null]); await recordContractLog(client,{contractId:Number(req.params.id)||null,action:'contract_ai_extraction_failed',actorId:req.user?.id||null,details:{error:err?.message||'Extraction failed'}}); } } catch(_){} next(createHttpError(500,'Failed to request AI extraction')); } finally { if(client) client.release(); }};
+ }catch(err){ if(client) await client.query('ROLLBACK').catch(()=>{}); next(err); } finally { if(client) client.release(); }};
 const listContractAiExtractions = async (req,res,next)=>{ try{ await ensureContractsPhaseSevenTables(); const {rows}=await pool.query('SELECT * FROM contract_ai_extractions WHERE contract_id=$1 ORDER BY created_at DESC',[Number(req.params.id)]); res.json(rows);}catch{next(createHttpError(500,'Failed'));}};
 const getContractAiExtractionById = async (req,res,next)=>{ try{ await ensureContractsPhaseSevenTables(); const {rows}=await pool.query('SELECT * FROM contract_ai_extractions WHERE contract_id=$1 AND id=$2',[Number(req.params.id),Number(req.params.extractionId)]); if(!rows.length) return next(createHttpError(404,'Extraction not found')); res.json(rows[0]);}catch{next(createHttpError(500,'Failed'));}};
 
@@ -3756,3 +3048,7 @@ module.exports = {
     reconcileContractApprovalWorkflow,
   },
 };
+for (const [name, handler] of Object.entries(module.exports)) {
+  if (typeof handler === 'function' && !['getContractAttachments','uploadContractAttachment','deleteContractAttachment'].includes(name))
+    module.exports[name] = contractBoundary.wrap(name, handler);
+}

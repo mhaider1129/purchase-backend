@@ -4,9 +4,9 @@ test('Contract resolution fails closed unless all known ownership signals match 
   const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
   await new ContractEquipmentCoverageRepository(db).contract(3, 7);
   const [sql, params] = db.query.mock.calls[0];
-  expect(sql).toContain('COALESCE(creator.institute_id,owner_department.institute_id,manager.institute_id)=$2');
-  expect(sql).toContain('(creator.institute_id IS NULL OR creator.institute_id=$2)');
-  expect(sql).toContain('(owner_department.institute_id IS NULL OR owner_department.institute_id=$2)');
+  expect(sql).toContain(require('../services/contractAuthorizationService').ownership('c'));
+  expect(sql).toContain(require('../services/contractAuthorizationService').ownerSql('c')+'=$2');
+  expect(sql).not.toContain('creator.institute_id');
   expect(params).toEqual([3, 7]);
 });
 

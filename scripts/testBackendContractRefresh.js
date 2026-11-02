@@ -128,12 +128,12 @@ async function run() {
       await require('../integration/deviceDemoWorkspaces')(client);
       return;
     }
-    if (process.argv.includes('--contracts')) {
+    if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement')) {
       await client.query(read(schemaFile));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
-      await require('../integration/contracts.postgres').run(client,url);
+      await require(process.argv.includes('--contract-settlement')?'../integration/legacyContractSettlement.postgres':'../integration/contracts.postgres').run(client,url);
       return;
     }
     const columns = async () =>

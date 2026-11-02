@@ -829,6 +829,7 @@ function wrap(name, handler, pool = database, options = {}) {
             "Complete the existing contract approval workflow first",
           );
       }
+      require('./legacyContractSettlementPolicy').assertAllowed({name,body:req.body,contract:ctx.contract,actor:ctx.actor});
       if (name === "deleteContract") {
         const retained = (
           await client.query(

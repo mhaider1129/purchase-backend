@@ -40,7 +40,7 @@ function fixture(pool, lookup) {
     if (sql.startsWith('SELECT * FROM stock_items')) return rows(state.stocks.filter(x=>x.id===Number(p[0])));
     if (sql.startsWith('SELECT id FROM warehouse_stock_levels')) return rows(state.balances.filter(x=>x.warehouse_id===Number(p[0])&&x.stock_item_id===Number(p[1])));
     if (sql.startsWith('SELECT id FROM department_stock_levels')) return rows([]);
-    if (sql.startsWith('SELECT ri.*,r.institute_id')) return rows(state.requested.filter(x=>x.id===Number(p[0])).map(x=>({...x,...{institute_id:state.requests.find(r=>r.id===x.request_id).institute_id,department_id:state.requests.find(r=>r.id===x.request_id).department_id,request_warehouse_id:state.requests.find(r=>r.id===x.request_id).warehouse_id}})));
+    if (sql.startsWith('SELECT ri.*,r.institute_id')) return rows(state.requested.filter(x=>x.id===Number(p[0])).map(x=>({...x,...{institute_id:state.requests.find(r=>r.id===x.request_id).institute_id,department_id:state.requests.find(r=>r.id===x.request_id).department_id,request_warehouse_id:state.requests.find(r=>r.id===x.request_id).supply_warehouse_id}})));
     if (sql.startsWith('SELECT department_id,created_at FROM requests')) return rows(state.requests.filter(x=>x.id===Number(p[0])&&x.institute_id===p[1]));
     if (sql.startsWith('SELECT * FROM procurement_plans WHERE department_id')) return rows(state.plans.filter(x=>x.department_id===Number(p[0])&&x.plan_year===Number(p[1])));
     if (sql.startsWith('SELECT * FROM procurement_plan_items')) return rows(state.items.filter(x=>sql.includes('WHERE id=') ? x.id===Number(p[0])&&x.plan_id===Number(p[1]) : x.plan_id===Number(p[0])));

@@ -2,6 +2,11 @@ jest.mock('../config/db', () => ({
   query: jest.fn(),
 }));
 
+// Domain payload/criteria tests only. Real grants and institute checks run in integration/contracts.postgres.js.
+jest.mock('../services/contractAuthorizationService',()=>({
+ db:require('../config/db'),ensureSchema:async()=>{},instituteSql:()=> '10',scope:()=> 'TRUE',wrap:(_name,handler)=>handler,
+}));
+
 const buildResponse = () => ({
   status: jest.fn().mockReturnThis(),
   json: jest.fn(),
@@ -38,7 +43,7 @@ describe('contractEvaluationsController', () => {
 
   it('allows contract managers to create evaluations and forwards the correct criterion metadata', async () => {
     const req = {
-      user: { id: 7, role: 'contract manager' },
+      user: { id: 7, role: 'custom', hasPermission: permission => permission==='contracts.manage' },
       body: { contract_id: 22, evaluator_id: 33, criterion_id: 5 },
     };
     const res = buildResponse();
@@ -49,8 +54,6 @@ describe('contractEvaluationsController', () => {
     ];
 
     pool.query
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure table exists
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure columns exist
       .mockResolvedValueOnce({
         rows: [{ id: 22, vendor: 'Test Vendor', title: 'CT Scanner', end_user_department_id: 4 }],
         rowCount: 1,
@@ -94,8 +97,8 @@ describe('contractEvaluationsController', () => {
 
     await createContractEvaluation(req, res, next);
 
-    expect(pool.query).toHaveBeenCalledTimes(7);
-    const insertParams = pool.query.mock.calls[6][1];
+    expect(pool.query).toHaveBeenCalledTimes(5);
+    const insertParams = pool.query.mock.calls[4][1];
     expect(insertParams[3]).toBe(5);
     expect(insertParams[6]).toBe('risk_issue_management');
 

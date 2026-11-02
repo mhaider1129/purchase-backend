@@ -36,8 +36,16 @@ function fixture() {
       rows = [{ available: state.tables.has(args[0].replace("public.", "")) }];
     else if (sql.startsWith("SELECT * FROM requests"))
       rows = state.root ? [state.root] : [];
-    else if (sql.includes("FROM contracts c LEFT JOIN"))
-      rows = state.contract ? [state.contract] : [];
+    else if (sql.startsWith('SELECT c.*,COALESCE(c.institute_id')) {
+      const c=state.contract;
+      const scopes=c?[c.institute_id,c.explicit_institute_id,c.request_institute_id,c.department_institute_id].filter(x=>x!=null):[];
+      const own=scopes[0];
+      const bounded=String(own)===String(state.user.institute_id)||(state.permissions.includes('requests.cross-institute')&&(state.scopes.institute_ids||[]).map(String).includes(String(own)));
+      const step=state.contractStep;
+      const reviewer=step && (step.is_active||['Approved','Rejected'].includes(step.status)) && (!step.reviewer_department_id||Number(step.reviewer_department_id)===Number(state.user.department_id)) && require('../../policies/contractApprovalPolicy').canUserDecideContractStep(state.user,step);
+      const related=c&&[c.created_by,c.contract_manager_id].includes(state.user.id);
+      rows=scopes.length&&new Set(scopes.map(String)).size===1&&bounded&&(state.permissions.includes('contracts.manage')||reviewer||related)?[{...c,resolved_institute_id:own}]:[];
+    }
     else if (sql.startsWith("SELECT p.*,d.institute_id"))
       rows = state.plan ? [state.plan] : [];
     else if (sql.startsWith("SELECT * FROM attachments"))

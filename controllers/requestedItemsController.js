@@ -46,15 +46,15 @@ const fetchRequestBaseline = async (client, requestId) => {
   return Number.isFinite(numericEstimated) ? numericEstimated : null;
 };
 
-const fetchContractSnapshot = async (client, contractId) => {
+const fetchContractSnapshot = async (client, contractId, requestId) => {
   if (!contractId) {
     return { contractId: null, contractValue: null };
   }
 
   const parsedId = parseOptionalInteger(contractId, 'contract_id');
   const { rows } = await client.query(
-    `SELECT contract_value FROM contracts WHERE id = $1 LIMIT 1`,
-    [parsedId]
+    `SELECT c.contract_value FROM contracts c JOIN requests r ON r.id=$2 WHERE c.id=$1 AND ${require('../services/contractAuthorizationService').ownership('c')} AND ${require('../services/contractAuthorizationService').ownerSql('c')}=r.institute_id LIMIT 1 FOR SHARE OF c`,
+    [parsedId,requestId]
   );
 
   if (rows.length === 0) {
@@ -96,7 +96,8 @@ const upsertItemFinancials = async (client, item, updates, userId) => {
 
   const { contractId, contractValue } = await fetchContractSnapshot(
     client,
-    updates.contract_id
+    updates.contract_id,
+    item.request_id
   );
 
   const params = [

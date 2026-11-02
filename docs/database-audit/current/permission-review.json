@@ -1,0 +1,53 @@
+{
+  "exportDefinitions": 152,
+  "missingDefinitions": [
+    {
+      "code": "approval-authority.cmo",
+      "source": "services/surgicalConsignmentModel.js:68",
+      "reason": "The existing clinical authority predicate checks this capability; metadata is absent from the supplied export.",
+      "grantPolicy": "No automatic user/role grants."
+    }
+  ],
+  "coreDefinitionsInspected": 45,
+  "resourceLiteralKeysInspected": [
+    "feature.adminTools",
+    "feature.allRequests",
+    "feature.analytics",
+    "feature.auditRequests",
+    "feature.contracts",
+    "feature.custody",
+    "feature.dashboard",
+    "feature.demandPlanning",
+    "feature.dispensing",
+    "feature.historicalRequests",
+    "feature.incompleteMedical",
+    "feature.incompleteOperational",
+    "feature.incompleteRequests",
+    "feature.itemMaster",
+    "feature.itemRecalls",
+    "feature.maintenanceWarehouseSupply",
+    "feature.management",
+    "feature.procureToPayInvoices",
+    "feature.procureToPayLifecycle",
+    "feature.procureToPayReceipts",
+    "feature.procurementPlanning",
+    "feature.procurementPlans",
+    "feature.procurementQueues",
+    "feature.rfxPortal",
+    "feature.riskManagement",
+    "feature.stockItemApprovals",
+    "feature.stockItemRequests",
+    "feature.supplierEvaluations",
+    "feature.suppliers",
+    "feature.technicalInspections",
+    "feature.warehouseDetail",
+    "feature.warehouseInventory",
+    "feature.warehouseRequests",
+    "feature.warehouseTemplates"
+  ],
+  "excludedExamples": {
+    "inventory.columns.quantity": "Frontend translation key, not an authorization capability.",
+    "planning.defaults.saved": "Audit business action, not a permission.",
+    "roles.cmo": "Role/display label is not a permission code."
+  }
+}

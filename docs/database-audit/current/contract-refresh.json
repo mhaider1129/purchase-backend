@@ -1,0 +1,632 @@
+{
+  "baselineRef": "9196f661",
+  "snapshots": {
+    "View_Supabase_SQL.sql": "39dd3bd59f59fd009b3f9f5132f5a33276f2551495d6a5c0cbaeab900bd6f262",
+    "permissions_Table.sql": "7fca52fc22a6b0a7ebb0e508c578ce06ad93cf41506ebfd0aec2e1f46ac448bf",
+    "UI_resource_permissions.sql": "214fd411f12ab326c27f0bf7de5c04d55b55c44c7259ee5f7812489fbe1385bf"
+  },
+  "structuralSources": [
+    "Known nullable evaluation compatibility fields from SQL 038\u2013043, conditional only; historical values stay NULL",
+    "Existing backend-wide structural contract (035, superseded global planning/assignment indexes excluded)",
+    "045_approval_activation_timestamps.sql",
+    "046_maintenance_approval_reporting_policy.sql",
+    "047_whole_request_priorities.sql",
+    "048_approval_hold_adjusted_timing.sql",
+    "049_preprocurement_technical_reviews.sql",
+    "050_device_demo_workspaces.sql",
+    "051_surgical_consignment.sql",
+    "052_surgical_consignment_supplier_scope_compatibility.sql",
+    "053_surgical_consignment_department_routing.sql",
+    "054_technical_review_and_delivery_workflow.sql",
+    "055_technical_proposal_scope_compatibility.sql",
+    "Planning structural scope only; role/user/catalog grants excluded",
+    "Canonical SHA-256 storage width across receipt, invoice, AP and payment commands",
+    "Canonical notification retry uniqueness required by backend and AUD-007",
+    "057_autoassignment_authorization_scope.sql"
+  ],
+  "newModuleColumns": {
+    "maintenance_approval_reporting_policy": [
+      "overdue_target_days",
+      "reason",
+      "updated_at",
+      "updated_by"
+    ],
+    "request_priority_rankings": [
+      "department_id",
+      "department_rank",
+      "institute_id",
+      "institutional_override_reason",
+      "institutional_rank",
+      "request_id",
+      "row_version",
+      "updated_at",
+      "updated_by"
+    ],
+    "preprocurement_technical_review_policy": [
+      "institute_id",
+      "reason",
+      "require_for_all",
+      "updated_at",
+      "updated_by"
+    ],
+    "preprocurement_technical_reviews": [
+      "created_at",
+      "created_by",
+      "decision_notes",
+      "id",
+      "institute_id",
+      "instructions",
+      "item_packets",
+      "payload_fingerprint",
+      "request_id",
+      "requesting_department_id",
+      "row_version",
+      "signed_at",
+      "signed_by",
+      "signer_snapshot",
+      "status",
+      "submission_key"
+    ],
+    "preprocurement_technical_review_assignments": [
+      "department_id",
+      "id",
+      "reports",
+      "review_id",
+      "reviewer_id",
+      "signature",
+      "status",
+      "submitted_at",
+      "submitted_by"
+    ],
+    "device_demo_workspaces": [
+      "created_at",
+      "created_by",
+      "criteria",
+      "id",
+      "institute_id",
+      "item_fingerprint",
+      "item_snapshot",
+      "objectives",
+      "payload_fingerprint",
+      "request_id",
+      "request_item_id",
+      "requesting_department_id",
+      "row_version",
+      "status",
+      "submission_key",
+      "title"
+    ],
+    "device_demo_reviewers": [
+      "department_id",
+      "reviewer_id",
+      "workspace_id"
+    ],
+    "device_demo_candidates": [
+      "approved_product_id",
+      "completed_at",
+      "created_at",
+      "created_by",
+      "description",
+      "id",
+      "location",
+      "manufacturer",
+      "model",
+      "planned_end",
+      "planned_start",
+      "received_at",
+      "returned_at",
+      "serial_number",
+      "started_at",
+      "status",
+      "supplier_catalog_item_id",
+      "supplier_id",
+      "supplier_name",
+      "workspace_id"
+    ],
+    "device_demo_reports": [
+      "demo_id",
+      "findings",
+      "id",
+      "recommendation",
+      "reviewer_id",
+      "safety_findings",
+      "scores",
+      "signature",
+      "submitted_at",
+      "weighted_score"
+    ],
+    "device_demo_selections": [
+      "comparison_snapshot",
+      "decided_at",
+      "decided_by",
+      "decision_notes",
+      "demo_id",
+      "id",
+      "rationale",
+      "signature",
+      "status",
+      "submitted_at",
+      "submitted_by",
+      "workspace_id"
+    ],
+    "device_demo_events": [
+      "action",
+      "actor_id",
+      "actor_snapshot",
+      "attachment_ids",
+      "created_at",
+      "demo_id",
+      "id",
+      "notes",
+      "workspace_id"
+    ],
+    "surgical_consignment_cases": [
+      "agreement_reference",
+      "authorization_code",
+      "billing_po_id",
+      "created_by",
+      "id",
+      "justification",
+      "status",
+      "submission_key",
+      "supplier_id",
+      "surgeon_id",
+      "surgery_date"
+    ],
+    "surgical_consignment_approvals": [
+      "approver_id",
+      "case_id"
+    ],
+    "surgical_consignment_receipts": [
+      "confirmed_by",
+      "id",
+      "vendor_representative"
+    ],
+    "surgical_consignment_receipt_lines": [
+      "delivered_quantity",
+      "id",
+      "requested_item_index"
+    ],
+    "surgical_consignment_usage_lines": [
+      "receipt_line_id",
+      "used_quantity"
+    ],
+    "surgical_consignment_returns": [
+      "actor_id",
+      "id",
+      "kind"
+    ],
+    "surgical_consignment_waivers": [
+      "actor_id",
+      "id",
+      "usage_fingerprint"
+    ],
+    "surgical_consignment_attestations": [
+      "actor_id",
+      "case_id"
+    ],
+    "surgical_consignment_files": [
+      "id",
+      "purpose"
+    ],
+    "surgical_consignment_events": [
+      "id",
+      "notes"
+    ],
+    "surgical_consignment_billing_lines": [
+      "case_id",
+      "purchase_order_item_id"
+    ],
+    "surgical_consignment_department_settings": [
+      "department_id",
+      "institute_id",
+      "is_enabled",
+      "nurse_id",
+      "receiver_id",
+      "row_version",
+      "updated_at",
+      "updated_by",
+      "warehouse_id"
+    ],
+    "surgical_consignment_section_nurses": [
+      "department_id",
+      "institute_id",
+      "nurse_id",
+      "section_id"
+    ],
+    "technical_review_profiles": [
+      "institute_id",
+      "profile_key",
+      "row_version",
+      "settings",
+      "updated_at",
+      "updated_by"
+    ],
+    "delivery_inspection_tasks": [
+      "created_at",
+      "created_by",
+      "department_id",
+      "id",
+      "institute_id",
+      "opinion_round",
+      "pending_disposition",
+      "profile_snapshot",
+      "receipt_item_id",
+      "request_id",
+      "row_version",
+      "status"
+    ],
+    "delivery_inspection_assignments": [
+      "department_id",
+      "id",
+      "opinion",
+      "reviewer_id",
+      "submitted_at",
+      "task_id"
+    ],
+    "technical_workflow_history": [
+      "action",
+      "actor_id",
+      "created_at",
+      "delivery_task_id",
+      "id",
+      "institute_id",
+      "payload",
+      "review_id"
+    ],
+    "technical_evidence_references": [
+      "attachment_id",
+      "created_at",
+      "created_by",
+      "delivery_task_id",
+      "id",
+      "review_id"
+    ],
+    "planning_settings": [
+      "demand_history_days",
+      "demand_history_months",
+      "forecast_horizon_months",
+      "forecast_window_size",
+      "id",
+      "mrp_bucket_days",
+      "mrp_horizon_days",
+      "safety_history_days",
+      "safety_lead_time_days",
+      "safety_review_period_days",
+      "updated_at",
+      "updated_by"
+    ],
+    "request_auto_assignment_rules": [
+      "assignee_user_id",
+      "created_at",
+      "created_by",
+      "id",
+      "is_active",
+      "updated_by",
+      "warehouse_id"
+    ]
+  },
+  "missingPermissionDefinitions": [
+    "approval-authority.cmo"
+  ],
+  "uiDefaults": [
+    {
+      "resourceKey": "feature.procureToPayLifecycle",
+      "label": "Procure-to-Pay Lifecycle",
+      "description": "Controls access to the procure-to-pay lifecycle overview page.",
+      "permissions": [
+        "procure-to-pay.lifecycle.view"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procureToPayReceipts",
+      "label": "Procure-to-Pay Goods Receipts",
+      "description": "Controls access to the procure-to-pay goods receipt entry page.",
+      "permissions": [
+        "procure-to-pay.receipts.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procureToPayInvoices",
+      "label": "Procure-to-Pay Invoices",
+      "description": "Controls access to the procure-to-pay invoice entry page.",
+      "permissions": [
+        "procure-to-pay.invoices.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.stockItemRequests",
+      "label": "Stock Item Request Form",
+      "description": "Controls access to the stock item request workflow.",
+      "permissions": [
+        "stock-requests.create"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.itemRecalls",
+      "label": "Item Recalls",
+      "description": "Allows viewing and managing item recalls.",
+      "permissions": [
+        "recalls.view",
+        "recalls.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.maintenanceWarehouseSupply",
+      "label": "Maintenance Warehouse Supply Request",
+      "description": "Enables access to the maintenance warehouse supply request form.",
+      "permissions": [
+        "warehouse.manage-supply",
+        "stock-requests.create"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.custody",
+      "label": "Custody Issue & Issued Lists",
+      "description": "Controls the custody issue and issued pages.",
+      "permissions": [
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.itemMaster",
+      "label": "Item Master Data",
+      "description": "Shows the central item master catalog (read-only).",
+      "permissions": [],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.technicalInspections",
+      "label": "Technical Inspections",
+      "description": "Controls access to the technical inspection log and form.",
+      "permissions": [
+        "technical-inspections.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.riskManagement",
+      "label": "Risk Management",
+      "description": "Track and mitigate organizational risks.",
+      "permissions": [
+        "risks.view",
+        "risks.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.warehouseTemplates",
+      "label": "Warehouse Supply Templates",
+      "description": "Allows users to manage warehouse supply templates.",
+      "permissions": [
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.warehouseRequests",
+      "label": "Warehouse Supply Requests",
+      "description": "Grants access to warehouse supply request tracking.",
+      "permissions": [
+        "warehouse.view-supply",
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.adminTools",
+      "label": "Admin Tools",
+      "description": "Controls access to the admin tools re-assignment panel.",
+      "permissions": [
+        "approvals.reassign"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.management",
+      "label": "System Management",
+      "description": "Shows the system management workspace.",
+      "permissions": [
+        "users.manage",
+        "departments.manage",
+        "permissions.manage",
+        "projects.manage",
+        "roles.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.allRequests",
+      "label": "All Requests",
+      "description": "Allows viewing all purchase requests.",
+      "permissions": [
+        "requests.view-all"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procurementPlans",
+      "label": "Procurement Plans",
+      "description": "Controls access to procurement plans.",
+      "permissions": [
+        "procurement.update-status",
+        "procurement.update-cost"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procurementPlanning",
+      "label": "Scoped Procurement Planning",
+      "description": "Controls access to institute/department-scoped procurement plans.",
+      "permissions": [
+        "planning.view",
+        "planning.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.demandPlanning",
+      "label": "Demand Planning",
+      "description": "Scoped planning and replenishment workbench.",
+      "permissions": [
+        "planning.view",
+        "planning.manage",
+        "replenishment.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.contracts",
+      "label": "Contracts Workspace",
+      "description": "Shows the contracts management page and navigation.",
+      "permissions": [
+        "contracts.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.rfxPortal",
+      "label": "RFX Collaboration Portal",
+      "description": "Publish RFQs/RFPs and review supplier responses.",
+      "permissions": [
+        "rfx.manage",
+        "rfx.respond"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.supplierEvaluations",
+      "label": "Supplier Evaluations",
+      "description": "Allows managing supplier evaluations.",
+      "permissions": [
+        "evaluations.manage"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.procurementQueues",
+      "label": "Procurement Queues",
+      "description": "Controls assigned and completed procurement queues.",
+      "permissions": [
+        "procurement.update-status"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.incompleteRequests",
+      "label": "Incomplete Requests Overview",
+      "description": "Allows viewing the incomplete request queues.",
+      "permissions": [
+        "requests.view-incomplete"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.incompleteMedical",
+      "label": "Incomplete Medical Requests",
+      "description": "Controls the medical incomplete queue.",
+      "permissions": [
+        "requests.view-incomplete"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.incompleteOperational",
+      "label": "Incomplete Operational Requests",
+      "description": "Controls the operational incomplete queue.",
+      "permissions": [
+        "requests.view-incomplete"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.auditRequests",
+      "label": "Audit Requests",
+      "description": "Allows access to the audit review workspace.",
+      "permissions": [
+        "requests.view-audit"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.warehouseDetail",
+      "label": "Warehouse Supply Detail",
+      "description": "Controls access to individual warehouse supply sheets.",
+      "permissions": [
+        "warehouse.manage-supply",
+        "warehouse.view-supply"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.dashboard",
+      "label": "Dashboard",
+      "description": "Controls the executive dashboard visibility.",
+      "permissions": [
+        "dashboard.view"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.analytics",
+      "label": "Lifecycle Analytics",
+      "description": "Controls the lifecycle analytics view.",
+      "permissions": [
+        "dashboard.view"
+      ],
+      "requireAll": false
+    },
+    {
+      "resourceKey": "feature.dispensing",
+      "label": "Monthly Dispensing",
+      "description": "Controls access to monthly dispensing ingestion and analytics.",
+      "permissions": [
+        "dashboard.view",
+        "warehouse.manage-supply"
+      ],
+      "requireAll": false
+    }
+  ],
+  "notes": [
+    "Original exports remain unchanged. Index/function/trigger/RLS absence from a table-only export is unknown, not confirmed live absence.",
+    "Existing role/user grants and customized UI rules are preserved."
+  ],
+  "structuralSourceHashes": {
+    "035_backend_schema_reconciliation.sql": "f72c614776469e71dbbb67268565a2a26cd1e30b56d18cd3af26605fbd2561e0",
+    "035_backend_schema_reconciliation_verify.sql": "ab9dd92177e5a3c69c4be31ce129e582301ddb78f5f273b4d5861d7bf81c8743",
+    "038_evaluation_result_timestamp_compatibility.sql": "18f913bc11d8f918f6c163d3e7b85dfd0cc43657bf24dd22fbe6a5221e054adb",
+    "039_evaluation_offer_model_compatibility.sql": "f943fd26afffd9809a3257ac861b19d4ae2819274bf074f62d5edb3c3981b4d7",
+    "040_evaluation_cost_quantity_compatibility.sql": "3545463a2062a76c7d608373e675af050bd70a7333796db2169a7f888dc62ae8",
+    "041_evaluation_criteria_timestamp_compatibility.sql": "037f8b6dd3191efcd1ba3bd26a8fba96f11c66206d1e60dc5a3af962898c1da9",
+    "042_evaluation_stability_metadata_compatibility.sql": "ccf3f42f4738f17458f7cb1e60f23e014cb179b70c4e50c6aabe9c2d68545f9e",
+    "043_evaluation_alternative_metadata_compatibility.sql": "00155cb4c6183dde904cfcc06d8666275ce56f99369e8885b332f6d3cc088325",
+    "045_approval_activation_timestamps.sql": "3c2360acb387bf0fc1148562fcbc69eaf73baf146eeeaa591921432b76aae69d",
+    "046_maintenance_approval_reporting_policy.sql": "74bf1428dd84b170d6c890c6a1a8bb28345203512e2adfe1c6a60b1db458e370",
+    "047_whole_request_priorities.sql": "8a0790461fbc31e9115ae28b0a80bbc190941793756c0ff592399e26073f3bc6",
+    "048_approval_hold_adjusted_timing.sql": "5ed2ac449e2d0bf838fa09545bb63200a87311249797b37af442ba6bd4f9aedf",
+    "049_preprocurement_technical_reviews.sql": "c451deb660cf4e99f693ef88abfaf4ca8c1a67f0ff7d4e8be44b7445960d91d0",
+    "050_device_demo_workspaces.sql": "98a8ba6f91d81cbbb3f688f9d209307355235f8b37548b67f6e686dc8e95969a",
+    "051_surgical_consignment.sql": "b5f286aaf0f0a872a7a6f640ca2a00a68e4f608f7632cb0fa0df27d749e20271",
+    "052_surgical_consignment_supplier_scope_compatibility.sql": "82b408b5832f2d120ba600bee8ed0cbc4f8369496f8cfe4d779ac460643c5409",
+    "053_surgical_consignment_department_routing.sql": "f921924cca11066748c6599682faf497f476849a1e76ebef58a8d64fc4abeed7",
+    "054_technical_review_and_delivery_workflow.sql": "608c7eac5d9c20d9d93ecc3cfd64d8852f635550e7c353d3393889a1cc8c712e",
+    "055_technical_proposal_scope_compatibility.sql": "08a22d8ab4032e8813e49c5cbfe4f1cf9b19e3f5b9841f5a532c7e0bfea5906e",
+    "056_planning_authorization_scope.sql": "166fab004da70fbe64f0b096946a0063add9176ccd4947ae036792b7ba62e9a5",
+    "057_autoassignment_authorization_scope.sql": "adaf82aa48a42e3d29d197dcebecb10c47aa9dc24b2797399e9ade039be7016b"
+  },
+  "deliberateChangesFromOlderReconciliation": [
+    "Apply only known nullable 038-043 compatibility fields conditionally, leaving historical values NULL.",
+    "Do not recreate superseded global planning/assignment unique indexes.",
+    "Exclude automatic role/user grants from older planning seed.",
+    "Require semantic full unique notification indexes, not index-name existence.",
+    "Widen all four narrow SHA-256 payload fields without guessing old hashes.",
+    "Use current backend defaults for additive UI registration; optional exact-match policy alignment is separate."
+  ]
+}

@@ -12,6 +12,8 @@ const {
 } = __contractApprovalInternals;
 
 describe('contract approval workflow assignment', () => {
+  beforeEach(()=>jest.spyOn(require('../services/contractAuthorizationService'),'instituteSql').mockReturnValue('10'));
+
   it('maps finance approvals to CFO users and executive approvals to COO users', () => {
     expect(getContractApprovalRoleAliases('finance')).toEqual(['finance', 'cfo']);
     expect(getContractApprovalRoleAliases('coo_ceo')).toEqual(['coo', 'ceo', 'coo_ceo', 'coo/ceo']);
@@ -75,11 +77,11 @@ describe('contract approval workflow assignment', () => {
         return { rows: [{ id: 202, is_active: true }] };
       }
 
-      if (sql.includes('WHERE is_active = TRUE') && params[0].includes('legal')) {
+      if (sql.includes('AND is_active = TRUE') && Array.isArray(params[0]) && params[0].includes('legal')) {
         return { rows: [] };
       }
 
-      if (sql.includes('WHERE is_active = TRUE') && params[0].includes('cfo')) {
+      if (sql.includes('AND is_active = TRUE') && Array.isArray(params[0]) && params[0].includes('cfo')) {
         return { rows: [{ id: 202 }] };
       }
 

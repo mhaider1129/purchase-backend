@@ -1,0 +1,30 @@
+{
+  "exportRows": 36,
+  "currentBackendDefaults": 30,
+  "missing": [
+    {
+      "resourceKey": "feature.procurementPlanning",
+      "label": "Scoped Procurement Planning",
+      "description": "Controls access to institute/department-scoped procurement plans.",
+      "permissions": [
+        "planning.view",
+        "planning.manage"
+      ],
+      "requireAll": false
+    }
+  ],
+  "existingPolicyDifferences": [
+    {
+      "resourceKey": "feature.demandPlanning",
+      "exportPermissions": [],
+      "currentDefaultPermissions": [
+        "planning.view",
+        "planning.manage",
+        "replenishment.manage"
+      ],
+      "exportRequireAll": false,
+      "currentDefaultRequireAll": false
+    }
+  ],
+  "policy": "Existing customized resource policies are preserved; differences require owner review, not automatic privilege changes."
+}

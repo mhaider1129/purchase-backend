@@ -75,6 +75,37 @@ function predicate(kind, a, parameter = "$1") {
     throw new TypeError("Unsupported financial scope expression");
   return `(${expressions[kind]()})`;
 }
+// Caller owns the transaction; the actor, capabilities and financial graph are
+// still revalidated here. This avoids opening a competing connection inside a
+// locked parent workflow. withRead retains its existing standalone transaction.
+async function withClientRead(
+  client,
+  actor,
+  work,
+  {
+    kind = null,
+    value = null,
+    requestId = null,
+    capabilities = ["procure-to-pay.lifecycle.view"],
+  } = {},
+) {
+  const current = await loadActor(client, actor, capabilities);
+  if (kind || requestId != null) {
+    const refs = { requestId, wholeRequest: requestId != null };
+    if (kind) {
+      const key = {
+        purchaseOrder: "purchaseOrderId",
+        invoice: "invoiceId",
+        receipt: "receiptId",
+      }[kind];
+      if (!key || !TABLES[kind])
+        throw new TypeError("Unsupported financial read root");
+      refs[key] = value;
+    }
+    await authorizeCommand({ client }, current, capabilities, refs);
+  }
+  return work(client, current, predicate);
+}
 async function withRead(
   actor,
   work,
@@ -88,22 +119,12 @@ async function withRead(
   const client = await pool.connect();
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
-    const current = await loadActor(client, actor, capabilities);
-    if (kind || requestId != null) {
-      const refs = { requestId, wholeRequest: requestId != null };
-      if (kind) {
-        const key = {
-          purchaseOrder: "purchaseOrderId",
-          invoice: "invoiceId",
-          receipt: "receiptId",
-        }[kind];
-        if (!key || !TABLES[kind])
-          throw new TypeError("Unsupported financial read root");
-        refs[key] = value;
-      }
-      await authorizeCommand({ client }, current, capabilities, refs);
-    }
-    const result = await work(client, current, predicate);
+    const result = await withClientRead(client, actor, work, {
+      kind,
+      value,
+      requestId,
+      capabilities,
+    });
     await client.query("COMMIT");
     return result;
   } catch (e) {
@@ -218,6 +239,7 @@ function invoiceJournalPredicate(a, parameter = "$1") {
 module.exports = {
   predicate,
   withRead,
+  withClientRead,
   flowPredicate,
   invoiceJournalPredicate,
 };

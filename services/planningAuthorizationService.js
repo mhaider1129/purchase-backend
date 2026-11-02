@@ -75,7 +75,7 @@ function createPlanningAuthorization(database = pool, lookup = getPermissionsFor
   }
   async function requestedItem(a, value, departmentId, db = database) {
     requireCapability(a,'read');
-    const row = (await db.query('SELECT ri.*,r.institute_id,r.department_id,r.warehouse_id AS request_warehouse_id,r.id AS parent_request_id FROM requested_items ri JOIN requests r ON r.id=ri.request_id JOIN departments d ON d.id=r.department_id AND d.institute_id=r.institute_id WHERE ri.id=$1 FOR SHARE OF ri,r', [id(value)])).rows[0];
+    const row = (await db.query('SELECT ri.*,r.institute_id,r.department_id,r.supply_warehouse_id AS request_warehouse_id,r.id AS parent_request_id FROM requested_items ri JOIN requests r ON r.id=ri.request_id JOIN departments d ON d.id=r.department_id AND d.institute_id=r.institute_id WHERE ri.id=$1 FOR SHARE OF ri,r', [id(value)])).rows[0];
     if (!row) throw missing(); inInstitute(a, row.institute_id);
     if (!departmentAllowed(a, row.department_id) || Number(row.department_id) !== Number(departmentId)) throw missing();
     if (row.request_warehouse_id != null) await warehouse(a,row.request_warehouse_id,db);

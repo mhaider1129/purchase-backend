@@ -1,0 +1,141 @@
+{
+  "passed": 95,
+  "review": [
+    {
+      "source": "controllers/requestedItemsController.js",
+      "line": 71,
+      "code": "42601",
+      "message": "syntax error at or near \"item\"",
+      "sql": "update this request item",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "controllers/requestedItemsController.js",
+      "line": 276,
+      "code": "42601",
+      "message": "syntax error at or near \"on\"",
+      "sql": "update cost on this request item",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "controllers/requestedItemsController.js",
+      "line": 583,
+      "code": "42601",
+      "message": "syntax error at or near \"for\"",
+      "sql": "update purchased quantity for this order item",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "controllers/requests/createRequestController.js",
+      "line": 353,
+      "code": "42601",
+      "message": "syntax error at or near \"fulfilling\"",
+      "sql": "Select the warehouse fulfilling this supply request",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "controllers/requests/createRequestController.js",
+      "line": 658,
+      "code": "42601",
+      "message": "syntax error at or near \"HOD\"",
+      "sql": "Select an active HOD requester for this maintenance request",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "controllers/requests/historicalRequestController.js",
+      "line": 167,
+      "code": "42601",
+      "message": "syntax error at or near \"fulfilling\"",
+      "sql": "Select the warehouse fulfilling this supply request",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "controllers/requests/requestWorkspaceController.js",
+      "line": 205,
+      "code": "42P01",
+      "message": "missing FROM-clause entry for table \"ri\"",
+      "sql": "SELECT COUNT(*)::int AS procurement_events_count,\n              MAX(COALESCE(procurement_date::timestamp, created_at)) AS latest_procurement_update,\n              (ARRAY_AGG(procurement_note ORDER BY created_at DESC, id DESC))[1] AS latest_note\n       FROM public.procurement_item_events pie\n       WHERE pie.requested_item_id = ri.id",
+      "classification": "correlated_or_incomplete_SQL_fragment_requires_parent_assembly"
+    },
+    {
+      "source": "controllers/requests/updateRequestsController.js",
+      "line": 553,
+      "code": "42601",
+      "message": "syntax error at or near \"HOD\"",
+      "sql": "Select a valid HOD user to continue",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "controllers/requests/updateRequestsController.js",
+      "line": 1223,
+      "code": "42601",
+      "message": "syntax error at or near \"fulfilling\"",
+      "sql": "Select the warehouse fulfilling this supply request",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "routes/requests.js",
+      "line": 130,
+      "code": "42P01",
+      "message": "missing FROM-clause entry for table \"u\"",
+      "sql": "SELECT\n      r.*,\n      u.name AS assigned_user_name,\n      d.name AS department_name,\n      COALESCE(r.temporary_requester_name, requester.name) AS requester_name,\n      CASE WHEN r.temporary_requester_name IS NOT NULL THEN 'Temporary Requester' ELSE requester.role END AS requester_role\n    FROM requests r",
+      "classification": "correlated_or_incomplete_SQL_fragment_requires_parent_assembly"
+    },
+    {
+      "source": "services/deviceDemoService.js",
+      "line": 297,
+      "code": "42601",
+      "message": "trailing junk after numeric literal at or near \"1–20\"",
+      "sql": "Select 1–20 distinct departmental evaluators",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "services/deviceDemoService.js",
+      "line": 450,
+      "code": "42601",
+      "message": "syntax error at or near \"one\"",
+      "sql": "Select at least one file to attach to the workspace",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "services/deviceDemoService.js",
+      "line": 688,
+      "code": "42601",
+      "message": "syntax error at or near \"demo\"",
+      "sql": "Select a completed demo approved as suitable by every evaluator",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "services/preprocurementTechnicalReviewService.js",
+      "line": 255,
+      "code": "42601",
+      "message": "syntax error at or near \"other\"",
+      "sql": "Select distinct departmental reviewers other than the SCM signatory",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "services/preprocurementTechnicalReviewService.js",
+      "line": 435,
+      "code": "42601",
+      "message": "syntax error at or near \"proposed\"",
+      "sql": "Select the actual proposed supplier for a required technical review",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "services/preprocurementTechnicalReviewService.js",
+      "line": 723,
+      "code": "42601",
+      "message": "syntax error at or near \"proposed\"",
+      "sql": "Select the actual proposed supplier before technical assessment",
+      "classification": "non_SQL_application_message"
+    },
+    {
+      "source": "services/technicalProposalSnapshot.js",
+      "line": 126,
+      "code": "42601",
+      "message": "syntax error at or near \"identity\"",
+      "sql": "Select the supplier identity when reviewing a specific proposed model",
+      "classification": "non_SQL_application_message"
+    }
+  ]
+}

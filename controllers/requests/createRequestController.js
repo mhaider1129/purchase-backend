@@ -532,14 +532,14 @@ const createRequest = async (req, res, next) => {
         `SELECT ci.id, ci.contract_id, ci.item_name, ci.contracted_price, ci.currency, c.contract_value
            FROM contract_items ci
            JOIN contracts c ON c.id = ci.contract_id
-          WHERE ci.id = $1
+          WHERE ${require('../../services/contractAuthorizationService').ownership('c')} AND ${require('../../services/contractAuthorizationService').ownerSql('c')}=(SELECT institute_id FROM users WHERE id=$3 AND is_active=TRUE) AND ci.id = $1
             AND ci.contract_id = $2
             AND ci.is_active = TRUE
             AND c.status IN ('active', 'renewed', 'expiring_soon')
             AND (ci.price_valid_from IS NULL OR ci.price_valid_from <= CURRENT_DATE)
             AND (ci.price_valid_to IS NULL OR ci.price_valid_to >= CURRENT_DATE)
           LIMIT 1`,
-        [item.contract_item_id, item.contract_id],
+        [item.contract_item_id, item.contract_id,req.user?.id],
       );
       if (!rows.length) {
         return next(createHttpError(400, `Selected contracted item for ${item.item_name} is not active or does not belong to the selected contract`));

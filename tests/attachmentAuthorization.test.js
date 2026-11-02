@@ -136,7 +136,7 @@ test("contract role/department approvers reuse the existing approval policy", as
   f.state.permissions = [];
   f.state.file.request_id = null;
   f.state.file.contract_id = 9;
-  f.state.contract = { id: 9, creator_institute_id: 10, created_by: 2 };
+  f.state.contract = { id: 9, explicit_institute_id: 10, created_by: 2 };
   f.state.tables.add("contract_approvals");
   f.state.contractStep = {
     id: 1,

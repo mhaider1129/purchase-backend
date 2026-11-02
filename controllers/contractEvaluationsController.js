@@ -1,4 +1,5 @@
-const pool = require('../config/db');
+const contractBoundary = require('../services/contractAuthorizationService');
+const pool = contractBoundary.db;
 const createHttpError = require('../utils/httpError');
 const normalizeRoleToken = role =>
   (role || '')
@@ -7,19 +8,7 @@ const normalizeRoleToken = role =>
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
 
-const canManageContractEvaluations = req => {
-  const allowedRoleTokens = new Set([
-    'SCM',
-    'COO',
-    'ADMIN',
-    'CONTRACTMANAGER',
-    'PROCUREMENTSPECIALIST',
-    'MEDICALDEVICES',
-  ]);
-
-  const roleToken = normalizeRoleToken(req.user?.role);
-  return allowedRoleTokens.has(roleToken);
-};
+const canManageContractEvaluations = req => Boolean(req.user?.hasPermission?.('contracts.manage'));
 
 const parseJsonValue = value => {
   if (value === null || value === undefined) {
@@ -187,7 +176,7 @@ const deriveTechnicalInspectionResults = async vendor => {
     const { rows } = await pool.query(
       `SELECT inspection_date, summary, general_checklist, category_checklist
          FROM technical_inspections
-        WHERE LOWER(supplier_name) = LOWER($1)
+        WHERE request_id IN (SELECT id FROM requests WHERE institute_id=${contractBoundary.instituteSql()}) AND LOWER(supplier_name) = LOWER($1)
         ORDER BY inspection_date DESC, id DESC
         LIMIT 1`,
       [vendor]
@@ -231,7 +220,7 @@ const deriveFulfillmentMetrics = async departmentId => {
          COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed,
          AVG(extract(epoch FROM (updated_at - created_at)) / 86400) FILTER (WHERE status = 'Completed') AS avg_lead_time_days
        FROM requests
-       WHERE department_id = $1`,
+       WHERE institute_id=${contractBoundary.instituteSql()} AND department_id = $1`,
       [departmentId]
     );
 
@@ -348,62 +337,7 @@ const serializeEvaluationRow = row => {
   };
 };
 
-const ensureContractEvaluationsTable = (() => {
-  let initialized = false;
-  let initializingPromise = null;
-
-  return async () => {
-    if (initialized) {
-      return;
-    }
-
-    if (initializingPromise) {
-      await initializingPromise;
-      return;
-    }
-
-    initializingPromise = (async () => {
-      try {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS contract_evaluations (
-            id SERIAL PRIMARY KEY,
-            contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-            evaluator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            status TEXT NOT NULL DEFAULT 'pending',
-            evaluation_notes TEXT,
-            evaluation_criteria JSONB,
-            criterion_id INTEGER REFERENCES evaluation_criteria(id) ON DELETE SET NULL,
-            criterion_name TEXT,
-            criterion_role TEXT,
-            criterion_code TEXT,
-            technical_inspection_results JSONB,
-            request_fulfillment_metrics JSONB,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-        await pool.query(`
-          ALTER TABLE contract_evaluations
-            ADD COLUMN IF NOT EXISTS criterion_id INTEGER REFERENCES evaluation_criteria(id) ON DELETE SET NULL,
-            ADD COLUMN IF NOT EXISTS criterion_name TEXT,
-            ADD COLUMN IF NOT EXISTS criterion_role TEXT,
-            ADD COLUMN IF NOT EXISTS criterion_code TEXT,
-            ADD COLUMN IF NOT EXISTS technical_inspection_results JSONB,
-            ADD COLUMN IF NOT EXISTS request_fulfillment_metrics JSONB
-        `);
-        initialized = true;
-      } catch (err) {
-        console.error('❌ Failed to ensure contract_evaluations table exists:', err);
-        throw err;
-      } finally {
-        initializingPromise = null;
-      }
-    })();
-
-    await initializingPromise;
-  };
-})();
+const ensureContractEvaluationsTable = contractBoundary.ensureSchema;
 
 const createContractEvaluation = async (req, res, next) => {
   if (!canManageContractEvaluations(req)) {
@@ -499,7 +433,7 @@ const getContractEvaluations = async (req, res, next) => {
       `SELECT ce.*, u.name as evaluator_name
          FROM contract_evaluations ce
          JOIN users u ON ce.evaluator_id = u.id
-        WHERE ce.contract_id = $1
+        WHERE ce.contract_id = $1 AND ${contractBoundary.evaluationScope()}
         ORDER BY ce.created_at ASC`,
       [contract_id]
     );
@@ -616,7 +550,7 @@ const getMyEvaluations = async (req, res, next) => {
       `SELECT ce.*, c.title as contract_title
          FROM contract_evaluations ce
          JOIN contracts c ON ce.contract_id = c.id
-        WHERE ce.evaluator_id = $1
+        WHERE ${contractBoundary.scope('c')} AND ce.evaluator_id = $1
         ORDER BY ce.created_at DESC`,
       [req.user.id]
     );
@@ -681,3 +615,6 @@ module.exports = {
   getContractEvaluationById,
   getEvaluationCriteria,
 };
+for (const [name,handler] of Object.entries(module.exports)) {
+  if (name!=='ensureContractEvaluationsTable') module.exports[name]=contractBoundary.wrap(name,handler,undefined,{evaluation:true});
+}

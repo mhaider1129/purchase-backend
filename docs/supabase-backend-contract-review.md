@@ -1,5 +1,7 @@
 # Supabase backend contract audit
 
+For the current exports and backend at `9196f661`, use the [1 November 2026 refresh](supabase-backend-contract-review-2026-11.md) and SQL 059–063. The results below remain historical evidence; the original hash-pinned runner targets its older snapshot.
+
 ## Backend query repairs — 2026-10-06
 
 The ten query failures listed in the historical audit below are now repaired in backend code. CASE actor branches explicitly bind integer user IDs; reused status parameters explicitly bind text before assignment to VARCHAR columns. RFID event processing locks only the read-event relation (`FOR UPDATE OF r`) so unmapped portal/antenna rows remain supported. The unused legacy procurement controller writes to canonical `audit_logs`, using `created_at` and recording both actor/user IDs. No approval policy, authorization, institute filters, workflow transitions or historical records are changed. No database migration is required for these code fixes.

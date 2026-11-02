@@ -121,14 +121,14 @@ const computeComplianceStatus = artifact => {
   };
 };
 
-const getComplianceStatusBySupplierIds = async supplierIds => {
+const getComplianceStatusBySupplierIds = async (supplierIds, database = pool) => {
   if (!Array.isArray(supplierIds) || supplierIds.length === 0) {
     return new Map();
   }
 
-  await ensureTables();
+  if (database === pool) await ensureTables();
   const placeholders = supplierIds.map((_, idx) => `$${idx + 1}`).join(', ');
-  const { rows } = await pool.query(
+  const { rows } = await database.query(
     `SELECT supplier_id, MIN(expiry_date) AS next_expiry,
             BOOL_OR(blocked OR (expiry_date IS NOT NULL AND expiry_date < CURRENT_DATE)) AS is_blocked
        FROM supplier_compliance_artifacts

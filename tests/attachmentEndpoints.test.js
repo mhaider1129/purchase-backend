@@ -3,6 +3,7 @@ const express = require("express"),
 jest.mock("../config/db", () => ({ query: jest.fn(), connect: jest.fn() }));
 jest.mock("../utils/permissionService", () => ({
   getPermissionsForUserId: jest.fn(),
+  userHasPermission:jest.requireActual('../utils/permissionService').userHasPermission,
 }));
 jest.mock("../services/attachmentStorageAdapter", () => ({
   key: jest.fn((v) => {
@@ -232,7 +233,7 @@ test.each(["contract approval", "document version"])(
     f.state.permissions = ["contracts.manage"];
     f.state.file.request_id = null;
     f.state.file.contract_id = 9;
-    f.state.contract = { id: 9, creator_institute_id: 10, created_by: 1 };
+    f.state.contract = { id: 9, explicit_institute_id: 10, created_by: 1 };
     if (type === "contract approval") {
       f.state.tables.add("contract_approvals");
       f.state.contractSigned = true;

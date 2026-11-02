@@ -426,7 +426,7 @@ const getSupplierProfile = async (req, res, next) => {
     const [principals, complianceDocuments, contracts, scorecards] = await Promise.all([
       listPrincipalsForSupplier(supplierId),
       safeQueryRows(`SELECT * FROM supplier_compliance_artifacts WHERE supplier_id = $1 ORDER BY expiry_date ASC NULLS LAST`, [supplierId]),
-      safeQueryRows(`SELECT * FROM contracts WHERE supplier_id = $1 ORDER BY created_at DESC`, [supplierId]),
+      (async()=>{const policy=require('../services/contractAuthorizationService');const actor=await policy.actor(req.user,pool);return safeQueryRows(`SELECT c.* FROM contracts c WHERE c.supplier_id=$1 AND ${policy.predicate(actor)} ORDER BY c.created_at DESC`,[supplierId]);})(),
       safeQueryRows(`SELECT * FROM supplier_scorecards WHERE supplier_id = $1 ORDER BY created_at DESC`, [supplierId]),
     ]);
 

@@ -12,6 +12,7 @@
     "dev": "nodemon app.js",
     "test": "jest",
     "test:p2p-postgres": "node scripts/runP2PPostgresIntegration.js",
+    "test:backend-contract-refresh": "node scripts/testBackendContractRefresh.js",
     "migrate": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
     "migrate:create": "node-pg-migrate create",
@@ -20,7 +21,11 @@
     "priority:recalculate-aging": "node jobs/recalculateProcurementPriorityAging.js",
     "test:sql028-029": "node scripts/testSql028029Integration.js",
     "verify:p2p-schema": "node scripts/verifyP2PSchemaContract.js",
-    "audit:p2p-baseline": "node scripts/auditP2PBaseline.js"
+    "audit:p2p-baseline": "node scripts/auditP2PBaseline.js",
+    "test:contracts-postgres": "node scripts/testBackendContractRefresh.js --contracts",
+    "test:device-demos-postgres": "node scripts/testBackendContractRefresh.js --device-demos",
+    "test:contract-settlement-postgres": "node scripts/testBackendContractRefresh.js --contract-settlement",
+    "audit:financial-writers": "node scripts/auditFinancialWriters.js"
   },
   "keywords": [
     "purchase",

@@ -397,7 +397,7 @@ async function run(client, url) {
         404,
       );
     });
-    await test("valid same-request PO consumption keeps existing settlement behavior", () =>
+    await test("valid same-request PO consumption is contained pending source reconciliation", () =>
       check(
         "createContractConsumptionEntry",
         101,
@@ -408,7 +408,7 @@ async function run(client, url) {
           amount: 1,
           consumption_date: "2026-11-01",
         },
-        201,
+        410,
       ));
     await test("payment cannot reference another contract invoice", () =>
       check(
@@ -418,13 +418,13 @@ async function run(client, url) {
         { invoice_id: 102, amount: 1 },
         404,
       ));
-    await test("legitimate invoice creation keeps legacy matching behavior", () =>
+    await test("new legacy invoice creation is contained pending source reconciliation", () =>
       check(
         "createContractInvoice",
         101,
         { id: 101 },
         { invoice_number: "IA-NEW", invoice_date: "2026-11-01", amount: 2 },
-        201,
+        410,
       ));
     await test("contract viewer is not an automatic approver", () =>
       check(

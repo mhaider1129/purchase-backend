@@ -489,6 +489,7 @@ const deleteRequestCompletely = async (req, res, next) => {
 
     const fileAccess = require('../../services/attachmentAuthorizationService').createAttachmentAuthorization();
     await fileAccess.request(await fileAccess.actor(req.user,client),requestId,'delete',client);
+    await require('../../services/financialHistoryRetentionService').assertRequestDeletable(client,requestId);
     const attachmentEvidence=await client.query('SELECT * FROM attachments WHERE request_id=$1',[requestId]);
     for(const file of attachmentEvidence.rows)await require('../attachmentsController').retained(client,file);
 
@@ -528,7 +529,7 @@ const deleteRequestCompletely = async (req, res, next) => {
     return res.json({ message: 'Request and related data deleted successfully.', request_id: requestId });
   } catch (err) {
     await client.query('ROLLBACK');
-    return next(createHttpError(500, err?.message || 'Failed to delete request'));
+    return next(err.statusCode ? err : createHttpError(500, err?.message || 'Failed to delete request'));
   } finally {
     client.release();
   }

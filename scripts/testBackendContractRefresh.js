@@ -123,6 +123,11 @@ async function run() {
         "ARRAY[]::text[]",
       ),
     );
+    if (process.argv.includes('--device-demos')) {
+      await client.query(read(schemaFile));
+      await require('../integration/deviceDemoWorkspaces')(client);
+      return;
+    }
     if (process.argv.includes('--contracts')) {
       await client.query(read(schemaFile));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));

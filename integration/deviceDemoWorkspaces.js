@@ -120,6 +120,19 @@ module.exports = async (client) => {
         (row) => String(row.id) === String(item.id),
       ),
     );
+    // Request type, not item name or department, determines demo eligibility.
+    // Exercise both active medical approvers and SCM's approved-demand path.
+    for (const [actor, status] of [[medical, "Submitted"], [scm, "Approved"]]) {
+      for (const requestType of ["Non-Stock", "Stock", "Medication", "IT Item", "Maintenance", "Warehouse Supply", "Printing Logbook"]) {
+        await client.query("UPDATE public.requests SET request_type=$1,status=$2 WHERE id=$3", [requestType, status, request.id]);
+        assert(!(await service.eligible(actor)).some(row => String(row.id) === String(item.id)), `${requestType} must not appear in device selection`);
+        await assert.rejects(service.create(actor, open), { statusCode: 409 });
+        assert.equal((await client.query("SELECT count(*)::int AS n FROM public.device_demo_workspaces WHERE request_item_id=$1", [item.id])).rows[0].n, 0);
+      }
+      await client.query("UPDATE public.requests SET request_type='Medical Device',status=$1 WHERE id=$2", [status, request.id]);
+      assert((await service.eligible(actor)).some(row => String(row.id) === String(item.id)));
+    }
+    await client.query("UPDATE public.requests SET status='Submitted' WHERE id=$1", [request.id]);
     await assert.rejects(service.create(outsider, open), { statusCode: 403 });
     await assert.rejects(
       service.create(medical, { ...open, reviewer_ids: [expert.id] }),

@@ -105,7 +105,7 @@ function handleAuthenticationError(error, next) {
 
 async function authenticateUser(req, _res, next) {
   const token = parseBearerToken(req.headers.authorization);
-  if (!token) return next(createHttpError(401, 'Unauthorized: Missing or malformed token'));
+  if (!token) return next(createHttpError(401, 'Unauthorized: Missing or malformed token', 'INVALID_TOKEN'));
   try { req.user = await attachUserFromToken(token); return next(); }
   catch (error) { return handleAuthenticationError(error, next); }
 }
@@ -114,7 +114,7 @@ async function authenticateUserOptional(req, _res, next) {
   const header = req.headers.authorization;
   if (!header) return next();
   const token = parseBearerToken(header);
-  if (!token) return next(createHttpError(401, 'Unauthorized: Missing or malformed token'));
+  if (!token) return next(createHttpError(401, 'Unauthorized: Missing or malformed token', 'INVALID_TOKEN'));
   try { req.user = await attachUserFromToken(token); return next(); }
   catch (error) { return handleAuthenticationError(error, next); }
 }

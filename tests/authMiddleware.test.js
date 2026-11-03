@@ -9,7 +9,7 @@ jest.mock('jsonwebtoken', () => ({
 const pool = require('../config/db');
 const jwt = require('jsonwebtoken');
 
-const { authenticateUser } = require('../middleware/authMiddleware');
+const { authenticateUser, authenticateUserOptional } = require('../middleware/authMiddleware');
 
 const createResponse = () => ({
   status: jest.fn().mockReturnThis(),
@@ -25,6 +25,32 @@ describe('authenticateUser middleware', () => {
 
   afterEach(() => {
     console.error.mockRestore();
+  });
+
+  it.each([undefined, '', 'Basic token', 'Bearer', 'Bearer a b'])(
+    'marks missing/malformed credentials %p as a definitive session failure',
+    async (authorization) => {
+      const next = jest.fn();
+      await authenticateUser({ headers: { authorization } }, createResponse(), next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({
+        statusCode: 401,
+        code: 'INVALID_TOKEN',
+        message: 'Unauthorized: Missing or malformed token',
+      }));
+      expect(jwt.verify).not.toHaveBeenCalled();
+      expect(pool.query).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps an absent optional token anonymous while rejecting a malformed supplied token', async () => {
+    const anonymous = jest.fn();
+    await authenticateUserOptional({ headers: {} }, createResponse(), anonymous);
+    expect(anonymous).toHaveBeenCalledWith();
+    const malformed = jest.fn();
+    await authenticateUserOptional({ headers: { authorization: 'Basic token' } }, createResponse(), malformed);
+    expect(malformed).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401, code: 'INVALID_TOKEN' }));
+    expect(jwt.verify).not.toHaveBeenCalled();
+    expect(pool.query).not.toHaveBeenCalled();
   });
 
   it('responds with 503 when the database is unreachable', async () => {

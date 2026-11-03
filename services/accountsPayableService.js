@@ -36,6 +36,7 @@ const createPayableFromVerifiedInvoice = ({ repository, requestId, invoiceId, ac
       return { voucher: retry, payable: await tx.findPayableByInvoice(invoice.id), idempotent: true };
     }
     if (invoice.status !== 'FINANCE_VERIFIED') throw fail('Invoice has not been finance verified', 'INVOICE_NOT_FINANCE_VERIFIED', 409);
+    if(tx.client?.query) await require('./contractFinanceIntegrationService').command(tx,actor,invoice);
     await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
     if (await tx.findPayableByInvoice(invoice.id)) throw fail('An active payable already exists for this invoice', 'DUPLICATE_PAYABLE', 409);
     const totals = validateLines(accountingLines, invoice.total_amount);
@@ -56,6 +57,7 @@ const verifyApVoucher = ({ repository, voucherId, actor, auditService = defaultA
   if (!voucher) throw fail('AP voucher not found', 'AP_VOUCHER_NOT_FOUND', 404);
   if (String(voucher.voucher_status).toLowerCase() !== 'draft') throw fail('Only a draft voucher can be verified', 'AP_VOUCHER_NOT_DRAFT', 409);
   const invoice = await tx.lockInvoice(voucher.supplier_invoice_id);
+  if(tx.client?.query) await require('./contractFinanceIntegrationService').command(tx,actor,invoice);
   await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
   const totals = validateLines(voucher.lines, invoice.total_amount);
   const verified = await tx.markVoucherVerified(voucher.id, actor.id);

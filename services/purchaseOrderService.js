@@ -15,7 +15,7 @@ const isPoNumberCollision = (error) => error?.code === '23505' && (
   || /\bpo_number\b/i.test(String(error.detail || ''))
 );
 const createPurchaseOrderFromAwards = async ({ repository, requestId: routeRequestId = null, awardIds, quantities = {}, actor, input = {}, auditService = defaultAudit, outbox = defaultOutbox }) => repository.withTransaction(async (tx) => {
-  actor = (await authorizeCommand(tx, actor, 'procure-to-pay.purchase-orders.manage', {requestId:routeRequestId,awardIds,rfxId:input.rfx_id,rfxResponseId:input.rfx_response_id})).actor;
+  actor = (await authorizeCommand(tx, actor, 'procure-to-pay.purchase-orders.manage', {requestId:routeRequestId,awardIds,rfxId:input.rfx_id,rfxResponseId:input.rfx_response_id,contractId:input.contract_id})).actor;
 
   if (!Array.isArray(awardIds) || !awardIds.length) throw Object.assign(new Error('At least one award is required'), { code: 'AWARD_REQUIRED' });
   const awards = await tx.lockAwards(awardIds);
@@ -27,6 +27,8 @@ const createPurchaseOrderFromAwards = async ({ repository, requestId: routeReque
   if (routeRequestId != null && Number(routeRequestId) !== Number(requestId)) throw Object.assign(new Error('The awards belong to a different purchase request'), { code: 'REQUEST_SCOPE_MISMATCH', statusCode: 409 });
   const currencies = new Set(awards.map((award) => String(award.currency).toUpperCase()));
   if (currencies.size !== 1) throw Object.assign(new Error('PO awards must use one currency'), { code: 'PO_CURRENCY_MISMATCH' });
+  if(tx.client?.query) await require('./contractFinanceIntegrationService').requireLink(tx.client,{contract_id:input.contract_id,request_id:requestId,supplier_id:supplierId});
+  await require('./contractFinanceIntegrationService').reference(tx.client,actor,input.contract_id,{request_id:requestId,supplier_id:supplierId,currency:awards[0].currency},{manage:true,active:true});
   const conversions = new Map();
   const snapshots = new Map();
   const technicalClearances = [];
@@ -45,6 +47,7 @@ const createPurchaseOrderFromAwards = async ({ repository, requestId: routeReque
     if (!snapshot.source_uom || !snapshot.base_uom) throw Object.assign(new Error('Award requires a controlled UOM snapshot'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
     if (governed && (!snapshot.generic_item_id || !snapshot.source_uom_id || !snapshot.base_uom_id || Number(snapshot.inventory_uom_id) !== Number(snapshot.base_uom_id))) throw Object.assign(new Error('Award UOM identity is inconsistent'), { code: 'AWARD_UOM_IDENTITY_INVALID', statusCode: 409 });
     if (governed && Number(snapshot.generic_base_uom_id) !== Number(snapshot.inventory_uom_id)) throw Object.assign(new Error('A governed Generic base-to-inventory UOM conversion is required'), { code: 'GENERIC_INVENTORY_UOM_CONVERSION_REQUIRED', statusCode: 409 });
+    if(input.contract_id!=null && (snapshot.request_mode==='service' || award.line_type==='SERVICE')) throw Object.assign(new Error('Service and milestone contract acceptance require an approved source adapter'),{code:'CONTRACT_SOURCE_UNSUPPORTED',statusCode:409});
     snapshots.set(String(award.id), { ...snapshot, conversion_factor: governed ? multiply(snapshot.supplier_conversion_factor, snapshot.package_quantity) : snapshot.conversion_factor });
   }
   let poNumber = normalizePoNumber(input.po_number);
@@ -83,7 +86,7 @@ const createPurchaseOrderFromAwards = async ({ repository, requestId: routeReque
   return created;
 });
 const event = async (tx, auditService, outbox, action, po, actor, metadata = {}) => {
-  await auditService.writeAuditEvent({ client: tx.client, entityType: 'purchase_order', entityId: po.id, requestId: po.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor.id, beforeData:{status:tx.financialContext?.documents?.get(`purchaseOrder:${po.id}`)?.status||null},afterData:{status:po.status},metadata });
+  await auditService.writeAuditEvent({ client: tx.client, entityType: 'purchase_order', entityId: po.id, requestId: po.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor.id, beforeData:{status:tx.financialContext?.documents?.get(`purchaseOrder:${po.id}`)?.status||null},afterData:{status:po.status,contract_id:po.contract_id||null},metadata:{...metadata,contract_id:po.contract_id||null} });
   let requestedItemIds=metadata.requestedItemIds;
   if(!requestedItemIds&&typeof tx.loadPurchaseOrderLines==='function') requestedItemIds=(await tx.loadPurchaseOrderLines(po.id)).map(line=>line.requested_item_id).filter(Boolean);
   await outbox.enqueueNotification(tx.client, { type: action, entityType: 'purchase_order', entityId: po.id, payload: { purchase_order_id: po.id, requestedItemIds:[...new Set(requestedItemIds||[])], supplierId:po.supplier_id, actorId:actor.id, ...metadata }, idempotencyKey: `${action.toLowerCase()}:${po.id}` });
@@ -107,6 +110,7 @@ const releasePurchaseOrder = async ({ repository, purchaseOrderId, actor, auditS
   for (const line of lines) if (!line.award_id || !line.requested_item_id || !line.price_source_type || !line.price_source_id) throw Object.assign(new Error('PO line traceability and price provenance are required'), { code: 'PO_LINE_TRACE_REQUIRED', statusCode: 409 });
   if(tx.client?.query) for(const line of lines) await require('./preprocurementTechnicalReviewGate').assertTechnicalClearance(tx.client,{id:line.requested_item_id,request_id:po.request_id},actor,'release_purchase_order',{supplier_id:po.supplier_id,approved_product_id:line.approved_product_id,source_type:line.price_source_type,source_id:line.price_source_id,supplier_catalog_item_id:line.supplier_catalog_item_id,quantity:line.quantity,unit_price:line.unit_price,currency:po.currency,purchase_order_id:po.id});
   const totals = calculatePurchaseOrderTotals({ lines, freight: po.freight, charges: po.charges });
+  if(tx.client?.query) await require('./contractFinanceIntegrationService').issue(tx.client,actor,po,totals.grand_total);
   const commitment = await commitPurchaseOrder({ repository: tx, purchaseOrder: { ...po, grand_total: totals.grand_total }, idempotencyKey: key, actor });
   const issued = await tx.markPurchaseOrderIssued(po.id, totals, actor.id);
   if (tx.linkDocuments) await tx.linkDocuments(po.request_id, 'PURCHASE_ORDER', po.id, 'BUDGET_COMMITMENT', commitment.id, actor.id);

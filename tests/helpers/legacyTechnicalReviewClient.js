@@ -3,6 +3,8 @@
 // dedicated gate tests and the disposable PostgreSQL workflow integration.
 module.exports = () => ({
   query: async (sql) => {
+    // This domain adapter has no installed contract module; native tests cover it.
+    if (sql.includes("to_regclass('public.contracts')")) return {rows:[{present:null}]};
     if (sql.includes("technical_review_available"))
       return { rows: [{ technical_review_available: false }] };
     if (

@@ -361,7 +361,7 @@ async function run(client, url) {
     });
     await client.query(`INSERT INTO requests(id,request_type,requester_id,department_id,institute_id,status) VALUES(101,'Non-Stock',101,101,101,'Approved');
  INSERT INTO purchase_orders(id,request_id,supplier_id,po_number,status,currency,total_amount) VALUES(101,101,101,'SETTLEMENT-PO','PO_ISSUED','USD',100);
- INSERT INTO supplier_invoices(id,request_id,purchase_order_id,supplier_id,supplier,invoice_number,normalized_invoice_number,invoice_date,subtotal_amount,total_amount,currency,status,contract_id) VALUES(101,101,101,101,'Supplier A','MATCH-1','match-1','2026-11-01',100,100,'USD','AP_POSTED',101);
+ INSERT INTO supplier_invoices(id,request_id,purchase_order_id,supplier_id,supplier,invoice_number,normalized_invoice_number,invoice_date,subtotal_amount,total_amount,currency,status,contract_id) VALUES(101,101,101,101,'Supplier A','CLEAN-1','clean-1','2026-11-01',100,100,'USD','AP_POSTED',NULL);
  INSERT INTO ap_vouchers(id,request_id,supplier_invoice_id,voucher_number,total_amount,voucher_status) VALUES(101,101,101,'SETTLEMENT-AP',100,'posted');
  INSERT INTO finance_postings(request_id,ap_voucher_id,supplier_invoice_id,posting_status,liability_recognized_amount) VALUES(101,101,101,'posted',100);
  INSERT INTO ap_payables(id,request_id,supplier_invoice_id,ap_voucher_id,supplier_id,supplier_name,invoice_total,open_balance,currency,payable_status) VALUES(101,101,101,101,101,'Supplier A',100,100,'USD','OPEN');
@@ -434,6 +434,7 @@ async function run(client, url) {
       );
       assert.deepEqual(await snapshot(), before);
     });
+    await client.query("UPDATE supplier_invoices SET invoice_number='MATCH-1',normalized_invoice_number='match-1',contract_id=101 WHERE id=101");
     await test("read-only reconciliation reports candidates without merging or mutating records", async () => {
       const report = require("../scripts/lib/contractSettlementReconciliation");
       const before = await snapshot();

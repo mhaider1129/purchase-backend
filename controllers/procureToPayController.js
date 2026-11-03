@@ -141,6 +141,7 @@ const submitInvoice = async (req, res, next) => {
       repository: createTransactionalP2PRepository(pool),
       requestId,
       purchaseOrderId: req.body.purchase_order_id,
+      contractId: req.body.contract_id,
       supplierId: req.body.supplier_id,
       invoiceNumber: req.body.invoice_number,
       invoiceDate: req.body.invoice_date,
@@ -313,6 +314,7 @@ const createPurchaseOrder = async (req, res, next) => {
         expected_delivery_date: req.body.expected_delivery_date || null,
         delivery_location: req.body.delivery_location || null,
         budget_cost_center: req.body.budget_cost_center || null,
+        contract_id: req.body.contract_id || null,
       },
     });
     res.status(201).json({ purchase_order: purchaseOrder });

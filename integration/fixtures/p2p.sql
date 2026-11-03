@@ -409,3 +409,10 @@ CREATE TABLE IF NOT EXISTS public.procurement_evaluation_tests (
 
 INSERT INTO permissions(code) VALUES('evaluations.manage');
 INSERT INTO user_permissions SELECT 1,id FROM permissions WHERE code='evaluations.manage';
+
+-- Actual contract identity/legacy evidence columns used by canonical financial gates.
+-- No contract business writes are exercised by this focused non-contract fixture.
+CREATE TABLE contracts(id SERIAL PRIMARY KEY,institute_id INTEGER,source_request_id INTEGER,end_user_department_id INTEGER,supplier_id INTEGER,currency TEXT DEFAULT 'USD',amount_paid NUMERIC DEFAULT 0,actual_consumed_value NUMERIC DEFAULT 0);
+CREATE TABLE contract_invoices(id BIGSERIAL PRIMARY KEY,contract_id INTEGER,supplier_id INTEGER,invoice_number TEXT,currency TEXT,net_payable_amount NUMERIC(18,2));
+CREATE TABLE contract_payments(id BIGSERIAL PRIMARY KEY,contract_id INTEGER,invoice_id BIGINT,currency TEXT,status TEXT,amount NUMERIC(18,2));
+CREATE TABLE contract_consumption(id BIGINT PRIMARY KEY,contract_id INTEGER);

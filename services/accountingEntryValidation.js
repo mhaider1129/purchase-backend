@@ -59,4 +59,4 @@ const validateAccountingEntry = ({
   return { debit: formatAmount(debit), credit: formatAmount(credit) };
 };
 
-module.exports = { validateAccountingEntry };
+module.exports = { validateAccountingEntry, parseAccountingAmount };

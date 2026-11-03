@@ -16,6 +16,7 @@ function fixture(pool, repositoryFactory) {
   const query = async (raw, p = []) => {
     const sql = raw.replace(/\s+/g, ' ').trim();
     if (/^(CREATE|ALTER)\b/.test(sql)) return rows([]); // existing initializers, never executed on a DB
+    if (sql.includes("to_regclass('public.contracts')")) return rows([{present:null}]);
     if (sql.startsWith('SELECT id FROM rfx_responses WHERE rfx_id=')) return rows(state.response?[{id:state.response.id}]:[]);
     if (sql.startsWith('SELECT * FROM rfx_events')) return rows(Number(p[0])===state.event.id?[state.event]:[]);
     if (sql.startsWith('SELECT * FROM rfx_responses')) return rows(state.response&&Number(p[0])===state.response.id?[state.response]:[]);

@@ -829,6 +829,7 @@ function wrap(name, handler, pool = database, options = {}) {
             "Complete the existing contract approval workflow first",
           );
       }
+      if(name==='updateContract') await require('./contractFinanceIntegrationService').edit(client,ctx.contract,req.body||{});
       require('./legacyContractSettlementPolicy').assertAllowed({name,body:req.body,contract:ctx.contract,actor:ctx.actor});
       if (name === "deleteContract") {
         const retained = (

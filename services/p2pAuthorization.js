@@ -118,6 +118,18 @@ async function authorizeCommand(tx, input, capability, refs = {}) {
       requestId = String(owner);
     }
   }
+  // Match the existing contract boundary lock order: contract before request.
+  // JSON reads keep non-contract commands compatible before optional SQL 065.
+  const contractIds = requestId == null ? [] : (await client.query(`SELECT DISTINCT contract_id FROM (
+    SELECT (to_jsonb(p)->>'contract_id')::integer contract_id FROM purchase_orders p JOIN requests r ON r.id=p.request_id WHERE r.id=$1 AND r.institute_id=$2
+    UNION SELECT (to_jsonb(i)->>'contract_id')::integer FROM supplier_invoices i JOIN requests r ON r.id=i.request_id WHERE r.id=$1 AND r.institute_id=$2
+    ) sources WHERE contract_id IS NOT NULL ORDER BY contract_id`,[requestId,actor.institute_id])).rows.map(r=>r.contract_id);
+  if (refs.contractId != null) contractIds.push(id(refs.contractId));
+  if (contractIds.length) {
+    await require('./contractFinanceIntegrationService').schema(client);
+    const contractBoundary=require('./contractAuthorizationService');
+    await client.query(`SELECT c.id FROM contracts c WHERE c.id=ANY($1::integer[]) AND ${contractBoundary.ownerSql('c')}=$2 ORDER BY c.id FOR SHARE OF c`,[contractIds,actor.institute_id]);
+  }
   let request = null;
   if (requestId != null) {
     request = (
@@ -581,6 +593,7 @@ async function authorizeCommand(tx, input, capability, refs = {}) {
     request,
     documents: seen,
   };
+  await require('./contractFinanceIntegrationService').validateGraph(client,actor,seen);
   tx.financialContext = context;
   return context;
 }

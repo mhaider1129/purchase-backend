@@ -146,6 +146,7 @@ router.patch('/:id/invoices/:invoiceId', updateContractInvoice);
 router.patch('/:id/invoices/:invoiceId/match', matchContractInvoice);
 router.patch('/:id/invoices/:invoiceId/status', updateContractInvoiceStatus);
 router.get('/:id/financial-summary', getContractFinancialSummary);
+router.get('/:id/canonical-financials', require('../controllers/contractFinancialProjectionController').getCanonicalContractFinancialSummary);
 router.get('/:id/consumption-entries', listContractConsumptionEntries);
 router.post('/:id/consumption-entries', createContractConsumptionEntry);
 router.get('/:id/amendments', listContractAmendments);

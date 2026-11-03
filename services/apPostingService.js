@@ -31,6 +31,7 @@ const postApVoucher = ({ repository, requestId, voucherId, actor, idempotencyKey
     }
     if (String(voucher.voucher_status).toLowerCase() !== 'verified') throw fail('Only a verified voucher can be posted', 'AP_VOUCHER_NOT_VERIFIED', 409);
     const invoice = await tx.lockInvoice(voucher.supplier_invoice_id);
+    if(tx.client?.query) await require('./contractFinanceIntegrationService').command(tx,actor,invoice);
     await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
     validateAccountingEntry({
       lines: voucher.lines,

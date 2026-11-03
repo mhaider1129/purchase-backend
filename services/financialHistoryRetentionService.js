@@ -18,6 +18,7 @@ async function assertRequestDeletable(client, requestId) {
         "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') AND c.relname=ANY($1::text[])",
         [
           TABLES.concat([
+            "purchase_orders",
             "contracts",
             "contract_invoices",
             "contract_payments",
@@ -60,6 +61,8 @@ async function assertRequestDeletable(client, requestId) {
   )
     throw retained();
   if (available.has("contracts")) {
+    if (available.has("purchase_orders") && (await client.query("SELECT 1 FROM contracts c JOIN purchase_orders p ON (to_jsonb(p)->>'contract_id')=c.id::text WHERE c.source_request_id=$1 LIMIT 1",[requestId])).rowCount) throw retained();
+
     const linked = [
       "contract_invoices",
       "contract_payments",

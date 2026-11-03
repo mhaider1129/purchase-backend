@@ -15,7 +15,7 @@ const equal = (a, b) => a != null && b != null && String(a) === String(b);
 async function authorize(
   client,
   actor,
-  { requestId, eventId, responseId, itemId, supplierId } = {},
+  { requestId, eventId, responseId, itemId, supplierId, contractId } = {},
 ) {
   actor = await finance.loadActor(client, actor, "rfx.manage");
   if (requestId != null) requestId = finance.id(requestId);
@@ -50,7 +50,7 @@ async function authorize(
     { client },
     actor,
     "rfx.manage",
-    { requestId },
+    { requestId, contractId },
   );
   if (!requestId) throw missing(); // Unlinked legacy events have no proven owner.
   if (event) {

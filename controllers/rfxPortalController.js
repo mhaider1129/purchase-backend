@@ -550,6 +550,7 @@ const awardRfxResponse = async (req, res, next) => {
     const sourcingContext = await sourcing.authorize(client, req.user, {
       eventId: rfxId,
       responseId,
+      contractId: req.body?.contract_id,
     });
 
     const responseRes = await client.query(
@@ -631,6 +632,7 @@ const awardRfxResponse = async (req, res, next) => {
     );
 
     if (existingPo.rowCount > 0) {
+      if(req.body?.contract_id!=null && String(req.body.contract_id)!==String(existingPo.rows[0].contract_id)) throw Object.assign(new Error('Award retry contract source differs from its existing PO'),{code:'CONTRACT_PROVENANCE_MISMATCH',statusCode:409});
       await require("../services/p2pAuthorization").authorizeCommand(
         { client },
         financialActor,
@@ -748,6 +750,7 @@ const awardRfxResponse = async (req, res, next) => {
         rfx_id: rfxId,
         rfx_response_id: responseId,
         po_number: poNumberInput || undefined,
+        contract_id: req.body?.contract_id || null,
         notes: awardNotes,
       },
     });

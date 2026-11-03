@@ -19,6 +19,7 @@ const verifyInvoiceForFinance = ({ repository, invoiceId, actor, auditService = 
     if (await tx.findFinancePostingByInvoice?.(invoice.id)) throw fail('Invoice has already been financially posted', 'INVOICE_ALREADY_POSTED', 409);
     const purchaseOrder = await tx.loadInvoicePurchaseOrder(invoice.purchase_order_id);
     if (!purchaseOrder || String(purchaseOrder.supplier_id) !== String(invoice.supplier_id)) throw fail('Invoice supplier or purchase-order link is invalid', 'INVOICE_PO_LINK_INVALID', 409);
+    if(tx.client?.query) await require('./contractFinanceIntegrationService').command(tx,actor,invoice);
     await supplierInvoiceService.assertInvoiceMatchApproved({ repository: tx, invoiceId: invoice.id });
     if (tx.assertAccountingDimensions) await tx.assertAccountingDimensions(invoice, purchaseOrder);
     const updated = await tx.updateInvoiceLifecycle(invoice.id, 'FINANCE_VERIFIED');

@@ -61,7 +61,7 @@ async function run() {
       `postgresql://p2p_test:${password}@${address}/${name}`,
     );
     let connected = false;
-    for (let attempt = 0; attempt < 40; attempt++) {
+    for (let attempt = 0; attempt < 150; attempt++) {
       client = new Client({ connectionString: url });
       try {
         await client.connect();
@@ -128,11 +128,20 @@ async function run() {
       await require('../integration/deviceDemoWorkspaces')(client);
       return;
     }
-    if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement') || process.argv.includes('--request-workspace')) {
+    if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement') || process.argv.includes('--request-workspace') || process.argv.includes('--contract-finance')) {
       await client.query(read(schemaFile));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
+      if(process.argv.includes('--contract-finance')) {
+        const integration=require('../integration/canonicalContractFinance.postgres');
+        const upgrade=await integration.prepareUpgrade(client);
+        await client.query(read('sql/manual/065_canonical_contract_finance.sql'));
+        await client.query(read('sql/manual/065_canonical_contract_finance.sql'));
+        await integration.verifyUpgrade(client,upgrade);
+        await integration.run(client,url);
+        return;
+      }
       await require(process.argv.includes('--request-workspace')?'../integration/requestWorkspace.postgres':process.argv.includes('--contract-settlement')?'../integration/legacyContractSettlement.postgres':'../integration/contracts.postgres').run(client,url);
       return;
     }

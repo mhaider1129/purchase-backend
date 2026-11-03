@@ -24,11 +24,11 @@ const assertRequestScope = (requestId, canonicalRequestId) => {
 };
 
 const emit = async (tx, auditService, outbox, action, invoice, actor, metadata = {}) => {
-  await auditService.writeAuditEvent({ client: tx.client, entityType: 'supplier_invoice', entityId: invoice.id, requestId: invoice.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor.id,beforeData:{status:tx.financialContext?.documents?.get(`invoice:${invoice.id}`)?.status||null},afterData:{status:invoice.status}, metadata });
+  await auditService.writeAuditEvent({ client: tx.client, entityType: 'supplier_invoice', entityId: invoice.id, requestId: invoice.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor.id,beforeData:{status:tx.financialContext?.documents?.get(`invoice:${invoice.id}`)?.status||null},afterData:{status:invoice.status,contract_id:invoice.contract_id||null}, metadata:{...metadata,contract_id:invoice.contract_id||null} });
   await outbox.enqueueNotification(tx.client, { type: action, entityType: 'supplier_invoice', entityId: invoice.id, payload: { supplier_invoice_id: invoice.id, purchase_order_id: invoice.purchase_order_id, ...metadata }, idempotencyKey: `${action.toLowerCase()}:${invoice.id}:${metadata.match_result_id || 'submission'}` });
 };
 
-const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, supplierId, invoiceNumber, invoiceDate, currency, lines, idempotencyKey, actor, attachmentMetadata = null, auditService = defaultAudit, outbox = defaultOutbox }) => {
+const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, supplierId, invoiceNumber, invoiceDate, currency, lines, idempotencyKey, actor, attachmentMetadata = null, contractId = null, auditService = defaultAudit, outbox = defaultOutbox }) => {
   if (!String(idempotencyKey || '').trim()) throw error('A non-empty idempotency key is required', 'IDEMPOTENCY_KEY_REQUIRED');
   if (!purchaseOrderId || !supplierId || !String(invoiceNumber || '').trim() || !invoiceDate || !currency || !Array.isArray(lines) || !lines.length) throw error('Purchase order, supplier, invoice number/date, currency and lines are required', 'INVALID_INVOICE');
   const payloadFingerprint = fingerprintInvoice({ supplierId, purchaseOrderId, invoiceNumber, invoiceDate, currency, lines });
@@ -39,11 +39,18 @@ const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, s
     const po = await tx.lockPurchaseOrder(purchaseOrderId);
     if (!po) throw error('Purchase order not found', 'PURCHASE_ORDER_NOT_FOUND', 404);
     assertRequestScope(requestId, po.request_id);
+    if (contractId != null && String(contractId)!==String(po.contract_id)) throw error('Invoice contract must be inherited from its PO','CONTRACT_PROVENANCE_MISMATCH',409);
     const retry = await tx.findInvoiceByIdempotency(idempotencyKey);
     if (retry) {
       await authorizeCommand(tx,actor,'procure-to-pay.invoices.manage',{requestId:po.request_id,purchaseOrderId:po.id,invoiceId:retry.id});
       if (retry.payload_fingerprint !== payloadFingerprint) throw error('Idempotency key was already used with a different invoice payload', 'IDEMPOTENCY_CONFLICT', 409);
       return { invoice: await tx.loadInvoiceWithLines(retry.id), idempotent: true };
+    }
+    if(tx.client?.query) {
+      const contractFinance=require('./contractFinanceIntegrationService');
+      await contractFinance.reference(tx.client,actor,po.contract_id,{...po,currency},{active:true,at:invoiceDate});
+      await contractFinance.reconciliation(tx.client,{contract_id:po.contract_id,request_id:po.request_id,supplier_id:supplierId,invoice_number:invoiceNumber});
+      await contractFinance.requireLink(tx.client,po);
     }
     const normalized = normalizeInvoiceNumber(invoiceNumber);
     await tx.lockSupplierInvoiceIdentity(supplierId, normalized);
@@ -59,7 +66,7 @@ const submitSupplierInvoice = async ({ repository, requestId, purchaseOrderId, s
       if (!poLine) throw error(`Invoice line ${index} does not belong to the purchase order`, 'PO_LINE_NOT_FOUND', 409);
       return { ...line, ...calculated.lines[index], purchase_order_item_id: poLine.id, requested_item_id: poLine.requested_item_id, description: poLine.description || line.description || `PO line ${poLine.id}` };
     });
-    const invoice = await tx.insertSupplierInvoice({ request_id: po.request_id, supplier_id: supplierId, purchase_order_id: po.id, invoice_number: String(invoiceNumber).trim(), normalized_invoice_number: normalized, invoice_date: invoiceDate, currency: String(currency).toUpperCase(), idempotency_key: idempotencyKey.trim(), payload_fingerprint: payloadFingerprint, subtotal_amount: calculated.subtotal, tax_amount: calculated.tax, discount_amount: calculated.discount, total_amount: calculated.grand_total, attachment_metadata: attachmentMetadata, submitted_by: actor.id });
+    const invoice = await tx.insertSupplierInvoice({ request_id: po.request_id, contract_id:po.contract_id||null, supplier_id: supplierId, purchase_order_id: po.id, invoice_number: String(invoiceNumber).trim(), normalized_invoice_number: normalized, invoice_date: invoiceDate, currency: String(currency).toUpperCase(), idempotency_key: idempotencyKey.trim(), payload_fingerprint: payloadFingerprint, subtotal_amount: calculated.subtotal, tax_amount: calculated.tax, discount_amount: calculated.discount, total_amount: calculated.grand_total, attachment_metadata: attachmentMetadata, submitted_by: actor.id });
     for (const line of persistedLines) await tx.insertSupplierInvoiceLine({ ...line, supplier_invoice_id: invoice.id });
     if (tx.linkDocuments) await tx.linkDocuments(po.request_id, 'PURCHASE_ORDER', po.id, 'AP_INVOICE', invoice.id, actor.id);
     await emit(tx, auditService, outbox, 'SUPPLIER_INVOICE_SUBMITTED', invoice, actor, { supplier_id: supplierId, totals: calculated });

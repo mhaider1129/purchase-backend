@@ -312,10 +312,7 @@ test('read-only baseline executes real catalog and reconciliation SQL without ch
   await pool.query('UPDATE payment_records SET amount_paid=31 WHERE id=$1', [paid.payment.id]);
   await pool.query(`INSERT INTO invoice_items(supplier_invoice_id,purchase_order_item_id,requested_item_id,quantity,unit_price,line_total)
     VALUES($1,$2,$3,1,100,100)`, [c.inv.id,c.line.id,c.item.id]);
-  await pool.query(`CREATE TABLE contracts(id BIGSERIAL PRIMARY KEY,amount_paid NUMERIC(18,2),currency TEXT DEFAULT 'USD');
-    CREATE TABLE contract_invoices(id BIGSERIAL PRIMARY KEY,contract_id BIGINT,supplier_id BIGINT,invoice_number TEXT,currency TEXT,net_payable_amount NUMERIC(18,2));
-    CREATE TABLE contract_payments(id BIGSERIAL PRIMARY KEY,contract_id BIGINT,invoice_id BIGINT,currency TEXT,status TEXT,amount NUMERIC(18,2));
-    CREATE TABLE journal_entries(id BIGSERIAL PRIMARY KEY,source_type TEXT,source_id TEXT,journal_type TEXT,currency TEXT)`);
+  await pool.query(`CREATE TABLE journal_entries(id BIGSERIAL PRIMARY KEY,source_type TEXT,source_id TEXT,journal_type TEXT,currency TEXT)`);
   const contract = await one('INSERT INTO contracts(amount_paid) VALUES(0) RETURNING id');
   const contractInvoice = await one(`INSERT INTO contract_invoices(contract_id,supplier_id,invoice_number,currency,net_payable_amount)
     VALUES($1,1,$2,'USD',100) RETURNING id`, [contract.id,c.inv.invoice_number]);

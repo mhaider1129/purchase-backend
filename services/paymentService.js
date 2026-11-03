@@ -33,6 +33,11 @@ const postPayment = ({ repository, payableId, invoiceId, amount, currency, payme
     if (!authority || String(authority.voucher_status).toLowerCase() !== 'posted') throw fail('AP liability has not been posted', 'PAYABLE_NOT_POSTED', 409);
     if (!payable.currency) throw fail('Payable currency is unavailable', 'PAYABLE_CURRENCY_UNAVAILABLE', 409);
     if (String(payable.currency).toUpperCase() !== normalized.currency) throw fail('Payment currency does not match payable', 'PAYMENT_CURRENCY_MISMATCH', 409);
+    if(tx.client?.query) {
+      const invoice=await tx.lockInvoice(payable.supplier_invoice_id);
+      await require('./contractFinanceIntegrationService').command(tx,actor,invoice);
+      if(invoice.contract_id!=null) require('./accountingEntryValidation').parseAccountingAmount(amount,'Contract payment amount');
+    }
     const paid = await tx.sumPostedPayments(payable.id);
     if(tx.assertTechnicalInvoiceClearance)await tx.assertTechnicalInvoiceClearance(payable.supplier_invoice_id);
     const remaining = subtractDecimal(payable.invoice_total, paid);
@@ -46,7 +51,7 @@ const postPayment = ({ repository, payableId, invoiceId, amount, currency, payme
     await tx.updateInvoicePaymentProjection(payable.supplier_invoice_id, status);
     if (tx.linkDocuments) await tx.linkDocuments(payable.request_id, 'ACCOUNTS_PAYABLE', payable.id, 'PAYMENT', payment.id, actor?.id || actorId);
     const action = status === 'PAID' ? 'PAYMENT_COMPLETED' : 'PAYMENT_PARTIAL';
-    await auditService.writeAuditEvent({ client: tx.client, entityType: 'payment', entityId: payment.id, requestId: payable.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor?.id || actorId,beforeData:{open_balance:payable.open_balance,status:payable.payable_status},afterData:{open_balance:openBalance,status}, metadata: { payable_id: payable.id, amount: String(amount), open_balance: openBalance } });
+    await auditService.writeAuditEvent({ client: tx.client, entityType: 'payment', entityId: payment.id, requestId: payable.request_id, instituteId: tx.financialContext?.instituteId, action, actorUserId: actor?.id || actorId,beforeData:{open_balance:payable.open_balance,status:payable.payable_status},afterData:{open_balance:openBalance,status}, metadata: { contract_id:tx.financialContext?.documents?.get(`invoice:${payable.supplier_invoice_id}`)?.contract_id||null, payable_id: payable.id, amount: String(amount), open_balance: openBalance } });
     await outbox.enqueueNotification(tx.client, { type: action, entityType: 'payment', entityId: payment.id, payload: { payable_id: payable.id, amount: String(amount), open_balance: openBalance }, idempotencyKey: `payment-posted:${payment.id}` });
     return { payment, open_balance: openBalance, payable_status: status, idempotent: false };
   });

@@ -330,7 +330,7 @@ const getAuditLogs = async (requestId,user) => {
       OR al.description ILIKE $2
       OR al.details::text ILIKE $2)
      AND al.target_type IS DISTINCT FROM 'contract_library'
-     AND (al.target_type IS DISTINCT FROM 'contract' OR EXISTS(SELECT 1 FROM contracts c WHERE c.id::text=al.target_id AND ${contractScope}))
+     AND (al.target_type IS DISTINCT FROM 'contract' OR EXISTS(SELECT 1 FROM contracts c WHERE c.id=al.target_id AND ${contractScope}))
    ORDER BY al.created_at DESC, al.id DESC`,
   [requestId, `%${requestId}%`],
 ).then((rows) => rows.map((row) => ({ ...row, details: parseAuditDetails(row.details), before_values: row.before_values || null, after_values: row.after_values || null })));

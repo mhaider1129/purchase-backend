@@ -76,6 +76,9 @@ const { getContractHealth, updateContractGovernanceFields } = require('../contro
 
 const router = express.Router();
 
+const reconciliation = require('../controllers/contractFinancialReconciliationController');
+router.get('/financial-reconciliation/worklist', authenticateUser, reconciliation.worklist);
+router.post('/financial-reconciliation/reviews', authenticateUser, reconciliation.review);
 router.get('/', listContracts);
 router.get('/items/active', listActiveContractItems);
 router.get('/:contractId/evaluation-candidates', getEvaluationCandidates);

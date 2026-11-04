@@ -872,6 +872,7 @@ const getLifecycleDetail = async (req, res, next) => {
     ]);
 
     return ({
+      completion: require('../services/p2pCompletionService').fromProjection(await require('../services/procurementCompletionService').project(client,{id:requestId,institute_id:scopeActor.institute_id}),await createConnectedP2PRepository(client).loadRequestP2PCompletionFacts(requestId)),
       lifecycle: lifecycle.rows[0] || null,
       request: requestMeta.rows[0] || null,
       request_items: requestItems.rows,

@@ -541,6 +541,7 @@ async function applyTechnicalDisposition({
         notes: d.notes,
       },
     });
+    await notificationOutbox.enqueueNotification(tx.client,{type:'GOODS_RECEIPT_ACCEPTANCE_APPLIED',entityType:'delivery_disposition',entityId:d.history_id,idempotencyKey:`delivery-disposition:${d.history_id}:applied`,payload:{requestedItemIds:[poLine.requested_item_id],actorId:actor.id,supplierId:po.supplier_id,requestId:po.request_id,instituteId:actor.institute_id}});
     for (const a of task.assignments)
       await delivery.notify(
         tx.client,

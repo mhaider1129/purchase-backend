@@ -69,7 +69,7 @@ describe('fetchRequestsController.getAllRequests filters', () => {
     await getAllRequests(req, res);
 
     expect(pool.query.mock.calls[0][0]).toContain(
-      "LOWER(TRIM(r.status)) = 'available in stock'",
+      `${require('../services/requestFulfillmentSql').effectiveRequestStatusSql('r')}`,
     );
     expect(pool.query.mock.calls[0][0]).not.toContain('step_user.role =');
     expect(pool.query.mock.calls[0][1]).toEqual([10, 0]);

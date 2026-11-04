@@ -81,6 +81,7 @@ router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
 router.patch('/:id/central-supply-status', updateCentralSupplyChainStatus);
 router.post('/:id/scm-rejection', require('../controllers/requests/scmRequestInterventionController').reject);
 router.post('/:id/request-hod-approval', requestHodApproval); // Insert additional HOD approval step
+router.get('/:id/completion', authenticateUser, async(req,res,next)=>{try{res.json(await require('../services/procurementCompletionService').get(req.params.id,req.user));}catch(e){next(e);}});
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.patch('/:id/report-receipt-issue', authenticateUser, reportReceiptIssue);

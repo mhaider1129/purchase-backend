@@ -7,4 +7,5 @@ const deriveCompletion = ({ approvedQuantity, orderedQuantity, receivedQuantity,
     ? compareDecimal(invoicedQuantity, orderedQuantity) >= 0 && compareDecimal(payableAmount, '0') > 0 && compareDecimal(paidAmount, payableAmount) >= 0
     : Number(financiallyActiveInvoiceCount) > 0 && Number(unsettledPayableCount) === 0 && Number(activeCommitmentCount) === 0 && Number(unresolvedFinancialObligationCount) === 0,
 });
-module.exports = { deriveCompletion };
+const fromProjection=(completion,facts)=>({...completion,financial_complete:deriveCompletion({financiallyActiveInvoiceCount:facts.financially_active_invoice_count,unsettledPayableCount:facts.unsettled_payable_count,activeCommitmentCount:facts.active_commitment_count,unresolvedFinancialObligationCount:facts.unresolved_financial_obligation_count}).financial_complete});
+module.exports = { deriveCompletion,fromProjection };

@@ -125,11 +125,29 @@ async function run() {
     );
     if (process.argv.includes('--device-demos')) {
       await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
       await require('../integration/deviceDemoWorkspaces')(client);
+      return;
+    }
+    if (process.argv.includes('--completion')) {
+      process.env.DATABASE_URL=disposableDatabaseUrl(url);
+      process.env.NODE_ENV='test';
+      await client.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
+      await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
+      await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
+      await client.query(read('sql/manual/065_canonical_contract_finance.sql'));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await require('../integration/stockFulfilledRequests')(client);
+      await require('../integration/technicalWorkflow')(client);
+      await require('../integration/procurementCompletion.postgres').run(client,url);
       return;
     }
     if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement') || process.argv.includes('--request-workspace') || process.argv.includes('--contract-finance') || process.argv.includes('--contract-reconciliation')) {
       await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
@@ -284,6 +302,7 @@ async function run() {
     for (let pass = 1; pass <= 2; pass++) {
       try {
         await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
       } catch (error) {
         console.error(
           "Patch context:",
@@ -753,6 +772,6 @@ async function run() {
   }
 }
 run().catch((error) => {
-  console.error(error.message);
+  console.error(error.stack);
   process.exitCode = 1;
 });

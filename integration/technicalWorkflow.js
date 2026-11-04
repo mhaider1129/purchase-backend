@@ -121,6 +121,7 @@ module.exports = async (client) => {
   };
   const one = async (sql, args) => (await client.query(sql, args)).rows[0];
   try {
+    await client.query("INSERT INTO item_uom(uom_code,uom_name,normalized_uom_code,is_active) SELECT 'EA','Each','ea',true WHERE NOT EXISTS(SELECT 1 FROM item_uom WHERE is_active)");
     const inst = (
       await one(
         "INSERT INTO institutes(id,name) SELECT COALESCE(max(id),0)+100,'Technical integrated fixture' FROM institutes RETURNING id",
@@ -172,9 +173,10 @@ module.exports = async (client) => {
     const outsider = await user("Technical outsider", "Requester", requesting);
     // Persist only the real policy owner's permission for automatic generation.
     await client.query(
-      "INSERT INTO user_permissions(user_id,permission_id) SELECT $1,id FROM permissions WHERE code='technical-inspections.manage' ON CONFLICT DO NOTHING",
+      "INSERT INTO user_permissions(user_id,permission_id) SELECT $1,id FROM permissions WHERE code IN ('technical-inspections.manage','procure-to-pay.match.manage','finance.override-mismatch') ON CONFLICT DO NOTHING",
       [scm.id],
     );
+    await client.query("INSERT INTO user_permissions(user_id,permission_id) SELECT $1,id FROM permissions WHERE code='procure-to-pay.receipts.manage' ON CONFLICT DO NOTHING",[receiver.id]);
     const warehouse = (
       await one(
         "INSERT INTO warehouses(id,name,institute_id) SELECT COALESCE(max(id),0)+100,'Technical receiving warehouse',$1 FROM warehouses RETURNING id",
@@ -222,8 +224,8 @@ module.exports = async (client) => {
       [hod.id, requesting, inst],
     );
     const item = await one(
-      "INSERT INTO requested_items(request_id,item_name,quantity,specs,unit_of_measure,approval_status,request_mode,catalog_status,restriction_justification,generic_item_id) VALUES($1,'Technical device',10,'Specification','Piece','Approved','approved_free_text_exception','approved_exception','Fixture authorization',$2) RETURNING *",
-      [request.id, generic],
+      "INSERT INTO requested_items(request_id,item_name,quantity,specs,unit_of_measure,approval_status,request_mode,catalog_status,restriction_justification,generic_item_id) VALUES($1,'Technical device',10,'Specification',$3,'Approved','approved_free_text_exception','approved_exception','Fixture authorization',$2) RETURNING *",
+      [request.id, generic,uom.uom_code],
     );
     const setting = {
       pre_required: true,
@@ -525,6 +527,8 @@ module.exports = async (client) => {
       row_version: task.row_version,
       disposition_id: task.pending_disposition.history_id,
     };
+    // Authority is reloaded from users, rather than trusted from the caller.
+    await client.query('UPDATE users SET warehouse_id=NULL WHERE id=$1',[receiver.id]);
     await assert.rejects(
       applyTechnicalDisposition({
         repository,
@@ -534,6 +538,7 @@ module.exports = async (client) => {
       }),
       { code: "WAREHOUSE_SCOPE_DENIED" },
     );
+    await client.query('UPDATE users SET warehouse_id=$1 WHERE id=$2',[warehouse,receiver.id]);
     assert.equal((await deliveries.get(hod, task.id)).status, "DECIDED");
     assert.equal(await balance(), 0);
     task = (
@@ -547,6 +552,11 @@ module.exports = async (client) => {
     assert.equal(task.status, "ON_HOLD");
     assert.equal(task.remaining_quantity, "1");
     assert.equal(await balance(), 8);
+    const partialCompletion=(await one('SELECT public.canonical_procurement_completion($1,$2,NULL) c',[request.id,inst])).c;
+    assert.equal(partialCompletion.receipt_complete,false);
+    assert.equal(partialCompletion.items[0].accepted_quantity,'8');
+    assert.equal(partialCompletion.items[0].quarantined_quantity,'1');
+    const dispositionEvents=Number((await one("SELECT count(*) n FROM notification_outbox WHERE event_type='GOODS_RECEIPT_ACCEPTANCE_APPLIED'")).n);
     assert.equal(
       (
         await applyTechnicalDisposition({
@@ -559,6 +569,7 @@ module.exports = async (client) => {
       true,
     );
     assert.equal(await balance(), 8);
+    assert.equal(Number((await one("SELECT count(*) n FROM notification_outbox WHERE event_type='GOODS_RECEIPT_ACCEPTANCE_APPLIED'")).n),dispositionEvents);
     const totals = await createConnectedP2PRepository(
       adapter,
     ).loadAcceptedReceiptQuantitiesByPoLine(po.id);
@@ -764,6 +775,10 @@ module.exports = async (client) => {
     await client.query("ROLLBACK TO SAVEPOINT retained_technical_file");
     assert.equal(formal.status, "CLOSED");
     assert.equal(await balance(), 10);
+    const fullCompletion=(await one('SELECT public.canonical_procurement_completion($1,$2,NULL) c',[request.id,inst])).c;
+    assert.equal(fullCompletion.receipt_complete,true);
+    assert.equal(fullCompletion.fulfillment_complete,false); // accepted warehouse intake is not department issue
+
     assert.equal(
       (await one("SELECT status FROM purchase_orders WHERE id=$1", [po.id]))
         .status,

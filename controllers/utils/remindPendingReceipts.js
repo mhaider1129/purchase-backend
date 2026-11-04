@@ -27,44 +27,14 @@ const remindPendingReceipts = async () => {
     `);
 
     for (const row of rows) {
-      const isFollowUp = Boolean(row.receipt_prompt_sent_at);
-      const title = isFollowUp
-        ? `Request ${row.request_id} auto-received`
-        : `Confirm receipt for request ${row.request_id}`;
-      const message = isFollowUp
-        ? `Your ${row.request_type || 'purchase'} request (ID: ${row.request_id}) was automatically marked as received because the receipt confirmation prompt was not answered within 24 hours.`
-        : `Your ${row.request_type || 'purchase'} request (ID: ${row.request_id}) was purchased. Please go to My Closed Requests and confirm item receipt.`;
+      const title = `Confirm receipt for request ${row.request_id}`;
+      const message = `Please review your ${row.request_type || 'purchase'} request (ID: ${row.request_id}) and explicitly confirm receipt or report an issue. A reminder does not establish fulfillment.`;
 
       try {
         await client.query('BEGIN');
 
-        if (isFollowUp) {
-          await client.query(
-            `UPDATE requested_items
-             SET is_received = TRUE,
-                 received_at = COALESCE(received_at, CURRENT_TIMESTAMP)
-             WHERE request_id = $1
-               AND COALESCE(is_received, FALSE) = FALSE`,
-            [row.request_id],
-          );
-
-          await client.query(
-            `UPDATE requests
-             SET status = 'received',
-                 auto_received_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [row.request_id],
-          );
-        } else {
-          await client.query(
-            `UPDATE requests
-             SET receipt_prompt_sent_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [row.request_id],
-          );
-        }
+        // Elapsed time and unanswered messages are not receipt evidence.
+        await client.query(`UPDATE requests SET receipt_prompt_sent_at=CURRENT_TIMESTAMP WHERE id=$1 AND lower(status)='completed'`,[row.request_id]);
 
         await createNotifications([
           {
@@ -74,7 +44,7 @@ const remindPendingReceipts = async () => {
             link: '/closed-requests',
             metadata: {
               requestId: row.request_id,
-              action: isFollowUp ? 'request_auto_received' : 'request_receipt_confirmation_required',
+              action: 'request_receipt_confirmation_required',
             },
           },
         ], client);

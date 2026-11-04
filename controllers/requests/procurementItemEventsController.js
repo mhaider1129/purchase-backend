@@ -124,20 +124,9 @@ const recalculateRequestProcurementStatus = async (client, requestId) => {
   );
 
   const summary = rows[0] || { total_items: 0, fully_procured_items: 0, started_items: 0 };
-  const totalItems = Number(summary.total_items || 0);
-  const fullyProcuredItems = Number(summary.fully_procured_items || 0);
   const startedItems = Number(summary.started_items || 0);
 
-  if (totalItems > 0 && fullyProcuredItems >= totalItems) {
-    await client.query(
-      `UPDATE requests
-       SET status = 'completed', completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
-      [requestId]
-    );
-    return 'completed';
-  }
-
+  // Procurement registration is commercial progress, never receipt/fulfillment authority.
   if (startedItems > 0) {
     await client.query(
       `UPDATE requests

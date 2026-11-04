@@ -79,7 +79,7 @@ test('dashboard aligns trusted activity numerators with FULL plus PARTIAL covera
 test('case detail still returns stored activity for a LEGACY_INCOMPLETE case', async () => {
   const legacyActivity = { id: 44, procurement_case_id: 4, activity_type: 'RFQ_CREATED' };
   pool.query.mockImplementation(async sql => {
-    if (sql.includes('SELECT pc.*,ri.item_name')) return { rowCount: 1, rows: [{ id: 4, activity_coverage: 'LEGACY_INCOMPLETE' }] };
+    if (sql.includes('AS completion,ri.item_name')) return { rowCount: 1, rows: [{ id: 4, activity_coverage: 'LEGACY_INCOMPLETE' }] };
     if (sql.includes('FROM procurement_case_activities WHERE')) return { rows: [legacyActivity] };
     return { rows: [] };
   });

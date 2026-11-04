@@ -4,7 +4,7 @@ const ACTIVITY_MAP = Object.freeze({
   RFX_CREATED: 'RFQ_CREATED', RFX_SUPPLIER_INVITED: 'SUPPLIER_CONTACTED',
   RFX_RESPONSE_SUBMITTED: 'QUOTATION_RECEIVED', TECHNICAL_EVALUATION_REQUESTED: 'TECHNICAL_EVALUATION_REQUESTED',
   TECHNICAL_EVALUATION_COMPLETED: 'TECHNICAL_EVALUATION_COMPLETED', AWARD_CREATED: 'AWARD_CREATED',
-  PO_CREATED: 'PO_CREATED', PO_ISSUED: 'PO_ISSUED', GOODS_RECEIPT_POSTED: 'GOODS_RECEIPT',
+  PO_CREATED: 'PO_CREATED', PO_ISSUED: 'PO_ISSUED', GOODS_RECEIPT_POSTED: 'GOODS_RECEIPT', GOODS_RECEIPT_ACCEPTANCE_APPLIED:'GOODS_RECEIPT', WAREHOUSE_FULFILLMENT_APPLIED:'GOODS_RECEIPT',
 });
 
 const PROJECTION_MAP = Object.freeze({
@@ -16,10 +16,10 @@ const PROJECTION_MAP = Object.freeze({
 });
 
 function projectionForEvent(event) {
-  if (event.type !== 'GOODS_RECEIPT_POSTED') return PROJECTION_MAP[event.type] || null;
-  // A receipt is delivery evidence only when the producer's authoritative PO totals say
-  // the requirement is complete. A partial receipt remains supplier fulfilment.
-  return event.receiptComplete === true || event.purchaseOrderStatus === 'PO_DELIVERED'
+  if (!['GOODS_RECEIPT_POSTED','GOODS_RECEIPT_ACCEPTANCE_APPLIED','WAREHOUSE_FULFILLMENT_APPLIED'].includes(event.type)) return PROJECTION_MAP[event.type] || null;
+  // Re-read accepted quantities across every PO for the case item; one delivered PO
+  // or a producer status flag cannot establish acceptance of the entire demand.
+  return event.completion?.approved_demand === true && event.completion?.terminal !== true && event.itemCompletion?.receipt_complete === true && event.itemCompletion?.evidence_conflict !== true
     ? { case_status: 'DELIVERED', pending_root_cause: null }
     : { case_status: 'SUPPLIER_FULFILLMENT', pending_root_cause: null };
 }
@@ -37,7 +37,14 @@ async function captureBusinessEvent({ repository, event }) {
       activity_type: activityType, activity_at: event.occurredAt, actor_id: event.actorId || null,
       supplier_id: event.supplierId || null, related_entity_type: event.entityType,
       related_entity_id: String(event.entityId), source: 'OUTBOX', idempotency_key: key }));
-    const projection = projectionForEvent(event);
+    let currentEvent=event;
+    if(['GOODS_RECEIPT_POSTED','GOODS_RECEIPT_ACCEPTANCE_APPLIED','WAREHOUSE_FULFILLMENT_APPLIED'].includes(event.type)) {
+      if(!repository.loadCaseCompletion)throw new Error('Authoritative case completion projection unavailable');
+      const completion=await repository.loadCaseCompletion(procurementCase.id);
+      if(!completion)throw new Error('Procurement case completion ancestry is inconsistent');
+      currentEvent={...event,completion,itemCompletion:completion.items.find(line=>String(line.requested_item_id)===String(procurementCase.requested_item_id))};
+    }
+    const projection = currentEvent.completion?.terminal ? null : projectionForEvent(currentEvent);
     if (projection) await repository.updateCaseProjection(procurementCase.id, {
       ...projection,
       occurred_at: event.occurredAt,

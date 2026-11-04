@@ -1,7 +1,7 @@
 "use strict";
 const m = require("./deviceDemoModel");
 const { writeAuditEvent } = require("./auditService");
-const { fulfilledItemSql } = require("./requestFulfillmentSql");
+const { fulfilledItemSql,stockItemSql } = require("./requestFulfillmentSql");
 const { error, required, id, snapshotItem, fingerprint } = m;
 const CURRENT_APPROVAL = `EXISTS(SELECT 1 FROM public.approvals a WHERE a.request_id=r.id AND a.approver_id=$2 AND a.is_active IS TRUE AND a.status IN ('Pending','On Hold') AND NOT COALESCE(a.is_superseded,false))`;
 const ACTIVE_REQUEST = `lower(trim(r.status)) NOT IN ('rejected','cancelled','canceled','closed','completed','received','available in stock','available_in_stock','in stock','in_stock')`;
@@ -224,7 +224,7 @@ function createDeviceDemoService(database) {
       throw error(403, "SCM or medical-devices authority is required");
     return (
       await database.query(
-        `SELECT ri.id,ri.request_id,ri.item_name,ri.specs,r.status,r.maintenance_ref_number,d.name AS department_name FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id JOIN public.departments d ON d.id=r.department_id AND d.institute_id=r.institute_id WHERE r.institute_id=$1 AND ${ACTIVE_REQUEST} AND r.request_type='Medical Device' AND (${CURRENT_APPROVAL} OR ($3::boolean AND lower(trim(r.status)) IN ('approved','partially procured','partially_procured'))) AND COALESCE(ri.purchased_quantity,0)=0 AND NOT ${fulfilledItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure') AND NOT EXISTS(SELECT 1 FROM public.device_demo_workspaces w WHERE w.request_item_id=ri.id AND w.status<>'CANCELLED') AND (r.id::text ILIKE $4 OR ri.item_name ILIKE $4 OR COALESCE(r.maintenance_ref_number,'') ILIKE $4) ORDER BY r.created_at DESC,ri.id LIMIT 100`,
+        `SELECT ri.id,ri.request_id,ri.item_name,ri.specs,r.status,r.maintenance_ref_number,d.name AS department_name FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id JOIN public.departments d ON d.id=r.department_id AND d.institute_id=r.institute_id WHERE r.institute_id=$1 AND ${ACTIVE_REQUEST} AND r.request_type='Medical Device' AND (${CURRENT_APPROVAL} OR ($3::boolean AND lower(trim(r.status)) IN ('approved','partially procured','partially_procured'))) AND COALESCE(ri.purchased_quantity,0)=0 AND NOT ${fulfilledItemSql("ri")} AND NOT ${stockItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure') AND NOT EXISTS(SELECT 1 FROM public.device_demo_workspaces w WHERE w.request_item_id=ri.id AND w.status<>'CANCELLED') AND (r.id::text ILIKE $4 OR ri.item_name ILIKE $4 OR COALESCE(r.maintenance_ref_number,'') ILIKE $4) ORDER BY r.created_at DESC,ri.id LIMIT 100`,
         [
           actor.institute_id,
           actor.id,
@@ -261,7 +261,7 @@ function createDeviceDemoService(database) {
   const fresh = async (client, w) => {
     const row = (
       await client.query(
-        `SELECT ri.*,r.department_id,r.status AS request_status FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id WHERE ri.id=$1 AND ri.request_id=$2 AND r.institute_id=$3 AND ${ACTIVE_REQUEST} AND COALESCE(ri.purchased_quantity,0)=0 AND NOT ${fulfilledItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure')`,
+        `SELECT ri.*,r.department_id,r.status AS request_status FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id WHERE ri.id=$1 AND ri.request_id=$2 AND r.institute_id=$3 AND ${ACTIVE_REQUEST} AND COALESCE(ri.purchased_quantity,0)=0 AND NOT ${fulfilledItemSql("ri")} AND NOT ${stockItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure')`,
         [w.request_item_id, w.request_id, w.institute_id],
       )
     ).rows[0];
@@ -323,7 +323,7 @@ function createDeviceDemoService(database) {
       }
       const row = (
         await client.query(
-          `SELECT ri.*,r.institute_id,r.department_id FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id JOIN public.departments dep ON dep.id=r.department_id AND dep.institute_id=r.institute_id WHERE ri.id=$4 AND r.institute_id=$1 AND ${ACTIVE_REQUEST} AND r.request_type='Medical Device' AND (${CURRENT_APPROVAL} OR ($3::boolean AND lower(trim(r.status)) IN ('approved','partially procured','partially_procured'))) AND COALESCE(ri.purchased_quantity,0)=0 AND NOT ${fulfilledItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure')`,
+          `SELECT ri.*,r.institute_id,r.department_id FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id JOIN public.departments dep ON dep.id=r.department_id AND dep.institute_id=r.institute_id WHERE ri.id=$4 AND r.institute_id=$1 AND ${ACTIVE_REQUEST} AND r.request_type='Medical Device' AND (${CURRENT_APPROVAL} OR ($3::boolean AND lower(trim(r.status)) IN ('approved','partially procured','partially_procured'))) AND COALESCE(ri.purchased_quantity,0)=0 AND NOT ${fulfilledItemSql("ri")} AND NOT ${stockItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure')`,
           [actor.institute_id, actor.id, m.isScm(actor), itemId],
         )
       ).rows[0];

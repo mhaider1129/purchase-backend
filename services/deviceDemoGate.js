@@ -1,6 +1,6 @@
 "use strict";
 const { error, snapshotItem, fingerprint } = require("./deviceDemoModel");
-const { fulfilledItemSql } = require("./requestFulfillmentSql");
+const { fulfilledItemSql,stockItemSql } = require("./requestFulfillmentSql");
 const { writeAuditEvent } = require("./auditService");
 // Called only for award, PO creation and procurement registration, in their transaction.
 async function assertDemoSelection(client, item, actor, command, context = {}) {
@@ -24,7 +24,7 @@ async function assertDemoSelection(client, item, actor, command, context = {}) {
     );
   const current = (
     await client.query(
-      `SELECT ri.*,r.department_id,r.institute_id,r.status AS request_status FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id WHERE ri.id=$1 AND ri.request_id=$2 AND NOT ${fulfilledItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure')`,
+      `SELECT ri.*,r.department_id,r.institute_id,r.status AS request_status FROM public.requested_items ri JOIN public.requests r ON r.id=ri.request_id WHERE ri.id=$1 AND ri.request_id=$2 AND NOT ${fulfilledItemSql("ri")} AND NOT ${stockItemSql("ri")} AND lower(trim(COALESCE(ri.approval_status,'')))<>'rejected' AND lower(trim(COALESCE(ri.procurement_status,''))) NOT IN ('cancelled','canceled','not_procured','unable_to_procure')`,
       [itemId, w.request_id],
     )
   ).rows[0];

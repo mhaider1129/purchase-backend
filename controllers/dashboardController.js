@@ -313,7 +313,10 @@ const getDashboardSummary = async (req, res) => {
     const actionableTotal = pendingRequests + completedRequests;
     const completionRate = actionableTotal ? (completedRequests / actionableTotal) * 100 : 0;
 
+    const completionDimensions = Number.isSafeInteger(Number(req.user?.institute_id)) && Number(req.user.institute_id)>0 ? (await pool.query(`SELECT count(*) FILTER(WHERE (c.value->>'procurement_complete')::boolean)::int procurement_complete_requests,count(*) FILTER(WHERE (c.value->>'receipt_complete')::boolean)::int receipt_complete_requests,count(*) FILTER(WHERE (c.value->>'fulfillment_complete')::boolean)::int fulfilled_requests,count(*) FILTER(WHERE (c.value->>'stock_resolved')::boolean)::int stock_ready_requests,count(*) FILTER(WHERE (c.value->>'legacy_completion_without_fulfillment')::boolean)::int legacy_unverified_requests FROM requests r CROSS JOIN LATERAL public.canonical_procurement_completion(r.id,r.institute_id,NULL) c(value) WHERE r.institute_id=$1`,[req.user.institute_id])).rows[0] : null;
     res.json({
+      completion_dimensions:completionDimensions?{scope:'CURRENT_INSTITUTE',institute_id:req.user.institute_id,...completionDimensions}:null,
+      legacy_completion_basis:'operational_archive_and_stock_ready_not_fulfillment',
       timing_basis: 'active_time_excluding_approval_holds',
       total_requests: totalRequests,
       approved_requests: parseInt(approvedRes.rows[0].count, 10),
@@ -649,7 +652,10 @@ const getWorkloadAnalysis = async (req, res) => {
 
     const summary = backlogSummaryRes.rows[0] || {};
 
+    const completionDimensions = Number.isSafeInteger(Number(req.user?.institute_id)) && Number(req.user.institute_id)>0 ? (await pool.query(`SELECT count(*) FILTER(WHERE (c.value->>'procurement_complete')::boolean)::int procurement_complete_requests,count(*) FILTER(WHERE (c.value->>'receipt_complete')::boolean)::int receipt_complete_requests,count(*) FILTER(WHERE (c.value->>'fulfillment_complete')::boolean)::int fulfilled_requests,count(*) FILTER(WHERE (c.value->>'stock_resolved')::boolean)::int stock_ready_requests,count(*) FILTER(WHERE (c.value->>'legacy_completion_without_fulfillment')::boolean)::int legacy_unverified_requests FROM requests r CROSS JOIN LATERAL public.canonical_procurement_completion(r.id,r.institute_id,NULL) c(value) WHERE r.institute_id=$1`,[req.user.institute_id])).rows[0] : null;
     res.json({
+      completion_dimensions:completionDimensions?{scope:'CURRENT_INSTITUTE',institute_id:req.user.institute_id,...completionDimensions}:null,
+      legacy_completion_basis:'operational_archive_and_stock_ready_not_fulfillment',
       timing_basis: 'active_time_excluding_approval_holds',
       total_active: Number(summary.active_pending || 0),
       on_hold: Number(summary.on_hold || 0),

@@ -36,7 +36,7 @@ describe('procurementHistoryController.getCompletedAssignedRequests', () => {
 
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining(
-        "LOWER(TRIM(r.status)) IN ('completed', 'received', 'available in stock')",
+        require('../services/requestFulfillmentSql').effectiveRequestStatusSql('r'),
       ),
       [7],
     );

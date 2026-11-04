@@ -1,22 +1,32 @@
-'use strict';
-// SQL aliases/expressions are supplied by backend code, never request input.
-const normalized = expression => `LOWER(TRIM(COALESCE(${expression},'')))`;
-const stockStates = "('available in stock','available_in_stock','in stock','in_stock')";
-const stockItemSql = (item='ri') => `(${normalized(`${item}.approval_status`)} IN ${stockStates}
-  OR ${normalized(`${item}.procurement_status`)} IN ${stockStates}
-  OR (${normalized(`${item}.approval_status`)}='rejected' AND EXISTS (
-    SELECT 1 FROM public.warehouse_supply_items fulfillment_wsi WHERE fulfillment_wsi.requested_item_id=${item}.id)))`;
-const fulfilledItemSql = (item='ri') => `(${stockItemSql(item)}
-  OR ${normalized(`${item}.procurement_status`)} IN ('purchased','completed','received','fulfilled')
-  OR (COALESCE(${item}.quantity,0)>0 AND GREATEST(COALESCE(${item}.purchased_quantity,0),COALESCE(${item}.received_quantity,0))>=${item}.quantity))`;
-const stockResolvedRequestSql = (request='r') => `(EXISTS (SELECT 1 FROM public.requested_items fulfillment_ri WHERE fulfillment_ri.request_id=${request}.id AND ${stockItemSql('fulfillment_ri')})
-  AND NOT EXISTS (SELECT 1 FROM public.requested_items fulfillment_ri WHERE fulfillment_ri.request_id=${request}.id AND NOT ${fulfilledItemSql('fulfillment_ri')}))`;
-const effectiveRequestStatusSql = (request='r') => `(CASE
-  WHEN ${normalized(`${request}.status`)} IN ${stockStates} THEN 'Available in Stock'
-  WHEN ${normalized(`${request}.status`)} IN ('completed','received','closed','delivered','rejected','cancelled','canceled') THEN ${request}.status
-  WHEN ${stockResolvedRequestSql(request)} THEN CASE
-    WHEN NOT EXISTS (SELECT 1 FROM public.requested_items fulfillment_ri WHERE fulfillment_ri.request_id=${request}.id AND NOT ${stockItemSql('fulfillment_ri')}) THEN 'Available in Stock'
-    ELSE 'Completed' END
-  ELSE ${request}.status END)`;
-const completedRequestSql = (request='r') => `LOWER(TRIM(${effectiveRequestStatusSql(request)})) IN ('completed','received','available in stock')`;
-module.exports={stockItemSql,fulfilledItemSql,stockResolvedRequestSql,effectiveRequestStatusSql,completedRequestSql};
+"use strict";
+// Compatibility status labels are distinct from authoritative fulfillment flags.
+const projectionSql = (request = "r") =>
+  `public.canonical_procurement_completion(${request}.id,${request}.institute_id,NULL)`;
+const itemProjectionSql = (item = "ri") =>
+  `(SELECT completion_item FROM jsonb_array_elements(public.canonical_procurement_completion(${item}.request_id,(SELECT completion_parent.institute_id FROM requests completion_parent WHERE completion_parent.id=${item}.request_id),${item}.id)->'items') completion_item WHERE completion_item->>'requested_item_id'=${item}.id::text LIMIT 1)`;
+const stockItemSql = (item = "ri") =>
+  `COALESCE((${itemProjectionSql(item)}->>'stock_resolved')::boolean,false)`;
+const fulfilledItemSql = (item = "ri") =>
+  `COALESCE((${itemProjectionSql(item)}->>'fulfillment_complete')::boolean,false)`;
+const stockResolvedRequestSql = (request = "r") =>
+  `(${request}.request_type<>'Warehouse Supply' AND COALESCE((${projectionSql(request)}->>'stock_resolved')::boolean,false))`;
+const effectiveRequestStatusSql = (request = "r") => `(CASE
+ WHEN lower(trim(${request}.status)) IN ('completed','received','closed','rejected','cancelled','canceled','available in stock','available_in_stock') THEN ${request}.status
+ WHEN ${stockResolvedRequestSql(request)} THEN 'Available in Stock'
+ WHEN COALESCE((${projectionSql(request)}->>'fulfillment_complete')::boolean,false) THEN 'Completed'
+ ELSE ${request}.status END)`;
+// Existing operational archive/queue contract. Never use this to authorize fulfillment.
+const completedRequestSql = (request = "r") =>
+  `lower(trim(${effectiveRequestStatusSql(request)})) IN ('completed','received','available in stock')`;
+const fullyFulfilledRequestSql = (request = "r") =>
+  `COALESCE((${projectionSql(request)}->>'fulfillment_complete')::boolean,false)`;
+module.exports = {
+  projectionSql,
+  itemProjectionSql,
+  stockItemSql,
+  fulfilledItemSql,
+  stockResolvedRequestSql,
+  effectiveRequestStatusSql,
+  completedRequestSql,
+  fullyFulfilledRequestSql,
+};

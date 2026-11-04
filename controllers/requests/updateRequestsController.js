@@ -9,10 +9,6 @@ const { createNotifications } = require('../../utils/notificationService');
 const { assignApprover } = require('./createRequestController');
 const { fetchApprovalRoutes, resolveRouteDomain } = require('../utils/approvalRoutes');
 const ensureRequestedItemReceivedColumns = require('../../utils/ensureRequestedItemReceivedColumns');
-const ensureWarehouseAssignments = require('../../utils/ensureWarehouseAssignments');
-const ensureWarehouseInventoryTables = require('../../utils/ensureWarehouseInventoryTables');
-const recalculateAvailableQuantity = require('../../utils/recalculateAvailableQuantity');
-const { getInspectionSummaryForRequest } = require('../../utils/technicalInspectionStatus');
 const ensureRequestEditApprovalsTable = require('../../utils/ensureRequestEditApprovalsTable');
 const requestReclassificationService = require('../../services/requestReclassificationService');
 const { applyAutoAssignmentForApprovedRequest } = require('../../services/requestAutoAssignmentService');
@@ -36,17 +32,6 @@ const rewireRequestType = async (req, res, next) => {
 };
 
 const { assignRequestLegacy: assignRequestToProcurement } = require('./assignRequestController');
-
-const addReceivedStockToWarehouse = async (client, { warehouseId, requestId, itemName, quantity, userId, actor }) => {
-  if (!Number.isInteger(warehouseId)) throw createHttpError(400, 'You must be assigned to a warehouse to receive stock items');
-  const stockItemRes = await client.query('SELECT id,name FROM stock_items WHERE LOWER(name)=LOWER($1) LIMIT 1',[itemName]);
-  if (!stockItemRes.rowCount) throw createHttpError(400, `Stock item '${itemName}' does not exist in the catalogue`);
-  const warehouseRes = await client.query('SELECT institute_id FROM warehouses WHERE id=$1',[warehouseId]);
-  const { postAcceptedReceiptLines } = require('../../services/goodsReceiptInventoryAdapter');
-  const line={id:`request-${requestId}-${stockItemRes.rows[0].id}`,stock_item_id:stockItemRes.rows[0].id,accepted_quantity:Number(quantity)};
-  const results=await postAcceptedReceiptLines({id:`legacy-request-${requestId}`,receipt_number:`REQUEST-${requestId}`},[line],{warehouseId,instituteId:warehouseRes.rows[0].institute_id,actor:actor || {id:userId},correlationId:`request-receipt:${requestId}`},client);
-  return {stock_item_id:stockItemRes.rows[0].id,item_name:stockItemRes.rows[0].name,quantity:Number(quantity),movement_id:results[0]?.movement?.id};
-};
 
 const updateApprovalStatus = async (req, res, next) => {
   const approval_id = req.params.id;
@@ -741,267 +726,8 @@ const requestHodApproval = async (req, res, next) => {
   }
 };
 
-const markRequestAsCompleted = async (req, res, next) => {
-  const { id } = req.params;
-  const { id: user_id } = req.user;
-
-  if (!req.user.hasPermission('requests.manage')) {
-    return next(createHttpError(403, 'You do not have permission to mark requests as completed'));
-  }
-
-  const client = await pool.connect();
-  let transactionActive = false;
-  try {
-    await client.query('BEGIN');
-    transactionActive = true;
-
-    const itemStatusRes = await client.query(
-      `SELECT
-         COALESCE(SUM(
-           CASE
-             WHEN LOWER(TRIM(COALESCE(approval_status, ''))) = 'rejected'
-             THEN 0
-             WHEN procurement_status IS NULL
-               OR TRIM(procurement_status) = ''
-               OR (
-                 LOWER(TRIM(procurement_status)) IN ('purchased', 'completed')
-                 AND purchased_quantity IS NULL
-               )
-             THEN 1
-             ELSE 0
-           END
-         ), 0) AS missing_required,
-         COALESCE(SUM(
-           CASE
-             WHEN LOWER(TRIM(COALESCE(approval_status, ''))) = 'rejected'
-             THEN 0
-             WHEN procurement_status IS NULL
-               OR TRIM(procurement_status) = ''
-             THEN 0
-             WHEN LOWER(TRIM(procurement_status)) NOT IN ('purchased', 'completed', 'not_procured', 'canceled')
-             THEN 1
-             ELSE 0
-           END
-         ), 0) AS invalid_status
-       FROM public.requested_items
-       WHERE request_id = $1`,
-      [id],
-    );
-
-    const {
-      missing_required: missingRequiredRaw = 0,
-      invalid_status: invalidStatusRaw = 0,
-    } = itemStatusRes.rows[0] || {};
-
-    const missingRequired = Number(missingRequiredRaw) || 0;
-    if (missingRequired > 0) {
-      await client.query('ROLLBACK');
-      transactionActive = false;
-      return next(
-        createHttpError(
-          400,
-          'Purchased or completed items must have a procurement status and purchased quantity.'
-        )
-      );
-    }
-
-    const invalidStatus = Number(invalidStatusRaw) || 0;
-    if (invalidStatus > 0) {
-      await client.query('ROLLBACK');
-      transactionActive = false;
-      return next(
-        createHttpError(
-          400,
-          'All items must be purchased, completed, not procured, or canceled before marking the request as completed.'
-        )
-      );
-    }
-
-    const requestRes = await client.query(
-      `SELECT
-         request_type,
-         department_id,
-         requester_id,
-         initiated_by_technician_id
-       FROM requests
-       WHERE id = $1
-       FOR UPDATE`,
-      [id],
-    );
-
-    if (requestRes.rowCount === 0) {
-      await client.query('ROLLBACK');
-      transactionActive = false;
-      return next(createHttpError(404, 'Request not found'));
-    }
-
-    const requestRow = requestRes.rows[0];
-
-    let requesterEmail = null;
-    let technicianEmail = null;
-    const notificationEntries = [];
-
-    const relatedUserIds = [
-      requestRow.requester_id,
-      requestRow.initiated_by_technician_id,
-    ].filter((value) => value !== null && value !== undefined);
-
-    if (relatedUserIds.length > 0) {
-      const userEmailRes = await client.query(
-        `SELECT id, email
-           FROM users
-          WHERE id = ANY($1::int[])`,
-        [relatedUserIds],
-      );
-
-      for (const { id: relatedId, email } of userEmailRes.rows) {
-        if (email) {
-          if (relatedId === requestRow.requester_id) {
-            requesterEmail = email;
-          }
-          if (relatedId === requestRow.initiated_by_technician_id) {
-            technicianEmail = email;
-          }
-        }
-      }
-    }
-
-    const inspectionSummary = await getInspectionSummaryForRequest(client, id);
-    const hasInspections = inspectionSummary.totalCount > 0;
-    const hasPendingInspections =
-      hasInspections && inspectionSummary.pendingCount > 0;
-
-    const nextStatus = hasPendingInspections ? 'technical_inspection_pending' : 'completed';
-
-    await client.query(
-      `UPDATE requests
-       SET status = $1::varchar,
-           completed_at = CASE
-             WHEN $1::varchar = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
-             ELSE completed_at
-           END,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2`,
-      [nextStatus, id],
-    );
-
-    const logAction = hasPendingInspections
-      ? 'Technical Inspection Pending'
-      : 'Marked as Completed';
-    const logComment = hasPendingInspections
-      ? 'Procurement finalized items; waiting for technical inspection acceptance.'
-      : 'All items finalized by procurement';
-
-    await client.query(
-      `INSERT INTO request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, $2, $3, $4)`,
-      [id, logAction, user_id, logComment],
-    );
-
-    const requesterTitle = hasPendingInspections
-      ? `Request ${id} awaiting technical inspection`
-      : `Request ${id} completed`;
-    const requesterMessage = hasPendingInspections
-      ? `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been finalized by procurement and is awaiting technical inspection before you can mark items as received.`
-      : `Your ${requestRow.request_type || 'purchase'} request (ID: ${id}) has been marked as completed by procurement. Items are purchased and awaiting your receipt confirmation in My Closed Requests.`;
-
-    notificationEntries.push({
-      userId: requestRow.requester_id,
-      title: requesterTitle,
-      message: requesterMessage,
-      link: '/closed-requests',
-      metadata: {
-        requestId: id,
-        requestType: requestRow.request_type,
-        action: hasPendingInspections ? 'technical_inspection_pending' : 'request_completed',
-      },
-    });
-
-    if (
-      requestRow.request_type === 'Maintenance' &&
-      requestRow.initiated_by_technician_id &&
-      requestRow.initiated_by_technician_id !== requestRow.requester_id
-    ) {
-      notificationEntries.push({
-        userId: requestRow.initiated_by_technician_id,
-        title: `Maintenance request ${id} completed`,
-        message: hasPendingInspections
-          ? `The maintenance request you initiated (ID: ${id}) is awaiting technical inspection after procurement finalized it.`
-          : `The maintenance request you initiated (ID: ${id}) has been marked as completed.`,
-        link: `/requests/${id}`,
-        metadata: {
-          requestId: id,
-          requestType: requestRow.request_type,
-          action: hasPendingInspections
-            ? 'technical_inspection_pending'
-            : 'maintenance_completed',
-        },
-      });
-    }
-
-    if (notificationEntries.length > 0) {
-      await createNotifications(notificationEntries, client);
-    }
-
-    await client.query('COMMIT');
-    transactionActive = false;
-
-    const emailPromises = [];
-    if (requesterEmail) {
-      emailPromises.push(
-        sendEmail(
-          requesterEmail,
-          requesterTitle,
-          `${requesterMessage}\nYou can review the latest status in the procurement portal.`,
-        ),
-      );
-    }
-
-    if (
-      requestRow.request_type === 'Maintenance' &&
-      technicianEmail &&
-      technicianEmail !== requesterEmail
-    ) {
-      emailPromises.push(
-        sendEmail(
-          technicianEmail,
-          hasPendingInspections
-            ? `Maintenance request ${id} pending technical inspection`
-            : `Maintenance request ${id} completed`,
-          hasPendingInspections
-            ? `The maintenance request you initiated (ID: ${id}) is awaiting technical inspection after procurement finalized it.\nPlease review the inspection outcome once available.`
-            : `The maintenance request you initiated (ID: ${id}) has been marked as completed.\nPlease review the outcome with the requesting department.`,
-        ),
-      );
-    }
-
-    try {
-      await Promise.all(emailPromises);
-    } catch (notificationErr) {
-      console.error('⚠️ Failed to send one or more completion notifications:', notificationErr);
-    }
-
-    const responseMessage = hasPendingInspections
-      ? '⚠️ Request finalized by procurement and waiting for technical inspection'
-      : '✅ Request marked as completed';
-
-    res.json({ message: responseMessage, status: nextStatus });
-  } catch (err) {
-    if (transactionActive) {
-      try {
-        await client.query('ROLLBACK');
-      } catch (rollbackErr) {
-        console.error('⚠️ Failed to rollback transaction:', rollbackErr);
-      }
-    }
-    console.error('❌ Failed to mark request as completed:', err);
-    if (!err.code && !err.statusCode) {
-      return next(createHttpError(500, 'Failed to complete the request'));
-    }
-    return next(err);
-  } finally {
-    client.release();
-  }
+const markRequestAsCompleted = async (req,res,next) => {
+  try {const result=await require('../../services/procurementCompletionService').complete(req.params.id,req.user);res.json({message:'Request completion verified against authoritative fulfillment evidence',status:result.after,completion:result.completion});}catch(e){next(e);}
 };
 
 const updateRequestCost = async (req, res, next) => {
@@ -1743,7 +1469,7 @@ const reportReceiptIssue = async (req, res, next) => {
 
     const request = requestRes.rows[0];
     const normalizedStatus = (request.status || '').trim().toLowerCase();
-    if (!['completed', 'received'].includes(normalizedStatus)) {
+    if (!['approved','fully_approved','ready_for_procurement','assigned','partially procured','partially_procured','in progress','available in stock','available_in_stock','completed','received'].includes(normalizedStatus)) {
       await client.query('ROLLBACK');
       return next(createHttpError(400, 'Request must be completed before receipt issues can be reported'));
     }
@@ -1796,10 +1522,8 @@ const reportReceiptIssue = async (req, res, next) => {
     );
 
     if (normalizedStatus === 'received') {
-      await client.query(
-        "UPDATE requests SET status = 'Completed', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-        [id],
-      );
+      const actor=await require('../../services/procurementCompletionService').actor(client,req.user);
+      await require('../../services/requestLifecycleService').transition({requestId:Number(id),actor,toStatus:'Completed',reason:'Requester reported a receipt issue',metadata:{receiptIssue:true}},client);
     }
 
     await client.query(
@@ -1858,7 +1582,7 @@ const markRequestAsReceived = async (req, res, next) => {
     await ensureRequestedItemReceivedColumns(client);
 
     const requestRes = await client.query(
-      'SELECT requester_id, status, request_type FROM requests WHERE id = $1 FOR UPDATE',
+      'SELECT * FROM requests WHERE id = $1 FOR UPDATE',
       [id]
     );
 
@@ -1867,9 +1591,8 @@ const markRequestAsReceived = async (req, res, next) => {
       return next(createHttpError(404, 'Request not found'));
     }
 
-    const { requester_id, status, request_type: requestType } = requestRes.rows[0];
+    const { requester_id, status } = requestRes.rows[0];
     const normalizedStatus = (status || '').trim().toLowerCase();
-    const normalizedRequestType = (requestType || '').trim().toLowerCase();
 
     if (normalizedStatus === 'technical_inspection_pending') {
       await client.query('ROLLBACK');
@@ -1881,10 +1604,10 @@ const markRequestAsReceived = async (req, res, next) => {
       );
     }
 
-    if (!['completed', 'received'].includes(normalizedStatus)) {
+    if (!['approved','fully_approved','ready_for_procurement','assigned','partially procured','partially_procured','in progress','available in stock','available_in_stock','completed','received'].includes(normalizedStatus)) {
       await client.query('ROLLBACK');
       return next(
-        createHttpError(400, 'Request must be completed before items can be marked as received')
+        createHttpError(400, 'Approved receiving evidence is required before requester acknowledgment')
       );
     }
 
@@ -1894,6 +1617,8 @@ const markRequestAsReceived = async (req, res, next) => {
         createHttpError(403, 'Unauthorized to mark request as received')
       );
     }
+
+    const completionEvidence=await require('../../services/procurementCompletionService').get(id,req.user,client);
 
     const itemsRes = await client.query(
       `SELECT id, item_name, is_received, purchased_quantity, quantity, received_quantity
@@ -1928,27 +1653,24 @@ const markRequestAsReceived = async (req, res, next) => {
       return next(createHttpError(404, 'Requested item not found for this request'));
     }
 
-    let inventoryUpdate = null;
-    const requestedReceiveQuantity =
-      received_quantity === undefined || received_quantity === null
-        ? null
-        : Number(received_quantity);
-    if (requestedReceiveQuantity !== null) {
-      if (!Number.isFinite(requestedReceiveQuantity) || requestedReceiveQuantity <= 0) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(400, 'received_quantity must be a positive number'));
-      }
-    }
+    const receivedEvidence=completionEvidence.items.find(line=>line.line_kind==='requested_item'&&String(line.requested_item_id)===String(targetItemId));
+    if(!receivedEvidence || !receivedEvidence.eligible || receivedEvidence.evidence_conflict || receivedEvidence.unsupported_policy || Number(receivedEvidence.accepted_quantity)<=0 && Number(receivedEvidence.warehouse_issued_quantity)<=0) throw createHttpError(409,'Verified accepted receiving or warehouse issue evidence is required before acknowledgment');
+    const quantityMath=require('../../services/purchaseOrderTotalsService');
+    const declared=quantityMath.parseDecimal(item.quantity);
+    const current=quantityMath.parseDecimal(item.received_quantity || '0');
+    const capacity=[receivedEvidence.accepted_quantity,receivedEvidence.warehouse_issued_quantity,receivedEvidence.fulfilled_quantity].map(quantityMath.parseDecimal).reduce((a,b)=>a>b?a:b,0n);
+    const capped=capacity<declared?capacity:declared;
+    const remainingValue=capped>current?capped-current:0n;
+    if(received_quantity!=null && !/^\d+(\.\d{1,2})?$/.test(String(received_quantity))) throw createHttpError(400,'Requester acknowledgment supports exact quantities with at most two decimal places');
+    const delta=received_quantity==null?remainingValue:quantityMath.parseDecimal(received_quantity);
+    if(delta<0n || delta>remainingValue) throw createHttpError(409,'Acknowledgment exceeds current accepted receiving or warehouse issue evidence');
+    if(delta%100n!==0n) throw createHttpError(409,'This legacy acknowledgment counter cannot represent the accepted fractional unit exactly');
+    const safeQuantityToReceive=quantityMath.formatDecimal(delta,2);
+    const purchasedQuantity=String(item.quantity);
+    const newReceivedQuantity=quantityMath.formatDecimal(current+delta,2);
+    const isFullyReceived=current+delta>=declared && declared>0n;
 
-    const purchasedQuantity = Number(item.purchased_quantity ?? item.quantity ?? 0);
-    const currentReceived = Number(item.received_quantity || 0);
-    const remainingReceivable = Math.max(purchasedQuantity - currentReceived, 0);
-    const quantityToReceive = requestedReceiveQuantity ?? remainingReceivable;
-    const safeQuantityToReceive = Math.min(quantityToReceive, remainingReceivable);
-
-    if (safeQuantityToReceive > 0) {
-      const newReceivedQuantity = Number((currentReceived + safeQuantityToReceive).toFixed(2));
-      const isFullyReceived = newReceivedQuantity >= purchasedQuantity && purchasedQuantity > 0;
+    if (delta > 0n) {
       await client.query(
         `UPDATE public.requested_items
          SET is_received = $3,
@@ -1973,18 +1695,7 @@ const markRequestAsReceived = async (req, res, next) => {
         ]
       );
 
-      if (normalizedRequestType === 'stock') {
-        const warehouseId = req.user?.warehouse_id;
-        inventoryUpdate = await addReceivedStockToWarehouse(client, {
-          warehouseId,
-          requestId: id,
-          itemName: item.item_name,
-          quantity: safeQuantityToReceive,
-          userId: user_id,
-          actor: req.user,
-        });
-      }
-    } else if (remainingReceivable <= 0 && !item.is_received) {
+    } else if (isFullyReceived && !item.is_received) {
       await client.query(
         `UPDATE public.requested_items
          SET is_received = TRUE,
@@ -1999,21 +1710,13 @@ const markRequestAsReceived = async (req, res, next) => {
       );
     }
 
-    const remainingRes = await client.query(
-      `SELECT COUNT(*) AS remaining
-         FROM public.requested_items
-        WHERE request_id = $1 AND (is_received IS DISTINCT FROM TRUE)`,
-      [id]
-    );
-
-    const remaining = Number(remainingRes.rows[0]?.remaining || 0);
+    const afterAck=await require('../../services/procurementCompletionService').project(client,requestRes.rows[0]);
+    const remaining=afterAck.items.filter(line=>line.eligible && (line.requester_issue || quantityMath.compareDecimal(line.requester_acknowledged_quantity,line.quantity)<0)).length;
 
     let requestStatus = status;
     if (remaining === 0 && normalizedStatus !== 'received') {
-      await client.query(
-        "UPDATE requests SET status = 'Received', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-        [id]
-      );
+      const actor=await require('../../services/procurementCompletionService').actor(client,req.user);
+      await require('../../services/requestLifecycleService').transition({requestId:Number(id),actor,toStatus:'Received',reason:'Requester explicitly acknowledged verified fulfillment'},client);
 
       requestStatus = 'Received';
 
@@ -2021,18 +1724,6 @@ const markRequestAsReceived = async (req, res, next) => {
         `INSERT INTO request_logs (request_id, action, actor_id, comments)
         VALUES ($1, 'Marked as Received', $2, 'All items marked as received by requester')`,
         [id, user_id]
-      );
-    }
-
-    if (inventoryUpdate) {
-      await client.query(
-        `INSERT INTO request_logs (request_id, action, actor_id, comments)
-         VALUES ($1, 'Warehouse inventory updated', $2, $3)`,
-        [
-          id,
-          user_id,
-          `Added ${inventoryUpdate.quantity} of '${inventoryUpdate.item_name}' to warehouse stock`,
-        ],
       );
     }
 

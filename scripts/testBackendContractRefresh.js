@@ -128,11 +128,22 @@ async function run() {
       await require('../integration/deviceDemoWorkspaces')(client);
       return;
     }
-    if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement') || process.argv.includes('--request-workspace') || process.argv.includes('--contract-finance')) {
+    if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement') || process.argv.includes('--request-workspace') || process.argv.includes('--contract-finance') || process.argv.includes('--contract-reconciliation')) {
       await client.query(read(schemaFile));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
+      if(process.argv.includes('--contract-reconciliation')) {
+        const baseline=require('../integration/canonicalContractFinance.postgres');
+        const before=await baseline.prepareUpgrade(client);
+        await client.query(read('sql/manual/065_canonical_contract_finance.sql'));
+        await client.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
+        await client.query(read('sql/manual/066_contract_financial_reconciliation.sql'));
+        await client.query(read('sql/manual/066_contract_financial_reconciliation.sql'));
+        await baseline.verifyUpgrade(client,before);
+        await baseline.run(client,url,{after:require('../integration/contractFinancialReconciliation.postgres').run});
+        return;
+      }
       if(process.argv.includes('--contract-finance')) {
         const integration=require('../integration/canonicalContractFinance.postgres');
         const upgrade=await integration.prepareUpgrade(client);

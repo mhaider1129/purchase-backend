@@ -1,7 +1,7 @@
 "use strict";
 const assert = require("node:assert/strict");
 const { disposableDatabaseUrl } = require("./disposableDatabase");
-async function run(client, url) {
+async function run(client, url, { after = null } = {}) {
   process.env.DATABASE_URL = disposableDatabaseUrl(url);
   process.env.NODE_ENV = "test";
   process.env.PGOPTIONS = "-c statement_timeout=10000 -c lock_timeout=5000";
@@ -670,6 +670,7 @@ async function run(client, url) {
       await client.query(sql);
       assert.deepEqual(await snapshot(), before);
     });
+    if (after) await after({client,url,c,po,po2,inv,inv2,inv3,ap,ap2,ap3,pool,repository});
     console.log(
       `Canonical contract finance PostgreSQL cases passed: ${passed}`,
     );

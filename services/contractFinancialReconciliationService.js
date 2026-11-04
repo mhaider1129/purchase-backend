@@ -152,7 +152,7 @@ async function collect(client, actor, contractId = null) {
         `SELECT a.id,a.supplier_invoice_id,a.request_id,a.supplier_id,a.ap_voucher_id,a.currency,a.invoice_total::text,a.open_balance::text,a.payable_status,
  v.supplier_invoice_id voucher_invoice_id,v.request_id voucher_request_id,v.total_amount::text voucher_total,v.voucher_status,v.currency voucher_currency,
  EXISTS(SELECT 1 FROM finance_postings f WHERE f.ap_voucher_id=v.id AND f.supplier_invoice_id=a.supplier_invoice_id AND f.request_id=a.request_id AND lower(f.posting_status)='posted' AND f.liability_recognized_amount=a.invoice_total) posted
- FROM ap_payables a LEFT JOIN ap_vouchers v ON v.id=a.ap_voucher_id WHERE a.supplier_invoice_id=ANY($1::int[]) AND ${scope.predicate("payable", "a", "$2")} ORDER BY a.id LIMIT 5001`,
+ FROM ap_payables a LEFT JOIN ap_vouchers v ON v.id=a.ap_voucher_id WHERE a.supplier_invoice_id=ANY($1::bigint[]) AND ${scope.predicate("payable", "a", "$2")} ORDER BY a.id LIMIT 5001`,
         [ids, actor.institute_id],
       )
     ).rows,
@@ -161,7 +161,7 @@ async function collect(client, actor, contractId = null) {
     (
       await client.query(
         `SELECT p.id,p.request_id,p.supplier_invoice_id,p.ap_voucher_id,p.currency,p.amount_paid::text,p.payment_reference,p.payment_status,p.reversal_of_payment_id,p.paid_by,p.paid_at::text
- FROM payment_records p WHERE p.supplier_invoice_id=ANY($1::int[]) AND ${scope.predicate("payment", "p", "$2")} ORDER BY p.id LIMIT 5001`,
+ FROM payment_records p WHERE p.supplier_invoice_id=ANY($1::bigint[]) AND ${scope.predicate("payment", "p", "$2")} ORDER BY p.id LIMIT 5001`,
         [ids, actor.institute_id],
       )
     ).rows,
@@ -169,7 +169,7 @@ async function collect(client, actor, contractId = null) {
   const allocations = bounded(
     (
       await client.query(
-        `SELECT a.id,a.payment_record_id,a.ap_payable_id,a.amount::text FROM payment_allocations a WHERE a.payment_record_id=ANY($1::int[]) AND a.ap_payable_id=ANY($2::int[]) ORDER BY a.id LIMIT 5001`,
+        `SELECT a.id,a.payment_record_id,a.ap_payable_id,a.amount::text FROM payment_allocations a WHERE a.payment_record_id=ANY($1::bigint[]) AND a.ap_payable_id=ANY($2::bigint[]) ORDER BY a.id LIMIT 5001`,
         [payments.map((x) => x.id), payables.map((x) => x.id)],
       )
     ).rows,
@@ -201,9 +201,9 @@ async function collect(client, actor, contractId = null) {
   const hidden = (
     await client.query(
       `SELECT
- (SELECT COUNT(*)::int FROM ap_payables WHERE supplier_invoice_id=ANY($1::int[])) ap_count,
- (SELECT COUNT(*)::int FROM payment_records WHERE supplier_invoice_id=ANY($1::int[])) payment_count,
- (SELECT COUNT(*)::int FROM payment_allocations WHERE payment_record_id=ANY($2::int[]) OR ap_payable_id=ANY($3::int[])) allocation_count`,
+ (SELECT COUNT(*)::int FROM ap_payables WHERE supplier_invoice_id=ANY($1::bigint[])) ap_count,
+ (SELECT COUNT(*)::int FROM payment_records WHERE supplier_invoice_id=ANY($1::bigint[])) payment_count,
+ (SELECT COUNT(*)::int FROM payment_allocations WHERE payment_record_id=ANY($2::bigint[]) OR ap_payable_id=ANY($3::bigint[])) allocation_count`,
       [ids, payments.map((x) => x.id), payables.map((x) => x.id)],
     )
   ).rows[0];

@@ -1,7 +1,7 @@
 "use strict";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-async function run({ client, c, inv, inv2, ap, ap3 }) {
+async function run({ client, c, po, inv, inv2, ap, ap3 }) {
   const service = require("../services/contractFinancialReconciliationService");
   const one = async (sql, params = []) =>
     (await client.query(sql, params)).rows[0];
@@ -506,6 +506,10 @@ async function run({ client, c, inv, inv2, ap, ap3 }) {
     await client.query("UPDATE ap_vouchers SET currency='USD' WHERE id=$1", [
       ap.ap_voucher_id,
     ]);
+  });
+  await test('canonical bigint document IDs remain readable beyond the integer range',async()=>{
+    await client.query("INSERT INTO supplier_invoices(id,request_id,purchase_order_id,supplier_id,supplier,invoice_number,normalized_invoice_number,invoice_date,currency,subtotal_amount,total_amount,status,contract_id) VALUES(3000000001,$1,$2,$3,'Fixture','HIGH-ID-REVIEW','high-id-review',CURRENT_DATE,'USD',10,10,'AP_INVOICE_SUBMITTED',$4)",[c.request.id,po.id,c.supplier.id,c.contract.id]);
+    const data=await load();assert.ok(data.rows.some(r=>r.candidates.some(x=>x.type==='supplier_invoice'&&x.id==='3000000001')));
   });
   const finalHistory = await snapshot();
   await test("reviews and reports create no financial, historical or outbox changes", async () => {

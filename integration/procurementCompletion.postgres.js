@@ -734,7 +734,8 @@ async function run(client, url) {
         "utf8",
       );
       await client.query(sql);
-      await client.query(sql);
+      const next=fs.readFileSync(require('node:path').join(__dirname,'../sql/manual/068_goods_receipt_acceptance_integration.sql'),'utf8');
+      await client.query(next);await client.query(sql);await client.query(next);
       assert.deepEqual(await snapshot(), before);
     });
     console.log(`Canonical completion PostgreSQL cases passed: ${passed}`);

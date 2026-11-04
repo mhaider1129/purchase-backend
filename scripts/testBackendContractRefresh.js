@@ -126,20 +126,25 @@ async function run() {
     if (process.argv.includes('--device-demos')) {
       await client.query(read(schemaFile));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await require('../integration/deviceDemoWorkspaces')(client);
       return;
     }
-    if (process.argv.includes('--completion')) {
+    if (process.argv.includes('--completion') || process.argv.includes('--receipt-acceptance')) {
       process.env.DATABASE_URL=disposableDatabaseUrl(url);
       process.env.NODE_ENV='test';
       await client.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
       await client.query(read(schemaFile));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
       await client.query(read('sql/manual/065_canonical_contract_finance.sql'));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
+      if(process.argv.includes('--receipt-acceptance')) { await require('../integration/goodsReceiptAcceptance.postgres').run(client,url); return; }
       await require('../integration/stockFulfilledRequests')(client);
       await require('../integration/technicalWorkflow')(client);
       await require('../integration/procurementCompletion.postgres').run(client,url);
@@ -148,6 +153,7 @@ async function run() {
     if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement') || process.argv.includes('--request-workspace') || process.argv.includes('--contract-finance') || process.argv.includes('--contract-reconciliation')) {
       await client.query(read(schemaFile));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
@@ -303,6 +309,7 @@ async function run() {
       try {
         await client.query(read(schemaFile));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       } catch (error) {
         console.error(
           "Patch context:",

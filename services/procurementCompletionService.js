@@ -26,13 +26,13 @@ async function schema(client) {
   if (
     !(
       await client.query(
-        "SELECT to_regprocedure('public.canonical_procurement_completion(integer,integer,integer)') IS NOT NULL AS ready",
+        "SELECT (to_regprocedure('public.canonical_procurement_completion(integer,integer,integer)') IS NOT NULL AND to_regprocedure('public.canonical_receipt_inventory_quantity(bigint,integer,text,bigint)') IS NOT NULL) AS ready",
       )
     ).rows[0]?.ready
   )
     throw fail(
       503,
-      "Apply manual SQL 067 before procurement completion",
+      "Apply manual SQL 067 and 068 before procurement completion",
       "COMPLETION_SCHEMA_REQUIRED",
     );
 }
@@ -121,12 +121,13 @@ async function assertLifecycleCompletion(client, request, input) {
   // Reversal locks the original movement FOR UPDATE. Hold the same source rows
   // FOR SHARE until lifecycle audit/outbox commit, then take a fresh projection.
   await client.query(
-    `SELECT m.id FROM inventory_transactions m WHERE
+    `WITH RECURSIVE completion_sources AS (SELECT m.id FROM inventory_transactions m WHERE
    (m.source_document_type='goods_receipt' AND EXISTS(SELECT 1 FROM goods_receipts gr WHERE gr.id::text=m.source_document_id AND gr.request_id=$1))
    OR (m.source_document_type='warehouse_supply' AND (m.source_document_id=$1::text OR EXISTS(
      SELECT 1 FROM warehouse_supply_items wsi JOIN requested_items ri ON ri.id=wsi.requested_item_id
      WHERE wsi.request_id::text=m.source_document_id AND ri.request_id=$1)))
-   ORDER BY m.id FOR SHARE OF m`,
+   UNION SELECT rv.id FROM inventory_transactions rv JOIN completion_sources p ON rv.reversal_of_movement_id=p.id)
+   SELECT m.id FROM inventory_transactions m JOIN completion_sources s ON s.id=m.id ORDER BY m.id FOR SHARE OF m`,
     [request.id],
   );
   const c = await project(client, request);

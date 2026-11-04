@@ -33,7 +33,7 @@ describe('Phase 3B inventory integrity', () => {
   });
   test('status transfers derive business permission and use controlled posting', () => {
     const status=read('services/inventoryStatusTransferService.js'); const posting=read('services/inventoryPostingService.js');
-    expect(status).toContain("'inventory.quarantine'"); expect(status).toContain("'inventory.release-quarantine'"); expect(status).toContain("'inventory.recall'");
+    expect(status).toContain("inventory.quarantine"); expect(status).toContain("inventory.release-quarantine"); expect(status).toContain("inventory.recall");
     expect(status).toContain('postStatusTransferMovement'); expect(posting).toContain('statusTransferOperation !== operation');
   });
   test('generic external validation cannot spoof internal status authorization', () => {

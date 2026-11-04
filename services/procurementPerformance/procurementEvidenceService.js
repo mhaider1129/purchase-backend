@@ -4,7 +4,7 @@ const ACTIVITY_MAP = Object.freeze({
   RFX_CREATED: 'RFQ_CREATED', RFX_SUPPLIER_INVITED: 'SUPPLIER_CONTACTED',
   RFX_RESPONSE_SUBMITTED: 'QUOTATION_RECEIVED', TECHNICAL_EVALUATION_REQUESTED: 'TECHNICAL_EVALUATION_REQUESTED',
   TECHNICAL_EVALUATION_COMPLETED: 'TECHNICAL_EVALUATION_COMPLETED', AWARD_CREATED: 'AWARD_CREATED',
-  PO_CREATED: 'PO_CREATED', PO_ISSUED: 'PO_ISSUED', GOODS_RECEIPT_POSTED: 'GOODS_RECEIPT', GOODS_RECEIPT_ACCEPTANCE_APPLIED:'GOODS_RECEIPT', WAREHOUSE_FULFILLMENT_APPLIED:'GOODS_RECEIPT',
+  PO_CREATED: 'PO_CREATED', PO_ISSUED: 'PO_ISSUED', GOODS_RECEIPT_POSTED: 'GOODS_RECEIPT', GOODS_RECEIPT_ACCEPTANCE_APPLIED:'GOODS_RECEIPT', GOODS_RECEIPT_STOCK_STATUS_CHANGED:'GOODS_RECEIPT', WAREHOUSE_FULFILLMENT_APPLIED:'GOODS_RECEIPT',
 });
 
 const PROJECTION_MAP = Object.freeze({
@@ -16,7 +16,7 @@ const PROJECTION_MAP = Object.freeze({
 });
 
 function projectionForEvent(event) {
-  if (!['GOODS_RECEIPT_POSTED','GOODS_RECEIPT_ACCEPTANCE_APPLIED','WAREHOUSE_FULFILLMENT_APPLIED'].includes(event.type)) return PROJECTION_MAP[event.type] || null;
+  if (!['GOODS_RECEIPT_POSTED','GOODS_RECEIPT_ACCEPTANCE_APPLIED','GOODS_RECEIPT_STOCK_STATUS_CHANGED','WAREHOUSE_FULFILLMENT_APPLIED'].includes(event.type)) return PROJECTION_MAP[event.type] || null;
   // Re-read accepted quantities across every PO for the case item; one delivered PO
   // or a producer status flag cannot establish acceptance of the entire demand.
   return event.completion?.approved_demand === true && event.completion?.terminal !== true && event.itemCompletion?.receipt_complete === true && event.itemCompletion?.evidence_conflict !== true
@@ -38,7 +38,7 @@ async function captureBusinessEvent({ repository, event }) {
       supplier_id: event.supplierId || null, related_entity_type: event.entityType,
       related_entity_id: String(event.entityId), source: 'OUTBOX', idempotency_key: key }));
     let currentEvent=event;
-    if(['GOODS_RECEIPT_POSTED','GOODS_RECEIPT_ACCEPTANCE_APPLIED','WAREHOUSE_FULFILLMENT_APPLIED'].includes(event.type)) {
+    if(['GOODS_RECEIPT_POSTED','GOODS_RECEIPT_ACCEPTANCE_APPLIED','GOODS_RECEIPT_STOCK_STATUS_CHANGED','WAREHOUSE_FULFILLMENT_APPLIED'].includes(event.type)) {
       if(!repository.loadCaseCompletion)throw new Error('Authoritative case completion projection unavailable');
       const completion=await repository.loadCaseCompletion(procurementCase.id);
       if(!completion)throw new Error('Procurement case completion ancestry is inconsistent');

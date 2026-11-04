@@ -393,6 +393,7 @@ async function run() {
     }
     console.log('Preservation, authorization, contract and read-only verification checks PASS');
     await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+    await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
     await require('../integration/maintenanceApprovalReportingPolicy')(client);
     await require('../integration/requestPriorityMigration')(client,read('sql/manual/047_whole_request_priorities.sql'));
     await require('../integration/approvalHoldTiming')(client);

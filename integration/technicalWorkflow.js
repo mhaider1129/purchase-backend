@@ -555,7 +555,8 @@ module.exports = async (client) => {
     const partialCompletion=(await one('SELECT public.canonical_procurement_completion($1,$2,NULL) c',[request.id,inst])).c;
     assert.equal(partialCompletion.receipt_complete,false);
     assert.equal(partialCompletion.items[0].accepted_quantity,'8');
-    assert.equal(partialCompletion.items[0].quarantined_quantity,'1');
+    assert.equal(partialCompletion.items[0].pending_inspection_quantity,'1');
+    assert.equal(partialCompletion.items[0].quarantined_quantity,'0');
     const dispositionEvents=Number((await one("SELECT count(*) n FROM notification_outbox WHERE event_type='GOODS_RECEIPT_ACCEPTANCE_APPLIED'")).n);
     assert.equal(
       (

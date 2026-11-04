@@ -44,7 +44,7 @@ describe('Phase 3B runtime integrity behavior', () => {
       inventoryItemId: 20, instituteId: 1, warehouseId: 10, quantity: 5,
       sourceDocumentId: 9, reason: 'inspection', idempotencyKey: 'q-1',
       actor: actor(['inventory.quarantine']),
-    }, {});
+    }, { query: jest.fn().mockResolvedValue({ rows: [] }) });
     expect(result.debit.movement.movementType).toBe('NEGATIVE_ADJUSTMENT');
     expect(result.credits).toHaveLength(1);
   });
@@ -80,7 +80,7 @@ describe('status transfer operation idempotency', () => {
     const movements = new Map();
     const postedKeys = [];
     jest.resetModules();
-    jest.doMock('../utils/withTransaction', () => (work) => work({}));
+    jest.doMock('../utils/withTransaction', () => (work) => work({ query: jest.fn().mockResolvedValue({ rows: [] }) }));
     jest.doMock('../services/inventoryPostingService', () => ({ postStatusTransferMovement: jest.fn(async (command) => {
       if (movements.has(command.idempotencyKey)) return { ...movements.get(command.idempotencyKey), idempotent: true };
       postedKeys.push(command.idempotencyKey);

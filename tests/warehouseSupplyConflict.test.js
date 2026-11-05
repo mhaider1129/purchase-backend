@@ -113,7 +113,7 @@ test('recall block and approval/warehouse/permission checks remain enforced',asy
   expect((await f.save({}, {...actor,hasPermission:()=>false})).error.statusCode).toBe(403);expect(f.state.movements).toHaveLength(0);
 });
 test('warehouse item lookup exposes canonical balance identity and unreserved availability',async()=>{
-  db.query.mockResolvedValue({rows:[]});const res={json:jest.fn()};await getWarehouseItems({params:{warehouseId:'3'}},res,jest.fn());
+  db.query.mockResolvedValue({rows:[]}).mockResolvedValueOnce({rows:[{id:3,institute_id:1}]});const res={json:jest.fn()},next=jest.fn();await getWarehouseItems({params:{warehouseId:'3'},user:{...actor,permissions:['warehouse.view-supply'],hasPermission:p=>p==='warehouse.view-supply'}},res,next);expect(next).not.toHaveBeenCalled();
   const sql=db.query.mock.calls.at(-1)[0];expect(sql).toContain('wsl.id AS warehouse_stock_level_id');expect(sql).toContain('wsl.batch_number');expect(sql).toContain('wsl.reserved_quantity');expect(sql).toContain('AS available_quantity');
 });
 

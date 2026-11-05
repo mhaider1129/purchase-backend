@@ -27,7 +27,7 @@ describe('fetchRequestsController.getAllRequests filters', () => {
   it.each(['operational', 'medical'])('filters requests by the %s domain', async (requestDomain) => {
     const req = {
       query: { request_domain: requestDomain },
-      user: { institute_id: null },
+      user: { id:1,institute_id:1,permissions:['requests.view-all'] },
     };
     const res = buildRes();
 
@@ -35,13 +35,13 @@ describe('fetchRequestsController.getAllRequests filters', () => {
 
     expect(pool.query).toHaveBeenNthCalledWith(
       1,
-      expect.stringContaining('LOWER(TRIM(r.request_domain)) = $1'),
-      [requestDomain, 10, 0],
+      expect.stringContaining('LOWER(TRIM(r.request_domain)) = $2'),
+      [[1],requestDomain, 10, 0],
     );
     expect(pool.query).toHaveBeenNthCalledWith(
       2,
-      expect.stringContaining('LOWER(TRIM(r.request_domain)) = $1'),
-      [requestDomain],
+      expect.stringContaining('LOWER(TRIM(r.request_domain)) = $2'),
+      [[1],requestDomain],
     );
     expect(res.json).toHaveBeenCalledWith({ data: [], total: 0, page: 1, limit: 10 });
   });
@@ -49,20 +49,20 @@ describe('fetchRequestsController.getAllRequests filters', () => {
   it('ignores unsupported domain values', async () => {
     const req = {
       query: { request_domain: 'financial' },
-      user: { institute_id: null },
+      user: { id:1,institute_id:1,permissions:['requests.view-all'] },
     };
     const res = buildRes();
 
     await getAllRequests(req, res);
 
     expect(pool.query.mock.calls[0][0]).not.toContain('LOWER(TRIM(r.request_domain))');
-    expect(pool.query.mock.calls[0][1]).toEqual([10, 0]);
+    expect(pool.query.mock.calls[0][1]).toEqual([[1],10, 0]);
   });
 
   it('filters the current step by the terminal Available in Stock status', async () => {
     const req = {
       query: { current_step: 'Available in Stock' },
-      user: { institute_id: null },
+      user: { id:1,institute_id:1,permissions:['requests.view-all'] },
     };
     const res = buildRes();
 
@@ -72,13 +72,13 @@ describe('fetchRequestsController.getAllRequests filters', () => {
       `${require('../services/requestFulfillmentSql').effectiveRequestStatusSql('r')}`,
     );
     expect(pool.query.mock.calls[0][0]).not.toContain('step_user.role =');
-    expect(pool.query.mock.calls[0][1]).toEqual([10, 0]);
+    expect(pool.query.mock.calls[0][1]).toEqual([[1],10, 0]);
   });
 
   it('falls back to the initiating technician for maintenance requests without a requester', async () => {
     const req = {
       query: { search: 'Technician Name' },
-      user: { institute_id: null },
+      user: { id:1,institute_id:1,permissions:['requests.view-all'] },
     };
     const res = buildRes();
 
@@ -96,7 +96,7 @@ describe('fetchRequestsController.getAllRequests filters', () => {
     expect(countQuery).toContain(
       'LEFT JOIN users initiating_technician ON r.initiated_by_technician_id = initiating_technician.id',
     );
-    expect(pool.query.mock.calls[0][1]).toEqual(['%technician name%', 10, 0]);
+    expect(pool.query.mock.calls[0][1]).toEqual([[1],'%technician name%', 10, 0]);
     expect(res.json).toHaveBeenCalledWith({ data: [], total: 0, page: 1, limit: 10 });
   });
 });

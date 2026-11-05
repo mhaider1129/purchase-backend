@@ -1,3 +1,4 @@
+const reporting = require('../services/procurementReportingService');
 const {stockItemSql,fulfilledItemSql,effectiveRequestStatusSql,completedRequestSql}=require('../services/requestFulfillmentSql');
 //controllers/dashboardController.js
 const pool = require('../config/db');
@@ -61,7 +62,7 @@ const requestProcurementRollup = `
   FROM requests r
   LEFT JOIN requested_items ri ON ri.request_id = r.id
   WHERE r.request_type <> 'Warehouse Supply'
-  GROUP BY r.id, r.department_id, r.created_at, r.updated_at, LOWER(COALESCE(r.status, ''))
+  GROUP BY r.id, r.institute_id, r.request_type, r.status, r.estimated_cost, r.department_id, r.created_at, r.updated_at, LOWER(COALESCE(r.status, ''))
 `;
 
 const isRequestProcurementPendingCondition = `(
@@ -82,7 +83,9 @@ const isRequestProcurementCompletedCondition = `(
 )`;
 
 const getDashboardSummary = async (req, res) => {
+  if(!req.user?.hasPermission?.('dashboard.view'))return res.status(403).json({message:'Dashboard permission required'});
   try {
+    const database = reporting.scopedDatabase(pool,req.user,req.query);
     const [
       totalRes,
       approvedRes,
@@ -101,33 +104,33 @@ const getDashboardSummary = async (req, res) => {
       departmentDemandVsProcuredRes,
       dataQualityAlertsRes,
     ] = await Promise.all([
-      pool.query("SELECT COUNT(*) FROM requests WHERE request_type <> 'Warehouse Supply'"),
-      pool.query(`SELECT COUNT(*) FROM requests r WHERE LOWER(${effectiveRequestStatusSql('r')}) = 'approved' AND request_type <> 'Warehouse Supply'`),
-      pool.query(
+      database.query("SELECT COUNT(*) FROM requests WHERE request_type <> 'Warehouse Supply'"),
+      database.query(`SELECT COUNT(*) FROM requests r WHERE LOWER(${effectiveRequestStatusSql('r')}) = 'approved' AND request_type <> 'Warehouse Supply'`),
+      database.query(
         "SELECT COUNT(*) FROM requests WHERE LOWER(status) = 'rejected' AND request_type <> 'Warehouse Supply'",
       ),
-      pool.query(`
+      database.query(`
         WITH request_rollup AS (${requestProcurementRollup})
         SELECT COUNT(*) FROM request_rollup
         WHERE ${isRequestProcurementPendingCondition}
       `),
-      pool.query(`
+      database.query(`
         WITH request_rollup AS (${requestProcurementRollup})
         SELECT COUNT(*) FROM request_rollup
         WHERE ${isRequestProcurementCompletedCondition}
       `),
-      pool.query(`
-        SELECT AVG(${activeDaysSql('id','created_at','updated_at')}) AS avg_days
+      database.query(`
+        SELECT AVG(${activeDaysSql('r.id','r.created_at',"(SELECT max(approval_clock.approved_at) FROM approvals approval_clock WHERE approval_clock.request_id=r.id AND approval_clock.status='Approved' AND NOT COALESCE(approval_clock.is_superseded,false))")}) AS avg_days
         FROM requests r
         WHERE LOWER(${effectiveRequestStatusSql('r')}) = 'approved' AND request_type <> 'Warehouse Supply'
       `),
-      pool.query(`
+      database.query(`
         WITH request_rollup AS (${requestProcurementRollup})
         SELECT AVG(${activeDaysSql('id','created_at','CURRENT_TIMESTAMP')}) AS avg_days
         FROM request_rollup
         WHERE ${isRequestProcurementPendingCondition}
       `),
-      pool.query(`
+      database.query(`
         SELECT
           TO_CHAR(created_at, 'YYYY-MM') AS month,
           COUNT(*) AS rejected_count
@@ -136,7 +139,7 @@ const getDashboardSummary = async (req, res) => {
         GROUP BY month
         ORDER BY month
       `),
-      pool.query(`
+      database.query(`
         SELECT
           TO_CHAR(COALESCE(ri.procurement_updated_at, r.updated_at, r.created_at), 'YYYY-MM') AS month,
           SUM(${itemActualCostExpression}) AS total_cost
@@ -147,7 +150,7 @@ const getDashboardSummary = async (req, res) => {
         GROUP BY month
         ORDER BY month
       `),
-      pool.query(`
+      database.query(`
         SELECT d.name, COUNT(*) AS request_count
         FROM requests r
         JOIN departments d ON r.department_id = d.id
@@ -157,7 +160,7 @@ const getDashboardSummary = async (req, res) => {
         ORDER BY request_count DESC
         LIMIT 5
       `),
-      pool.query(`
+      database.query(`
         WITH request_rollup AS (${requestProcurementRollup})
         SELECT
           TO_CHAR(created_at, 'YYYY-MM') AS month,
@@ -168,7 +171,7 @@ const getDashboardSummary = async (req, res) => {
         GROUP BY month
         ORDER BY month
       `),
-      pool.query(`
+      database.query(`
         WITH request_rollup AS (${requestProcurementRollup})
         SELECT
           rr.id,
@@ -184,7 +187,7 @@ const getDashboardSummary = async (req, res) => {
         ORDER BY age_days DESC
         LIMIT 5
       `),
-      pool.query(`
+      database.query(`
         WITH request_rollup AS (${requestProcurementRollup}), staged AS (
           SELECT
             CASE
@@ -204,7 +207,7 @@ const getDashboardSummary = async (req, res) => {
         GROUP BY stage
         ORDER BY request_count DESC, stage
       `),
-      pool.query(`
+      database.query(`
         WITH request_rollup AS (${requestProcurementRollup}), timed AS MATERIALIZED (
           SELECT *,${activeSecondsSql('id','created_at','CURRENT_TIMESTAMP')} AS active_seconds
           FROM request_rollup WHERE ${isRequestProcurementPendingCondition}
@@ -232,7 +235,7 @@ const getDashboardSummary = async (req, res) => {
         GROUP BY bucket, sort_order
         ORDER BY sort_order
       `),
-      pool.query(`
+      database.query(`
         WITH request_values AS (
           SELECT
             r.id,
@@ -245,7 +248,7 @@ const getDashboardSummary = async (req, res) => {
           LEFT JOIN requested_items ri ON ri.request_id = r.id
           WHERE r.request_type <> 'Warehouse Supply'
             AND r.created_at >= (CURRENT_DATE - INTERVAL '11 months')
-          GROUP BY r.id, r.department_id, r.created_at, LOWER(COALESCE(r.status, ''))
+          GROUP BY r.id, r.institute_id, r.request_type, r.status, r.estimated_cost, r.department_id, r.created_at, LOWER(COALESCE(r.status, ''))
         )
         SELECT
           COALESCE(d.name, 'Unassigned') AS department,
@@ -259,7 +262,7 @@ const getDashboardSummary = async (req, res) => {
         GROUP BY department, month
         ORDER BY month, department
       `),
-      pool.query(`
+      database.query(`
         WITH issue_counts AS (
           SELECT 'approved_no_items' AS issue_key, 'Approved requests without items' AS issue_label, COUNT(*) AS issue_count
           FROM requests r
@@ -313,9 +316,10 @@ const getDashboardSummary = async (req, res) => {
     const actionableTotal = pendingRequests + completedRequests;
     const completionRate = actionableTotal ? (completedRequests / actionableTotal) * 100 : 0;
 
-    const completionDimensions = Number.isSafeInteger(Number(req.user?.institute_id)) && Number(req.user.institute_id)>0 ? (await pool.query(`SELECT count(*) FILTER(WHERE (c.value->>'procurement_complete')::boolean)::int procurement_complete_requests,count(*) FILTER(WHERE (c.value->>'receipt_complete')::boolean)::int receipt_complete_requests,count(*) FILTER(WHERE (c.value->>'fulfillment_complete')::boolean)::int fulfilled_requests,count(*) FILTER(WHERE (c.value->>'stock_resolved')::boolean)::int stock_ready_requests,count(*) FILTER(WHERE (c.value->>'legacy_completion_without_fulfillment')::boolean)::int legacy_unverified_requests FROM requests r CROSS JOIN LATERAL public.canonical_procurement_completion(r.id,r.institute_id,NULL) c(value) WHERE r.institute_id=$1`,[req.user.institute_id])).rows[0] : null;
+    const completionDimensions = await reporting.summary(req.user,req.query,pool);
     res.json({
-      completion_dimensions:completionDimensions?{scope:'CURRENT_INSTITUTE',institute_id:req.user.institute_id,...completionDimensions}:null,
+      completion_report:completionDimensions,
+      completion_dimensions:completionDimensions,
       legacy_completion_basis:'operational_archive_and_stock_ready_not_fulfillment',
       timing_basis: 'active_time_excluding_approval_holds',
       total_requests: totalRequests,
@@ -391,7 +395,8 @@ const getDepartmentMonthlySpending = async (req, res) => {
   const year = parseInt(req.query.year, 10) || new Date().getFullYear();
 
   try {
-    const { rows } = await pool.query(
+    const database = reporting.scopedDatabase(pool,req.user,req.query);
+    const { rows } = await database.query(
       `SELECT COALESCE(d.name, 'Unassigned') AS department,
               TO_CHAR(COALESCE(ri.procurement_updated_at, r.updated_at, r.created_at), 'YYYY-MM') AS month,
               SUM(${itemActualCostExpression}) AS total_cost
@@ -426,7 +431,8 @@ const getDepartmentMonthlyRequestCosts = async (req, res) => {
   const year = parseInt(req.query.year, 10) || new Date().getFullYear();
 
   try {
-    const { rows } = await pool.query(
+    const database = reporting.scopedDatabase(pool,req.user,req.query);
+    const { rows } = await database.query(
       `WITH request_costs AS (
          SELECT
            r.id,
@@ -439,7 +445,7 @@ const getDepartmentMonthlyRequestCosts = async (req, res) => {
          WHERE r.request_type <> 'Warehouse Supply'
            AND LOWER(COALESCE(r.status, '')) IN ('approved', 'rejected')
            AND EXTRACT(YEAR FROM r.created_at) = $1
-         GROUP BY r.id, r.department_id, r.created_at, LOWER(COALESCE(r.status, ''))
+         GROUP BY r.id, r.institute_id, r.request_type, r.status, r.estimated_cost, r.department_id, r.created_at, LOWER(COALESCE(r.status, ''))
        )
        SELECT
          COALESCE(d.name, 'Unassigned') AS department,
@@ -479,7 +485,8 @@ const getLifecycleAnalytics = async (req, res) => {
   }
 
   try {
-    const avgApprovalRes = await pool.query(`
+    const database = reporting.scopedDatabase(pool,req.user,req.query);
+    const avgApprovalRes = await database.query(`
       WITH final_approvals AS (
         SELECT request_id, MAX(approved_at) AS final_approved_at
         FROM approvals
@@ -493,7 +500,7 @@ const getLifecycleAnalytics = async (req, res) => {
         AND r.request_type <> 'Warehouse Supply'
     `);
 
-    const stageDurationRes = await pool.query(`
+    const stageDurationRes = await database.query(`
       SELECT a.approval_level,
              AVG(${activeDaysSql('r.id','r.created_at','a.approved_at')}) AS avg_days
       FROM approvals a
@@ -512,7 +519,7 @@ const getLifecycleAnalytics = async (req, res) => {
       null,
     );
 
-    const spendRes = await pool.query(`
+    const spendRes = await database.query(`
       SELECT COALESCE(ri.item_name, 'Uncategorized') AS category, SUM(ri.total_cost) AS total_cost
       FROM public.requested_items ri
       JOIN requests r ON ri.request_id = r.id
@@ -521,7 +528,7 @@ const getLifecycleAnalytics = async (req, res) => {
       ORDER BY total_cost DESC
     `);
 
-    const prToPoRes = await pool.query(`
+    const prToPoRes = await database.query(`
       WITH po_events AS (
         SELECT request_id, MIN(created_at) AS po_timestamp
         FROM public.purchase_orders
@@ -549,6 +556,7 @@ const getLifecycleAnalytics = async (req, res) => {
     `);
 
     res.json({
+      completion_report:await reporting.summary(req.user,req.query,pool),
       avg_approval_time_days:
         parseFloat(avgApprovalRes.rows[0].avg_days) || 0,
       timing_basis: 'active_time_excluding_approval_holds',
@@ -575,10 +583,11 @@ const getWorkloadAnalysis = async (req, res) => {
   }
 
   try {
+    const database = reporting.scopedDatabase(pool,req.user,req.query);
     const filters = getWorkloadFilters(req.query);
     const [backlogSummaryRes, userWorkloadRes, levelBacklogRes, departmentBacklogRes, completionTrendRes] =
       await Promise.all([
-        pool.query(`
+        database.query(`
           SELECT
             COUNT(*) FILTER (WHERE a.status = ANY($1) AND a.is_active = TRUE) AS active_pending,
             COUNT(*) FILTER (WHERE a.status = 'On Hold' AND a.is_active = TRUE) AS on_hold,
@@ -588,7 +597,7 @@ const getWorkloadAnalysis = async (req, res) => {
           FROM approvals a
           JOIN requests r ON a.request_id = r.id AND NOT ${completedRequestSql('r')}
         `, [filters.pendingStatuses]),
-        pool.query(`
+        database.query(`
           SELECT
             a.approver_id,
             COALESCE(u.name, 'Unassigned') AS approver_name,
@@ -609,7 +618,7 @@ const getWorkloadAnalysis = async (req, res) => {
           GROUP BY a.approver_id, approver_name, role, department
           ORDER BY pending_count DESC, urgent_count DESC
         `, [filters.pendingStatuses]),
-        pool.query(`
+        database.query(`
           SELECT
             a.approval_level,
             COUNT(*) AS pending_count,
@@ -623,7 +632,7 @@ const getWorkloadAnalysis = async (req, res) => {
           GROUP BY a.approval_level
           ORDER BY a.approval_level
         `, [filters.pendingStatuses]),
-        pool.query(`
+        database.query(`
           SELECT
             COALESCE(d.name, 'Unassigned') AS department,
             COUNT(*) AS pending_count,
@@ -638,12 +647,13 @@ const getWorkloadAnalysis = async (req, res) => {
           GROUP BY department
           ORDER BY pending_count DESC
         `, [filters.pendingStatuses]),
-        pool.query(`
+        database.query(`
           SELECT
             TO_CHAR(DATE_TRUNC('day', a.approved_at), 'YYYY-MM-DD') AS day,
             COUNT(*) AS approvals_completed
           FROM approvals a
           WHERE a.status = $1
+            AND EXISTS(SELECT 1 FROM requests reporting_parent WHERE reporting_parent.id=a.request_id)
             AND a.approved_at >= (CURRENT_DATE - ($2::int - 1) * INTERVAL '1 day')
           GROUP BY day
           ORDER BY day
@@ -652,9 +662,10 @@ const getWorkloadAnalysis = async (req, res) => {
 
     const summary = backlogSummaryRes.rows[0] || {};
 
-    const completionDimensions = Number.isSafeInteger(Number(req.user?.institute_id)) && Number(req.user.institute_id)>0 ? (await pool.query(`SELECT count(*) FILTER(WHERE (c.value->>'procurement_complete')::boolean)::int procurement_complete_requests,count(*) FILTER(WHERE (c.value->>'receipt_complete')::boolean)::int receipt_complete_requests,count(*) FILTER(WHERE (c.value->>'fulfillment_complete')::boolean)::int fulfilled_requests,count(*) FILTER(WHERE (c.value->>'stock_resolved')::boolean)::int stock_ready_requests,count(*) FILTER(WHERE (c.value->>'legacy_completion_without_fulfillment')::boolean)::int legacy_unverified_requests FROM requests r CROSS JOIN LATERAL public.canonical_procurement_completion(r.id,r.institute_id,NULL) c(value) WHERE r.institute_id=$1`,[req.user.institute_id])).rows[0] : null;
+    const completionDimensions = await reporting.summary(req.user,req.query,pool);
     res.json({
-      completion_dimensions:completionDimensions?{scope:'CURRENT_INSTITUTE',institute_id:req.user.institute_id,...completionDimensions}:null,
+      completion_report:completionDimensions,
+      completion_dimensions:completionDimensions,
       legacy_completion_basis:'operational_archive_and_stock_ready_not_fulfillment',
       timing_basis: 'active_time_excluding_approval_holds',
       total_active: Number(summary.active_pending || 0),

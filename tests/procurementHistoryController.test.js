@@ -27,7 +27,7 @@ describe('procurementHistoryController.getCompletedAssignedRequests', () => {
 
     const req = {
       query: {},
-      user: { id: 7 },
+      user: { id: 7,institute_id:1 },
     };
     const res = buildRes();
     const next = jest.fn();
@@ -38,7 +38,7 @@ describe('procurementHistoryController.getCompletedAssignedRequests', () => {
       expect.stringContaining(
         require('../services/requestFulfillmentSql').effectiveRequestStatusSql('r'),
       ),
-      [7],
+      [7,[1],7],
     );
     expect(res.json).toHaveBeenCalledWith({
       data: [

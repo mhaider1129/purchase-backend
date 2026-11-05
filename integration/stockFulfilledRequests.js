@@ -34,7 +34,7 @@ module.exports=async(client)=>{
     const dashboard=require('../controllers/dashboardController');
     const invoke=async(fn,query={})=>{
       let output;const res={json:value=>{output=value;return res;},status:code=>{assert(code<400,`Unexpected HTTP ${code}`);return res;}};
-      await fn({query,user:{id:1,role:'SCM',hasPermission:()=>true}},res,error=>{throw error;});
+      await fn({query,user:{id:1,institute_id:institute,department_id:department,role:'SCM',hasPermission:()=>true}},res,error=>{throw error;});
       return output;
     };
     const summary=await invoke(dashboard.getDashboardSummary);

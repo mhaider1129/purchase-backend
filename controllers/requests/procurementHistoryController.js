@@ -1,3 +1,4 @@
+const reporting=require('../../services/procurementReportingService');
 const {stockItemSql,effectiveRequestStatusSql}=require('../../services/requestFulfillmentSql');
 const pool = require('../../config/db');
 const createHttpError = require('../../utils/httpError');
@@ -26,8 +27,8 @@ const getCompletedAssignedRequests = async (req, res, next) => {
     }
 
 
-    const result = await pool.query(
-      `SELECT r.*,${effectiveRequestStatusSql('r')} AS status,r.status AS stored_status, p.name AS project_name,
+    const result = await reporting.scopedDatabase(pool,req.user).query(
+      `SELECT r.*,${reporting.recordSql('r')} AS completion,${effectiveRequestStatusSql('r')} AS status,r.status AS stored_status, p.name AS project_name,
               COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name) AS requester_name,
               CASE
                 WHEN NULLIF(TRIM(r.temporary_requester_name), '') IS NOT NULL THEN 'Temporary Requester'

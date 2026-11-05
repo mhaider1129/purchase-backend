@@ -1,3 +1,4 @@
+const reporting=require('../services/procurementReportingService');
 const {stockItemSql,effectiveRequestStatusSql}=require('../services/requestFulfillmentSql');
 const {activeDaysSql}=require('../services/approvalTimingSql');
 const pool = require('../config/db');
@@ -70,6 +71,7 @@ const buildWhereClause = (query = {}, user) => {
   if (!scope) {
     return { forbidden: true, whereSql: '', values };
   }
+  if(!user?.id||!user?.institute_id)return {forbidden:true,whereSql:"",values};
 
   if (scope.type !== 'all') {
     where.push(`r.department_id = ${addParam(values, scope.departmentId)}`);
@@ -135,6 +137,7 @@ const buildWhereClause = (query = {}, user) => {
     where.push('GREATEST(COALESCE(ri.quantity, 0) - COALESCE(ri.purchased_quantity, 0), 0) > 0');
   }
 
+  where.push(reporting.scope(user,{},values).sql);
   return { whereSql: where.join(' AND '), values };
 };
 
@@ -191,6 +194,7 @@ const baseSelect = whereSql => `
       COALESCE(r.temporary_requester_name, requester.name) AS requester_name,
       requester.phone_number AS requester_phone,
       requester.email AS requester_email,
+      ${reporting.recordSql('r')} AS completion,
       ri.id AS item_id,
       ri.item_name,
       ri.brand,
@@ -311,7 +315,7 @@ const getDepartmentRequestedItems = async (req, res, next) => {
     );
 
     res.json({
-      data: dataResult.rows,
+      data: dataResult.rows.map(row=>({...row,completion_category:row.completion?.category})),
       summary: summaryResult.rows[0] || {
         total_open_items: 0,
         total_departments: 0,

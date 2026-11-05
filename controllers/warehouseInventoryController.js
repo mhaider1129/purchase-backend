@@ -1,6 +1,17 @@
+const reporting=require('../services/procurementReportingService');
+const {authorizeInventoryMovement}=require('../policies/inventoryPolicy');
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureWarehouseInventoryTables = require('../utils/ensureWarehouseInventoryTables');
+async function reportingWarehouse(user,value) {
+  const id=Number(value);
+  if(!Number.isSafeInteger(id)||id<=0)throw createHttpError(400,'A valid warehouse is required');
+  const row=(await pool.query('SELECT id,institute_id FROM warehouses WHERE id=$1',[id])).rows[0];
+  if(!row)throw createHttpError(404,'Warehouse not found');
+  authorizeInventoryMovement(user,{permission:'warehouse.view-supply'},row);
+  return row;
+}
+
 const ensureWarehouseAssignments = require('../utils/ensureWarehouseAssignments');
 const recalculateAvailableQuantity = require('../utils/recalculateAvailableQuantity');
 
@@ -156,6 +167,7 @@ const getWarehouseItems = async (req, res, next) => {
   await ensureWarehouseInventoryTables();
 
   try {
+    const warehouse=await reportingWarehouse(req.user,warehouseId);
     const { rows } = await pool.query(
       `SELECT
         wsl.id AS warehouse_stock_level_id,
@@ -174,15 +186,15 @@ const getWarehouseItems = async (req, res, next) => {
         si.sub_category
        FROM warehouse_stock_levels wsl
        LEFT JOIN stock_items si ON si.id = wsl.stock_item_id
-      WHERE wsl.warehouse_id = $1
+      WHERE wsl.warehouse_id = $1 AND EXISTS(SELECT 1 FROM warehouses current_wh WHERE current_wh.id=wsl.warehouse_id AND current_wh.institute_id=$2)
       ORDER BY wsl.item_name, COALESCE(wsl.expiry_date, DATE '9999-12-31'), wsl.lot_number NULLS LAST`,
-      [warehouseId],
+      [warehouseId,warehouse.institute_id],
     );
 
     res.json(rows);
   } catch (err) {
     console.error('❌ Failed to fetch warehouse items:', err.message);
-    next(createHttpError(500, 'Failed to fetch warehouse items'));
+    next(err.statusCode?err:createHttpError(500, 'Failed to fetch warehouse items'));
   }
 };
 
@@ -197,6 +209,26 @@ const getWeeklyDepartmentStockingReport = async (req, res, next) => {
   const windowStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
   try {
+    const warehouse=await reportingWarehouse(req.user,req.query?.warehouse_id||req.user.warehouse_id);
+    if(req.query?.basis!=='historical') {
+      const from=reporting.date(req.query?.from_date,'from_date'),to=reporting.date(req.query?.to_date,'to_date');
+      if(from&&to&&from>to)throw createHttpError(400,'Invalid date range');
+      const {rows}=await pool.query(`WITH RECURSIVE issue_sources AS MATERIALIZED (
+        SELECT m.* FROM inventory_transactions m JOIN departments d ON d.id=m.department_id AND d.institute_id=m.institute_id
+        WHERE m.warehouse_id=$1 AND m.institute_id=$2 AND EXISTS(SELECT 1 FROM warehouses current_wh WHERE current_wh.id=m.warehouse_id AND current_wh.institute_id=m.institute_id) AND m.movement_type='ISSUE' AND m.reversal_of_movement_id IS NULL
+        AND m.stock_status='AVAILABLE' AND m.posted_at>=COALESCE($3::timestamptz,$5::timestamptz)
+        AND m.posted_at<COALESCE($4::timestamptz,CURRENT_TIMESTAMP)
+      ), issue_tree AS (
+        SELECT id,id root_id,department_id,stock_item_id,base_uom,quantity FROM issue_sources
+        UNION ALL SELECT rv.id,p.root_id,p.department_id,p.stock_item_id,p.base_uom,rv.quantity
+        FROM issue_tree p JOIN inventory_transactions rv ON rv.reversal_of_movement_id=p.id
+        WHERE rv.institute_id=$2 AND rv.warehouse_id=$1 AND rv.stock_item_id=p.stock_item_id AND rv.base_uom=p.base_uom
+      ), totals AS (SELECT department_id,stock_item_id,base_uom,GREATEST(-sum(quantity),0) quantity FROM issue_tree GROUP BY department_id,stock_item_id,base_uom)
+      SELECT d.id department_id,d.name department_name,jsonb_agg(jsonb_build_object('stock_item_id',t.stock_item_id,'item_name',si.name,'base_uom',t.base_uom,'total_quantity',trim_scale(t.quantity)::text) ORDER BY si.name,t.stock_item_id,t.base_uom) items
+      FROM totals t JOIN departments d ON d.id=t.department_id AND d.institute_id=$2 JOIN stock_items si ON si.id=t.stock_item_id
+      WHERE t.quantity>0 GROUP BY d.id,d.name ORDER BY d.name,d.id`,[warehouse.id,warehouse.institute_id,from?from+'T00:00:00Z':null,to?new Date(Date.parse(to)+86400000).toISOString():null,windowStart.toISOString()]);
+      return res.json({generated_at:now.toISOString(),window_start:from?from+'T00:00:00Z':windowStart.toISOString(),window_end:to?new Date(Date.parse(to)+86400000).toISOString():now.toISOString(),basis:'canonical_net_issue_quantities',date_basis:'original_issue_posted_at_utc',as_of:now.toISOString(),warehouse_id:warehouse.id,departments:rows});
+    }
     const { rows } = await pool.query(
       `SELECT
         d.id AS department_id,
@@ -220,16 +252,17 @@ const getWeeklyDepartmentStockingReport = async (req, res, next) => {
         FROM warehouse_stock_movements
         WHERE direction = 'out'
           AND to_department_id IS NOT NULL
-          AND created_at >= $1
+          AND created_at >= $1 AND warehouse_id=$2
         GROUP BY to_department_id, stock_item_id, item_name
       ) m
-      JOIN departments d ON d.id = m.to_department_id
+      JOIN departments d ON d.id = m.to_department_id AND d.institute_id=$3
       GROUP BY d.id, d.name
       ORDER BY d.name`,
-      [windowStart],
+      [windowStart,warehouse.id,warehouse.institute_id],
     );
 
     res.json({
+      basis:"historical_stock_movement_archive",
       generated_at: now.toISOString(),
       window_start: windowStart.toISOString(),
       window_end: now.toISOString(),
@@ -237,7 +270,7 @@ const getWeeklyDepartmentStockingReport = async (req, res, next) => {
     });
   } catch (err) {
     console.error('❌ Failed to generate weekly stocking report:', err.message);
-    next(createHttpError(500, 'Failed to generate weekly stocking report'));
+    next(err.statusCode?err:createHttpError(500, 'Failed to generate weekly stocking report'));
   }
 };
 
@@ -248,18 +281,20 @@ const getInventoryTransactions = async (req, res, next) => {
   await ensureWarehouseInventoryTables();
   try {
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const warehouse=await reportingWarehouse(req.user,req.query.warehouse_id||req.user.warehouse_id);
     const { rows } = await pool.query(
       `SELECT it.*, si.name AS stock_item_name
        FROM inventory_transactions it
        LEFT JOIN stock_items si ON si.id = it.stock_item_id
+       WHERE it.warehouse_id=$2 AND it.institute_id=$3 AND EXISTS(SELECT 1 FROM warehouses current_wh WHERE current_wh.id=it.warehouse_id AND current_wh.institute_id=it.institute_id)
        ORDER BY it.created_at DESC
        LIMIT $1`,
-      [limit],
+      [limit,warehouse.id,warehouse.institute_id],
     );
     res.json(rows);
   } catch (err) {
     console.error('❌ Failed to fetch inventory transactions:', err.message);
-    next(createHttpError(500, 'Failed to fetch inventory transactions'));
+    next(err.statusCode?err:createHttpError(500, 'Failed to fetch inventory transactions'));
   }
 };
 

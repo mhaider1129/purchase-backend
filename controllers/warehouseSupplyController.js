@@ -1,3 +1,4 @@
+const reporting=require('../services/procurementReportingService');
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
@@ -394,7 +395,7 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
     }
 
     const result = await pool.query(
-      `SELECT r.id, r.justification, r.status, r.created_at,
+      `SELECT r.id, ${reporting.recordSql('r')} AS completion, r.justification, r.status, r.created_at,
               d.name AS department_name,
               s.name AS section_name,
               w.name AS warehouse_name,
@@ -406,8 +407,9 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
        WHERE r.request_type = 'Warehouse Supply'
          AND r.status IN ('Approved', 'Completed')
          AND r.supply_warehouse_id = $1
+         AND r.institute_id=$2 AND d.institute_id=r.institute_id AND w.institute_id=r.institute_id
        ORDER BY r.created_at DESC`,
-      [warehouseId]
+      [warehouseId,req.user.institute_id]
     );
     const requests = result.rows;
 

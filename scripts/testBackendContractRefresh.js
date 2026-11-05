@@ -130,7 +130,7 @@ async function run() {
       await require('../integration/deviceDemoWorkspaces')(client);
       return;
     }
-    if (process.argv.includes('--completion') || process.argv.includes('--receipt-acceptance')) {
+    if (process.argv.includes('--completion') || process.argv.includes('--receipt-acceptance') || process.argv.includes('--completion-reporting')) {
       process.env.DATABASE_URL=disposableDatabaseUrl(url);
       process.env.NODE_ENV='test';
       await client.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
@@ -144,6 +144,7 @@ async function run() {
       await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
       await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
+      if(process.argv.includes('--completion-reporting')) { await require('../integration/goodsReceiptAcceptance.postgres').run(client,url,{after:require('../integration/completionReporting.postgres').run}); return; }
       if(process.argv.includes('--receipt-acceptance')) { await require('../integration/goodsReceiptAcceptance.postgres').run(client,url); return; }
       await require('../integration/stockFulfilledRequests')(client);
       await require('../integration/technicalWorkflow')(client);

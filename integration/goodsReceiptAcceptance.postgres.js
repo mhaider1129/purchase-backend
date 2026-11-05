@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { disposableDatabaseUrl } = require("./disposableDatabase");
-async function run(client, url) {
+async function run(client, url, options = {}) {
   process.env.DATABASE_URL = disposableDatabaseUrl(url);
   process.env.NODE_ENV = "test";
   const pool = require("../config/db");
@@ -1070,6 +1070,7 @@ async function run(client, url) {
       );
       assert.deepEqual(await snapshot(), before);
     });
+    if(options.after)await options.after({client,pool,make,makePo,receive,receiptTask,authorize,apply,issue,project,snapshot,full,partial,pending,rejected,quarantine,multi});
     console.log(
       `Goods Receipt acceptance PostgreSQL scenarios passed: ${passed}`,
     );

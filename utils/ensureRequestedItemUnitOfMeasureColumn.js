@@ -1,9 +1,8 @@
 const pool = require('../config/db');
 
 const ensureRequestedItemUnitOfMeasureColumn = async (client = pool) => {
-  await client.query(
-    `ALTER TABLE public.requested_items ADD COLUMN IF NOT EXISTS unit_of_measure TEXT`,
-  );
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/ensureRequestedItemUnitOfMeasureColumn.js#ensureRequestedItemUnitOfMeasureColumn", client);
 };
 
 module.exports = ensureRequestedItemUnitOfMeasureColumn;

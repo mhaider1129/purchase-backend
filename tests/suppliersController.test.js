@@ -49,7 +49,7 @@ describe('suppliersController', () => {
     resetSuppliersTableCacheForTests();
   });
 
-  it('adds missing legacy contact columns before relaxing supplier constraints', async () => {
+  it('uses the reviewed supplier schema without runtime repair', async () => {
     pool.query.mockImplementation((sql) => {
       if (/information_schema\.columns/.test(sql)) {
         return Promise.resolve({ rowCount: 0, rows: [] });
@@ -73,27 +73,13 @@ describe('suppliersController', () => {
 
     expect(next).not.toHaveBeenCalled();
 
-    const statements = pool.query.mock.calls.map(([sql]) => sql);
-    const addEmailIndex = statements.findIndex((sql) =>
-      /ADD COLUMN IF NOT EXISTS contact_email TEXT/.test(sql)
-    );
-    const addPhoneIndex = statements.findIndex((sql) =>
-      /ADD COLUMN IF NOT EXISTS contact_phone TEXT/.test(sql)
-    );
-    const dropNotNullIndex = statements.findIndex((sql) =>
-      /ALTER COLUMN contact_email DROP NOT NULL/.test(sql)
-    );
-
-    expect(addEmailIndex).toBeGreaterThanOrEqual(0);
-    expect(addPhoneIndex).toBeGreaterThanOrEqual(0);
-    expect(dropNotNullIndex).toBeGreaterThan(addEmailIndex);
-    expect(dropNotNullIndex).toBeGreaterThan(addPhoneIndex);
+    expect(pool.query.mock.calls.map(([sql])=>sql).join('\n')).not.toMatch(/ALTER TABLE|CREATE TABLE|CREATE INDEX/i);
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(supplierRow);
   });
 
 
-  it('migrates legacy bank_info columns to jsonb before saving supplier details', async () => {
+  it('saves bank details through the reviewed jsonb schema', async () => {
     const savedSupplier = {
       ...supplierRow,
       contact_email: 'buyer@example.com',
@@ -130,8 +116,6 @@ describe('suppliersController', () => {
     await createSupplier(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
-    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('ALTER COLUMN bank_info TYPE JSONB'));
-    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('ALTER COLUMN contact_email DROP NOT NULL'));
     expect(pool.query).toHaveBeenCalledWith(
       expect.stringContaining('bank_info = COALESCE($5::jsonb, bank_info)'),
       expect.arrayContaining([JSON.stringify({ iban: 'SA123' })])

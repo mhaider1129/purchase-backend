@@ -3,15 +3,8 @@ const pool = require('../config/db');
 let columnEnsured = false;
 
 const ensureRequestedItemPoIssuanceColumn = async (client = pool) => {
-  if (columnEnsured) return;
-
-  const runner = client.query ? client : pool;
-
-  await runner.query(
-    `ALTER TABLE public.requested_items ADD COLUMN IF NOT EXISTS po_issuance_method TEXT`,
-  );
-
-  columnEnsured = true;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/ensureRequestedItemPoIssuanceColumn.js#ensureRequestedItemPoIssuanceColumn", client);
 };
 
 module.exports = ensureRequestedItemPoIssuanceColumn;

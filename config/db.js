@@ -18,6 +18,10 @@ const pool = new Pool({
   connectionTimeoutMillis: 10_000,
 });
 
+const {guard}=require('../utils/runtimeSqlGuard');
+guard(pool);
+pool.on('connect',client=>{guard(client);require('../utils/runtimeSchemaContract').registerClient(client,pool);});
+
 // Successful Connection
 pool.on('connect', () => {
   console.log('✅ Connected to PostgreSQL database');

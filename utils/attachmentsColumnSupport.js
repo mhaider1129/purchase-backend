@@ -51,8 +51,7 @@ async function attachmentsHasColumn(queryable, columnName) {
 
     return supported;
   } catch (err) {
-    console.error(`⚠️ Failed to inspect attachments.${columnName} schema:`, err.message);
-    markAttachmentColumnSupport(columnName, true);
+    throw Object.assign(new Error(`Unable to verify attachments.${columnName}`), {code:'DATABASE_MODULE_CONTRACT_UNVERIFIED',statusCode:503,cause:err});
   }
 
   return true;
@@ -64,33 +63,10 @@ async function ensureAttachmentsColumn(queryable, {
   referenceColumn = 'id',
   indexName,
 }) {
-  const supported = await attachmentsHasColumn(queryable, columnName);
-
-  if (supported) {
-    return true;
-  }
-
-  try {
-    await queryable.query(
-      `ALTER TABLE ${ATTACHMENTS_SCHEMA}.${ATTACHMENTS_TABLE}
-         ADD COLUMN IF NOT EXISTS ${columnName} BIGINT
-         REFERENCES public.${referenceTable}(${referenceColumn})
-         ON DELETE SET NULL`
-    );
-
-    await queryable.query(
-      `CREATE INDEX IF NOT EXISTS ${indexName}
-         ON ${ATTACHMENTS_SCHEMA}.${ATTACHMENTS_TABLE} (${columnName})`
-    );
-
-    resetAttachmentColumnSupportCache(columnName);
-  } catch (err) {
-    console.error(`⚠️ Failed to ensure attachments.${columnName} column:`, err.message);
-    markAttachmentColumnSupport(columnName, false);
-    return false;
-  }
-
-  return attachmentsHasColumn(queryable, columnName);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  await require("./runtimeSchemaContract").assertModuleContract("utils/attachmentsColumnSupport.js#ensureAttachmentsColumn", queryable);
+  if(!await attachmentsHasColumn(queryable,columnName))throw Object.assign(new Error('Required attachment reference is missing; review the manual release'),{code:'DATABASE_MODULE_CONTRACT_MISSING',statusCode:503});
+  return true;
 }
 
 module.exports = {

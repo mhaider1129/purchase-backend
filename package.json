@@ -13,9 +13,9 @@
     "test": "jest",
     "test:p2p-postgres": "node scripts/runP2PPostgresIntegration.js",
     "test:backend-contract-refresh": "node scripts/testBackendContractRefresh.js",
-    "migrate": "node-pg-migrate up",
-    "migrate:down": "node-pg-migrate down",
-    "migrate:create": "node-pg-migrate create",
+    "migrate": "node scripts/databaseRelease.js plan",
+    "migrate:down": "node scripts/databaseRelease.js rollback-disabled",
+    "migrate:create": "node scripts/databaseRelease.js new",
     "validate:sql004": "node scripts/validateManualSql.js",
     "test:sql018": "node scripts/testSql018Integration.js",
     "priority:recalculate-aging": "node jobs/recalculateProcurementPriorityAging.js",
@@ -31,7 +31,11 @@
     "test:request-workspace-postgres": "node scripts/testBackendContractRefresh.js --request-workspace",
     "test:device-demos-postgres": "node scripts/testBackendContractRefresh.js --device-demos",
     "test:contract-settlement-postgres": "node scripts/testBackendContractRefresh.js --contract-settlement",
-    "audit:financial-writers": "node scripts/auditFinancialWriters.js"
+    "audit:financial-writers": "node scripts/auditFinancialWriters.js",
+    "db:inventory": "node scripts/databaseRelease.js inventory",
+    "db:plan": "node scripts/databaseRelease.js plan",
+    "db:verify": "node scripts/databaseRelease.js verify",
+    "test:database-governance-postgres": "node scripts/testBackendContractRefresh.js --database-governance"
   },
   "keywords": [
     "purchase",

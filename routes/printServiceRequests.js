@@ -10,41 +10,8 @@ const PRINT_QUEUE_SETTING_KEY = 'print_service_queue_department_id';
 let ensurePrintServiceTablePromise;
 
 const ensurePrintServiceTables = async () => {
-  if (!ensurePrintServiceTablePromise) {
-    ensurePrintServiceTablePromise = pool.query(`
-      CREATE TABLE IF NOT EXISTS print_service_requests (
-        id SERIAL PRIMARY KEY,
-        requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-        department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
-        section_id INTEGER,
-        form_name TEXT NOT NULL,
-        quantity INTEGER NOT NULL CHECK (quantity > 0),
-        notes TEXT,
-        status TEXT NOT NULL DEFAULT 'submitted',
-        accepted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        accepted_at TIMESTAMPTZ,
-        completed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        completed_at TIMESTAMPTZ,
-        claimed_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_print_service_requests_requester ON print_service_requests (requester_id);
-      CREATE INDEX IF NOT EXISTS idx_print_service_requests_status ON print_service_requests (status);
-      CREATE INDEX IF NOT EXISTS idx_print_service_requests_accepted_by ON print_service_requests (accepted_by);
-      CREATE INDEX IF NOT EXISTS idx_print_service_requests_created_at ON print_service_requests (created_at DESC);
-
-      CREATE TABLE IF NOT EXISTS print_service_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT,
-        updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-  }
-
-  return ensurePrintServiceTablePromise;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("routes/printServiceRequests.js#ensurePrintServiceTables", pool);
 };
 
 const normalize = (value) => String(value || '').trim().toLowerCase();

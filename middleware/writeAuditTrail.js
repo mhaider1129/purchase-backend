@@ -6,29 +6,8 @@ const SENSITIVE_KEYS = ['password', 'token', 'secret', 'authorization', 'apiKey'
 let auditTableReadyPromise;
 
 const ensureAuditTable = async () => {
-  if (!auditTableReadyPromise) {
-    auditTableReadyPromise = pool.query(`
-      CREATE TABLE IF NOT EXISTS governance_audit_trail (
-        id BIGSERIAL PRIMARY KEY,
-        actor_id INTEGER,
-        actor_role TEXT,
-        request_path TEXT NOT NULL,
-        method TEXT NOT NULL,
-        status_code INTEGER NOT NULL,
-        module TEXT NOT NULL,
-        resource TEXT NOT NULL,
-        action TEXT NOT NULL,
-        required_permissions TEXT[] NOT NULL DEFAULT '{}',
-        request_id TEXT,
-        ip_address TEXT,
-        user_agent TEXT,
-        payload JSONB,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-  }
-
-  return auditTableReadyPromise;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("middleware/writeAuditTrail.js#ensureAuditTable", pool);
 };
 
 const redactPayload = (value) => {

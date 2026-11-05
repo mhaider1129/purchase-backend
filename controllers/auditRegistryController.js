@@ -10,40 +10,8 @@ const AUDIT_STATUSES = {
 };
 
 const ensureAuditRegistryTable = async client => {
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS public.audit_registry_entries (
-      id BIGSERIAL PRIMARY KEY,
-      request_id INTEGER REFERENCES public.requests(id) ON DELETE SET NULL,
-      requester_id INTEGER NOT NULL REFERENCES public.users(id),
-      requester_type TEXT NOT NULL CHECK (requester_type IN ('INDIVIDUAL','COMMITTEE')),
-      account_name TEXT,
-      notes TEXT,
-      required_before_payment TEXT,
-      required_after_payment TEXT,
-      audit_status TEXT NOT NULL DEFAULT 'COO_REVIEW_PENDING' CHECK (audit_status IN ('COO_REVIEW_PENDING','AUDIT_REVIEW_PENDING','ACTION_REQUIRED','REGISTERED','CLOSED')),
-      finance_issued_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
-      returned_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
-      currency TEXT NOT NULL DEFAULT 'USD',
-      completed_at TIMESTAMPTZ,
-      created_by INTEGER REFERENCES public.users(id),
-      updated_by INTEGER REFERENCES public.users(id),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-  await client.query('ALTER TABLE public.audit_registry_entries ALTER COLUMN request_id DROP NOT NULL');
-  await client.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'audit_registry_entries_request_id_fkey'
-      ) THEN
-        ALTER TABLE public.audit_registry_entries
-          ADD CONSTRAINT audit_registry_entries_request_id_fkey
-          FOREIGN KEY (request_id) REFERENCES public.requests(id) ON DELETE SET NULL;
-      END IF;
-    END $$;
-  `);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("controllers/auditRegistryController.js#ensureAuditRegistryTable", client);
 };
 
 const assertValidStatus = status => {

@@ -3,15 +3,8 @@ const pool = require('../config/db');
 let columnEnsured = false;
 
 const ensureApprovalReminderColumn = async (client = pool) => {
-  if (columnEnsured) return;
-
-  const runner = typeof client.query === 'function' ? client : pool;
-
-  await runner.query(
-    `ALTER TABLE public.approvals ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`
-  );
-
-  columnEnsured = true;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/ensureApprovalReminderColumn.js#ensureApprovalReminderColumn", client);
 };
 
 module.exports = ensureApprovalReminderColumn;

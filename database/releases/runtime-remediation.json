@@ -1,0 +1,403 @@
+[
+  {
+    "file": "controllers/auditRegistryController.js",
+    "initializer": "ensureAuditRegistryTable",
+    "tables": [
+      "audit_registry_entries"
+    ],
+    "old_body_sha256": "8bd328bdf4bbd6a81a5c069c88023577f75c84ba6ce687891e9074a33b5de5de"
+  },
+  {
+    "file": "controllers/requests/assignRequestController.js",
+    "initializer": "runRequestedItemAssignmentEnsure",
+    "tables": [
+      "requested_items"
+    ],
+    "old_body_sha256": "013a9de52568d1d2a260cacbb4296ec2b31615f70678ea21a29a6053a7a76e20"
+  },
+  {
+    "file": "controllers/requests/createRequestController.js",
+    "initializer": "ensureContractsPhaseTwoForRequests",
+    "tables": [
+      "contract_items"
+    ],
+    "old_body_sha256": "e19b9183a1a86b54e49ec63239119805ddd502461c4d2b861d3ab7d41cf1d39d"
+  },
+  {
+    "file": "controllers/supplierEvaluationsController.js",
+    "initializer": "ensureSupplierEvaluationsTable",
+    "tables": [
+      "supplier_evaluations"
+    ],
+    "old_body_sha256": "5ca0ba7ea0d22f665455ed6e3247ff69ad0755fadc394fe2aabecc8e1409dbe5"
+  },
+  {
+    "file": "controllers/supplierSrmController.js",
+    "initializer": "ensureTables",
+    "tables": [
+      "supplier_scorecards",
+      "supplier_issues",
+      "supplier_compliance_artifacts"
+    ],
+    "old_body_sha256": "b5cd558b40ba36cc9c3df5eb40120f436c8c09d6aab808fc68ebd4320e124438"
+  },
+  {
+    "file": "controllers/suppliersController.js",
+    "initializer": "ensureSupplierContactsTable",
+    "tables": [
+      "supplier_contacts"
+    ],
+    "old_body_sha256": "d001e1d828589af456dba4fb0aeee3e9c1f4a36dc05752f2e0741d19c9fb113e"
+  },
+  {
+    "file": "controllers/suppliersController.js",
+    "initializer": "ensureSuppliersTable",
+    "tables": [
+      "suppliers"
+    ],
+    "old_body_sha256": "c13f47223199747a682e6f002124e9da003177c2b7e84981862a2b04cd6cc6ae"
+  },
+  {
+    "file": "controllers/utils/approvalRouteVersioning.js",
+    "initializer": "ensureApprovalRouteVersioning",
+    "tables": [
+      "approval_route_versions",
+      "approval_route_rules"
+    ],
+    "old_body_sha256": "0d6fdcb337b209443f5483160f9b979084ea811f5c2e9eebce8877ac43a2ac60"
+  },
+  {
+    "file": "controllers/warehouseSupplyTemplatesController.js",
+    "initializer": "ensureDepartmentIdColumn",
+    "tables": [
+      "warehouse_supply_templates"
+    ],
+    "old_body_sha256": "677507e1a03f3f2d6be0395d2ca716749ea7514108ac1041d45ccbfae96bec62"
+  },
+  {
+    "file": "utils/attachmentsColumnSupport.js",
+    "initializer": "ensureAttachmentsColumn",
+    "tables": [
+      "attachments"
+    ],
+    "old_body_sha256": "6e48e7d1feb3d0f1a49c591513eafced2dd02a039efc7ba4a5f4253a56794161"
+  },
+  {
+    "file": "utils/capabilityPolicyService.js",
+    "initializer": "ensureTable",
+    "tables": [
+      "route_capability_policies"
+    ],
+    "old_body_sha256": "e04bbe7e294cbb59ac8243055419f1ecb5efafc85684203d321e5dd580a5f55f"
+  },
+  {
+    "file": "utils/ensureApprovalReminderColumn.js",
+    "initializer": "ensureApprovalReminderColumn",
+    "tables": [
+      "approvals"
+    ],
+    "old_body_sha256": "b3ea988e0b3eb9f6baf45b6b6b0a340f2cf013ee483d6eb7a89c8f96ea6c853a"
+  },
+  {
+    "file": "utils/ensureDepartmentItemFollowUpNotesTable.js",
+    "initializer": "ensureDepartmentItemFollowUpNotesTable",
+    "tables": [
+      "department_item_follow_up_notes"
+    ],
+    "old_body_sha256": "0eeca2c7e33871077d96eecdc86486aed428b01a479c97167fdbde42a6a1005b"
+  },
+  {
+    "file": "utils/ensureFinanceCoreTables.js",
+    "initializer": "ensureFinanceCoreTables",
+    "tables": [
+      "finance_chart_of_accounts",
+      "finance_cost_centers",
+      "budget_envelopes",
+      "commitment_ledger",
+      "journal_entries",
+      "journal_entry_lines",
+      "gl_postings",
+      "gl_posting_lines"
+    ],
+    "old_body_sha256": "3e2705fbd4d733d591ee8bb97d573eb11eb790754c9ea37b18cf28462a8caaf0"
+  },
+  {
+    "file": "utils/ensureHistoricalRequestSchema.js",
+    "initializer": "ensureHistoricalRequestSchema",
+    "tables": [
+      "requests",
+      "requested_items",
+      "warehouse_supply_items"
+    ],
+    "old_body_sha256": "6cf43d70e96f1bff25cc71fac72cb1957c6e5b5805eddba8ffb718aeef845b7b"
+  },
+  {
+    "file": "utils/ensureItemMasterTables.js",
+    "initializer": "ensureItemMasterTables",
+    "tables": [
+      "item_categories",
+      "item_uom",
+      "item_manufacturers",
+      "item_brands",
+      "item_master",
+      "item_variants",
+      "item_conversion",
+      "stock_items",
+      "item_master_items",
+      "item_master_documents"
+    ],
+    "old_body_sha256": "0521a78033aed14c0e405a5ef232874916ea76de23e0bddba4e8617dcd231bb8"
+  },
+  {
+    "file": "utils/ensureItemRecallsTable.js",
+    "initializer": "ensureItemRecallsTable",
+    "tables": [
+      "item_recalls"
+    ],
+    "old_body_sha256": "805abca365d461725b8a7d2e4c85175af4a36dc3290ede5fec711c2d40e0dd35"
+  },
+  {
+    "file": "utils/ensureMaintenanceRequestSchema.js",
+    "initializer": "ensureMaintenanceRequestSchema",
+    "tables": [
+      "requests"
+    ],
+    "old_body_sha256": "3f7b25c140b2cfc2cb6c9463225372276250ab98454c1d73e83b0a81bfc3dbfd"
+  },
+  {
+    "file": "utils/ensureMonthlyDispensingTables.js",
+    "initializer": "ensureMonthlyDispensingTables",
+    "tables": [
+      "monthly_dispensing"
+    ],
+    "old_body_sha256": "7b5b13fee63fe9ee024c326ff6278e114851670f3ecccc134e2ac99bb8c1b958"
+  },
+  {
+    "file": "utils/ensureProcureToPayTables.js",
+    "initializer": "ensureProcureToPayTables",
+    "tables": [
+      "procurement_lifecycle_states",
+      "procurement_state_history",
+      "goods_receipts",
+      "goods_receipt_items",
+      "supplier_invoices",
+      "invoice_items",
+      "invoice_match_results",
+      "ap_vouchers",
+      "ap_voucher_lines",
+      "finance_postings",
+      "payment_records",
+      "finance_action_history",
+      "purchase_orders",
+      "purchase_order_items",
+      "ap_payables",
+      "payment_allocations",
+      "document_flow_links",
+      "non_po_receipt_approvals"
+    ],
+    "old_body_sha256": "c760d22c41949793fcb4538128bb2c3d342ed40e38a3037081c5e25503b18250"
+  },
+  {
+    "file": "utils/ensureProjectsTable.js",
+    "initializer": "ensureProjectsTable",
+    "tables": [
+      "projects",
+      "project_department_visibility",
+      "requests"
+    ],
+    "old_body_sha256": "fbe8fd25abfe331030d5c42fff9d09dbb9fe610e857fd2070c06978a002ced54"
+  },
+  {
+    "file": "utils/ensureRequestClientSubmissionKey.js",
+    "initializer": "ensureRequestClientSubmissionKey",
+    "tables": [
+      "requests"
+    ],
+    "old_body_sha256": "fb85407d684fb5e9adb3e52a2ddcc342c54472f73233bb143f8e2a46c3c8f04b"
+  },
+  {
+    "file": "utils/ensureRequestEditApprovalsTable.js",
+    "initializer": "ensureRequestEditApprovalsTable",
+    "tables": [
+      "request_edit_approvals"
+    ],
+    "old_body_sha256": "913676a698f3032eada8263b9719052d55e23eb72dd6fada0c54e5b9495b00ce"
+  },
+  {
+    "file": "utils/ensureRequestSchedulingColumns.js",
+    "initializer": "ensureRequestSchedulingColumns",
+    "tables": [
+      "requests"
+    ],
+    "old_body_sha256": "6ee574c0fa0a71798f0b0b91760778ae669b1d6e3a2e6e4e69a5c3cc7ee09aba"
+  },
+  {
+    "file": "utils/ensureRequestedItemApprovalColumns.js",
+    "initializer": "ensureRequestedItemApprovalColumns",
+    "tables": [
+      "requested_items"
+    ],
+    "old_body_sha256": "b81087be3a11cafc3fa91151161116fec3939c3586ecf3e60372c6434191fa29"
+  },
+  {
+    "file": "utils/ensureRequestedItemFinancialsTable.js",
+    "initializer": "ensureRequestedItemFinancialsTable",
+    "tables": [
+      "requested_item_financials"
+    ],
+    "old_body_sha256": "df5a789171042a8ae8d3e79fcd1519e4ffe7b359f46a2012c6f21197601c3fec"
+  },
+  {
+    "file": "utils/ensureRequestedItemPoIssuanceColumn.js",
+    "initializer": "ensureRequestedItemPoIssuanceColumn",
+    "tables": [
+      "requested_items"
+    ],
+    "old_body_sha256": "ec4aa2fc8783ebf1cadb8168ab7c54415d828d5943a1a208047b85c57d652b47"
+  },
+  {
+    "file": "utils/ensureRequestedItemReceivedColumns.js",
+    "initializer": "ensureRequestedItemReceivedColumns",
+    "tables": [
+      "requested_items",
+      "requests"
+    ],
+    "old_body_sha256": "578e329c0130cbaad9f1de73373f83bd86c8b648cfd90d1406d58c402f089a16"
+  },
+  {
+    "file": "utils/ensureRequestedItemUnitOfMeasureColumn.js",
+    "initializer": "ensureRequestedItemUnitOfMeasureColumn",
+    "tables": [
+      "requested_items"
+    ],
+    "old_body_sha256": "c3f93b17189112b45818a571643a7216b6bb18ebf9ae5efaea45681ebd45717c"
+  },
+  {
+    "file": "utils/ensureRiskRegisterTable.js",
+    "initializer": "ensureRiskRegisterTable",
+    "tables": [
+      "risk_register"
+    ],
+    "old_body_sha256": "4d080acbd2c2d2004f84008839d97a454069046904a84d77995d5538c3b0c0b3"
+  },
+  {
+    "file": "utils/ensureTechnicalInspectionsTable.js",
+    "initializer": "ensureTechnicalInspectionsTable",
+    "tables": [
+      "technical_inspections"
+    ],
+    "old_body_sha256": "8bb2b3e9e449000385e3df3a97f477f6c220184ffd07d0aa496ff6026874e84c"
+  },
+  {
+    "file": "utils/ensureWarehouseSupplyTables.js",
+    "initializer": "ensureWarehouseSupplyTables",
+    "tables": [
+      "warehouse_supply_items",
+      "warehouse_supplied_items"
+    ],
+    "old_body_sha256": "c6dddab6d5ec36f8ec1100574b8a840fcc31b5c65856f91bacf5fae2c487ea8d"
+  },
+  {
+    "file": "utils/ensureWarehouseSupplyTables.js",
+    "initializer": "ensureWarehouseSupplyApprovalColumns",
+    "tables": [
+      "warehouse_supply_items"
+    ],
+    "old_body_sha256": "024b1d23207a701a3904e5ff7b84e733de6b7b4efcc28a02a521302d910c9dd5"
+  },
+  {
+    "file": "utils/ensureWarehouseTransferTables.js",
+    "initializer": "ensureWarehouseTransferTables",
+    "tables": [
+      "warehouse_transfer_requests",
+      "warehouse_transfer_items"
+    ],
+    "old_body_sha256": "b99efdc9c5fd4f9d577cadbd37c4585a2e320c49d34f2599004c827dc771b31f"
+  },
+  {
+    "file": "utils/evaluationCriteriaSeeder.js",
+    "initializer": "ensureEvaluationCriteriaTable",
+    "tables": [
+      "evaluation_criteria"
+    ],
+    "old_body_sha256": "ffd09169da4bfa229152ba2b282df0efbb7c6b9adcd57813328c5658c02abbd3"
+  },
+  {
+    "file": "utils/notificationService.js",
+    "initializer": "ensureNotificationsTable",
+    "tables": [
+      "notifications"
+    ],
+    "old_body_sha256": "b14d0cba7eea45ee7ec2d6038de51f117bdfbba477993bb3fa0eacbc830ac682"
+  },
+  {
+    "file": "utils/permissionService.js",
+    "initializer": "ensurePermissionTables",
+    "tables": [
+      "permissions",
+      "user_permissions",
+      "role_permissions",
+      "data_scopes",
+      "user_data_scopes",
+      "role_data_scopes"
+    ],
+    "old_body_sha256": "928cb09b1b5442f49cc3f501ae9783f8c35f1edf28935f0637ab0a7d49fe8bc8"
+  },
+  {
+    "file": "utils/uiAccessService.js",
+    "initializer": "ensureTable",
+    "tables": [
+      "ui_resource_permissions"
+    ],
+    "old_body_sha256": "378df654f171e2f0adda408ea5e79255e1705d1ed3b1a46e79fc21d6efd2bc7c"
+  },
+  {
+    "file": "services/procurementEvaluationService.js",
+    "initializer": "ensureTestCostSchema",
+    "tables": [
+      "procurement_evaluation_offer_test_costs"
+    ],
+    "old_body_sha256": "4c08f1d70956f26b363b06fffec29a18c69712a4d24e681c61e7550693c4ffca"
+  },
+  {
+    "file": "services/procurementEvaluationService.js",
+    "initializer": "ensureResultPersistenceSchema",
+    "tables": [
+      "procurement_evaluation_results"
+    ],
+    "old_body_sha256": "8c8ed70bf8b8a21780e7d80ed766e5516277aad6aa2d811f582b3e346ea8e69b"
+  },
+  {
+    "file": "middleware/writeAuditTrail.js",
+    "initializer": "ensureAuditTable",
+    "tables": [
+      "governance_audit_trail"
+    ],
+    "old_body_sha256": "5fc2f32572558b9c6d76b8d9ab62880638f791eb3cae6d049f24e529714b0c73"
+  },
+  {
+    "file": "routes/printServiceRequests.js",
+    "initializer": "ensurePrintServiceTables",
+    "tables": [
+      "print_service_requests",
+      "print_service_settings"
+    ],
+    "old_body_sha256": "1cfcad704cca61eda0ca45a26b2ed1417d366af35ccc44440695fcef95735ced"
+  },
+  {
+    "file": "repositories/stockItemRequestRepository.js",
+    "initializer": "ensureColumns",
+    "tables": [
+      "stock_item_requests"
+    ],
+    "old_initializer_sha256": "44672f6671d060850ab2f91daf49efcb87c5ba4053a0d2621913b18cfabf662c"
+  },
+  {
+    "file": "routes/documentBranding.js",
+    "initializer": "ensureTable",
+    "tables": [
+      "document_branding_settings"
+    ],
+    "old_source_sha256": "0184b6f7a8c8bc819a9d277d0a1908da0f5c2df0795f8e9e3b11ad9b4d5469d7"
+  }
+]

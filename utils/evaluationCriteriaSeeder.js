@@ -66,79 +66,8 @@ const EVALUATION_CRITERIA = [
 ];
 
 const ensureEvaluationCriteriaTable = async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS evaluation_criteria (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        role TEXT NOT NULL,
-        components JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        code TEXT
-      )
-    `);
-
-    await pool.query(`
-      ALTER TABLE evaluation_criteria
-        ADD COLUMN IF NOT EXISTS code TEXT,
-        ADD COLUMN IF NOT EXISTS assignment_config JSONB
-    `);
-
-    await pool.query(`
-      UPDATE evaluation_criteria
-         SET code = LOWER(code)
-       WHERE code IS NOT NULL AND code <> LOWER(code)
-    `);
-
-    await pool.query(`
-      DROP INDEX IF EXISTS evaluation_criteria_code_idx
-    `);
-
-    await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS evaluation_criteria_code_unique_idx
-        ON evaluation_criteria(code)
-    `);
-
-    for (const criteria of EVALUATION_CRITERIA) {
-      const normalizedCode = criteria.code ? criteria.code.toLowerCase() : null;
-      const componentsJson = JSON.stringify(criteria.components);
-
-      await pool.query(
-        `WITH target AS (
-            SELECT id
-              FROM evaluation_criteria
-             WHERE code IS NULL AND LOWER(name) = LOWER($2)
-             ORDER BY id
-             LIMIT 1
-          )
-          UPDATE evaluation_criteria ec
-             SET code = $1,
-                 name = $2,
-                 role = $3,
-                 components = $4
-            FROM target
-           WHERE ec.id = target.id`,
-        [normalizedCode, criteria.name, criteria.role, componentsJson]
-      );
-
-      await pool.query(
-        `INSERT INTO evaluation_criteria (code, name, role, components)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (code) DO NOTHING`,
-        [normalizedCode, criteria.name, criteria.role, componentsJson]
-      );
-    }
-
-    await pool.query(
-      `DELETE FROM evaluation_criteria
-        WHERE code IS NULL
-          AND LOWER(name) = ANY($1::text[])`,
-      [EVALUATION_CRITERIA.map((criteria) => criteria.name.toLowerCase())]
-    );
-  } catch (err) {
-    console.error('❌ Failed to ensure evaluation_criteria table exists:', err);
-    throw err;
-  }
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/evaluationCriteriaSeeder.js#ensureEvaluationCriteriaTable", pool);
 };
 
 module.exports = {

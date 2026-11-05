@@ -3,32 +3,8 @@ const pool = require('../config/db');
 let ensurePromise = null;
 
 const ensureNotificationsTable = async () => {
-  if (!ensurePromise) {
-    ensurePromise = (async () => {
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS notifications (
-          id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          title TEXT,
-          message TEXT NOT NULL,
-          link TEXT,
-          metadata JSONB,
-          is_read BOOLEAN DEFAULT FALSE,
-          created_at TIMESTAMPTZ DEFAULT NOW()
-        )
-      `);
-
-      await pool.query(
-        `CREATE INDEX IF NOT EXISTS notifications_user_read_created_idx
-         ON notifications(user_id, is_read, created_at DESC)`
-      );
-    })().catch(err => {
-      ensurePromise = null;
-      throw err;
-    });
-  }
-
-  return ensurePromise;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/notificationService.js#ensureNotificationsTable", pool);
 };
 
 const normalizeText = value => {

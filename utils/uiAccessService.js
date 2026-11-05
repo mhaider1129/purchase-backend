@@ -221,15 +221,8 @@ const defaultResources = [
 ];
 
 const ensureTable = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ui_resource_permissions (
-      resource_key TEXT PRIMARY KEY,
-      label TEXT NOT NULL,
-      description TEXT,
-      permissions TEXT[] NOT NULL DEFAULT '{}',
-      require_all BOOLEAN NOT NULL DEFAULT FALSE
-    )
-  `);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/uiAccessService.js#ensureTable", pool);
 };
 
 const normalizePermissionList = (permissions) => {
@@ -289,62 +282,8 @@ const normalizeBoolean = (value) => {
 };
 
 const syncUiAccessResources = async () => {
-  await ensureTable();
-  for (const resource of defaultResources) {
-    const { resourceKey, label, description, permissions, requireAll } = resource;
-    const normalizedPermissions = normalizePermissionList(permissions);
-    const existing = await pool.query(
-      `SELECT label, description, permissions, require_all FROM ui_resource_permissions WHERE resource_key = $1`,
-      [resourceKey]
-    );
-
-    if (existing.rowCount === 0) {
-      await pool.query(
-        `INSERT INTO ui_resource_permissions (resource_key, label, description, permissions, require_all)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [resourceKey, label, description, normalizedPermissions, requireAll]
-      );
-      continue;
-    }
-
-    const row = existing.rows[0];
-    const rawPermissions = Array.isArray(row.permissions) ? row.permissions.filter(Boolean) : [];
-    const currentPermissions = normalizePermissionList(rawPermissions);
-    const currentRequireAll = Boolean(row.require_all);
-
-    if (
-      rawPermissions.length !== currentPermissions.length ||
-      rawPermissions.some((code, idx) => (code || '').trim().toLowerCase() !== currentPermissions[idx])
-    ) {
-      await pool.query(
-        `UPDATE ui_resource_permissions SET permissions = $2 WHERE resource_key = $1`,
-        [resourceKey, currentPermissions]
-      );
-      console.info(
-        `ℹ️ Normalized permission codes for UI resource '${resourceKey}' to ${
-          currentPermissions.join(', ') || 'none'
-        }.`
-      );
-    }
-
-    const permissionsChanged =
-      currentPermissions.length !== normalizedPermissions.length ||
-      currentPermissions.some((code, idx) => code !== normalizedPermissions[idx]);
-
-    const requireAllChanged = currentRequireAll !== Boolean(requireAll);
-
-    const labelChanged = row.label !== label || row.description !== description;
-
-    if (permissionsChanged || requireAllChanged || labelChanged) {
-      console.warn(
-        `⚠️ UI resource '${resourceKey}' differs from defaults. Current permissions=${
-          currentPermissions.join(', ') || 'none'
-        }, require_all=${currentRequireAll}. To align with defaults, update it via the UI to permissions=${
-          normalizedPermissions.join(', ') || 'none'
-        } and require_all=${Boolean(requireAll)}.`
-      );
-    }
-  }
+  // AUD-010: reference definitions are installed only by reviewed manual SQL.
+  await ensureTable(); return true;
 };
 
 const listUiResources = async () => {

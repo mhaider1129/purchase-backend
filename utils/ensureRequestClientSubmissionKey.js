@@ -4,24 +4,8 @@ let ensured = false;
 let ensurePromise = null;
 
 const ensureRequestClientSubmissionKey = async () => {
-  if (ensured) return;
-
-  if (!ensurePromise) {
-    ensurePromise = (async () => {
-      await pool.query(`ALTER TABLE public.requests ADD COLUMN IF NOT EXISTS client_submission_key TEXT`);
-      await pool.query(`DROP INDEX IF EXISTS public.requests_client_submission_key_unique_idx`);
-      await pool.query(
-        `CREATE UNIQUE INDEX IF NOT EXISTS requests_requester_client_submission_key_unique_idx
-         ON public.requests (requester_id, client_submission_key)
-         WHERE client_submission_key IS NOT NULL`
-      );
-      ensured = true;
-    })().finally(() => {
-      ensurePromise = null;
-    });
-  }
-
-  await ensurePromise;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/ensureRequestClientSubmissionKey.js#ensureRequestClientSubmissionKey", pool);
 };
 
 module.exports = ensureRequestClientSubmissionKey;

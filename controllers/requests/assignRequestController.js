@@ -8,21 +8,8 @@ const assignment = require("../../services/procurementAssignmentService");
 let assignmentColumnsEnsurePromise = null;
 
 const runRequestedItemAssignmentEnsure = async (clientOrPool) => {
-  await clientOrPool.query(`
-    ALTER TABLE public.requested_items
-      ADD COLUMN IF NOT EXISTS assigned_to INTEGER REFERENCES public.users(id),
-      ADD COLUMN IF NOT EXISTS assigned_by INTEGER REFERENCES public.users(id),
-      ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP WITH TIME ZONE,
-      ADD COLUMN IF NOT EXISTS assignment_notes TEXT
-  `);
-  await clientOrPool.query(`
-    CREATE INDEX IF NOT EXISTS idx_requested_items_assigned_to
-      ON public.requested_items(assigned_to)
-  `);
-  await clientOrPool.query(`
-    CREATE INDEX IF NOT EXISTS idx_requested_items_request_assignee
-      ON public.requested_items(request_id, assigned_to)
-  `);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../../utils/runtimeSchemaContract").assertModuleContract("controllers/requests/assignRequestController.js#runRequestedItemAssignmentEnsure", clientOrPool);
 };
 
 const ensureRequestedItemAssignmentColumns = async (clientOrPool = pool) => {

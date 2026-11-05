@@ -50,9 +50,9 @@ describe('manual migration governance', () => {
   test('architecture policy marks deployed numbered migrations immutable', () => {
     const policy = read('docs/architecture/manual-migration-governance.md');
     expect(policy).toContain('Do not modify numbered migrations after production execution. Create a new forward migration.');
-    expect(policy).toContain('001 through 006 are deployed');
+    expect(policy).toContain('Historical execution remains UNVERIFIED');
     expect(policy).toContain('007 is diagnostic only');
-    expect(policy).toContain('008, 009, and 010 are pending manual execution');
+    expect(policy).toContain('069_database_release_governance.sql');
   });
 });
 

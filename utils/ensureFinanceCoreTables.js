@@ -108,30 +108,9 @@ const statements = [
   `CREATE INDEX IF NOT EXISTS idx_gl_posting_lines_posting ON public.gl_posting_lines(gl_posting_id)`,
 ];
 
-const seedDefaultAccounts = async (client) => {
-  await client.query(
-    `INSERT INTO public.finance_chart_of_accounts (code, name, account_type)
-     VALUES
-       ('5000-PROC-EXP', 'Procurement Expense', 'expense'),
-       ('2100-AP-ACCRUAL', 'Accounts Payable Accrual', 'liability')
-     ON CONFLICT (code) DO NOTHING`
-  );
-};
-
 async function ensureFinanceCoreTables(client = null) {
-  if (ensured && !client) {
-    return;
-  }
-
-  const runner = client || pool;
-  for (const statement of statements) {
-    await runner.query(statement);
-  }
-  await seedDefaultAccounts(runner);
-
-  if (!client) {
-    ensured = true;
-  }
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/ensureFinanceCoreTables.js#ensureFinanceCoreTables", client);
 }
 
 module.exports = { ensureFinanceCoreTables, financeCoreStatements: statements };

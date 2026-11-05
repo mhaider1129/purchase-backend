@@ -7,21 +7,7 @@ const MAX_IMAGE_LENGTH = 3 * 1024 * 1024;
 
 let ensureTablePromise;
 
-const ensureTable = () => {
-  if (!ensureTablePromise) {
-    ensureTablePromise = pool.query(`
-      CREATE TABLE IF NOT EXISTS document_branding_settings (
-        key TEXT PRIMARY KEY,
-        logo_data TEXT,
-        document_code VARCHAR(80),
-        template_data TEXT,
-        updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-  }
-  return ensureTablePromise;
-};
+const ensureTable = async () => require('../utils/runtimeSchemaContract').assertModuleContract('routes/documentBranding.js#ensureTable',pool);
 
 const normalize = (value) => String(value || '').trim().toLowerCase();
 const canManage = (user) =>

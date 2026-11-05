@@ -63,9 +63,8 @@ const parseOptionalPositiveInteger = (value, fieldName) => {
 
 
 const ensureContractsPhaseTwoForRequests = async () => {
-  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS item_id INTEGER`);
-  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS requested_quantity NUMERIC(14,2)`);
-  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS delivered_quantity NUMERIC(14,2) NOT NULL DEFAULT 0`);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../../utils/runtimeSchemaContract").assertModuleContract("controllers/requests/createRequestController.js#ensureContractsPhaseTwoForRequests", pool);
 };
 
 const assignApprover = async (

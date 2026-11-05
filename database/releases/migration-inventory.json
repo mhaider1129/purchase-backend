@@ -2,7 +2,7 @@
   "application_sources": [
     {
       "path": "app.js",
-      "sha256": "bbbca39aae3c0797046bbc10cd1051575820811be6e27f9e42f3e2afa9d80d46"
+      "sha256": "eec2e695e62eb7cad93880d18275b01f3f50beaf578f7cf3396baf5252a5d222"
     },
     {
       "path": "config/capabilityMatrix.js",
@@ -262,7 +262,7 @@
     },
     {
       "path": "controllers/rfidController.js",
-      "sha256": "9fa715302c47df4bbc05c48753a8c0f07087161e7e0b62e48afda36e5dfb0c5a"
+      "sha256": "52edc7ef0026bb50b686c7dfc51cf82f8a40de9693a20159edddc93d8c6b2722"
     },
     {
       "path": "controllers/rfxPortalController.js",
@@ -377,6 +377,10 @@
       "sha256": "e286d85f5da260e2539ba47aace8c507897253a959048d6e4d0e6d51272625b8"
     },
     {
+      "path": "database/releases/prerequisites/069-schema-contract.json",
+      "sha256": "b4416c185b9dd801f08fc66364a7c5e029fecb7915012c793e77afa51c56df25"
+    },
+    {
       "path": "database/releases/runtime-modules.json",
       "sha256": "60195ad7787c6cd374c019ce69491d7b767fc7859e7dbd9fa469b621c8d63d57"
     },
@@ -393,6 +397,10 @@
       "sha256": "0d684ca03138224c851cf6140e4363045beb6b64bba983c4f4d5f0c366bdd313"
     },
     {
+      "path": "domain/rfidObservationIdentity.js",
+      "sha256": "e9b23e991f28d4f0449115f778276e918836fb74dfb0e89af96b4d5116d9c47b"
+    },
+    {
       "path": "domain/statusConstants.js",
       "sha256": "2728207d0a19fae32220b936aeda519e6344891abf0a1aaf20b924ed2b17b8b9"
     },
@@ -407,6 +415,10 @@
     {
       "path": "jobs/recalculateProcurementPriorityAging.js",
       "sha256": "2aedf2dedfc609f2593ab0c68b072964f6caf47f8a0d603aa311a630cc52431e"
+    },
+    {
+      "path": "jobs/rfidWorker.js",
+      "sha256": "965963d581bc811492d6cd140f55b1aa61c323dbb8e4a73565c6f4fdd50d3990"
     },
     {
       "path": "middleware/authMiddleware.js",
@@ -506,7 +518,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "beddddfed7ef9914337d4bcb2bdc4a3c8f2d359f2da24482831c09f13c414baa"
+      "sha256": "c1ff82487335a293d3e921b38d068dbbe8de7f957f1389c9032c106bf788bb1f"
     },
     {
       "path": "policies/approvalPolicy.js",
@@ -770,7 +782,7 @@
     },
     {
       "path": "routes/rfid.js",
-      "sha256": "19688fa46eea6506f117eb7d4df0357d3bf0dabcdbaf81aac6d647da3266b6db"
+      "sha256": "ab650b5edc06c2d52fdfa670fedbe7aa786d41ef01a1512c4ffe61ce1a487b63"
     },
     {
       "path": "routes/rfidIngestion.js",
@@ -866,11 +878,11 @@
     },
     {
       "path": "scripts/lib/databaseRelease/inventory.js",
-      "sha256": "18bf89aaa417c9ac474da8cc0fa2da8513a352fc6ea6ddab58bb04942fe54e31"
+      "sha256": "b780247a6e0d7cec6e6f324856cbe07b35f174a8295a0f9b6d353f9fa47ca797"
     },
     {
       "path": "scripts/lib/databaseRelease/planner.js",
-      "sha256": "5b06953d30f04b2ee75e38854423730498e78c9255b4d59133cfe6b69f024c3d"
+      "sha256": "a7fd7f224ec833ec289c34e4602b01833853669d431750a66105dec8ecedb954"
     },
     {
       "path": "scripts/lib/databaseRelease/sqlStatements.js",
@@ -978,7 +990,7 @@
     },
     {
       "path": "services/databaseReleaseService.js",
-      "sha256": "4dfccad14545e5c86db1407a7b3ff7e9a2b73e5ae46a77291949185c0ac85190"
+      "sha256": "c5badb196b5596e8fa265d795f3a42b4e2e1c1fdf8967da269d5e564f7493666"
     },
     {
       "path": "services/deliveryInspectionService.js",
@@ -1346,11 +1358,19 @@
     },
     {
       "path": "services/rfidEventProcessor.js",
-      "sha256": "a4af491e0ee1b442af3e58ca2641a115bf907682f4bf94bb0c092d312f7801f0"
+      "sha256": "678e86cf506a6c555020c8c8d9e54134a517b56f7956378882d6a062ca9da5c7"
+    },
+    {
+      "path": "services/rfidJobService.js",
+      "sha256": "f0a47d3677f74493facd767c414005a4364ca51be0e5cb3ab5d8e6a25dcc1806"
+    },
+    {
+      "path": "services/rfidProcessingPolicy.js",
+      "sha256": "be729572d66104af4e19cdb4c548dfabb66cc68a94c0015c37761f018d31a2fb"
     },
     {
       "path": "services/rfidService.js",
-      "sha256": "4cd3026cc4c25700af2239008a14470ca9dc09b3069b409b4678c9cb64721dd6"
+      "sha256": "f86787f6943f50feb0b72ccb4f6f9b3609a8feb97b8d915deacb2ce0e0bd6c67"
     },
     {
       "path": "services/rfidVendorAdapter.js",
@@ -1705,8 +1725,8 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "2948344b1beb268715b4937ed82e47dcf355b82fb00f576abdaf34f035762473",
-  "highest_manual_number": 69,
+  "application_manifest_sha256": "ec85fe1b9ac3b4dfd7027b7f596e445a4acad4ed62cf9bb814a0ff30ec0cb720",
+  "highest_manual_number": 70,
   "artifacts": [
     {
       "path": "sql/20260313_procure_to_pay_document_flow.sql",
@@ -2489,17 +2509,33 @@
     {
       "path": "sql/manual/069_database_release_governance.sql",
       "id": "069",
-      "classification": "active_forward_migration",
+      "classification": "frozen_historical_migration",
       "sha256": "4a60c71b7565085e187a0fb44d946108d857cc0f8bd32868e805916ea8c2ec5a",
       "bytes": 34356,
       "execution_evidence": "UNVERIFIED",
       "ddl_statements": 10,
       "header": "-- MANUAL DATABASE MIGRATION REQUIRED. Review in Development first.\n-- Prerequisites: reviewed canonical 059/060/061 and current 064/065/066/067/068 contracts.\n-- Creates no historical migration receipts and backfills no business evidence.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';",
+      "governed_receipt_required": true,
       "required_contracts": [
         "canonical_procurement_completion(integer,integer,integer)",
         "canonical_receipt_inventory_quantity(bigint,integer,text,bigint)",
         "reviewed_baseline_and_permission_UI_catalogs"
       ]
+    },
+    {
+      "path": "sql/manual/070_rfid_processing_recovery.sql",
+      "id": "070",
+      "classification": "active_forward_migration",
+      "sha256": "acef7ca703623adbacedd4a27c53042f310d120052d598c7b8113496210af41a",
+      "bytes": 5780,
+      "execution_evidence": "UNVERIFIED",
+      "ddl_statements": 11,
+      "header": "-- MANUAL DATABASE MIGRATION REQUIRED. Task 7B / AUD-012.\n-- Requires the reviewed Task 7A release and existing RFID core. No raw observation,\n-- asset, stock, count, reconciliation, historical audit or notification backfill.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';",
+      "governed_receipt_required": true,
+      "depends_on": [
+        "069_database_release_governance"
+      ],
+      "preflight_contract": "database/releases/prerequisites/069-schema-contract.json"
     },
     {
       "path": "sql/migrations/20260312_procure_to_pay.sql",
@@ -2752,7 +2788,7 @@
       "path": "scripts/testBackendContractRefresh.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 5,
-      "sha256": "45d762c33403048d92f6c06d483b0f68aefb8356a2c144219832750dcc0a8471"
+      "sha256": "25e628a5df77a797a39f1f3a10604e32398098a268ec561972857e8dc7bf8475"
     },
     {
       "path": "scripts/testBackendSchemaReconciliation.js",
@@ -2794,7 +2830,7 @@
       "path": "integration/databaseGovernance.postgres.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 8,
-      "sha256": "fa9c736c0e94bbffd299bd9d084db1a7d03a1e4f9da0b77ca0024c931c759376"
+      "sha256": "5d4d444bc48ac4b90ec429ea0c77a16400b076d67b65daac20ea393fb5b167e1"
     },
     {
       "path": "integration/deviceDemoWorkspaces.js",

@@ -509,6 +509,33 @@ const startServer = async (
       await syncCapabilityPolicies();
       const server = app.listen(port, host, async () => {
         log('info', 'server_started', { host, port });
+        const rfidWorker = require('./jobs/rfidWorker').startRfidWorker({
+          log,
+        });
+        const scheduledTimers = [];
+        let stopping = false;
+        const shutdown = async () => {
+          if (stopping) return;
+          stopping = true;
+          for (const timer of scheduledTimers) clearInterval(timer);
+          server.close();
+          await rfidWorker.stop();
+          await pool.end();
+        };
+        const onShutdown = () =>
+          shutdown().catch((error) =>
+            log('error', 'rfid_shutdown_incomplete', {
+              code: error.code || 'DATABASE_INTERRUPTION',
+            }),
+          );
+        process.once('SIGTERM', onShutdown);
+        process.once('SIGINT', onShutdown);
+        server.once('close', () => {
+          for (const timer of scheduledTimers) clearInterval(timer);
+          process.off('SIGTERM', onShutdown);
+          process.off('SIGINT', onShutdown);
+          rfidWorker.stop();
+        });
         try {
           await reassignPendingApprovals();
           log('info', 'pending_approvals_reassigned_on_startup');
@@ -516,31 +543,35 @@ const startServer = async (
           await remindPendingReceipts();
           await processScheduledRequests();
           await processNotificationOutbox();
-          setInterval(
-            () => {
-              processScheduledRequests().catch((err) =>
-                log('error', 'scheduled_request_processor_failed', {
-                  error: err.message,
-                }),
-              );
-              remindPendingApprovals().catch((err) =>
-                log('error', 'reminder_job_failed', { error: err.message }),
-              );
-              remindPendingReceipts().catch((err) =>
-                log('error', 'receipt_reminder_job_failed', {
-                  error: err.message,
-                }),
-              );
-            },
-            24 * 60 * 60 * 1000,
+          scheduledTimers.push(
+            setInterval(
+              () => {
+                processScheduledRequests().catch((err) =>
+                  log('error', 'scheduled_request_processor_failed', {
+                    error: err.message,
+                  }),
+                );
+                remindPendingApprovals().catch((err) =>
+                  log('error', 'reminder_job_failed', { error: err.message }),
+                );
+                remindPendingReceipts().catch((err) =>
+                  log('error', 'receipt_reminder_job_failed', {
+                    error: err.message,
+                  }),
+                );
+              },
+              24 * 60 * 60 * 1000,
+            ),
           ); // daily
-          setInterval(() => {
-            processNotificationOutbox().catch((err) =>
-              log('error', 'notification_outbox_processor_failed', {
-                error: err.message,
-              }),
-            );
-          }, 60 * 1000);
+          scheduledTimers.push(
+            setInterval(() => {
+              processNotificationOutbox().catch((err) =>
+                log('error', 'notification_outbox_processor_failed', {
+                  error: err.message,
+                }),
+              );
+            }, 60 * 1000),
+          );
         } catch (err) {
           log('error', 'startup_reassignment_failed', { error: err.message });
         }
@@ -555,7 +586,7 @@ if (require.main === module) {
   startServer().catch(async (error) => {
     log('error', 'database_release_startup_blocked', {
       code: error.code || 'DATABASE_RELEASE_INCOMPATIBLE',
-      findings: error.findings?.slice(0,50),
+      findings: error.findings?.slice(0, 50),
       findingCount: error.findings?.length,
     });
     await require('./config/db').end();

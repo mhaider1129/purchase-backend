@@ -1,5 +1,8 @@
 # AUD-010: database release governance and Development rollout
 
+Task 7B supersedes the active release with SQL 070 and contract `hospital-erp-2026-11-7b`. SQL 069 is now a frozen governed prerequisite, with its original schema contract preserved. Use [the Task 7B rollout](rfid-crash-recovery-7b.md) for the current release; the 7A architecture and original rollout below remain historical context.
+
+
 ## Finding and current baseline
 
 Reviewed `origin/master` **3aecb532**, including Batches 1–6 and unified completion reporting. Discovery found **068** as the highest existing manual SQL number; this release adds **069**. No hosted database was connected to. Installed database state is therefore **unknown**, not “all migrations applied.”

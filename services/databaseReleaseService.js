@@ -7,7 +7,7 @@ const {
   verifyFiles,
 } = require("../scripts/lib/databaseRelease/inventory");
 const directory = path.join(__dirname, "../database/releases");
-const CONTRACT_VERSION = "hospital-erp-2026-11-7a";
+const CONTRACT_VERSION = "hospital-erp-2026-11-7b";
 function loadContract() {
   return JSON.parse(
     fs.readFileSync(path.join(directory, "schema-contract.json"), "utf8"),
@@ -196,7 +196,7 @@ async function verify(
         reason: "explicit_release_and_environment_required",
       });
     for (const entry of inventory.artifacts.filter(
-      (r) => r.classification === "active_forward_migration",
+      (r) => r.classification === "active_forward_migration" || r.governed_receipt_required,
     )) {
       const id = path.basename(entry.path, ".sql");
       const applied = receipts.find(

@@ -35,7 +35,8 @@
     "db:inventory": "node scripts/databaseRelease.js inventory",
     "db:plan": "node scripts/databaseRelease.js plan",
     "db:verify": "node scripts/databaseRelease.js verify",
-    "test:database-governance-postgres": "node scripts/testBackendContractRefresh.js --database-governance"
+    "test:database-governance-postgres": "node scripts/testBackendContractRefresh.js --database-governance",
+    "test:rfid-recovery-postgres": "node scripts/testBackendContractRefresh.js --rfid-recovery"
   },
   "keywords": [
     "purchase",

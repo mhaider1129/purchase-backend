@@ -26,17 +26,28 @@ function selectMigrations(inventory, ids) {
       throw new Error("FROZEN_REPLAY_DISABLED");
     return r;
   });
-  validateOrder(selected);
+  validateOrder(
+    selected,
+    new Set(
+      inventory.artifacts
+        .filter(
+          (r) =>
+            r.governed_receipt_required &&
+            r.classification === "frozen_historical_migration",
+        )
+        .map((r) => path.basename(r.path, ".sql")),
+    ),
+  );
   return selected;
 }
-function validateOrder(selected) {
+function validateOrder(selected, prior = new Set()) {
   const positions = new Map(
     selected.map((r, i) => [path.basename(r.path, ".sql"), i]),
   );
   for (let i = 0; i < selected.length; i++)
     for (const dep of selected[i].depends_on || []) {
       const p = positions.get(dep);
-      if (p === undefined || p >= i)
+      if ((p === undefined && !prior.has(dep)) || p >= i)
         throw new Error("MIGRATION_ORDER_OR_PREREQUISITE_INVALID");
     }
   return selected;
@@ -102,6 +113,27 @@ function bundle({ inventory, contract, ids, environment, actor, releaseRef }) {
     body = migrationBody(sql);
   const tag = "$db_release_" + entry.sha256.slice(0, 16) + "$";
   if (body.includes(tag)) throw new Error("SQL_BUNDLE_DELIMITER_COLLISION");
+  const preflight = entry.preflight_contract
+    ? JSON.parse(
+        fs.readFileSync(path.join(root, entry.preflight_contract), "utf8"),
+      )
+    : contract;
+  const preflightChecks = entry.preflight_contract
+    ? `BEGIN
+ ${checks(preflight.catalog, { preflight: true })}
+ EXCEPTION WHEN raise_exception THEN
+ ${checks(contract.catalog, { preflight: true })}
+ END;`
+    : checks(preflight.catalog, { preflight: true });
+  const dependencies = (entry.depends_on || [])
+    .map((dep) => {
+      const previous = inventory.artifacts.find(
+        (r) => path.basename(r.path, ".sql") === dep,
+      );
+      if (!previous) throw new Error("UNKNOWN_MIGRATION_PREREQUISITE");
+      return `IF NOT EXISTS(SELECT 1 FROM public.database_release_migrations WHERE migration_id=${literal(dep)} AND filename=${literal(previous.path)} AND content_sha256=${literal(previous.sha256)} AND execution_environment=${literal(environment)} AND execution_status='APPLIED') THEN RAISE EXCEPTION 'DATABASE_RELEASE_PREREQUISITE_RECEIPT_MISSING'; END IF;`;
+    })
+    .join("\n");
   const fingerprint = `encode(sha256(convert_to(actual::text,'UTF8')),'hex')`;
   return `-- Generated offline. Review checksum, actor, environment and release before manual SQL Editor execution.
 -- Historical migrations remain UNVERIFIED. This bundle never replays a frozen file.
@@ -118,9 +150,10 @@ BEGIN
   EXECUTE 'SELECT content_sha256 FROM public.database_release_migrations WHERE migration_id=$1 AND execution_environment=$2 AND execution_status=''APPLIED''' INTO prior_hash USING ${literal(id)},${literal(environment)};
   IF prior_hash IS NOT NULL AND prior_hash<>${literal(entry.sha256)} THEN RAISE EXCEPTION 'MIGRATION_CHECKSUM_MISMATCH'; END IF;
  END IF;
+ ${dependencies}
  IF prior_hash IS NULL THEN
   actual := ${snapshotExpression()};
-  ${checks(contract.catalog, { preflight: true })}
+  ${preflightChecks}
   EXECUTE ${literal(body)};
  END IF;
  actual := ${snapshotExpression()};

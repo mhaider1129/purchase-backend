@@ -85,6 +85,16 @@ function inventory() {
       entry.note =
         "Overlapping responsibility is consolidated; never replay or infer historical execution.";
     }
+    if (entry.id === "069") {
+      entry.classification = "frozen_historical_migration";
+      entry.governed_receipt_required = true;
+    }
+    if (entry.id === "070") {
+      entry.governed_receipt_required = true;
+      entry.depends_on = ["069_database_release_governance"];
+      entry.preflight_contract =
+        "database/releases/prerequisites/069-schema-contract.json";
+    }
     if (entry.id === "069")
       entry.required_contracts = [
         "canonical_procurement_completion(integer,integer,integer)",
@@ -131,6 +141,9 @@ function inventory() {
     "package-lock.json",
     "scripts/databaseRelease.js",
     "database/releases/runtime-modules.json",
+    ...files(path.join(root, "database/releases/prerequisites")).map((f) =>
+      path.relative(root, f),
+    ),
     ...files(path.join(root, "scripts/lib/databaseRelease"))
       .filter((f) => f.endsWith(".js"))
       .map((f) => path.relative(root, f)),

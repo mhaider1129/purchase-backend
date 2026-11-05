@@ -760,6 +760,69 @@ async function run(owner, url) {
         "RFID_SCOPE_MISMATCH",
       );
     });
+    await test("invalid neighboring evidence cannot influence a valid read interpretation", async () => {
+      const a = await fixture(),
+        b = await fixture(),
+        known = await knownAsset(a),
+        foreign = await knownAsset(b);
+      const portal = await row(
+        "INSERT INTO rfid_portals(institute_id,code,name,portal_type,from_location_id,to_location_id,enabled) VALUES($1,'DOOR','Door','DOORWAY',$2,$2,true) RETURNING id",
+        [a.institute.id, a.location.id],
+      );
+      for (const [port, role] of [
+        [1, "SIDE_A"],
+        [2, "SIDE_B"],
+      ]) {
+        const antenna = await row(
+          "INSERT INTO rfid_antennas(institute_id,reader_id,antenna_port,name,enabled) VALUES($1,$2,$3,$4,true) RETURNING id",
+          [a.institute.id, a.reader.id, port, "Side " + port],
+        );
+        await owner.query(
+          "INSERT INTO rfid_portal_antennas(portal_id,antenna_id,direction_role) VALUES($1,$2,$3)",
+          [portal.id, antenna.id, role],
+        );
+      }
+      const first = await upload(a, { epc: known.tag.epc, antennaPort: 1 }),
+        bad = await upload(a, { epc: known.tag.epc, antennaPort: 2 });
+      await owner.query("UPDATE rfid_read_events SET asset_id=$1 WHERE id=$2", [
+        foreign.asset.id,
+        bad.read.id,
+      ]);
+      const historical = await row(
+        "INSERT INTO rfid_business_events(institute_id,event_type,asset_id,asset_tag_id,epc,portal_id,reader_id,direction,first_seen_at,last_seen_at,observation_count,authorization_status,status) VALUES($1,'ASSET_SEEN',$2,$3,$4,$5,$6,'UNKNOWN',$7,$7,7,'NOT_APPLICABLE','OPEN') RETURNING id",
+        [
+          a.institute.id,
+          foreign.asset.id,
+          known.tag.id,
+          known.tag.epc,
+          portal.id,
+          a.reader.id,
+          first.read.read_timestamp,
+        ],
+      );
+      await new Processor(repo).process(2, a.ctx);
+      const event = await row(
+        "SELECT * FROM rfid_business_events WHERE id=$1",
+        [(await state(first.read.id)).business_event_id],
+      );
+      assert.equal(event.direction, "UNKNOWN");
+      assert.equal(event.event_type, "ASSET_SEEN");
+      assert.equal(event.observation_count, 1);
+      assert.equal(event.asset_id, known.asset.id);
+      assert.equal(
+        (
+          await row(
+            "SELECT observation_count n FROM rfid_business_events WHERE id=$1",
+            [historical.id],
+          )
+        ).n,
+        7,
+      );
+      assert.equal(
+        (await state(bad.read.id)).processing_error_code,
+        "RFID_IDENTITY_CHANGED",
+      );
+    });
     await test("historical linked evidence is not replayed when technical status is inconsistent", async () => {
       const f = await fixture(),
         first = await upload(f);

@@ -1358,7 +1358,7 @@
     },
     {
       "path": "services/rfidEventProcessor.js",
-      "sha256": "678e86cf506a6c555020c8c8d9e54134a517b56f7956378882d6a062ca9da5c7"
+      "sha256": "4739de96df9e267897f21c420de5da3c8df1997354c495461ded0e7700bd17eb"
     },
     {
       "path": "services/rfidJobService.js",
@@ -1725,7 +1725,7 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "ec85fe1b9ac3b4dfd7027b7f596e445a4acad4ed62cf9bb814a0ff30ec0cb720",
+  "application_manifest_sha256": "6f4bfc66721419f3208bf80f9f332dfba22d24acc1b6b741a1655d5e4e500a92",
   "highest_manual_number": 70,
   "artifacts": [
     {

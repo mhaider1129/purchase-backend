@@ -270,13 +270,15 @@ class RfidEventProcessor {
     ]);
     const nearby = (
       await tx.query(
-        `SELECT r.read_timestamp,pa.direction_role FROM rfid_read_events r LEFT JOIN rfid_portal_antennas pa ON pa.portal_id=r.portal_id AND pa.antenna_id=r.antenna_id JOIN rfid_readers rr ON rr.id=r.reader_id AND rr.institute_id=r.institute_id AND rr.is_active JOIN rfid_integration_clients ic ON ic.id=r.integration_client_id AND ic.institute_id=r.institute_id AND ic.enabled AND 'rfid:ingest'=ANY(ic.scopes) WHERE r.institute_id=$1 AND r.epc=$2 AND r.portal_id IS NOT DISTINCT FROM $3 AND r.read_timestamp BETWEEN $4::timestamptz-make_interval(secs=>$5) AND $4::timestamptz+make_interval(secs=>$5) ORDER BY r.read_timestamp,r.id`,
+        `SELECT r.read_timestamp,pa.direction_role FROM rfid_read_events r LEFT JOIN rfid_portal_antennas pa ON pa.portal_id=r.portal_id AND pa.antenna_id=r.antenna_id LEFT JOIN rfid_antennas na ON na.id=r.antenna_id AND na.reader_id=r.reader_id AND na.institute_id=r.institute_id AND na.enabled JOIN rfid_readers rr ON rr.id=r.reader_id AND rr.institute_id=r.institute_id AND rr.is_active JOIN rfid_integration_clients ic ON ic.id=r.integration_client_id AND ic.institute_id=r.institute_id AND ic.enabled AND 'rfid:ingest'=ANY(ic.scopes) WHERE r.institute_id=$1 AND r.epc=$2 AND r.portal_id IS NOT DISTINCT FROM $3 AND r.asset_id IS NOT DISTINCT FROM $6 AND r.asset_tag_id IS NOT DISTINCT FROM $7 AND (r.antenna_id IS NULL OR na.id IS NOT NULL) AND (r.portal_id IS NULL OR pa.portal_id IS NOT NULL) AND (rr.location_id IS NULL OR EXISTS(SELECT 1 FROM asset_locations l WHERE l.id=rr.location_id AND l.institute_id=r.institute_id AND l.is_active)) AND (na.location_id IS NULL OR EXISTS(SELECT 1 FROM asset_locations l WHERE l.id=na.location_id AND l.institute_id=r.institute_id AND l.is_active)) AND r.read_timestamp BETWEEN $4::timestamptz-make_interval(secs=>$5) AND $4::timestamptz+make_interval(secs=>$5) ORDER BY r.read_timestamp,r.id`,
         [
           read.institute_id,
           read.epc,
           read.portal_id,
           read.read_timestamp,
           this.windowSeconds,
+          read.asset_id,
+          read.asset_tag_id,
         ],
       )
     ).rows;
@@ -328,13 +330,15 @@ class RfidEventProcessor {
     // Require recent activity and a bounded session start so neighboring reads cannot chain forever.
     const existing = (
       await tx.query(
-        `SELECT * FROM rfid_business_events WHERE institute_id=$1 AND epc=$2 AND portal_id IS NOT DISTINCT FROM $3 AND last_seen_at >= $4::timestamptz-make_interval(secs=>$5) AND first_seen_at >= $4::timestamptz-make_interval(secs=>$5) AND first_seen_at <= $4::timestamptz ORDER BY last_seen_at DESC LIMIT 2 FOR UPDATE`,
+        `SELECT * FROM rfid_business_events WHERE institute_id=$1 AND epc=$2 AND portal_id IS NOT DISTINCT FROM $3 AND asset_id IS NOT DISTINCT FROM $6 AND asset_tag_id IS NOT DISTINCT FROM $7 AND EXISTS(SELECT 1 FROM rfid_readers er WHERE er.id=rfid_business_events.reader_id AND er.institute_id=rfid_business_events.institute_id) AND last_seen_at >= $4::timestamptz-make_interval(secs=>$5) AND first_seen_at >= $4::timestamptz-make_interval(secs=>$5) AND first_seen_at <= $4::timestamptz ORDER BY last_seen_at DESC LIMIT 2 FOR UPDATE`,
         [
           read.institute_id,
           read.epc,
           read.portal_id,
           read.read_timestamp,
           this.windowSeconds,
+          read.asset_id,
+          read.asset_tag_id,
         ],
       )
     ).rows;

@@ -2831,7 +2831,7 @@
       "path": "scripts/testBackendContractRefresh.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 5,
-      "sha256": "3e26c15fe21b7f2a95b3b85ede502212057af6f874c23775f45d44dfbeb76a78"
+      "sha256": "0dfa42085a2d32bea600122a1e4ec49d4ac888b1dd943f184af2cb18e4eca50c"
     },
     {
       "path": "scripts/testBackendSchemaReconciliation.js",

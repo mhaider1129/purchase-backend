@@ -19,6 +19,9 @@ describe('emailService', () => {
     delete process.env.EMAIL_FROM;
     delete process.env.EMAIL_REPLY_TO;
     delete process.env.EMAIL_DRY_RUN;
+    // All SMTP transport is mocked here; isolate aliases from runner safety flags.
+    delete process.env.SMTP_DRY_RUN;
+    delete process.env.MAIL_DRY_RUN;
     delete process.env.EMAIL_SERVICE;
     delete process.env.EMAIL_POOL;
     delete process.env.EMAIL_MAX_CONNECTIONS;

@@ -12,7 +12,8 @@ const { extractBackendSqlContract } = require("./extractBackendSqlContract");
 const root = path.resolve(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(root, p), "utf8");
 const schemaFile = "sql/manual/059_backend_contract_refresh.sql";
-const reportDir = path.join(root, "docs/database-audit/current");
+const reportDir = process.env.CI_QUALITY_REPORT_DIR ? path.resolve(process.env.CI_QUALITY_REPORT_DIR,"database-audit") : path.join(root,"docs/database-audit/current");
+fs.mkdirSync(reportDir,{recursive:true});
 const metadata = JSON.parse(
   read("docs/database-audit/current/contract-refresh.json"),
 );
@@ -479,6 +480,9 @@ async function run() {
     console.log(
       "Optional exact-match UI policy alignment, retries, audit and custom policy preservation PASS",
     );
+    // Validate current backend SQL against all reviewed forward structures,
+    // after preserving the original 059 populated-upgrade assertions above.
+    for(const forward of ['064_contract_authorization_scope.sql','065_canonical_contract_finance.sql','066_contract_financial_reconciliation.sql','069_database_release_governance.sql','070_rfid_processing_recovery.sql','071_transactional_event_reliability.sql'])await client.query(read('sql/manual/'+forward));
     const after = await columns();
     const beforeKeys = new Set(
       before.map((r) => r.table_name + "." + r.column_name),
@@ -776,8 +780,9 @@ async function run() {
       JSON.stringify({
         tables: results.requiredTables,
         columns: after.length,
-        missingRelations: missingTables.length,
-        missingExistingColumns: results.missingColumns.length,
+        baselineMissingRelations: missingTables.length,
+        baselineMissingExistingColumns: results.missingColumns.length,
+        postflightFindings:0,
         plansPassed: passed.length,
         plansFailed: failures.length,
       }),

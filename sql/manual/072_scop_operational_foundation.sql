@@ -8,6 +8,32 @@ DO $$ BEGIN
  IF NOT pg_try_advisory_xact_lock(hashtextextended('purchase-tracker:database-release',0)) THEN RAISE EXCEPTION 'DATABASE_RELEASE_BUSY'; END IF;
  IF to_regprocedure('public.canonical_receipt_inventory_quantity(bigint,integer,text,bigint)') IS NULL OR to_regclass('public.database_release_migrations') IS NULL THEN RAISE EXCEPTION 'SCOP_PREREQUISITES_MISSING'; END IF;
 END $$;
+-- Read-only per-execution-row projection of the existing canonical 067 supply invariants.
+-- Existing aggregate completion and stock posting are unchanged.
+CREATE OR REPLACE FUNCTION public.canonical_supply_line_quantity(p_supplied_line_id integer,p_institute_id integer)
+RETURNS numeric LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog,public AS $$
+ WITH supplied AS (
+ SELECT s.id,s.supplied_quantity,
+   COALESCE((SELECT SUM(-m.quantity-COALESCE((SELECT SUM(rv.quantity) FROM public.inventory_transactions rv WHERE rv.reversal_of_movement_id=m.id AND rv.institute_id=m.institute_id AND rv.warehouse_id=m.warehouse_id),0))
+    FROM public.inventory_transactions m JOIN public.stock_items stock ON stock.id=m.stock_item_id
+    WHERE m.movement_type='ISSUE' AND m.reversal_of_movement_id IS NULL AND m.quantity<0 AND m.stock_status='AVAILABLE'
+      AND m.source_document_type='warehouse_supply' AND m.source_document_id=r.id::text AND m.source_document_line_id=s.id::text
+      AND m.institute_id=p_institute_id AND m.warehouse_id=r.supply_warehouse_id AND m.department_id=r.department_id
+      AND (ri.id IS NULL OR (ri.generic_item_id IS NULL OR ri.generic_item_id=stock.generic_item_id))
+      AND (ri.id IS NULL OR (upper(trim(COALESCE(ri.unit_of_measure,'')))=upper(trim(m.base_uom)) OR EXISTS(SELECT 1 FROM public.item_uom completion_uom WHERE completion_uom.id=stock.inventory_uom_id AND upper(trim(ri.unit_of_measure)) IN (upper(trim(completion_uom.uom_code)),upper(trim(completion_uom.uom_name))))))),0) net_issue
+ FROM public.warehouse_supply_items wsi JOIN public.requests r ON r.id=wsi.request_id
+ JOIN public.warehouses w ON w.id=r.supply_warehouse_id AND w.institute_id=r.institute_id
+ JOIN public.warehouse_supplied_items s ON s.item_id=wsi.id AND s.request_id=r.id
+ LEFT JOIN public.requested_items ri ON ri.id=wsi.requested_item_id
+ LEFT JOIN public.requests original_request ON original_request.id=ri.request_id
+ WHERE s.id=p_supplied_line_id AND r.institute_id=p_institute_id AND r.request_type='Warehouse Supply'
+ AND lower(trim(r.status)) IN ('approved','completed','received','closed')
+ AND lower(trim(COALESCE(to_jsonb(wsi)->>'approval_status','approved'))) <> 'rejected'
+ AND (wsi.requested_item_id IS NULL OR ri.id IS NOT NULL)
+ AND (ri.id IS NULL OR (original_request.institute_id=r.institute_id AND original_request.department_id=r.department_id))
+ ) SELECT COALESCE(SUM(LEAST(supplied_quantity,GREATEST(net_issue,0))),0) FROM supplied
+$$;
+
 CREATE TABLE IF NOT EXISTS public.scop_request_purposes (
  code text PRIMARY KEY, label text NOT NULL, is_active boolean NOT NULL DEFAULT true
 );
@@ -63,7 +89,7 @@ CREATE TABLE IF NOT EXISTS public.scop_allocation_evidence (
  allocation_id bigint NOT NULL REFERENCES public.scop_fulfillment_allocations(id),
  po_line_id bigint UNIQUE REFERENCES public.purchase_order_items(id),
  receipt_line_id bigint UNIQUE REFERENCES public.goods_receipt_items(id),
- supply_line_id integer UNIQUE REFERENCES public.warehouse_supply_items(id),
+ supply_line_id integer UNIQUE REFERENCES public.warehouse_supplied_items(id),
  created_by integer NOT NULL REFERENCES public.users(id),
  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CHECK(num_nonnulls(po_line_id,receipt_line_id,supply_line_id)=1)
@@ -131,16 +157,16 @@ ALTER TABLE public.scop_fulfillment_allocations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scop_allocation_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.scop_allocation_commands ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.scop_request_purposes,public.scop_fulfillment_policies,public.scop_requirement_profiles,public.scop_fulfillment_allocations,public.scop_allocation_evidence,public.scop_allocation_commands FROM PUBLIC,anon,authenticated,purchase_backend;
-REVOKE ALL ON FUNCTION public.scop_guard_allocation(),public.scop_preserve_evidence(),public.scop_guard_profile() FROM PUBLIC,anon,authenticated,purchase_backend;
+REVOKE ALL ON FUNCTION public.scop_guard_allocation(),public.scop_preserve_evidence(),public.scop_guard_profile(),public.canonical_supply_line_quantity(integer,integer) FROM PUBLIC,anon,authenticated,purchase_backend;
 REVOKE ALL ON SEQUENCE public.scop_requirement_profiles_id_seq,public.scop_fulfillment_allocations_id_seq,public.scop_allocation_evidence_id_seq FROM PUBLIC,anon,authenticated,purchase_backend;
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN
   REVOKE ALL ON public.scop_request_purposes,public.scop_fulfillment_policies,public.scop_requirement_profiles,public.scop_fulfillment_allocations,public.scop_allocation_evidence,public.scop_allocation_commands FROM service_role;
   REVOKE ALL ON SEQUENCE public.scop_requirement_profiles_id_seq,public.scop_fulfillment_allocations_id_seq,public.scop_allocation_evidence_id_seq FROM service_role;
-  REVOKE ALL ON FUNCTION public.scop_guard_allocation(),public.scop_preserve_evidence(),public.scop_guard_profile() FROM service_role;
+  REVOKE ALL ON FUNCTION public.scop_guard_allocation(),public.scop_preserve_evidence(),public.scop_guard_profile(),public.canonical_supply_line_quantity(integer,integer) FROM service_role;
  END IF;
 END $$;
-GRANT EXECUTE ON FUNCTION public.scop_guard_allocation(),public.scop_preserve_evidence(),public.scop_guard_profile() TO purchase_backend;
+GRANT EXECUTE ON FUNCTION public.scop_guard_allocation(),public.scop_preserve_evidence(),public.scop_guard_profile(),public.canonical_supply_line_quantity(integer,integer) TO purchase_backend;
 GRANT SELECT ON public.scop_request_purposes,public.scop_fulfillment_policies TO purchase_backend;
 GRANT SELECT,INSERT ON public.scop_requirement_profiles,public.scop_allocation_evidence,public.scop_allocation_commands TO purchase_backend;
 GRANT SELECT,INSERT,UPDATE ON public.scop_fulfillment_allocations TO purchase_backend;

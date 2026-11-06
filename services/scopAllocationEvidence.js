@@ -1,6 +1,11 @@
 "use strict";
 // Read-only attribution to existing P2P/warehouse evidence. No stock/inspection/finance writer.
-const { fail, id, progress } = require("../policies/scopFoundationPolicy");
+const {
+  fail,
+  id,
+  progress,
+  scaled,
+} = require("../policies/scopFoundationPolicy");
 const norm = (v) =>
   String(v ?? "")
     .trim()
@@ -153,7 +158,7 @@ async function bind(client, profile, allocation, kind, value, actor) {
       );
     const r = (
       await client.query(
-        `SELECT w.*,r.institute_id,r.department_id AS request_department,r.supply_warehouse_id FROM warehouse_supply_items w JOIN requests r ON r.id=w.request_id WHERE w.id=$1 FOR SHARE OF w,r`,
+        `SELECT w.*,r.institute_id,r.department_id AS request_department,r.supply_warehouse_id,si.supplied_quantity,si.request_id AS supplied_request_id,si.warehouse_id AS supplied_warehouse_id,si.department_id AS supplied_department_id FROM warehouse_supplied_items si JOIN warehouse_supply_items w ON w.id=si.item_id JOIN requests r ON r.id=w.request_id WHERE si.id=$1 FOR SHARE OF si,w,r`,
         [id(value)],
       )
     ).rows[0];
@@ -164,10 +169,24 @@ async function bind(client, profile, allocation, kind, value, actor) {
     if (
       !r ||
       !original ||
+      !same(r.supplied_request_id, r.request_id) ||
+      (r.supplied_department_id != null &&
+        !same(r.supplied_department_id, r.request_department)) ||
+      (r.supplied_warehouse_id != null &&
+        !same(r.supplied_warehouse_id, r.supply_warehouse_id)) ||
       !same(r.institute_id, profile.institute_id) ||
       !same(r.request_department, profile.requesting_function_id)
     )
       throw fail(404, "Supply evidence not found", "SCOP_REFERENCE_NOT_FOUND");
+    if (
+      scaled(r.supplied_quantity) === 0n ||
+      scaled(r.supplied_quantity) > scaled(allocation.quantity)
+    )
+      throw fail(
+        409,
+        "Whole issue line exceeds allocation",
+        "SCOP_EVIDENCE_CONFLICT",
+      );
     if (
       allocation.warehouse_id != null &&
       !same(allocation.warehouse_id, r.supply_warehouse_id)
@@ -191,7 +210,7 @@ async function project(client, profile, allocation) {
     `WITH RECURSIVE contributing AS (
     SELECT m.id FROM inventory_transactions m WHERE m.institute_id=$2 AND (
       (m.source_document_type='goods_receipt' AND EXISTS(SELECT 1 FROM scop_allocation_evidence e WHERE e.allocation_id=$1 AND e.receipt_line_id::text=m.source_document_line_id)) OR
-      (m.source_document_type='warehouse_supply' AND EXISTS(SELECT 1 FROM scop_allocation_evidence e JOIN warehouse_supplied_items si ON si.item_id=e.supply_line_id WHERE e.allocation_id=$1 AND si.id::text=m.source_document_line_id AND si.request_id::text=m.source_document_id)))
+      (m.source_document_type='warehouse_supply' AND EXISTS(SELECT 1 FROM scop_allocation_evidence e JOIN warehouse_supplied_items si ON si.id=e.supply_line_id WHERE e.allocation_id=$1 AND si.id::text=m.source_document_line_id AND si.request_id::text=m.source_document_id)))
     UNION SELECT rv.id FROM inventory_transactions rv JOIN contributing p ON rv.reversal_of_movement_id=p.id)
     SELECT m.id FROM inventory_transactions m JOIN contributing c ON c.id=m.id ORDER BY m.id FOR SHARE OF m`,
     [allocation.id, profile.institute_id],
@@ -238,7 +257,7 @@ async function project(client, profile, allocation) {
     COALESCE(SUM(short_quantity*factor),0) AS short,
     COALESCE(SUM(CASE WHEN technical_inspection_required THEN GREATEST(usable-technical-technical_rejected_quantity,0)*factor ELSE 0 END),0) AS pending_inspection,
     COALESCE(SUM(CASE WHEN line_type='INVENTORY' THEN LEAST(technical*factor,GREATEST(quarantine,0)) WHEN stock_status='QUARANTINE' THEN technical*factor ELSE 0 END),0) AS quarantined,
-    COALESCE((SELECT SUM(canonical_supply_quantity(e.supply_line_id,$4)) FROM scop_allocation_evidence e WHERE e.allocation_id=$1 AND e.supply_line_id IS NOT NULL),0) AS issued
+    COALESCE((SELECT SUM(canonical_supply_line_quantity(e.supply_line_id,$4)) FROM scop_allocation_evidence e WHERE e.allocation_id=$1 AND e.supply_line_id IS NOT NULL),0) AS issued
     FROM receipts`,
       [
         allocation.id,

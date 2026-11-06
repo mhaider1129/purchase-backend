@@ -508,7 +508,7 @@ async function run(client, url, c) {
     assert.equal((await facts(x, a)).accepted_quantity, "10.000000");
     await c.issue(x, "10");
     const w = await one(
-      "SELECT id FROM warehouse_supply_items WHERE requested_item_id=$1 ORDER BY id DESC LIMIT 1",
+      "SELECT si.id FROM warehouse_supplied_items si JOIN warehouse_supply_items wi ON wi.id=si.item_id WHERE wi.requested_item_id=$1 ORDER BY si.id DESC LIMIT 1",
       [x.item.id],
     );
     next = await bind(x, next, "SUPPLY_LINE", w.id);
@@ -633,17 +633,113 @@ async function run(client, url, c) {
       true,
     );
   });
-  await test('restricted backend role can append and transition allocations without history rewrite authority',async()=>{
-    const x=await fresh(),p=(await read(x)).profile;
-    await client.query('BEGIN');
-    try{
-      await client.query('SET LOCAL ROLE purchase_backend');
-      const inserted=await one("INSERT INTO scop_fulfillment_allocations(profile_id,source_kind,responsible_user_id,quantity,reason,created_by) VALUES($1,'CENTRAL_SUPPLY',9701,1,'Restricted runtime role',9701) RETURNING *",[p.id]);
-      await client.query("UPDATE scop_fulfillment_allocations SET status='CANCELLED',revision=revision+1 WHERE id=$1",[inserted.id]);
-      await client.query('SAVEPOINT denied_history');
-      await deny(()=>client.query('UPDATE scop_requirement_profiles SET purpose_code=purpose_code WHERE id=$1',[p.id]));
-      await client.query('ROLLBACK TO SAVEPOINT denied_history');
-    }finally{await client.query('ROLLBACK');}
+  await test("restricted backend role can append and transition allocations without history rewrite authority", async () => {
+    const x = await fresh(),
+      p = (await read(x)).profile;
+    await client.query("BEGIN");
+    try {
+      await client.query("SET LOCAL ROLE purchase_backend");
+      const inserted = await one(
+        "INSERT INTO scop_fulfillment_allocations(profile_id,source_kind,responsible_user_id,quantity,reason,created_by) VALUES($1,'CENTRAL_SUPPLY',9701,1,'Restricted runtime role',9701) RETURNING *",
+        [p.id],
+      );
+      await client.query(
+        "UPDATE scop_fulfillment_allocations SET status='CANCELLED',revision=revision+1 WHERE id=$1",
+        [inserted.id],
+      );
+      await client.query("SAVEPOINT denied_history");
+      await deny(() =>
+        client.query(
+          "UPDATE scop_requirement_profiles SET purpose_code=purpose_code WHERE id=$1",
+          [p.id],
+        ),
+      );
+      await client.query("ROLLBACK TO SAVEPOINT denied_history");
+    } finally {
+      await client.query("ROLLBACK");
+    }
+  });
+  await test("two partial stock issues against one warehouse requirement attribute 4 and 6 exactly once", async () => {
+    const stock = await c.make();
+    const gr = await c.receive(stock, "10");
+    await c.apply(await c.authorize(await c.receiptTask(gr), "10", "0"));
+    const r = await one(
+      "INSERT INTO requests(request_type,requester_id,department_id,institute_id,status,supply_warehouse_id) VALUES('Warehouse Supply',9701,801,801,'Approved',811) RETURNING *",
+    );
+    const wi = await one(
+      "INSERT INTO warehouse_supply_items(request_id,item_name,quantity,approval_status) VALUES($1,$2,10,'Approved') RETURNING *",
+      [r.id, stock.item.item_name],
+    );
+    const p = {
+      requestId: String(r.id),
+      itemKind: "warehouse_supply_item",
+      itemId: String(wi.id),
+    };
+    await cmd(p, "classify", {
+      category_id: 9701,
+      purpose_code: "ROUTINE",
+      policy_code: "STANDARD",
+    });
+    const a4 = await cmd(
+        p,
+        "create",
+        source("4", { source_kind: "WAREHOUSE_STOCK", warehouse_id: 811 }),
+      ),
+      a6 = await cmd(
+        p,
+        "create",
+        source("6", { source_kind: "WAREHOUSE_STOCK", warehouse_id: 811 }),
+      );
+    const issuer = await require("../services/p2pAuthorization").loadActor(
+      client,
+      actor,
+      "warehouse.manage-supply",
+    );
+    const supply = async (q) => {
+      const si = await one(
+        "INSERT INTO warehouse_supplied_items(request_id,item_id,supplied_quantity,supplied_by) VALUES($1,$2,$3,9701) RETURNING *",
+        [r.id, wi.id, q],
+      );
+      await require("../services/inventoryPostingService").postMovement({
+        movementType: "ISSUE",
+        inventoryItemId: stock.stock.id,
+        warehouseId: 811,
+        instituteId: 801,
+        departmentId: 801,
+        quantity: q,
+        baseUom: "EA",
+        stockStatus: "AVAILABLE",
+        sourceDocumentType: "warehouse_supply",
+        sourceDocumentId: r.id,
+        sourceDocumentLineId: si.id,
+        actor: issuer,
+        idempotencyKey: key(),
+      });
+      return si;
+    };
+    const si4 = await supply("4"),
+      si6 = await supply("6");
+    const attach = (a, si) =>
+      cmd({ ...p, allocationId: String(a.id) }, "evidence", {
+        expected_revision: a.revision,
+        kind: "SUPPLY_LINE",
+        source_id: String(si.id),
+        reason: "Attribute actual partial issue",
+      });
+    await attach(a4, si4);
+    await deny(() => attach(a6, si4));
+    await attach(a6, si6);
+    const v = await s.get(actor, p);
+    assert.equal(v.totals.issued_quantity, "10.000000");
+    assert.equal(v.totals.outstanding_quantity, "0.000000");
+    assert.equal(v.allocations[0].progress.issued_quantity, "4.000000");
+    assert.equal(v.allocations[1].progress.issued_quantity, "6.000000");
+    assert.equal(
+      require("../policies/scopFoundationPolicy").decimal(
+        (await one("SELECT canonical_supply_quantity($1,801) q", [wi.id])).q,
+      ),
+      "10.000000",
+    );
   });
   console.log(`SCOP foundation PostgreSQL scenarios passed: ${passed}`);
 }

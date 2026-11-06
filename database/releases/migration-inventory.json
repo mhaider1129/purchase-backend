@@ -1422,7 +1422,7 @@
     },
     {
       "path": "services/scopAllocationEvidence.js",
-      "sha256": "871fbdcca27b15cfea9090aedff294339b118a9a3eac75cc13819e3c48af0860"
+      "sha256": "fbb6ac390c4dfa3675ecebbeddb4220127fbf868b084976dac8aa1f9eadd0893"
     },
     {
       "path": "services/scopFoundationService.js",
@@ -1773,7 +1773,7 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "15b319bba0581fa4d20919b99037d2eee076e4bb7aef278473938a6758c9cdcb",
+  "application_manifest_sha256": "6cf8c5f1917a7b9e66c4ed119d39c87eab2af4c53ca155cb653a2f5d93a5df35",
   "highest_manual_number": 72,
   "artifacts": [
     {
@@ -2604,10 +2604,10 @@
       "path": "sql/manual/072_scop_operational_foundation.sql",
       "id": "072",
       "classification": "active_forward_migration",
-      "sha256": "d48f3ea3b55ee2a0128c57ecac9529d0e668c62cc19146abb2bf7e287d1c2664",
-      "bytes": 14071,
+      "sha256": "0696d96493d00ab49283f770ca50ddf7ab0312bfb1d7482400ddc099904a6ff6",
+      "bytes": 16723,
       "execution_evidence": "UNVERIFIED",
-      "ddl_statements": 28,
+      "ddl_statements": 29,
       "header": "-- MANUAL DATABASE MIGRATION REQUIRED. Additive SCOP Phase 1; no historical enrollment/backfill.\n-- Prerequisites: reviewed canonical 059/064-071 contracts and governed 071 execution receipt.\n-- Apply the generated governed bundle manually, not the frozen migration collection.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';",
       "governed_receipt_required": true,
       "depends_on": [
@@ -2944,7 +2944,7 @@
       "path": "integration/scopFoundation.postgres.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 2,
-      "sha256": "1b3f03fad8dbe7f484bfc5c27ab5dc9eb62c27493484628d7a83dafe93f12946"
+      "sha256": "59c9699b012b9bf85b839b7b3b1bf7c460a768f1c8cac814fec1983f74bdf281"
     },
     {
       "path": "integration/surgicalConsignments.js",

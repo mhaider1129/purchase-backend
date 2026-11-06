@@ -6,7 +6,7 @@ const processScheduledRequests = async () => {
     await client.query('BEGIN');
 
     const dueRes = await client.query(
-      `SELECT id
+      `SELECT id,institute_id
          FROM requests
         WHERE status = 'Scheduled'
           AND scheduled_for IS NOT NULL
@@ -38,6 +38,9 @@ const processScheduledRequests = async () => {
             )`,
         [requestId],
       );
+      const approvals=(await client.query("SELECT id,approver_id FROM approvals WHERE request_id=$1 AND status='Pending' AND is_active=true AND COALESCE(is_superseded,false)=false",[requestId])).rows;
+      for(const approval of approvals)await require('../../services/workflowNotificationService').notice(client,{requestId,userId:approval.approver_id,title:'Scheduled request needs review',message:`Request ${requestId} is ready for review.`,link:`/requests/${requestId}`,approvalId:approval.id,email:true,operationKey:`scheduled:${requestId}:${approval.id}`});
+      await require('../../services/auditService').writeAuditEvent({client,entityType:'request',entityId:requestId,requestId,instituteId:row.institute_id,actorUserId:null,action:'REQUEST_SCHEDULED_ACTIVATED',beforeData:{status:'Scheduled'},afterData:{status:'Submitted'},operationKey:`scheduled:${requestId}`});
     }
 
     await client.query('COMMIT');

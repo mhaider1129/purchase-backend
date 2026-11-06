@@ -1,3 +1,4 @@
+jest.mock('../services/workflowNotificationService',()=>({email:jest.fn()}));
 jest.mock('../config/db',()=>({connect:jest.fn()}));
 jest.mock('../utils/ensureRequestedItemReceivedColumns',()=>jest.fn());
 jest.mock('../utils/emailService',()=>({sendEmail:jest.fn()}));

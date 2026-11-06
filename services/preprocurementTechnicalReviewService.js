@@ -217,17 +217,25 @@ function createTechnicalReviewService(database) {
       current_user_id: actor.id,
     };
   };
-  const notify = (client, userId, title, message, id) =>
-    client.query(
-      "INSERT INTO public.notifications(user_id,title,message,link,metadata) VALUES($1,$2,$3,$4,$5::jsonb)",
-      [
-        userId,
-        title,
-        message,
-        `/technical-inspections/pre-procurement?review=${id}`,
-        JSON.stringify({ technical_review_id: String(id) }),
-      ],
-    );
+  const notify = async (client, userId, title, message, id) => {
+    const source = (
+      await client.query(
+        "SELECT * FROM preprocurement_technical_reviews WHERE id=$1",
+        [id],
+      )
+    ).rows[0];
+    return require("./workflowNotificationService").notice(client, {
+      userId,
+      title,
+      message,
+      link: `/technical-inspections/pre-procurement?review=${id}`,
+      metadata: {
+        technical_review_id: String(id),
+        rowVersion: source?.row_version,
+      },
+      operationKey: `technical-review:${id}:${source?.row_version}`,
+    });
+  };
   const validateProposal = require("./technicalProposalSnapshot").prepare;
   const create = async (actor, input, internal = false) => {
     manage(actor);
@@ -622,7 +630,20 @@ function createTechnicalReviewService(database) {
               409,
               "Every assigned department must approve before SCM technical clearance",
             );
-          for(const packet of review.item_packets)if(packet.evidence)await require('./technicalProposalSnapshot').assertCurrent(client,packet.evidence,{supplier_id:packet.evidence.supplier_id,approved_product_id:packet.evidence.approved_product_id,source_type:packet.evidence.quotation_item_id?'QUOTATION':undefined,source_id:packet.evidence.quotation_item_id});
+          for (const packet of review.item_packets)
+            if (packet.evidence)
+              await require("./technicalProposalSnapshot").assertCurrent(
+                client,
+                packet.evidence,
+                {
+                  supplier_id: packet.evidence.supplier_id,
+                  approved_product_id: packet.evidence.approved_product_id,
+                  source_type: packet.evidence.quotation_item_id
+                    ? "QUOTATION"
+                    : undefined,
+                  source_id: packet.evidence.quotation_item_id,
+                },
+              );
           const rows = (
             await client.query(
               "SELECT * FROM public.requested_items WHERE request_id=$1 AND id=ANY($2::int[])",

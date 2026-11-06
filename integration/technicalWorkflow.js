@@ -97,7 +97,7 @@ module.exports = async (client) => {
         await client.query("ROLLBACK TO SAVEPOINT workflow_" + serial);
         return client.query("RELEASE SAVEPOINT workflow_" + serial);
       }
-      if (failNotification && sql.startsWith("INSERT INTO notifications")) {
+      if (failNotification && sql.startsWith("INSERT INTO notification_outbox") && args?.[0] === "WORKFLOW_NOTICE") {
         failNotification = false;
         throw new Error("Injected technical notification failure");
       }

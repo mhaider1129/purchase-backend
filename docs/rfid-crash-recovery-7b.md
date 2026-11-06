@@ -1,5 +1,7 @@
 # Task 7B / AUD-012 — RFID crash recovery
 
+Task 7C supersedes the active release with SQL 071 and contract `hospital-erp-2026-11-7c`. Use [the current manual rollout](transactional-event-reliability-7c.md) for the successor release; the original architecture and rollout below remain historical context.
+
 ## Reviewed architecture and reproduced failure
 
 Baseline: master **68c36468**, including Task 7A (PR 98). Highest installed-in-repository SQL discovered: **069**; this task adds **070**. Installed hosted schema/history remains unknown. No hosted or Production connection, SQL execution, deployment or merge occurred.

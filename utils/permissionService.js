@@ -127,6 +127,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+  {code:'operations.events.view',name:'View scoped event reliability',description:'Read institute-scoped audit/outbox reconciliation and delivery diagnostics; grants no business mutation or recipient authority.'},
   {code:'finance.budget.manage',name:'Manage financial budgets',description:'Configure budget envelopes within the actor institute; no posting, payment or cross-institute authority.'},
   { code: 'planning.view', name: 'View procurement planning', description: 'Read plans and advisory forecasts within authorized institute, department and warehouse scopes.' },
   { code: 'planning.manage', name: 'Prepare procurement plans', description: 'Upload plans, add plan items and links, and maintain planning defaults in authorized scopes; no approval or procurement authority.' },

@@ -547,8 +547,11 @@ async function run(owner, url) {
         idempotencyKey: "RFID-test-" + read.id,
         payload: { message: "Disposable in-app notice" },
       };
+      await owner.query("BEGIN");
+      await owner.query("SELECT pg_current_xact_id()");
       const first = await enqueueNotification(owner, event);
       assert.equal((await enqueueNotification(owner, event)).created, false);
+      await owner.query("COMMIT");
       const {
         createNotificationOutboxProcessor,
         deliverInApp,

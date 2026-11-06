@@ -1,3 +1,5 @@
+jest.mock('../services/workflowNotificationService',()=>({notice:jest.fn().mockResolvedValue({event:{id:1}}),email:jest.fn().mockResolvedValue([{event:{id:1}}])}));
+jest.mock('../services/auditService',()=>({writeAuditEvent:jest.fn().mockResolvedValue({id:1})}));
 jest.mock('../config/db', () => ({ connect: jest.fn(), query: jest.fn() }));
 jest.mock('../utils/ensureRequestedItemApprovalColumns', () => jest.fn().mockResolvedValue(undefined));
 jest.mock('../utils/ensureWarehouseSupplyTables', () => ({ ensureWarehouseSupplyApprovalColumns: jest.fn().mockResolvedValue(undefined), ensureWarehouseSupplyTables: jest.fn().mockResolvedValue(undefined) }));

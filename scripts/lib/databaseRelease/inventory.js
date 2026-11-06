@@ -90,10 +90,17 @@ function inventory() {
       entry.governed_receipt_required = true;
     }
     if (entry.id === "070") {
+      entry.classification = "frozen_historical_migration";
       entry.governed_receipt_required = true;
       entry.depends_on = ["069_database_release_governance"];
       entry.preflight_contract =
         "database/releases/prerequisites/069-schema-contract.json";
+    }
+    if (entry.id === "071") {
+      entry.governed_receipt_required = true;
+      entry.depends_on = ["070_rfid_processing_recovery"];
+      entry.preflight_contract =
+        "database/releases/prerequisites/070-schema-contract.json";
     }
     if (entry.id === "069")
       entry.required_contracts = [

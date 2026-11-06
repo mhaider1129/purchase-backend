@@ -7,7 +7,7 @@ const {
   verifyFiles,
 } = require("../scripts/lib/databaseRelease/inventory");
 const directory = path.join(__dirname, "../database/releases");
-const CONTRACT_VERSION = "hospital-erp-2026-11-7b";
+const CONTRACT_VERSION = "hospital-erp-2026-11-7c";
 function loadContract() {
   return JSON.parse(
     fs.readFileSync(path.join(directory, "schema-contract.json"), "utf8"),

@@ -1,5 +1,7 @@
 # AUD-010: database release governance and Development rollout
 
+Task 7C supersedes the active release with SQL 071 and contract `hospital-erp-2026-11-7c`. Use [the current manual rollout](transactional-event-reliability-7c.md) for the successor release; the original architecture and rollout below remain historical context.
+
 Task 7B supersedes the active release with SQL 070 and contract `hospital-erp-2026-11-7b`. SQL 069 is now a frozen governed prerequisite, with its original schema contract preserved. Use [the Task 7B rollout](rfid-crash-recovery-7b.md) for the current release; the 7A architecture and original rollout below remain historical context.
 
 

@@ -4,7 +4,7 @@
 const fs = require("fs"),
   path = require("path");
 const { disposableDatabaseUrl } = require("./disposableDatabase");
-module.exports = async (client, url) => {
+module.exports = async (client, url, step = "069") => {
   disposableDatabaseUrl(url);
   const {
     inventory,
@@ -14,7 +14,7 @@ module.exports = async (client, url) => {
   manifest.artifacts = manifest.artifacts.map((row) => ({
     ...row,
     classification:
-      row.id === "069"
+      row.id === step
         ? "active_forward_migration"
         : row.classification === "active_forward_migration"
           ? "test_fixture"
@@ -24,7 +24,7 @@ module.exports = async (client, url) => {
     fs.readFileSync(
       path.join(
         root,
-        "database/releases/prerequisites/069-schema-contract.json",
+        `database/releases/prerequisites/${step}-schema-contract.json`,
       ),
       "utf8",
     ),
@@ -34,10 +34,15 @@ module.exports = async (client, url) => {
       require("../scripts/lib/databaseRelease/planner").bundle({
         inventory: manifest,
         contract,
-        ids: ["069_database_release_governance"],
+        ids: [
+          path.basename(
+            manifest.artifacts.find((row) => row.id === step).path,
+            ".sql",
+          ),
+        ],
         environment,
         actor: "disposable-7a-prerequisite-test",
-        releaseRef: "disposable-7a-prerequisite",
+        releaseRef: `disposable-prerequisite-${step}`,
       }),
     );
 };

@@ -4,7 +4,6 @@ const createHttpError = require('../utils/httpError');
 const { ensureWarehouseSupplyTables } = require('../utils/ensureWarehouseSupplyTables');
 const ensureRequestedItemPoIssuanceColumn = require('../utils/ensureRequestedItemPoIssuanceColumn');
 const { ensureRequestedItemFinancialsTable } = require('../utils/ensureRequestedItemFinancialsTable');
-const { sendRequestWorkflowEmail } = require('../utils/workflowEmailNotifications');
 const { createNotifications } = require('../utils/notificationService');
 const { insertRequestedItem } = require('../services/requestedItemWriteService');
 const { assertReadyForCommand } = require('../services/procurementIdentityPolicyService');
@@ -522,9 +521,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
       ], client);
     }
 
-    await client.query('COMMIT');
-
-    await sendRequestWorkflowEmail({
+    await require('../utils/workflowEmailNotifications').queueRequestWorkflowEmail({client,
       requestId: item.request_id,
       subject: `Procurement item status updated for request #${item.request_id}`,
       message: [
@@ -535,6 +532,7 @@ const updateItemProcurementStatus = async (req, res, next) => {
       ].filter(Boolean).join('\n'),
       logLabel: 'procurement item status notification',
     });
+    await client.query('COMMIT');
 
     res.json({ message: '✅ Procurement status updated successfully' });
   } catch (err) {

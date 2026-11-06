@@ -14,7 +14,7 @@ const {
   selectMigrations,
   validateOrder,
 } = require("../scripts/lib/databaseRelease/planner");
-const version = "hospital-erp-2026-11-7b";
+const version = "hospital-erp-2026-11-7c";
 async function run(client, url) {
   const ownerUrl = require("./disposableDatabase").disposableDatabaseUrl(url);
   process.env.DATABASE_URL = ownerUrl;
@@ -23,7 +23,7 @@ async function run(client, url) {
   if (process.argv.includes("--capture-database-contract")) {
     const contract = {
       version,
-      baseline_ref: "68c36468",
+      baseline_ref: "d6fc982f",
       catalog: await catalog.snapshot(client),
     };
     fs.writeFileSync(
@@ -107,7 +107,10 @@ async function run(client, url) {
         () =>
           empty.query(
             fs.readFileSync(
-              path.join(root, "sql/manual/070_rfid_processing_recovery.sql"),
+              path.join(
+                root,
+                "sql/manual/071_transactional_event_reliability.sql",
+              ),
               "utf8",
             ),
           ),
@@ -134,7 +137,7 @@ async function run(client, url) {
     assert.equal(
       (
         await one(
-          "SELECT count(*)::int n FROM database_release_migrations WHERE migration_id LIKE '070_%'",
+          "SELECT count(*)::int n FROM database_release_migrations WHERE migration_id LIKE '071_%'",
         )
       ).n,
       0,
@@ -142,7 +145,7 @@ async function run(client, url) {
   });
   // Simulate permissive hosted defaults on a precreated governance namespace.
   await client.query(
-    "GRANT ALL ON public.rfid_processing_attempts TO authenticated; GRANT TRUNCATE ON public.rfid_processing_attempts TO purchase_backend",
+    "GRANT ALL ON public.notification_email_deliveries TO authenticated; GRANT TRUNCATE ON public.notification_email_deliveries TO purchase_backend",
   );
   await client.query(plan());
   await test("transactional manual bundle records actual forward execution and current attestation", async () => {
@@ -151,7 +154,7 @@ async function run(client, url) {
     assert.equal(
       r.receipts.filter((row) => row.execution_environment === "disposable")
         .length,
-      2,
+      3,
     );
     assert.equal(
       (
@@ -170,9 +173,9 @@ async function run(client, url) {
       false,
     );
     assert.equal(
-      r.receipts.find((row) => row.migration_id.startsWith("070_"))
+      r.receipts.find((row) => row.migration_id.startsWith("071_"))
         .migration_id,
-      "070_rfid_processing_recovery",
+      "071_transactional_event_reliability",
     );
     assert.equal(
       (
@@ -214,7 +217,7 @@ async function run(client, url) {
     assert.equal(
       (
         await one(
-          "SELECT count(*)::int n FROM database_release_migrations WHERE execution_environment='staging' AND migration_id LIKE '070_%'",
+          "SELECT count(*)::int n FROM database_release_migrations WHERE execution_environment='staging' AND migration_id LIKE '071_%'",
         )
       ).n,
       0,
@@ -232,7 +235,7 @@ async function run(client, url) {
   });
   await test("checksum mismatch and frozen replay are rejected before execution", async () => {
     const tampered = structuredClone(inventory);
-    tampered.artifacts.find((e) => e.path.includes("070_")).sha256 = "0".repeat(
+    tampered.artifacts.find((e) => e.path.includes("071_")).sha256 = "0".repeat(
       64,
     );
     assert.throws(() => selectMigrations(tampered), /CHECKSUM_MISMATCH/);

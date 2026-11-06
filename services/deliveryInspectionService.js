@@ -16,16 +16,25 @@ const scope = (a) => {
   if (!a?.id || !Number(a.institute_id))
     throw error(403, "Institute account required");
 };
-const notify = (db, user, task, message) =>
-  db.query(
-    "INSERT INTO notifications(user_id,title,message,link,metadata) VALUES($1,'Delivery technical inspection',$2,$3,$4::jsonb)",
-    [
-      user,
-      message,
-      `/technical-inspections?delivery=${task}`,
-      JSON.stringify({ delivery_inspection_id: String(task) }),
-    ],
-  );
+const notify = async (db, user, task, message) => {
+  const source = (
+    await db.query(
+      "SELECT row_version FROM delivery_inspection_tasks WHERE id=$1",
+      [task],
+    )
+  ).rows[0];
+  return require("./workflowNotificationService").notice(db, {
+    userId: user,
+    title: "Delivery technical inspection",
+    message,
+    link: `/technical-inspections?delivery=${task}`,
+    metadata: {
+      delivery_inspection_id: String(task),
+      rowVersion: source?.row_version,
+    },
+    operationKey: `delivery-task:${task}:${source?.row_version}`,
+  });
+};
 async function prepare(db, po, line, actor, cachedProfiles) {
   if (line.technical_review_requested && !cachedProfiles)
     await p.requireSchema(db);

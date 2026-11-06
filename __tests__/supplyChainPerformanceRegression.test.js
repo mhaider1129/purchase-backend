@@ -47,7 +47,7 @@ test('outbox projection failure is recorded and retry inserts evidence once',asy
   await expect(processor.processOne()).resolves.toMatchObject({status:'failed',retryCount:1});
   expect(coreEvent).toMatchObject({id:31,event_type:'PO_ISSUED'});expect(activityCount).toBe(0);
   await expect(processor.processOne()).resolves.toMatchObject({status:'delivered'});expect(activityCount).toBe(1);
-  expect(updates.some(entry=>entry.sql.includes("status='failed'"))).toBe(true);
+  expect(updates.some(entry=>entry.params?.at(-1)==='failed')).toBe(true);
 });
 
 test('manual SQL 010 retains foundation invariants without fabricated history',()=>{

@@ -1,24 +1,27 @@
-const pool = require('../config/db');
+const pool = require("../config/db");
 
 let ensurePromise = null;
 
 const ensureNotificationsTable = async () => {
   // AUD-010: schema is owned by the reviewed manual release, not this request.
-  return require("./runtimeSchemaContract").assertModuleContract("utils/notificationService.js#ensureNotificationsTable", pool);
+  return require("./runtimeSchemaContract").assertModuleContract(
+    "utils/notificationService.js#ensureNotificationsTable",
+    pool,
+  );
 };
 
-const normalizeText = value => {
+const normalizeText = (value) => {
   if (value == null) return null;
   const trimmed = String(value).trim();
   return trimmed.length > 0 ? trimmed : null;
 };
 
-const normalizeMetadata = metadata => {
+const normalizeMetadata = (metadata) => {
   if (metadata == null) {
     return null;
   }
 
-  if (typeof metadata === 'string') {
+  if (typeof metadata === "string") {
     const trimmed = metadata.trim();
     if (!trimmed) return null;
     try {
@@ -32,20 +35,20 @@ const normalizeMetadata = metadata => {
     return null;
   }
 
-  if (typeof metadata === 'object') {
+  if (typeof metadata === "object") {
     return metadata;
   }
 
   return null;
 };
 
-const normalizeNotifications = notifications => {
+const normalizeNotifications = (notifications) => {
   if (!Array.isArray(notifications)) {
     return [];
   }
 
   return notifications
-    .map(notification => {
+    .map((notification) => {
       if (!notification) return null;
 
       const userId = notification.userId ?? notification.user_id;
@@ -78,6 +81,34 @@ const createNotifications = async (notifications, client = null) => {
     return [];
   }
 
+  if (client) {
+    const results = [];
+    for (const entry of entries) {
+      const requestId = entry.metadata?.requestId ?? entry.metadata?.request_id;
+      if (requestId || entry.metadata?.delivery_inspection_id) {
+        const queued =
+          await require("../services/workflowNotificationService").notice(
+            client,
+            { ...entry, requestId },
+          );
+        results.push(queued?.event);
+      } else {
+        // Non-workflow legacy notices remain transactional in-app records.
+        const result = await client.query(
+          "INSERT INTO notifications(user_id,title,message,link,metadata) VALUES($1,$2,$3,$4,$5::jsonb) RETURNING *",
+          [
+            entry.userId,
+            entry.title,
+            entry.message,
+            entry.link,
+            JSON.stringify(entry.metadata),
+          ],
+        );
+        results.push(...result.rows);
+      }
+    }
+    return results.filter(Boolean);
+  }
   await ensureNotificationsTable();
 
   const queryable = client || pool;
@@ -94,7 +125,7 @@ const createNotifications = async (notifications, client = null) => {
 
   const query = `
     INSERT INTO notifications (user_id, title, message, link, metadata)
-    VALUES ${placeholders.join(', ')}
+    VALUES ${placeholders.join(", ")}
     RETURNING *
   `;
 
@@ -107,7 +138,7 @@ const createNotification = async (notification, client = null) => {
   return row || null;
 };
 
-const mapNotificationRow = row => {
+const mapNotificationRow = (row) => {
   if (!row) return null;
 
   return {
@@ -125,7 +156,7 @@ const mapNotificationRow = row => {
 const getUserNotifications = async (userId, options = {}, client = null) => {
   const parsedUserId = Number(userId);
   if (!Number.isInteger(parsedUserId)) {
-    throw new TypeError('userId must be a valid integer');
+    throw new TypeError("userId must be a valid integer");
   }
 
   await ensureNotificationsTable();
@@ -148,37 +179,35 @@ const getUserNotifications = async (userId, options = {}, client = null) => {
     offset = 0;
   }
 
-  const showUnreadOnly = unreadOnly === undefined ? !includeRead : Boolean(unreadOnly);
+  const showUnreadOnly =
+    unreadOnly === undefined ? !includeRead : Boolean(unreadOnly);
 
   const queryable = client || pool;
-  const values = [parsedUserId];
-  const conditions = ['user_id = $1'];
-
-  if (showUnreadOnly) {
-    conditions.push('is_read = false');
-  }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const notificationsQuery = `
-    SELECT id, user_id, title, message, link, metadata, is_read, created_at
-      FROM notifications
-      ${whereClause}
-      ORDER BY created_at DESC, id DESC
-      LIMIT $${values.length + 1}
-      OFFSET $${values.length + 2}
-  `;
-
-  values.push(limit, offset);
-
+  const visibility = require("./notificationVisibility");
+  const current = await visibility.context(queryable, parsedUserId);
+  if (!current.active) return { notifications: [], unreadCount: 0 };
+  const values = [
+    parsedUserId,
+    current.viewAll,
+    current.rfid,
+    current.deliveryManager,
+    current.technicalManager,
+  ];
+  const where = `WHERE n.user_id=$1 AND ${visibility.predicate}`;
   const [notificationsResult, unreadCountResult] = await Promise.all([
-    queryable.query(notificationsQuery, values),
     queryable.query(
-      `SELECT COUNT(*)::int AS unread_count FROM notifications WHERE user_id = $1 AND is_read = false`,
-      [parsedUserId],
+      `SELECT n.id,n.user_id,n.title,n.message,n.link,n.metadata,n.is_read,n.created_at FROM notifications n LEFT JOIN notification_outbox o ON o.id=n.outbox_event_id ${where} ${showUnreadOnly ? "AND n.is_read=false" : ""} ORDER BY n.created_at DESC,n.id DESC LIMIT $6 OFFSET $7`,
+      [...values, limit, offset],
+    ),
+    queryable.query(
+      `SELECT count(*)::integer unread_count FROM notifications n LEFT JOIN notification_outbox o ON o.id=n.outbox_event_id ${where} AND n.is_read=false`,
+      values,
     ),
   ]);
 
-  const rows = Array.isArray(notificationsResult.rows) ? notificationsResult.rows : [];
+  const rows = Array.isArray(notificationsResult.rows)
+    ? notificationsResult.rows
+    : [];
   const unreadCountRow = unreadCountResult.rows?.[0];
 
   return {
@@ -192,11 +221,11 @@ const markNotificationRead = async (notificationId, userId, client = null) => {
   const parsedUserId = Number(userId);
 
   if (!Number.isInteger(parsedId) || parsedId <= 0) {
-    throw new TypeError('notificationId must be a positive integer');
+    throw new TypeError("notificationId must be a positive integer");
   }
 
   if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
-    throw new TypeError('userId must be a positive integer');
+    throw new TypeError("userId must be a positive integer");
   }
 
   await ensureNotificationsTable();
@@ -219,7 +248,7 @@ const markAllNotificationsRead = async (userId, client = null) => {
   const parsedUserId = Number(userId);
 
   if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
-    throw new TypeError('userId must be a positive integer');
+    throw new TypeError("userId must be a positive integer");
   }
 
   await ensureNotificationsTable();
@@ -233,14 +262,22 @@ const markAllNotificationsRead = async (userId, client = null) => {
   return result.rowCount || 0;
 };
 
-const markNotificationsRead = async (notificationIds, userId, client = null) => {
+const markNotificationsRead = async (
+  notificationIds,
+  userId,
+  client = null,
+) => {
   const parsedUserId = Number(userId);
-  const ids = [...new Set((Array.isArray(notificationIds) ? notificationIds : [])
-    .map(Number)
-    .filter(id => Number.isInteger(id) && id > 0))];
+  const ids = [
+    ...new Set(
+      (Array.isArray(notificationIds) ? notificationIds : [])
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
 
   if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
-    throw new TypeError('userId must be a positive integer');
+    throw new TypeError("userId must be a positive integer");
   }
 
   if (ids.length === 0) return 0;

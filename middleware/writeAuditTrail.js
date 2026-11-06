@@ -84,7 +84,9 @@ const writeAuditTrail = (req, res, next) => {
         ]
       );
     } catch (error) {
-      console.warn('⚠️ Failed to persist governance audit trail entry:', error.message || error);
+      // This post-response trail is supplementary HTTP telemetry. Canonical
+      // business audit writers participate in the mutation transaction.
+      console.warn('HTTP_AUDIT_TELEMETRY_FAILED', {correlationId:req.id||null,code:/^[A-Z0-9_]{1,64}$/.test(error.code||'')?error.code:'PERSISTENCE_FAILURE'});
     }
   });
 

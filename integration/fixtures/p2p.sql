@@ -1,3 +1,6 @@
+CREATE TABLE institutes(id INTEGER PRIMARY KEY,name TEXT);
+INSERT INTO institutes VALUES(1,'Disposable institute'),(2,'Foreign institute');
+CREATE TABLE notifications(id BIGSERIAL PRIMARY KEY,user_id INTEGER,title TEXT,message TEXT,link TEXT,metadata JSONB);
 -- Focused disposable test contract, not a production migration or schema dump.
 -- Columns/constraints follow the connected P2P and inventory repositories, SQL
 -- 004/006/031 and their later UOM/identity fields. Unused domains are omitted.
@@ -416,3 +419,6 @@ CREATE TABLE contracts(id SERIAL PRIMARY KEY,institute_id INTEGER,source_request
 CREATE TABLE contract_invoices(id BIGSERIAL PRIMARY KEY,contract_id INTEGER,supplier_id INTEGER,invoice_number TEXT,currency TEXT,net_payable_amount NUMERIC(18,2));
 CREATE TABLE contract_payments(id BIGSERIAL PRIMARY KEY,contract_id INTEGER,invoice_id BIGINT,currency TEXT,status TEXT,amount NUMERIC(18,2));
 CREATE TABLE contract_consumption(id BIGINT PRIMARY KEY,contract_id INTEGER);
+
+-- Test-only canonical notification-worker columns (never a hosted migration).
+ALTER TABLE notification_outbox ADD COLUMN created_at timestamptz DEFAULT now(),ADD COLUMN retry_count integer NOT NULL DEFAULT 0,ADD COLUMN last_error text,ADD COLUMN next_attempt_at timestamptz NOT NULL DEFAULT now(),ADD COLUMN processing_started_at timestamptz,ADD COLUMN processed_at timestamptz;

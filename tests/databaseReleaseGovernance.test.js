@@ -76,7 +76,7 @@ test("query guard rejects callback and promise queries without invoking the driv
 test("locked inventory discovers the actual highest migration and records unverified history", () => {
   const manifest = loadInventory(),
     current = inventory();
-  expect(current.highest_manual_number).toBe(70);
+  expect(current.highest_manual_number).toBe(71);
   expect(verifyFiles(manifest)).toEqual([]);
   expect(
     current.artifacts.some((e) => e.classification === "test_fixture"),
@@ -96,7 +96,7 @@ test("planner blocks frozen history, changed checksums and dependency reversal",
     selectMigrations(manifest, ["067_canonical_procurement_completion"]),
   ).toThrow("FROZEN_REPLAY_DISABLED");
   const changed = structuredClone(manifest);
-  changed.artifacts.find((e) => e.id === "070").sha256 = "0".repeat(64);
+  changed.artifacts.find((e) => e.id === "071").sha256 = "0".repeat(64);
   expect(() => selectMigrations(changed)).toThrow("CHECKSUM_MISMATCH");
   expect(() =>
     validateOrder([

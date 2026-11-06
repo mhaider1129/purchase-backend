@@ -1,25 +1,39 @@
-const { applyRequestedItemEdits } = require('../services/requestedItemWriteService');
+const {
+  applyRequestedItemEdits,
+} = require("../services/requestedItemWriteService");
 // src/controllers/approvalsController.js
-const pool = require('../config/db');
-const { sendEmail, buildApprovalActionLinks, verifyApprovalActionToken } = require('../utils/emailService');
-const { createNotifications } = require('../utils/notificationService');
-const createHttpError = require('../utils/httpError');
-const ensureApprovalReminderColumn = require('../utils/ensureApprovalReminderColumn');
-const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
-const { ensureWarehouseSupplyApprovalColumns } = require('../utils/ensureWarehouseSupplyTables');
-const getColumnType = require('../utils/getColumnType');
-const { assignApprover } = require('./requests/createRequestController');
-const { fetchApprovalRoutes, resolveRouteDomain } = require('./utils/approvalRoutes');
-const { applyAutoAssignmentForApprovedRequest } = require('../services/requestAutoAssignmentService');
-const ensureRequestEditApprovalsTable = require('../utils/ensureRequestEditApprovalsTable');
-const { buildMaintenanceApprovalNotification } = require('../utils/maintenanceNotifications');
-const { REQUEST_STATUS } = require('../constants/statusCatalog');
-const hodRankingGate = require('../services/procurementPriority/hodRankingGateService');
-const { continueApprovalWorkflowAfterLevel } = require('../services/approvalContinuationService');
+const pool = require("../config/db");
+const {
+  verifyApprovalActionToken,
+} = require("../utils/emailService");
+const createHttpError = require("../utils/httpError");
+const ensureApprovalReminderColumn = require("../utils/ensureApprovalReminderColumn");
+const ensureRequestedItemApprovalColumns = require("../utils/ensureRequestedItemApprovalColumns");
+const {
+  ensureWarehouseSupplyApprovalColumns,
+} = require("../utils/ensureWarehouseSupplyTables");
+const getColumnType = require("../utils/getColumnType");
+const { assignApprover } = require("./requests/createRequestController");
+const {
+  fetchApprovalRoutes,
+  resolveRouteDomain,
+} = require("./utils/approvalRoutes");
+const {
+  applyAutoAssignmentForApprovedRequest,
+} = require("../services/requestAutoAssignmentService");
+const ensureRequestEditApprovalsTable = require("../utils/ensureRequestEditApprovalsTable");
+const {
+  buildMaintenanceApprovalNotification,
+} = require("../utils/maintenanceNotifications");
+const { REQUEST_STATUS } = require("../constants/statusCatalog");
+const hodRankingGate = require("../services/procurementPriority/hodRankingGateService");
+const {
+  continueApprovalWorkflowAfterLevel,
+} = require("../services/approvalContinuationService");
 
 // 🧰 Helper to rollback and return error
 const rollbackWithError = async (client, res, next, status, msg) => {
-  await client.query('ROLLBACK');
+  await client.query("ROLLBACK");
   return next(createHttpError(status, msg));
 };
 
@@ -27,54 +41,70 @@ const rollbackWithError = async (client, res, next, status, msg) => {
 const handleApprovalDecision = async (req, res, next) => {
   const { id } = req.params;
   if (!/^\d+$/.test(id)) {
-    return next(createHttpError(400, 'Invalid approval ID'));
+    return next(createHttpError(400, "Invalid approval ID"));
   }
   const approvalId = Number(id);
-  const { status, comments, is_urgent, estimated_cost: estimatedCostInput } = req.body;
+  const {
+    status,
+    comments,
+    is_urgent,
+    estimated_cost: estimatedCostInput,
+  } = req.body;
   // authMiddleware exposes the logged in user's id as `id`
   const approver_id = req.user.id;
   const user_role = req.user.role;
 
-  if (!['Approved', 'Rejected'].includes(status)) {
-    return next(createHttpError(400, 'Invalid status value'));
+  if (!["Approved", "Rejected"].includes(status)) {
+    return next(createHttpError(400, "Invalid status value"));
   }
 
   const sanitizedEstimatedCost =
     estimatedCostInput !== undefined &&
     estimatedCostInput !== null &&
-    String(estimatedCostInput).trim() !== ''
-      ? Number(String(estimatedCostInput).replace(/,/g, ''))
+    String(estimatedCostInput).trim() !== ""
+      ? Number(String(estimatedCostInput).replace(/,/g, ""))
       : null;
 
   if (sanitizedEstimatedCost !== null) {
     if (Number.isNaN(sanitizedEstimatedCost) || sanitizedEstimatedCost <= 0) {
-      return next(createHttpError(400, 'estimated_cost must be a positive number'));
+      return next(
+        createHttpError(400, "estimated_cost must be a positive number"),
+      );
     }
 
-    if (!req.user?.hasPermission || !req.user.hasPermission('procurement.update-cost')) {
+    if (
+      !req.user?.hasPermission ||
+      !req.user.hasPermission("procurement.update-cost")
+    ) {
       return next(
-        createHttpError(403, 'You do not have permission to update estimated cost during approval'),
+        createHttpError(
+          403,
+          "You do not have permission to update estimated cost during approval",
+        ),
       );
     }
   }
 
   const approverId = req.user?.id ?? null;
   if (!approverId) {
-    return next(createHttpError(403, 'Unable to identify the current approver'));
+    return next(
+      createHttpError(403, "Unable to identify the current approver"),
+    );
   }
 
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     // 1. Fetch Approval Row
     const approvalRes = await client.query(
       `SELECT * FROM approvals WHERE id = $1`,
-      [approvalId]
+      [approvalId],
     );
     const approval = approvalRes.rows[0];
-    if (!approval) return rollbackWithError(client, res, next, 404, 'Approval not found');
-    if (!['Pending', 'On Hold'].includes(approval.status)) {
+    if (!approval)
+      return rollbackWithError(client, res, next, 404, "Approval not found");
+    if (!["Pending", "On Hold"].includes(approval.status)) {
       return rollbackWithError(
         client,
         res,
@@ -83,9 +113,23 @@ const handleApprovalDecision = async (req, res, next) => {
         `This approval has already been ${approval.status.toLowerCase()}.`,
       );
     }
-    if (!approval.is_active) return rollbackWithError(client, res, next, 403, 'This approval is not yet active for your action.');
-    if (approval.approver_id !== approver_id) return rollbackWithError(client, res, next, 403, 'You are not authorized to act on this approval.');
-    const isEditApproval = approval.comments === 'Edit Approval';
+    if (!approval.is_active)
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        "This approval is not yet active for your action.",
+      );
+    if (approval.approver_id !== approver_id)
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        "You are not authorized to act on this approval.",
+      );
+    const isEditApproval = approval.comments === "Edit Approval";
 
     // 2. Fetch Request
     const requestRes = await client.query(
@@ -94,13 +138,25 @@ const handleApprovalDecision = async (req, res, next) => {
        LEFT JOIN projects p ON r.project_id = p.id
        JOIN users u ON r.requester_id = u.id
        WHERE r.id = $1 FOR UPDATE OF r`,
-      [approval.request_id]
+      [approval.request_id],
     );
     const request = requestRes.rows[0];
-    if (!request) return rollbackWithError(client, res, next, 404, 'Request not found');
-    if (String(request.status || '').trim().toLowerCase() === 'rejected') return rollbackWithError(client, res, next, 409, 'This request has been rejected and its approval workflow is stopped');
+    if (!request)
+      return rollbackWithError(client, res, next, 404, "Request not found");
+    if (
+      String(request.status || "")
+        .trim()
+        .toLowerCase() === "rejected"
+    )
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        409,
+        "This request has been rejected and its approval workflow is stopped",
+      );
 
-    if (request.request_type === 'Warehouse Supply') {
+    if (request.request_type === "Warehouse Supply") {
       await ensureWarehouseSupplyApprovalColumns(client);
     } else {
       await ensureRequestedItemApprovalColumns(client);
@@ -124,7 +180,9 @@ const handleApprovalDecision = async (req, res, next) => {
       [approval.request_id, approval.approval_level],
     );
     const routedHodContext =
-      (user_role || '').toUpperCase() === 'HOD' ? routedHodRes.rows[0] || null : null;
+      (user_role || "").toUpperCase() === "HOD"
+        ? routedHodRes.rows[0] || null
+        : null;
 
     const routeDomain = await resolveRouteDomain({
       client,
@@ -168,7 +226,13 @@ const handleApprovalDecision = async (req, res, next) => {
 
     const notificationsToCreate = [];
     const notificationKeySet = new Set();
-    const enqueueNotification = ({ userId, title, message, link, metadata }) => {
+    const enqueueNotification = ({
+      userId,
+      title,
+      message,
+      link,
+      metadata,
+    }) => {
       if (userId == null) {
         return;
       }
@@ -177,14 +241,14 @@ const handleApprovalDecision = async (req, res, next) => {
         return;
       }
 
-      const trimmedMessage = typeof message === 'string' ? message.trim() : '';
+      const trimmedMessage = typeof message === "string" ? message.trim() : "";
       if (!trimmedMessage) {
         return;
       }
 
-      const trimmedTitle = typeof title === 'string' ? title.trim() : null;
-      const normalizedLink = typeof link === 'string' ? link.trim() : null;
-      const key = `${parsedId}|${trimmedTitle || ''}|${trimmedMessage}|${normalizedLink || ''}`;
+      const trimmedTitle = typeof title === "string" ? title.trim() : null;
+      const normalizedLink = typeof link === "string" ? link.trim() : null;
+      const key = `${parsedId}|${trimmedTitle || ""}|${trimmedMessage}|${normalizedLink || ""}`;
 
       if (notificationKeySet.has(key)) {
         return;
@@ -200,12 +264,10 @@ const handleApprovalDecision = async (req, res, next) => {
       });
     };
 
-    const initiatingTechnicianId = Number(request.initiated_by_technician_id) || null;
+    const initiatingTechnicianId =
+      Number(request.initiated_by_technician_id) || null;
     let technicianEmail = null;
-    if (
-      request.request_type === 'Maintenance' &&
-      initiatingTechnicianId
-    ) {
+    if (request.request_type === "Maintenance" && initiatingTechnicianId) {
       const techRes = await client.query(
         `SELECT email FROM users WHERE id = $1`,
         [initiatingTechnicianId],
@@ -213,44 +275,120 @@ const handleApprovalDecision = async (req, res, next) => {
       technicianEmail = techRes.rows[0]?.email || null;
     }
 
+    // Refresh after the request lock: a concurrent decision may have committed.
+    const current = (
+      await client.query(
+        "SELECT * FROM approvals WHERE id=$1 AND request_id=$2 FOR UPDATE",
+        [approvalId, request.id],
+      )
+    ).rows[0];
+    if (
+      !current ||
+      !["Pending", "On Hold"].includes(current.status) ||
+      !current.is_active ||
+      current.approver_id !== approver_id
+    )
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        409,
+        "Approval changed; reload before deciding",
+      );
+    Object.assign(approval, current);
+    const queueEmail = (to, subject, message) =>
+      require("../services/workflowNotificationService").email(client, {
+        requestId: approval.request_id,
+        to,
+        subject,
+        message,
+        operationKey: `decision:${approval.id}:${status}`,
+      });
+    const flushNotices = async () => {
+      for (const n of notificationsToCreate)
+        await require("../services/workflowNotificationService").notice(
+          client,
+          {
+            ...n,
+            requestId: approval.request_id,
+            operationKey: `decision:${approval.id}:${status}`,
+          },
+        );
+    };
+    const recordDecision = () =>
+      require("../services/auditService").writeAuditEvent({
+        client,
+        entityType: "approval",
+        entityId: approval.id,
+        requestId: approval.request_id,
+        instituteId: request.institute_id,
+        actorUserId: approver_id,
+        action: "APPROVAL_DECIDED",
+        beforeData: { status: approval.status, is_active: approval.is_active },
+        afterData: { status, is_active: false },
+        reason: comments,
+        operationKey: `approval-decision:${approval.id}:${status}`,
+      });
     // 3. HOD Role Validation
-    if (user_role === 'HOD' && req.user.department_id !== request.department_id && !routedHodContext) {
-      return rollbackWithError(client, res, next, 403, 'Only the HOD of the same department can approve this request');
+    if (
+      user_role === "HOD" &&
+      req.user.department_id !== request.department_id &&
+      !routedHodContext
+    ) {
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        "Only the HOD of the same department can approve this request",
+      );
     }
 
     // 4. Validate Role Against Approval Route
     const routeForLevel = routeDefinitions.find(
-      route => route.approval_level === approval.approval_level,
+      (route) => route.approval_level === approval.approval_level,
     );
     const expectedRole = routeForLevel?.role || null;
     if (
       expectedRole &&
-      expectedRole.trim().toUpperCase() !== (user_role || '').toUpperCase() &&
+      expectedRole.trim().toUpperCase() !== (user_role || "").toUpperCase() &&
       !routedHodContext
     ) {
-      return rollbackWithError(client, res, next, 403, `Only users with role '${expectedRole}' can approve at this level.`);
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        `Only users with role '${expectedRole}' can approve at this level.`,
+      );
     }
 
     // 5. Ensure Previous Approvals Are Completed
     if (approval.approval_level > 1) {
       const prevRes = await client.query(
         `SELECT id FROM approvals WHERE request_id = $1 AND approval_level < $2 AND status != 'Approved'`,
-        [approval.request_id, approval.approval_level]
+        [approval.request_id, approval.approval_level],
       );
       if (prevRes.rows.length > 0) {
-        return rollbackWithError(client, res, next, 403, 'Previous level approvals are still pending.');
+        return rollbackWithError(
+          client,
+          res,
+          next,
+          403,
+          "Previous level approvals are still pending.",
+        );
       }
     }
 
     // 6. Update Approval Decision
     const shouldMarkUrgent = (() => {
       if (is_urgent === undefined || is_urgent === null) return false;
-      if (typeof is_urgent === 'boolean') return is_urgent;
-      if (typeof is_urgent === 'number') return is_urgent !== 0;
-      if (typeof is_urgent === 'string') {
+      if (typeof is_urgent === "boolean") return is_urgent;
+      if (typeof is_urgent === "number") return is_urgent !== 0;
+      if (typeof is_urgent === "string") {
         const normalized = is_urgent.trim().toLowerCase();
-        if (normalized === '') return false;
-        return ['true', '1', 'yes', 'y', 'on', 'urgent'].includes(normalized);
+        if (normalized === "") return false;
+        return ["true", "1", "yes", "y", "on", "urgent"].includes(normalized);
       }
       return false;
     })();
@@ -263,7 +401,7 @@ const handleApprovalDecision = async (req, res, next) => {
           is_active = FALSE,
           is_urgent = CASE WHEN $4 THEN TRUE ELSE is_urgent END
           WHERE id = $3`,
-      [status, comments || null, approvalId, shouldMarkUrgent]
+      [status, comments || null, approvalId, shouldMarkUrgent],
     );
 
     const wasAlreadyUrgent = request.is_urgent === true;
@@ -274,31 +412,46 @@ const handleApprovalDecision = async (req, res, next) => {
             SET is_urgent = TRUE,
                 updated_at = NOW()
           WHERE id = $1`,
-        [approval.request_id]
+        [approval.request_id],
       );
 
       await client.query(
         `INSERT INTO request_logs (request_id, action, actor_id, comments)
          VALUES ($1, 'Marked as Urgent', $2, 'Request flagged as urgent by approver')`,
-        [approval.request_id, approver_id]
+        [approval.request_id, approver_id],
       );
 
       request.is_urgent = true;
     }
 
-    if (status === 'Approved') await require('../services/procurementPriority/departmentPriorityCoverageService').recordDepartmentHodApproval({
-      client,request:{...request,id:approval.request_id},approvalId,actor:req.user});
+    if (status === "Approved")
+      await require("../services/procurementPriority/departmentPriorityCoverageService").recordDepartmentHodApproval(
+        {
+          client,
+          request: { ...request, id: approval.request_id },
+          approvalId,
+          actor: req.user,
+        },
+      );
 
     // 7. Insert Audit Logs
-    await client.query(`
+    await client.query(
+      `
       INSERT INTO request_logs (request_id, action, actor_id, comments)
       VALUES ($1, $2, $3, $4)
-    `, [approval.request_id, `Approval ${status}`, approver_id, comments || null]);
+    `,
+      [
+        approval.request_id,
+        `Approval ${status}`,
+        approver_id,
+        comments || null,
+      ],
+    );
 
     await client.query(
       `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
       VALUES ($1, $2, $3, $4, $5)`,
-      [approvalId, approval.request_id, approver_id, status, comments || null]
+      [approvalId, approval.request_id, approver_id, status, comments || null],
     );
 
     // Warehouse Managers can divert in-stock items to warehouse fulfillment while
@@ -307,8 +460,8 @@ const handleApprovalDecision = async (req, res, next) => {
     // request-level decision is Approve or Reject.
     let closedAsAvailableInStock = false;
     if (
-      (user_role || '').toUpperCase() === 'WAREHOUSEMANAGER' &&
-      request.request_type !== 'Warehouse Supply'
+      (user_role || "").toUpperCase() === "WAREHOUSEMANAGER" &&
+      request.request_type !== "Warehouse Supply"
     ) {
       const inStockItemsRes = await client.query(
         `SELECT
@@ -328,7 +481,8 @@ const handleApprovalDecision = async (req, res, next) => {
       const inStockSummary = inStockItemsRes.rows[0] || {};
       const totalItems = Number(inStockSummary.total || 0);
       closedAsAvailableInStock =
-        totalItems > 0 && Number(inStockSummary.available_in_stock || 0) === totalItems;
+        totalItems > 0 &&
+        Number(inStockSummary.available_in_stock || 0) === totalItems;
 
       if (closedAsAvailableInStock) {
         await client.query(
@@ -347,7 +501,7 @@ const handleApprovalDecision = async (req, res, next) => {
           [
             approval.request_id,
             approver_id,
-            'All requested items were rejected from purchasing and diverted to warehouse fulfillment',
+            "All requested items were rejected from purchasing and diverted to warehouse fulfillment",
           ],
         );
       }
@@ -365,10 +519,16 @@ const handleApprovalDecision = async (req, res, next) => {
 
       const pendingEdit = editRes.rows[0] || null;
       if (!pendingEdit) {
-        return rollbackWithError(client, res, next, 404, 'Pending edit request not found');
+        return rollbackWithError(
+          client,
+          res,
+          next,
+          404,
+          "Pending edit request not found",
+        );
       }
 
-      if (status === 'Approved') {
+      if (status === "Approved") {
         const payload = pendingEdit.payload || {};
         const editedItems = Array.isArray(payload.items) ? payload.items : [];
         const editedEstimatedCost = Number(payload.estimated_cost) || 0;
@@ -396,8 +556,11 @@ const handleApprovalDecision = async (req, res, next) => {
           ],
         );
 
-        if (request.request_type === 'Warehouse Supply') {
-          await client.query(`DELETE FROM warehouse_supply_items WHERE request_id = $1`, [approval.request_id]);
+        if (request.request_type === "Warehouse Supply") {
+          await client.query(
+            `DELETE FROM warehouse_supply_items WHERE request_id = $1`,
+            [approval.request_id],
+          );
 
           for (const item of editedItems) {
             await client.query(
@@ -407,7 +570,12 @@ const handleApprovalDecision = async (req, res, next) => {
             );
           }
         } else {
-          await applyRequestedItemEdits(client, approval.request_id, editedItems, req.user);
+          await applyRequestedItemEdits(
+            client,
+            approval.request_id,
+            editedItems,
+            req.user,
+          );
         }
 
         await client.query(
@@ -421,7 +589,11 @@ const handleApprovalDecision = async (req, res, next) => {
         await client.query(
           `INSERT INTO request_logs (request_id, action, actor_id, comments)
            VALUES ($1, 'Edit Approval Approved', $2, $3)`,
-          [approval.request_id, approver_id, comments || 'SCM approved the submitted edit'],
+          [
+            approval.request_id,
+            approver_id,
+            comments || "SCM approved the submitted edit",
+          ],
         );
       } else {
         await client.query(
@@ -435,24 +607,29 @@ const handleApprovalDecision = async (req, res, next) => {
         await client.query(
           `INSERT INTO request_logs (request_id, action, actor_id, comments)
            VALUES ($1, 'Edit Approval Rejected', $2, $3)`,
-          [approval.request_id, approver_id, comments || 'SCM rejected the submitted edit'],
+          [
+            approval.request_id,
+            approver_id,
+            comments || "SCM rejected the submitted edit",
+          ],
         );
       }
 
       if (notificationsToCreate.length > 0) {
-        await createNotifications(notificationsToCreate, client);
+        await flushNotices();
       }
 
-      await client.query('COMMIT');
+      await recordDecision();
+      await client.query("COMMIT");
 
       return res.json({
         message: `✅ Edit approval ${status.toLowerCase()} successfully`,
-        updatedRequestStatus: request.status || 'Submitted',
+        updatedRequestStatus: request.status || "Submitted",
         editApproval: true,
       });
     }
 
-    if (request.request_type === 'Maintenance' && initiatingTechnicianId) {
+    if (request.request_type === "Maintenance" && initiatingTechnicianId) {
       const technicianNotification = buildMaintenanceApprovalNotification({
         requestId: approval.request_id,
         role: user_role,
@@ -477,7 +654,7 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     if (routedHodContext && !closedAsAvailableInStock) {
-      if (status === 'Approved') {
+      if (status === "Approved") {
         const resumedScmRes = await client.query(
           `UPDATE approvals
               SET is_active = TRUE,
@@ -496,7 +673,7 @@ const handleApprovalDecision = async (req, res, next) => {
             [
               approval.request_id,
               approver_id,
-              'Routed HOD approved the request; SCM can now continue the review',
+              "Routed HOD approved the request; SCM can now continue the review",
             ],
           );
 
@@ -507,23 +684,23 @@ const handleApprovalDecision = async (req, res, next) => {
               resumedScm.id,
               approval.request_id,
               approver_id,
-              'Routed HOD approved the request; SCM approval is active again',
+              "Routed HOD approved the request; SCM approval is active again",
             ],
           );
 
           enqueueNotification({
             userId: resumedScm.approver_id,
-            title: 'HOD review complete',
+            title: "HOD review complete",
             message: `The routed HOD approved request ${approval.request_id}. Your SCM approval step is active again.`,
             link: `/requests/${approval.request_id}`,
             metadata: {
               requestId: approval.request_id,
               requestType: request.request_type,
-              action: 'scm_approval_resumed',
+              action: "scm_approval_resumed",
             },
           });
         }
-      } else if (status === 'Rejected') {
+      } else if (status === "Rejected") {
         await client.query(
           `UPDATE approvals
               SET is_active = FALSE,
@@ -540,7 +717,7 @@ const handleApprovalDecision = async (req, res, next) => {
           [
             approval.request_id,
             approver_id,
-            'Approval cycle stopped because the routed HOD rejected the request',
+            "Approval cycle stopped because the routed HOD rejected the request",
           ],
         );
       }
@@ -549,7 +726,7 @@ const handleApprovalDecision = async (req, res, next) => {
     let rankingGate = null;
     let continuationResult = null;
     // 8. Activate Next Approval Step (only when approved)
-    if (status === 'Approved' && !closedAsAvailableInStock) {
+    if (status === "Approved" && !closedAsAvailableInStock) {
       const sameLevelPendingRes = await client.query(
         `SELECT COUNT(*) AS pending_count
            FROM approvals
@@ -563,35 +740,60 @@ const handleApprovalDecision = async (req, res, next) => {
         sameLevelPendingRes.rows?.[0]?.pending_count || 0,
       );
 
-      if ((user_role || '').toUpperCase() === 'HOD' && String(req.user.department_id) === String(request.department_id)) {
-        rankingGate = await hodRankingGate.findGate({ client, request: { ...request, id: approval.request_id }, approvalLevel: approval.approval_level, actorId: approver_id, force: true });
-        if (rankingGate) await hodRankingGate.auditGate({ client, request: { ...request, id: approval.request_id }, approval, actorId: approver_id, gate: rankingGate });
+      if (
+        (user_role || "").toUpperCase() === "HOD" &&
+        String(req.user.department_id) === String(request.department_id)
+      ) {
+        rankingGate = await hodRankingGate.findGate({
+          client,
+          request: { ...request, id: approval.request_id },
+          approvalLevel: approval.approval_level,
+          actorId: approver_id,
+          force: true,
+        });
+        if (rankingGate)
+          await hodRankingGate.auditGate({
+            client,
+            request: { ...request, id: approval.request_id },
+            approval,
+            actorId: approver_id,
+            gate: rankingGate,
+          });
       }
       // Priority placement follows the recorded approval. A closed browser or
       // failed queue load must not leave the clinical approval route stranded.
       if (pendingAtCurrentLevel === 0) {
         continuationResult = await continueApprovalWorkflowAfterLevel({
-          client, request: { ...request, id: approval.request_id }, approval,
-          actorId: approver_id, routeDefinitions, routeDomain, technicianEmail,
+          client,
+          request: { ...request, id: approval.request_id },
+          approval,
+          actorId: approver_id,
+          routeDefinitions,
+          routeDomain,
+          technicianEmail,
           enqueueNotification,
         });
       }
     }
 
     // 9. Check Final Request Status
-    const statusesRes = await client.query(`SELECT status FROM approvals WHERE request_id = $1`, [approval.request_id]);
-    const statuses = statusesRes.rows.map(row => row.status);
+    const statusesRes = await client.query(
+      `SELECT status FROM approvals WHERE request_id = $1`,
+      [approval.request_id],
+    );
+    const statuses = statusesRes.rows.map((row) => row.status);
 
     let newStatus = null;
     if (closedAsAvailableInStock) newStatus = REQUEST_STATUS.AVAILABLE_IN_STOCK;
-    else if (statuses.includes('Rejected')) newStatus = 'Rejected';
-    else if (continuationResult?.requestStatus === 'Approved') newStatus = 'Approved';
+    else if (statuses.includes("Rejected")) newStatus = "Rejected";
+    else if (continuationResult?.requestStatus === "Approved")
+      newStatus = "Approved";
 
     let itemSummary = null;
     const itemSummaryTable =
-      request.request_type === 'Warehouse Supply'
-        ? 'warehouse_supply_items'
-        : 'requested_items';
+      request.request_type === "Warehouse Supply"
+        ? "warehouse_supply_items"
+        : "requested_items";
 
     const summaryRes = await client.query(
       `SELECT
@@ -602,7 +804,7 @@ const handleApprovalDecision = async (req, res, next) => {
          ) AS pending
        FROM public.${itemSummaryTable}
        WHERE request_id = $1`,
-      [approval.request_id]
+      [approval.request_id],
     );
 
     if (summaryRes.rowCount > 0) {
@@ -615,15 +817,21 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     if (newStatus && continuationResult?.requestStatus !== newStatus) {
-      await client.query(`
+      await client.query(
+        `
         UPDATE requests SET status = $1, updated_at = NOW()
         WHERE id = $2
-      `, [newStatus, approval.request_id]);
+      `,
+        [newStatus, approval.request_id],
+      );
 
-      await client.query(`
+      await client.query(
+        `
         INSERT INTO request_logs (request_id, action, actor_id, comments)
         VALUES ($1, $2, $3, NULL)
-      `, [approval.request_id, `Request marked ${newStatus}`, approver_id]);
+      `,
+        [approval.request_id, `Request marked ${newStatus}`, approver_id],
+      );
 
       const statusLower = newStatus.toLowerCase();
       const requesterMessage = closedAsAvailableInStock
@@ -639,12 +847,14 @@ const handleApprovalDecision = async (req, res, next) => {
           requestId: approval.request_id,
           requestType: request.request_type,
           action: closedAsAvailableInStock
-            ? 'request_available_in_stock'
-            : newStatus === 'Approved' ? 'request_approved' : 'request_rejected',
+            ? "request_available_in_stock"
+            : newStatus === "Approved"
+              ? "request_approved"
+              : "request_rejected",
         },
       });
 
-      if (newStatus === 'Approved') {
+      if (newStatus === "Approved") {
         const autoAssignment = await applyAutoAssignmentForApprovedRequest(
           client,
           {
@@ -660,16 +870,16 @@ const handleApprovalDecision = async (req, res, next) => {
       }
 
       if (request.requester_email) {
-        await sendEmail(
+        await queueEmail(
           request.requester_email,
           `Your purchase request ${approval.request_id} has been ${newStatus}`,
           `${requesterMessage}\nLog in to view the full details.`,
         );
       }
 
-      if (newStatus === 'Approved') {
+      if (newStatus === "Approved") {
         if (
-          request.request_type === 'Maintenance' &&
+          request.request_type === "Maintenance" &&
           request.initiated_by_technician_id &&
           technicianEmail
         ) {
@@ -681,11 +891,11 @@ const handleApprovalDecision = async (req, res, next) => {
             metadata: {
               requestId: approval.request_id,
               requestType: request.request_type,
-              action: 'maintenance_approved',
+              action: "maintenance_approved",
             },
           });
 
-          await sendEmail(
+          await queueEmail(
             technicianEmail,
             `Maintenance request ${approval.request_id} approved`,
             `The maintenance request you initiated (ID: ${approval.request_id}) has received final approval.\nYou can follow up with the requesting department for fulfillment.`,
@@ -697,13 +907,13 @@ const handleApprovalDecision = async (req, res, next) => {
              FROM users
             WHERE role = 'SCM'
               AND is_active = true
-              AND ($1::INT IS NULL OR department_id = $1)`,
-          [request.department_id || null],
+              AND ($1::INT IS NULL OR department_id = $1) AND institute_id=$2`,
+          [request.department_id || null, request.institute_id],
         );
 
-        const scmEmails = scmRows.map(row => row.email).filter(Boolean);
+        const scmEmails = scmRows.map((row) => row.email).filter(Boolean);
         if (scmEmails.length > 0) {
-          await sendEmail(
+          await queueEmail(
             scmEmails,
             `Request ${approval.request_id} fully approved`,
             `All approvals for ${request.request_type} request ${approval.request_id} are complete.\nYou can proceed with procurement activities.`,
@@ -711,8 +921,8 @@ const handleApprovalDecision = async (req, res, next) => {
         }
 
         scmRows
-          .filter(row => Number.isInteger(row.id))
-          .forEach(row => {
+          .filter((row) => Number.isInteger(row.id))
+          .forEach((row) => {
             enqueueNotification({
               userId: row.id,
               title: `Request ${approval.request_id} fully approved`,
@@ -721,7 +931,7 @@ const handleApprovalDecision = async (req, res, next) => {
               metadata: {
                 requestId: approval.request_id,
                 requestType: request.request_type,
-                action: 'request_ready_for_assignment',
+                action: "request_ready_for_assignment",
               },
             });
           });
@@ -729,22 +939,24 @@ const handleApprovalDecision = async (req, res, next) => {
     }
 
     if (notificationsToCreate.length > 0) {
-      await createNotifications(notificationsToCreate, client);
+      await flushNotices();
     }
 
-    await client.query('COMMIT');
+    await recordDecision();
+    await client.query("COMMIT");
 
     res.json({
-      message: rankingGate ? 'Approval recorded; place this request in the department priority list' : `✅ Approval ${status.toLowerCase()} successfully`,
-      updatedRequestStatus: newStatus || 'Pending',
+      message: rankingGate
+        ? "Approval recorded; place this request in the department priority list"
+        : `✅ Approval ${status.toLowerCase()} successfully`,
+      updatedRequestStatus: newStatus || "Pending",
       itemApprovalSummary: itemSummary,
       workflowState: rankingGate?.state || null,
       rankingGate,
     });
-
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Approval decision failed:', err);
+    await client.query("ROLLBACK");
+    console.error("❌ Approval decision failed:", err);
     next(err);
   } finally {
     client.release();
@@ -757,24 +969,26 @@ const setApprovalHoldStatus = async (req, res, next) => {
   const { on_hold: onHoldFlag, status: statusInput, comments } = req.body;
 
   if (!/^\d+$/.test(id)) {
-    return next(createHttpError(400, 'Invalid approval ID'));
+    return next(createHttpError(400, "Invalid approval ID"));
   }
 
   const approverId = req.user?.id ?? null;
   if (!Number.isInteger(approverId)) {
-    return next(createHttpError(403, 'Unable to identify the current approver'));
+    return next(
+      createHttpError(403, "Unable to identify the current approver"),
+    );
   }
 
   const normalizedStatus =
-    typeof statusInput === 'string' ? statusInput.trim().toLowerCase() : null;
+    typeof statusInput === "string" ? statusInput.trim().toLowerCase() : null;
 
   let targetStatus = null;
-  if (typeof onHoldFlag === 'boolean') {
-    targetStatus = onHoldFlag ? 'On Hold' : 'Pending';
-  } else if (normalizedStatus === 'on hold' || normalizedStatus === 'hold') {
-    targetStatus = 'On Hold';
-  } else if (normalizedStatus === 'pending' || normalizedStatus === 'resume') {
-    targetStatus = 'Pending';
+  if (typeof onHoldFlag === "boolean") {
+    targetStatus = onHoldFlag ? "On Hold" : "Pending";
+  } else if (normalizedStatus === "on hold" || normalizedStatus === "hold") {
+    targetStatus = "On Hold";
+  } else if (normalizedStatus === "pending" || normalizedStatus === "resume") {
+    targetStatus = "Pending";
   }
 
   if (!targetStatus) {
@@ -788,7 +1002,7 @@ const setApprovalHoldStatus = async (req, res, next) => {
 
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     const { rows } = await client.query(
       `SELECT id, request_id, approver_id, status, is_active
@@ -801,31 +1015,46 @@ const setApprovalHoldStatus = async (req, res, next) => {
     const approval = rows[0];
 
     if (!approval) {
-      return rollbackWithError(client, res, next, 404, 'Approval not found');
+      return rollbackWithError(client, res, next, 404, "Approval not found");
     }
 
     if (approval.approver_id !== approverId) {
-      return rollbackWithError(client, res, next, 403, 'You are not authorized to update this approval.');
-    }
-
-    if (!approval.is_active) {
-      return rollbackWithError(client, res, next, 403, 'This approval is not active for your action.');
-    }
-
-    if (['Approved', 'Rejected'].includes(approval.status)) {
       return rollbackWithError(
         client,
         res,
         next,
         403,
-        'Completed approvals cannot be placed on hold or resumed.',
+        "You are not authorized to update this approval.",
+      );
+    }
+
+    if (!approval.is_active) {
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        "This approval is not active for your action.",
+      );
+    }
+
+    if (["Approved", "Rejected"].includes(approval.status)) {
+      return rollbackWithError(
+        client,
+        res,
+        next,
+        403,
+        "Completed approvals cannot be placed on hold or resumed.",
       );
     }
 
     if (approval.status === targetStatus) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       return res.json({
-        message: targetStatus === 'On Hold' ? 'Approval is already on hold.' : 'Approval is already pending.',
+        message:
+          targetStatus === "On Hold"
+            ? "Approval is already on hold."
+            : "Approval is already pending.",
         status: targetStatus,
       });
     }
@@ -841,8 +1070,12 @@ const setApprovalHoldStatus = async (req, res, next) => {
       [targetStatus, comments || null, approval.id],
     );
 
-    const actionLabel = targetStatus === 'On Hold' ? 'Approval placed on hold' : 'Approval resumed';
-    const approvalActionLabel = targetStatus === 'On Hold' ? 'On Hold' : 'Resumed';
+    const actionLabel =
+      targetStatus === "On Hold"
+        ? "Approval placed on hold"
+        : "Approval resumed";
+    const approvalActionLabel =
+      targetStatus === "On Hold" ? "On Hold" : "Resumed";
 
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
@@ -853,112 +1086,144 @@ const setApprovalHoldStatus = async (req, res, next) => {
     await client.query(
       `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
        VALUES ($1, $2, $3, $4, $5)`,
-      [approval.id, approval.request_id, approverId, approvalActionLabel, comments || null],
+      [
+        approval.id,
+        approval.request_id,
+        approverId,
+        approvalActionLabel,
+        comments || null,
+      ],
     );
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
 
     res.json({
-      message: targetStatus === 'On Hold' ? 'Approval placed on hold' : 'Approval resumed for review',
+      message:
+        targetStatus === "On Hold"
+          ? "Approval placed on hold"
+          : "Approval resumed for review",
       status: targetStatus,
     });
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Failed to update approval hold status:', err);
+    await client.query("ROLLBACK");
+    console.error("❌ Failed to update approval hold status:", err);
     next(err);
   } finally {
     client.release();
   }
 };
 
-
-const buildItemApprovalComments = ({ existingComments, incomingComments, existingApprovedBy, currentApproverId }) => {
-  const normalizedIncoming = String(incomingComments ?? '').trim();
-  const normalizedExisting = String(existingComments ?? '').trim();
+const buildItemApprovalComments = ({
+  existingComments,
+  incomingComments,
+  existingApprovedBy,
+  currentApproverId,
+}) => {
+  const normalizedIncoming = String(incomingComments ?? "").trim();
+  const normalizedExisting = String(existingComments ?? "").trim();
 
   if (!normalizedIncoming) {
     return normalizedExisting || null;
   }
 
-  const existingApprover = existingApprovedBy != null ? String(existingApprovedBy) : null;
-  const currentApprover = currentApproverId != null ? String(currentApproverId) : null;
+  const existingApprover =
+    existingApprovedBy != null ? String(existingApprovedBy) : null;
+  const currentApprover =
+    currentApproverId != null ? String(currentApproverId) : null;
 
-  if (!normalizedExisting || !existingApprover || existingApprover === currentApprover) {
+  if (
+    !normalizedExisting ||
+    !existingApprover ||
+    existingApprover === currentApprover
+  ) {
     return normalizedIncoming;
   }
 
   return `${normalizedExisting}
 
-Approver ${currentApprover || 'current'}: ${normalizedIncoming}`;
+Approver ${currentApprover || "current"}: ${normalizedIncoming}`;
 };
 
 // 🔘 Allow approvers to record decisions for individual items before final approval
 const updateApprovalItems = async (req, res, next) => {
   const { id } = req.params;
   if (!/^\d+$/.test(id)) {
-    return next(createHttpError(400, 'Invalid approval ID'));
+    return next(createHttpError(400, "Invalid approval ID"));
   }
 
   const items = Array.isArray(req.body.items) ? req.body.items : null;
   if (!items || items.length === 0) {
-    return next(createHttpError(400, 'At least one item decision is required'));
+    return next(createHttpError(400, "At least one item decision is required"));
   }
 
   const rawApproverId = req.user?.id;
   const approverId = rawApproverId ?? null;
-  const approverIdAsString = rawApproverId != null ? String(rawApproverId) : null;
+  const approverIdAsString =
+    rawApproverId != null ? String(rawApproverId) : null;
 
   let approverIdAsInteger = null;
-  if (typeof rawApproverId === 'number' && Number.isInteger(rawApproverId)) {
+  if (typeof rawApproverId === "number" && Number.isInteger(rawApproverId)) {
     approverIdAsInteger = rawApproverId;
-  } else if (typeof rawApproverId === 'string' && /^\d+$/.test(rawApproverId)) {
+  } else if (typeof rawApproverId === "string" && /^\d+$/.test(rawApproverId)) {
     approverIdAsInteger = Number.parseInt(rawApproverId, 10);
   }
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     const approvalRes = await client.query(
       `SELECT id, request_id, approver_id, status, is_active
          FROM approvals
          WHERE id = $1
          FOR UPDATE`,
-      [Number(id)]
+      [Number(id)],
     );
 
     const approval = approvalRes.rows[0];
     if (!approval) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Approval not found'));
+      await client.query("ROLLBACK");
+      return next(createHttpError(404, "Approval not found"));
     }
 
     const approvalApproverId =
       approval.approver_id != null ? String(approval.approver_id) : null;
 
-    if ((approvalApproverId ?? '') !== (approverIdAsString ?? '')) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(403, 'You are not authorized to update items for this approval'));
+    if ((approvalApproverId ?? "") !== (approverIdAsString ?? "")) {
+      await client.query("ROLLBACK");
+      return next(
+        createHttpError(
+          403,
+          "You are not authorized to update items for this approval",
+        ),
+      );
     }
 
-    if (!approval.is_active || approval.status !== 'Pending') {
-      await client.query('ROLLBACK');
-      return next(createHttpError(403, 'Only active pending approvals can update item decisions'));
+    if (!approval.is_active || approval.status !== "Pending") {
+      await client.query("ROLLBACK");
+      return next(
+        createHttpError(
+          403,
+          "Only active pending approvals can update item decisions",
+        ),
+      );
     }
 
     const requestRes = await client.query(
       `SELECT request_type, estimated_cost FROM requests WHERE id = $1`,
-      [approval.request_id]
+      [approval.request_id],
     );
 
     if (requestRes.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'Associated request not found'));
+      await client.query("ROLLBACK");
+      return next(createHttpError(404, "Associated request not found"));
     }
 
     const requestType = requestRes.rows[0].request_type;
-    const isWarehouseSupply = requestType === 'Warehouse Supply';
-    const requestEstimatedCost = Number(requestRes.rows[0]?.estimated_cost || 0);
+    const isWarehouseSupply = requestType === "Warehouse Supply";
+    const requestEstimatedCost = Number(
+      requestRes.rows[0]?.estimated_cost || 0,
+    );
 
     if (isWarehouseSupply) {
       await ensureWarehouseSupplyApprovalColumns(client);
@@ -975,12 +1240,14 @@ const updateApprovalItems = async (req, res, next) => {
       }
     }
 
-    const targetTable = isWarehouseSupply ? 'warehouse_supply_items' : 'requested_items';
+    const targetTable = isWarehouseSupply
+      ? "warehouse_supply_items"
+      : "requested_items";
 
     const statusMap = {
-      approved: 'Approved',
-      rejected: 'Rejected',
-      pending: 'Pending',
+      approved: "Approved",
+      rejected: "Rejected",
+      pending: "Pending",
     };
 
     const updatedItems = [];
@@ -991,9 +1258,9 @@ const updateApprovalItems = async (req, res, next) => {
     const seenItemIds = new Set();
 
     const approvedByColumnTypeRaw = await getColumnType(
-      'public',
+      "public",
       targetTable,
-      'approved_by',
+      "approved_by",
       client,
     );
 
@@ -1003,32 +1270,42 @@ const updateApprovalItems = async (req, res, next) => {
 
     const approvedByPrefersString =
       approvedByColumnType &&
-      ['uuid', 'text', 'varchar', 'character varying'].includes(approvedByColumnType);
+      ["uuid", "text", "varchar", "character varying"].includes(
+        approvedByColumnType,
+      );
 
     const approvedByPrefersInteger =
       approvedByColumnType &&
-      ['integer', 'int4', 'bigint', 'int8', 'smallint', 'int2'].includes(approvedByColumnType);
+      ["integer", "int4", "bigint", "int8", "smallint", "int2"].includes(
+        approvedByColumnType,
+      );
 
     const resolvedApproverValue = approvedByPrefersString
-      ? approverIdAsString ?? null
+      ? (approverIdAsString ?? null)
       : approvedByPrefersInteger
-      ? approverIdAsInteger ?? null
-      : approverIdAsInteger ?? approverIdAsString ?? null;
+        ? (approverIdAsInteger ?? null)
+        : (approverIdAsInteger ?? approverIdAsString ?? null);
 
     const approvedByParameterCast = (() => {
-      if (!approvedByColumnType) return '::INTEGER';
-      if (['uuid'].includes(approvedByColumnType)) return '::UUID';
-      if (['text', 'varchar', 'character varying'].includes(approvedByColumnType)) return '::TEXT';
-      if (['bigint', 'int8'].includes(approvedByColumnType)) return '::BIGINT';
-      if (['smallint', 'int2'].includes(approvedByColumnType)) return '::SMALLINT';
-      return '::INTEGER';
+      if (!approvedByColumnType) return "::INTEGER";
+      if (["uuid"].includes(approvedByColumnType)) return "::UUID";
+      if (
+        ["text", "varchar", "character varying"].includes(approvedByColumnType)
+      )
+        return "::TEXT";
+      if (["bigint", "int8"].includes(approvedByColumnType)) return "::BIGINT";
+      if (["smallint", "int2"].includes(approvedByColumnType))
+        return "::SMALLINT";
+      return "::INTEGER";
     })();
 
     for (const itemDecision of items) {
       const rawItemId = itemDecision?.item_id ?? itemDecision?.id;
-      if (!/^\d+$/.test(String(rawItemId || ''))) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(400, 'Each item must include a valid numeric id'));
+      if (!/^\d+$/.test(String(rawItemId || ""))) {
+        await client.query("ROLLBACK");
+        return next(
+          createHttpError(400, "Each item must include a valid numeric id"),
+        );
       }
 
       const itemId = Number(rawItemId);
@@ -1037,15 +1314,19 @@ const updateApprovalItems = async (req, res, next) => {
       }
       seenItemIds.add(itemId);
 
-      const normalizedStatus = String(itemDecision.status || '')
+      const normalizedStatus = String(itemDecision.status || "")
         .trim()
         .toLowerCase();
-      const convertToWarehouseSupply = Boolean(itemDecision.convert_to_warehouse_supply);
-      const finalStatus = convertToWarehouseSupply ? 'Rejected' : statusMap[normalizedStatus];
+      const convertToWarehouseSupply = Boolean(
+        itemDecision.convert_to_warehouse_supply,
+      );
+      const finalStatus = convertToWarehouseSupply
+        ? "Rejected"
+        : statusMap[normalizedStatus];
 
       if (!finalStatus) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(400, 'Invalid item status supplied'));
+        await client.query("ROLLBACK");
+        return next(createHttpError(400, "Invalid item status supplied"));
       }
 
       const itemRes = await client.query(
@@ -1058,12 +1339,17 @@ const updateApprovalItems = async (req, res, next) => {
                FROM public.requested_items
               WHERE id = $1 AND request_id = $2
               FOR UPDATE`,
-        [itemId, approval.request_id]
+        [itemId, approval.request_id],
       );
 
       if (itemRes.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return next(createHttpError(404, `Requested item ${itemId} not found for this request`));
+        await client.query("ROLLBACK");
+        return next(
+          createHttpError(
+            404,
+            `Requested item ${itemId} not found for this request`,
+          ),
+        );
       }
 
       const existingItem = itemRes.rows[0];
@@ -1074,9 +1360,10 @@ const updateApprovalItems = async (req, res, next) => {
         resolvedApproverValue != null ? String(resolvedApproverValue) : null;
 
       const isLockedRejected =
-        existingItem.approval_status === 'Rejected' &&
+        existingItem.approval_status === "Rejected" &&
         existingApprovedByNormalized != null &&
-        existingApprovedByNormalized !== (resolvedApproverValueNormalized ?? '');
+        existingApprovedByNormalized !==
+          (resolvedApproverValueNormalized ?? "");
 
       if (isLockedRejected) {
         lockedItems.push({
@@ -1090,25 +1377,32 @@ const updateApprovalItems = async (req, res, next) => {
       let parsedQuantity = null;
       let quantityChanged = false;
       const previousQuantity = Number(existingItem.quantity);
-      const existingStatus = existingItem.approval_status || 'Pending';
+      const existingStatus = existingItem.approval_status || "Pending";
 
-      if (rawQuantity !== undefined && rawQuantity !== null && rawQuantity !== '') {
+      if (
+        rawQuantity !== undefined &&
+        rawQuantity !== null &&
+        rawQuantity !== ""
+      ) {
         const numericQuantity = Number(rawQuantity);
         if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
-          await client.query('ROLLBACK');
-          return next(createHttpError(400, 'Quantity must be a positive number'));
+          await client.query("ROLLBACK");
+          return next(
+            createHttpError(400, "Quantity must be a positive number"),
+          );
         }
 
         if (!Number.isInteger(numericQuantity)) {
-          await client.query('ROLLBACK');
-          return next(createHttpError(400, 'Quantity must be a whole number'));
+          await client.query("ROLLBACK");
+          return next(createHttpError(400, "Quantity must be a whole number"));
         }
 
         parsedQuantity = numericQuantity;
         quantityChanged = parsedQuantity !== Number(existingItem.quantity);
       }
 
-      const isFinalDecision = finalStatus === 'Approved' || finalStatus === 'Rejected';
+      const isFinalDecision =
+        finalStatus === "Approved" || finalStatus === "Rejected";
       const statusChanged = finalStatus !== existingStatus;
 
       if (quantityChanged) {
@@ -1132,8 +1426,10 @@ const updateApprovalItems = async (req, res, next) => {
         const updatedRow = quantityUpdateRes.rows[0];
         existingItem.quantity = updatedRow?.quantity ?? parsedQuantity;
         if (!isWarehouseSupply) {
-          existingItem.unit_cost = updatedRow?.unit_cost ?? existingItem.unit_cost;
-          existingItem.total_cost = updatedRow?.total_cost ?? existingItem.total_cost;
+          existingItem.unit_cost =
+            updatedRow?.unit_cost ?? existingItem.unit_cost;
+          existingItem.total_cost =
+            updatedRow?.total_cost ?? existingItem.total_cost;
         }
 
         quantityChanges.push({
@@ -1148,16 +1444,31 @@ const updateApprovalItems = async (req, res, next) => {
 
       if (convertToWarehouseSupply) {
         if (isWarehouseSupply) {
-          await client.query('ROLLBACK');
-          return next(createHttpError(400, 'Warehouse supply items cannot be converted again'));
+          await client.query("ROLLBACK");
+          return next(
+            createHttpError(
+              400,
+              "Warehouse supply items cannot be converted again",
+            ),
+          );
         }
-        if ((req.user?.role || '').toUpperCase() !== 'WAREHOUSEMANAGER') {
-          await client.query('ROLLBACK');
-          return next(createHttpError(403, 'Only Warehouse Managers can convert purchase items to warehouse supply requests'));
+        if ((req.user?.role || "").toUpperCase() !== "WAREHOUSEMANAGER") {
+          await client.query("ROLLBACK");
+          return next(
+            createHttpError(
+              403,
+              "Only Warehouse Managers can convert purchase items to warehouse supply requests",
+            ),
+          );
         }
         if (!Number.isInteger(req.user?.warehouse_id)) {
-          await client.query('ROLLBACK');
-          return next(createHttpError(400, 'Your user account must be linked to a warehouse to convert items'));
+          await client.query("ROLLBACK");
+          return next(
+            createHttpError(
+              400,
+              "Your user account must be linked to a warehouse to convert items",
+            ),
+          );
         }
         convertedWarehouseSupplyItems.push({
           item_id: itemId,
@@ -1169,7 +1480,8 @@ const updateApprovalItems = async (req, res, next) => {
       const nextApprovalComments = buildItemApprovalComments({
         existingComments: existingItem.approval_comments,
         incomingComments: convertToWarehouseSupply
-          ? itemDecision.comments || 'Converted to warehouse supply request because stock is available.'
+          ? itemDecision.comments ||
+            "Converted to warehouse supply request because stock is available."
           : itemDecision.comments,
         existingApprovedBy: existingItem.approved_by,
         currentApproverId: resolvedApproverValue,
@@ -1198,7 +1510,7 @@ const updateApprovalItems = async (req, res, next) => {
           approvedByValue,
           itemId,
           approval.request_id,
-        ]
+        ],
       );
 
       const updated = updateRes.rows[0];
@@ -1239,8 +1551,8 @@ const updateApprovalItems = async (req, res, next) => {
           originalReq.department_id,
           originalReq.institute_id,
           originalReq.section_id,
-          `Converted from Purchase Request #${approval.request_id}: ${originalReq.justification || 'items available in warehouse stock'}`,
-          originalReq.request_domain || 'operational',
+          `Converted from Purchase Request #${approval.request_id}: ${originalReq.justification || "items available in warehouse stock"}`,
+          originalReq.request_domain || "operational",
           originalReq.project_id,
           req.user.warehouse_id,
           req.user.id,
@@ -1252,7 +1564,13 @@ const updateApprovalItems = async (req, res, next) => {
         await client.query(
           `INSERT INTO warehouse_supply_items (request_id, requested_item_id, item_name, quantity, approval_status, approved_by, approved_at)
            VALUES ($1, $2, $3, $4, 'Approved', $5, NOW())`,
-          [warehouseSupplyRequestId, convertedItem.item_id, convertedItem.item_name, convertedItem.quantity, resolvedApproverValue],
+          [
+            warehouseSupplyRequestId,
+            convertedItem.item_id,
+            convertedItem.item_name,
+            convertedItem.quantity,
+            resolvedApproverValue,
+          ],
         );
       }
 
@@ -1265,7 +1583,7 @@ const updateApprovalItems = async (req, res, next) => {
           approverId,
           `${convertedWarehouseSupplyItems.length} item(s) converted to Warehouse Supply Request #${warehouseSupplyRequestId}`,
           warehouseSupplyRequestId,
-          `Created from Purchase Request #${approval.request_id} and assigned to ${req.user.name || 'the converting Warehouse Manager'}`,
+          `Created from Purchase Request #${approval.request_id} and assigned to ${req.user.name || "the converting Warehouse Manager"}`,
         ],
       );
     }
@@ -1279,7 +1597,7 @@ const updateApprovalItems = async (req, res, next) => {
          ) AS pending
        FROM public.${targetTable}
        WHERE request_id = $1`,
-      [approval.request_id]
+      [approval.request_id],
     );
 
     const summaryRow = summaryRes.rows[0] || {};
@@ -1313,7 +1631,8 @@ const updateApprovalItems = async (req, res, next) => {
       const inStockSummary = inStockItemsRes.rows[0] || {};
       const totalItems = Number(inStockSummary.total || 0);
       const allItemsAvailableInStock =
-        totalItems > 0 && Number(inStockSummary.available_in_stock || 0) === totalItems;
+        totalItems > 0 &&
+        Number(inStockSummary.available_in_stock || 0) === totalItems;
 
       if (allItemsAvailableInStock) {
         updatedRequestStatus = REQUEST_STATUS.AVAILABLE_IN_STOCK;
@@ -1350,7 +1669,7 @@ const updateApprovalItems = async (req, res, next) => {
           [
             approval.request_id,
             approverId,
-            'All requested items were diverted to warehouse fulfillment when item decisions were saved',
+            "All requested items were diverted to warehouse fulfillment when item decisions were saved",
           ],
         );
       }
@@ -1364,30 +1683,35 @@ const updateApprovalItems = async (req, res, next) => {
       commentFragments.push(`${summaryAdjustments.Rejected} item(s) rejected`);
     }
     if (summaryAdjustments.Pending > 0) {
-      commentFragments.push(`${summaryAdjustments.Pending} item(s) set to pending`);
+      commentFragments.push(
+        `${summaryAdjustments.Pending} item(s) set to pending`,
+      );
     }
 
     if (quantityChanges.length > 0) {
       commentFragments.push(
         `${quantityChanges.length} item(s) quantity adjusted: ${quantityChanges
-          .map((change) => `${change.item_name || 'Item'} (#${change.id}): ${change.previous_quantity} → ${change.updated_quantity}`)
-          .join('; ')}`,
+          .map(
+            (change) =>
+              `${change.item_name || "Item"} (#${change.id}): ${change.previous_quantity} → ${change.updated_quantity}`,
+          )
+          .join("; ")}`,
       );
     }
 
-    const commentText = commentFragments.join(', ');
+    const commentText = commentFragments.join(", ");
 
     if (commentText) {
       await client.query(
         `INSERT INTO public.request_logs (request_id, action, actor_id, comments)
          VALUES ($1, 'Item approvals updated', $2, $3)`,
-        [approval.request_id, approverId, commentText]
+        [approval.request_id, approverId, commentText],
       );
 
       await client.query(
         `INSERT INTO public.approval_logs (approval_id, request_id, approver_id, action, comments)
          VALUES ($1, $2, $3, 'Items Reviewed', $4)`,
-        [approval.id, approval.request_id, approverId, commentText]
+        [approval.id, approval.request_id, approverId, commentText],
       );
     }
 
@@ -1412,10 +1736,10 @@ const updateApprovalItems = async (req, res, next) => {
       );
     }
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
 
     res.json({
-      message: '✅ Item decisions recorded successfully',
+      message: "✅ Item decisions recorded successfully",
       updatedItems,
       summary,
       lockedItems,
@@ -1424,8 +1748,8 @@ const updateApprovalItems = async (req, res, next) => {
       updatedRequestStatus,
     });
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Failed to update item approvals:', err);
+    await client.query("ROLLBACK");
+    console.error("❌ Failed to update item approvals:", err);
     next(err);
   } finally {
     client.release();
@@ -1437,7 +1761,7 @@ const getApprovalDetailsForRequest = async (req, res, next) => {
   const { request_id } = req.params;
 
   if (!/^\d+$/.test(String(request_id))) {
-    return next(createHttpError(400, 'Invalid request id'));
+    return next(createHttpError(400, "Invalid request id"));
   }
 
   try {
@@ -1472,8 +1796,8 @@ const getApprovalDetailsForRequest = async (req, res, next) => {
 
     res.json(result.rows);
   } catch (err) {
-    console.error('❌ Failed to retrieve approval summary:', err);
-    next(createHttpError(500, 'Failed to retrieve approval summary'));
+    console.error("❌ Failed to retrieve approval summary:", err);
+    next(createHttpError(500, "Failed to retrieve approval summary"));
   }
 };
 
@@ -1511,14 +1835,14 @@ const getApprovalSummary = async (req, res, next) => {
   `;
 
   if (conditions.length > 0) {
-    query += ' WHERE ' + conditions.join(' AND ');
+    query += " WHERE " + conditions.join(" AND ");
   }
 
   try {
     const result = await pool.query(query, values);
     res.json(result.rows[0]);
   } catch (err) {
-    next(createHttpError(500, 'Failed to fetch approval summary'));
+    next(createHttpError(500, "Failed to fetch approval summary"));
   }
 };
 
@@ -1526,20 +1850,20 @@ const getApprovalSummary = async (req, res, next) => {
 const notifyCurrentApprovalByEmail = async (req, res, next) => {
   const { request_id: requestIdParam } = req.params;
 
-  if (!/^\d+$/.test(String(requestIdParam || ''))) {
-    return next(createHttpError(400, 'Invalid request ID'));
+  if (!/^\d+$/.test(String(requestIdParam || ""))) {
+    return next(createHttpError(400, "Invalid request ID"));
   }
 
   const requestId = Number(requestIdParam);
   const actorId = req.user?.id ?? null;
 
   if (!Number.isInteger(actorId)) {
-    return next(createHttpError(403, 'Unable to identify the current user'));
+    return next(createHttpError(403, "Unable to identify the current user"));
   }
 
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
     await ensureApprovalReminderColumn(client);
 
     const { rows } = await client.query(
@@ -1554,7 +1878,7 @@ const notifyCurrentApprovalByEmail = async (req, res, next) => {
           r.request_type,
           r.requester_id,
           r.assigned_to,
-          r.status AS request_status
+          r.status AS request_status, r.institute_id AS request_institute_id
          FROM approvals a
          JOIN requests r ON r.id = a.request_id
          LEFT JOIN users u ON u.id = a.approver_id
@@ -1570,59 +1894,63 @@ const notifyCurrentApprovalByEmail = async (req, res, next) => {
 
     const currentApproval = rows[0];
     if (!currentApproval) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(404, 'No active pending approval found for this request'));
-    }
-
-    if (String(req.user?.role || '').trim().toUpperCase() !== 'SCM') {
-      await client.query('ROLLBACK');
-      return next(createHttpError(403, 'Only SCM users can remind the current approver'));
-    }
-
-    if (!currentApproval.approver_email) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(400, 'The current approver does not have an email address'));
-    }
-
-    const actionLinks = currentApproval.approver_id
-      ? buildApprovalActionLinks({
-          approvalId: currentApproval.approval_id,
-          approverId: currentApproval.approver_id,
-        })
-      : null;
-
-    const approverName = currentApproval.approver_name || 'Approver';
-    const baseMessage = [
-      `Hello ${approverName},`,
-      '',
-      `${req.user?.name || 'A procurement user'} sent you a reminder to review ${currentApproval.request_type} request ${currentApproval.request_id}.`,
-      `Approval level: ${currentApproval.approval_level}`,
-      `Current approval status: ${currentApproval.approval_status}`,
-      '',
-      'Please log in to review the full request details and take action.',
-    ];
-
-    if (actionLinks) {
-      baseMessage.push(
-        '',
-        'Quick actions:',
-        `Approve: ${actionLinks.approveUrl}`,
-        `Reject: ${actionLinks.rejectUrl}`,
+      await client.query("ROLLBACK");
+      return next(
+        createHttpError(
+          404,
+          "No active pending approval found for this request",
+        ),
       );
     }
 
-    const emailResult = await sendEmail(
-      currentApproval.approver_email,
-      `Reminder: request ${currentApproval.request_id} is waiting for your approval`,
-      baseMessage.join('\n'),
-      { throwOnError: true },
-    );
-
-    if (!emailResult) {
-      await client.query('ROLLBACK');
-      return next(createHttpError(503, 'Approval reminder email could not be sent because email delivery is not configured or was rejected'));
+    if (
+      String(req.user?.role || "")
+        .trim()
+        .toUpperCase() !== "SCM"
+    ) {
+      await client.query("ROLLBACK");
+      return next(
+        createHttpError(403, "Only SCM users can remind the current approver"),
+      );
     }
 
+    const actor = (
+      await client.query(
+        "SELECT institute_id,is_active FROM users WHERE id=$1 FOR SHARE",
+        [actorId],
+      )
+    ).rows[0];
+    if (
+      !actor?.is_active ||
+      actor.institute_id == null ||
+      Number(actor.institute_id) !==
+        Number(currentApproval.request_institute_id)
+    ) {
+      throw createHttpError(
+        403,
+        "Reminder actor is outside the request institute",
+      );
+    }
+
+    if (!currentApproval.approver_email) {
+      await client.query("ROLLBACK");
+      return next(
+        createHttpError(
+          400,
+          "The current approver does not have an email address",
+        ),
+      );
+    }
+
+    const operationKey = `reminder:${currentApproval.approval_id}:${Math.floor(Date.now() / 300000)}`;
+    await require("../services/workflowNotificationService").email(client, {
+      requestId: currentApproval.request_id,
+      userId: currentApproval.approver_id,
+      subject: `Reminder: request ${currentApproval.request_id} is waiting for your approval`,
+      message: "Please log in to review the request and take action.",
+      approvalId: currentApproval.approval_id,
+      operationKey,
+    });
     await client.query(
       `UPDATE approvals
           SET reminder_sent_at = NOW(),
@@ -1633,50 +1961,62 @@ const notifyCurrentApprovalByEmail = async (req, res, next) => {
 
     await client.query(
       `INSERT INTO request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, 'Approval reminder emailed', $2, $3)`,
+       VALUES ($1, 'Approval reminder queued', $2, $3)`,
       [
         currentApproval.request_id,
         actorId,
-        `Reminder sent to approval level ${currentApproval.approval_level}`,
+        `Reminder queued for approval level ${currentApproval.approval_level}`,
       ],
     );
 
     await client.query(
       `INSERT INTO approval_logs (approval_id, request_id, approver_id, action, comments)
-       VALUES ($1, $2, $3, 'Reminder Sent', $4)`,
+       VALUES ($1, $2, $3, 'Reminder Queued', $4)`,
       [
         currentApproval.approval_id,
         currentApproval.request_id,
         actorId,
-        `Email reminder sent to ${currentApproval.approver_email}`,
+        `Email reminder queued for the authorized current approver`,
       ],
     );
 
-    await client.query('COMMIT');
+    await require("../services/auditService").writeAuditEvent({
+      client,
+      entityType: "approval",
+      entityId: currentApproval.approval_id,
+      requestId: currentApproval.request_id,
+      actorUserId: actorId,
+      action: "APPROVAL_REMINDER_QUEUED",
+      afterData: { delivery_status: "queued" },
+      operationKey,
+    });
+    await client.query("COMMIT");
 
     res.json({
-      message: 'Approval reminder email sent successfully',
+      message: "Approval reminder queued for delivery",
+      delivery_status: "queued",
       request_id: currentApproval.request_id,
       approval_id: currentApproval.approval_id,
       approver_id: currentApproval.approver_id,
       approval_level: currentApproval.approval_level,
     });
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Failed to send current approval reminder:', err);
+    await client.query("ROLLBACK");
+    console.error("❌ Failed to send current approval reminder:", err);
     next(err);
   } finally {
     client.release();
   }
 };
 
-
 const handleEmailApprovalAction = async (req, res, next) => {
   try {
     const token = req.query?.token || req.body?.token;
     const tokenPayload = verifyApprovalActionToken(token);
     if (!tokenPayload) {
-      return next(createHttpError(400, 'Invalid or expired email approval token'));
+      return next(
+        createHttpError(400, "Invalid or expired email approval token"),
+      );
     }
 
     const { rows } = await pool.query(
@@ -1689,11 +2029,17 @@ const handleEmailApprovalAction = async (req, res, next) => {
 
     const approver = rows[0];
     if (!approver) {
-      return next(createHttpError(404, 'Approval or approver not found for token'));
+      return next(
+        createHttpError(404, "Approval or approver not found for token"),
+      );
     }
 
     req.params = { ...(req.params || {}), id: String(tokenPayload.approvalId) };
-    req.body = { ...(req.body || {}), status: tokenPayload.action, comments: 'Decision captured from email action link.' };
+    req.body = {
+      ...(req.body || {}),
+      status: tokenPayload.action,
+      comments: "Decision captured from email action link.",
+    };
     req.user = {
       id: approver.id,
       role: approver.role,

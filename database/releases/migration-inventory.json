@@ -42,7 +42,7 @@
     },
     {
       "path": "controllers/approvalsController.js",
-      "sha256": "d8e7e2d22d1cd7d7bb88105d061874db628cb361adcc6fa666e23b48ab2842dc"
+      "sha256": "acb0b9c0d990c79da71b9a98ffcee0aa7ed752daaed00624c22551a93fca009f"
     },
     {
       "path": "controllers/attachmentsController.js",
@@ -186,7 +186,7 @@
     },
     {
       "path": "controllers/requestedItemsController.js",
-      "sha256": "aac3a7e2244607a3cc7bd64ff180c2275800f4103b2144eb68bbe9bff7854bb5"
+      "sha256": "7dd419367340c78378d59a4f65ac6f1b895bd8dcec1d11ea7ab2c30dfdb07643"
     },
     {
       "path": "controllers/requests/assignRequestController.js",
@@ -198,7 +198,7 @@
     },
     {
       "path": "controllers/requests/createRequestController.js",
-      "sha256": "faccd2f77a5758cf6d23d0690a9c20df6a8dce38824f30ffbbeb54a9196fd801"
+      "sha256": "0ed3dae67bbf66a75ddade4b412b65d91f8511dafc9a7ec56ab5e25e4bf29ee0"
     },
     {
       "path": "controllers/requests/directPurchaseCommunicationController.js",
@@ -338,7 +338,7 @@
     },
     {
       "path": "controllers/utils/processScheduledRequests.js",
-      "sha256": "10061f09721643ae99785559b84062124bb4fd35bd70993ff680e7207f7ce31c"
+      "sha256": "d85cadcf3aa3134c7e8abcd937226b4f30d82897ebb7d713d8d98edb2db37de4"
     },
     {
       "path": "controllers/utils/reassignPendingApprovals.js",
@@ -350,11 +350,11 @@
     },
     {
       "path": "controllers/utils/remindPendingApprovals.js",
-      "sha256": "acd8bd2fda8cae634b16b9763914ea906f7e2abc5fcb0a3b2e5b7bcb9def6929"
+      "sha256": "718954b25d6cd1481c2ec8e9d52192452b21694e50568636826617b16e871bf9"
     },
     {
       "path": "controllers/utils/remindPendingReceipts.js",
-      "sha256": "057783ab65f3eb889a9c21df6fb8effbca0cd9b3c8974520d433ccd1b6b2b804"
+      "sha256": "34c1e56ddfd8a3ff40084614ded49ad105b49645f163c7c9eed1d45cdd90c0a1"
     },
     {
       "path": "controllers/warehouseInventoryController.js",
@@ -379,6 +379,10 @@
     {
       "path": "database/releases/prerequisites/069-schema-contract.json",
       "sha256": "b4416c185b9dd801f08fc66364a7c5e029fecb7915012c793e77afa51c56df25"
+    },
+    {
+      "path": "database/releases/prerequisites/070-schema-contract.json",
+      "sha256": "cda60fc07abe9c16a9e1b88fd0decf2ed069746160eac5fbee116e7b739458f4"
     },
     {
       "path": "database/releases/runtime-modules.json",
@@ -450,7 +454,7 @@
     },
     {
       "path": "middleware/writeAuditTrail.js",
-      "sha256": "04be879f9ccaa36e4d823785c55f5572494b1afeae729d1936fafd1ebcce0e90"
+      "sha256": "9f1d5ccf70c5575d40945c3942fdd88b3643eb89440e0b1db761e7640dd1e5f7"
     },
     {
       "path": "modules/ai-intelligence/aiAuditService.js",
@@ -518,7 +522,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "c1ff82487335a293d3e921b38d068dbbe8de7f957f1389c9032c106bf788bb1f"
+      "sha256": "038d46bf0c097eb13c78f569875eee0667bcaa75c35439753178e193098cc3e0"
     },
     {
       "path": "policies/approvalPolicy.js",
@@ -722,7 +726,7 @@
     },
     {
       "path": "routes/notifications.js",
-      "sha256": "bc624c7ed04c97e7015b7840f72c30b483202fa528bcf63129e10992e28c653a"
+      "sha256": "faf8b4cf383f3a13bed85d0c2f0eba21549bd59cda21f9501cc092f61dedb800"
     },
     {
       "path": "routes/organization.js",
@@ -878,7 +882,7 @@
     },
     {
       "path": "scripts/lib/databaseRelease/inventory.js",
-      "sha256": "b780247a6e0d7cec6e6f324856cbe07b35f174a8295a0f9b6d353f9fa47ca797"
+      "sha256": "4033b2bb953199123cf2ec32c17048cee00a12c5fd03d3b15c9e019a1d148a0e"
     },
     {
       "path": "scripts/lib/databaseRelease/planner.js",
@@ -902,7 +906,7 @@
     },
     {
       "path": "services/approvalContinuationService.js",
-      "sha256": "6380d6b2c8909a52e830361e1555a7bab6e14b02456339e942300d890324df85"
+      "sha256": "d7ceb3eba7f02aa2b6ffbbb65160924d8e93bc29a15febabe9c27b2121812a02"
     },
     {
       "path": "services/approvalDelegationService.js",
@@ -950,7 +954,7 @@
     },
     {
       "path": "services/auditService.js",
-      "sha256": "49840d55292b3196090dce3a09dbcde22ae743d3117d6655e4fc5d361e786e9f"
+      "sha256": "e05296210a8b8b369e9d6b6d32a36475877b8cc88bf05c2006d0e6f9b4e678d8"
     },
     {
       "path": "services/budgetCommitmentService.js",
@@ -990,11 +994,11 @@
     },
     {
       "path": "services/databaseReleaseService.js",
-      "sha256": "c5badb196b5596e8fa265d795f3a42b4e2e1c1fdf8967da269d5e564f7493666"
+      "sha256": "fa898c72ec986a1b0cfa807c986866491199fc44e12ec57f57e73144450f8372"
     },
     {
       "path": "services/deliveryInspectionService.js",
-      "sha256": "c912e8fd2d314629cc7efbc19f423dcf9f978d6a168a5ee90e68633cf0c79e4e"
+      "sha256": "75838cfc381b3c1587ad603b99c1bfa2fde4289ebd5d1c51b54bc629310c39d0"
     },
     {
       "path": "services/deviceDemoGate.js",
@@ -1015,6 +1019,14 @@
     {
       "path": "services/equipmentService.js",
       "sha256": "d4e3324480e0a66bb77d8e03be4f86084c3d7f034bf7009da7dbb67e881023a3"
+    },
+    {
+      "path": "services/eventAuthority.js",
+      "sha256": "e94f9de5abe8aaff6c726b42523aceab371d355e938b164d24398ba82816c45a"
+    },
+    {
+      "path": "services/eventReconciliationService.js",
+      "sha256": "3f326553c67f781cf7e082d637483868521f63e6d04dc6dd0d0f08931579b5d9"
     },
     {
       "path": "services/financeCoreService.js",
@@ -1121,12 +1133,16 @@
       "sha256": "0258d14270d8e3215a85e214eca51b970612a9b7c3bcb2598820802b910cdd3a"
     },
     {
+      "path": "services/notificationEmailDelivery.js",
+      "sha256": "77dc1c493d450ecdd1eb4e490e0b8e59ba85cccb54f5c62fe32bd4e2e73fec67"
+    },
+    {
       "path": "services/notificationOutboxProcessor.js",
-      "sha256": "59580aa55de7d89afc8ccd2ce2d0d92d8f8690e3c4b44bb397fa12d7727308f0"
+      "sha256": "ed40bc1b10d44f9a86e330c62e91edfbf21e0aeef1d83118fa28c70b057ba319"
     },
     {
       "path": "services/notificationOutboxService.js",
-      "sha256": "888f5337184c43d8f7419b117b0eefb72f74cb3d75e88bea1ec3289f3093258c"
+      "sha256": "69374264ab09a0f831a1fb04a72f2de4894dcffdb5aeaa76f253e2865df487d3"
     },
     {
       "path": "services/organizationAuthorityService.js",
@@ -1178,7 +1194,7 @@
     },
     {
       "path": "services/preprocurementTechnicalReviewService.js",
-      "sha256": "c07e73fba5cb1f4c7107f3a949c61cf9645dae8a132e98ea1f136a29333a4b8f"
+      "sha256": "3652ae6b57f294e6229b19defd02b830f195f54185d91ffd2aa098b31e6de6b6"
     },
     {
       "path": "services/procureToPayPersistenceService.js",
@@ -1190,7 +1206,7 @@
     },
     {
       "path": "services/procurementAssignmentNotification.js",
-      "sha256": "e7cded2ea2f0feb948dd15946f5d572e0b1425cb2e69c36dba48d2851f065ec6"
+      "sha256": "3c2d973d9747909012b77e7b37548221eed619eb1d38a9e7db1c66e07fccfe39"
     },
     {
       "path": "services/procurementAssignmentPolicy.js",
@@ -1485,6 +1501,10 @@
       "sha256": "adc4d539096f9c218fd667222da43320b0f9f07ee04efc3228fe32a867bdaa13"
     },
     {
+      "path": "services/workflowNotificationService.js",
+      "sha256": "8c02debc7c30d351e96ce271123d691ab1d4ca37984856ed0841d531d1bdb446"
+    },
+    {
       "path": "utils/attachmentPaths.js",
       "sha256": "25e59afcee6d36139042a210a7963cad3859f48d925b11c958de1327119fc9af"
     },
@@ -1514,7 +1534,7 @@
     },
     {
       "path": "utils/emailService.js",
-      "sha256": "f9af9ca1eaf2a93924177d43134deea15612794e995b65c363fb1e1b45713eeb"
+      "sha256": "2ee322b627c4e0c594cf941581ff379ba4360baa67511b8bd03124759aa49e4c"
     },
     {
       "path": "utils/ensureApprovalReminderColumn.js",
@@ -1650,7 +1670,11 @@
     },
     {
       "path": "utils/notificationService.js",
-      "sha256": "4e4e082b5022eb0980a8b49aa0a541ca3be7f515f94e2bd8893f1b04e6899f44"
+      "sha256": "cb4d502a7380fc7928da1aec9ea029bb01959c9f4662169aab79da45a4268861"
+    },
+    {
+      "path": "utils/notificationVisibility.js",
+      "sha256": "700cdd53fb41820c1995a36021a22038b7713d487a1e437b399c8977e480e4ab"
     },
     {
       "path": "utils/observability.js",
@@ -1658,11 +1682,15 @@
     },
     {
       "path": "utils/permissionService.js",
-      "sha256": "b2da2cb900152065692c5372f0517026f582b26d837c0775a4d67fd579f20507"
+      "sha256": "5ebf182470c8a2fa825318bd686b0cc68e42e0c289a6ddd5e7d583da8d0fd9e6"
     },
     {
       "path": "utils/recalculateAvailableQuantity.js",
       "sha256": "62d59913df5ac588a8db5af5bd3251a9641139bf2107dcf20245d4c528acf6ad"
+    },
+    {
+      "path": "utils/requireAuditTransaction.js",
+      "sha256": "abb2e9ab878759a4ba0008da0af01c4ef7f9243a5330191806e292e9a35c9771"
     },
     {
       "path": "utils/responseFormatter.js",
@@ -1698,7 +1726,7 @@
     },
     {
       "path": "utils/workflowEmailNotifications.js",
-      "sha256": "0e507601291b4be3cecef85e39acc7eede9ae794ff43242baeddfdc5f4eea815"
+      "sha256": "b4d5094a2f7702849b5d4c90a583c76005fdf8604e6ae3099166e9f17ca9a1af"
     },
     {
       "path": "validators/approvalDecisionValidator.js",
@@ -1725,8 +1753,8 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "6f4bfc66721419f3208bf80f9f332dfba22d24acc1b6b741a1655d5e4e500a92",
-  "highest_manual_number": 70,
+  "application_manifest_sha256": "8ac7e30e0afd065d73aaa136c9faf69a3780361627ba9f1a62c7310f2a806126",
+  "highest_manual_number": 71,
   "artifacts": [
     {
       "path": "sql/20260313_procure_to_pay_document_flow.sql",
@@ -2525,7 +2553,7 @@
     {
       "path": "sql/manual/070_rfid_processing_recovery.sql",
       "id": "070",
-      "classification": "active_forward_migration",
+      "classification": "frozen_historical_migration",
       "sha256": "acef7ca703623adbacedd4a27c53042f310d120052d598c7b8113496210af41a",
       "bytes": 5780,
       "execution_evidence": "UNVERIFIED",
@@ -2536,6 +2564,21 @@
         "069_database_release_governance"
       ],
       "preflight_contract": "database/releases/prerequisites/069-schema-contract.json"
+    },
+    {
+      "path": "sql/manual/071_transactional_event_reliability.sql",
+      "id": "071",
+      "classification": "active_forward_migration",
+      "sha256": "ab4ee222691aab9945ecd7318215a99a55dec06fb025c70477f11ce98eb56021",
+      "bytes": 5313,
+      "execution_evidence": "UNVERIFIED",
+      "ddl_statements": 13,
+      "header": "-- MANUAL DATABASE MIGRATION REQUIRED. Task 7C / AUD-014.\n-- No historical audit/event backfill. Use the governed bundle with the 070 receipt.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';\nDO $$ BEGIN",
+      "governed_receipt_required": true,
+      "depends_on": [
+        "070_rfid_processing_recovery"
+      ],
+      "preflight_contract": "database/releases/prerequisites/070-schema-contract.json"
     },
     {
       "path": "sql/migrations/20260312_procure_to_pay.sql",
@@ -2761,7 +2804,7 @@
       "path": "integration/fixtures/p2p.sql",
       "id": null,
       "classification": "test_fixture",
-      "sha256": "1f1f9c426bc373c17668773d49c821ab38bad8bde76b8464f205e8cb1ba9618d",
+      "sha256": "e27f37738855618516c5dd73196420d0e25dd9d9f93aaac4d7e33f78e18dbdc2",
       "execution_evidence": "NOT_A_DEPLOYMENT_ARTIFACT"
     }
   ],
@@ -2788,7 +2831,7 @@
       "path": "scripts/testBackendContractRefresh.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 5,
-      "sha256": "25e628a5df77a797a39f1f3a10604e32398098a268ec561972857e8dc7bf8475"
+      "sha256": "3e26c15fe21b7f2a95b3b85ede502212057af6f874c23775f45d44dfbeb76a78"
     },
     {
       "path": "scripts/testBackendSchemaReconciliation.js",
@@ -2830,13 +2873,19 @@
       "path": "integration/databaseGovernance.postgres.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 8,
-      "sha256": "5d4d444bc48ac4b90ec429ea0c77a16400b076d67b65daac20ea393fb5b167e1"
+      "sha256": "fda5cb2fc03041792dc090ce07880a747ff332e93b999c0486055a424de62f59"
     },
     {
       "path": "integration/deviceDemoWorkspaces.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 2,
       "sha256": "8ae999cb3b7c91e33b9dea4816b3f8f6cb2fb11d969112ed5bd9571cfecb7ca5"
+    },
+    {
+      "path": "integration/eventReliability.postgres.js",
+      "classification": "test_fixture_or_verification",
+      "ddl_occurrences": 1,
+      "sha256": "6564b4bfa737e9b902165079177e4e1764b805f70222ce7555bdeb493b2d733b"
     },
     {
       "path": "integration/legacyContractSettlement.postgres.js",
@@ -2847,8 +2896,8 @@
     {
       "path": "integration/p2p.postgres.test.js",
       "classification": "test_fixture_or_verification",
-      "ddl_occurrences": 18,
-      "sha256": "cc06b8eaa1a17ca48840251df5130b380d38c2ec2d3f50f7d26a77712e9fe6a7"
+      "ddl_occurrences": 19,
+      "sha256": "ccd0bb605314d881fe5d8f289be50c2a41904324441329dba37f3ba8ee0221be"
     },
     {
       "path": "integration/scmRequestIntervention.js",
@@ -2866,7 +2915,7 @@
       "path": "integration/technicalWorkflow.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 1,
-      "sha256": "27b2abe6e1b813dd7aa28bacdaa53afaff29f59c15ce6da3f6cbd294f82e2dfd"
+      "sha256": "2052266234dad26b8fdfd7e96195a56482623c618b5df7c2337321317b104bfd"
     }
   ],
   "note": "Repository existence is not execution evidence. Superseded definitions and optional policy/data patches are not a replay order."

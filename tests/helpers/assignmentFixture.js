@@ -153,6 +153,7 @@ module.exports = function fixture(pool, lookup) {
     audits: [],
     outbox: [],
     notifications: [],
+    emailDeliveries: [],
     sequence: 500,
     schema: true,
     columns: true,
@@ -430,6 +431,9 @@ module.exports = function fixture(pool, lookup) {
       );
       return result([]);
     }
+    if(sql.startsWith('SELECT * FROM users WHERE id='))return result(state.users.filter(u=>u.id===Number(p[0])&&u.institute_id===Number(p[1])&&u.is_active));
+    if(sql.startsWith('SELECT institute_id FROM users WHERE id='))return result(state.users.filter(u=>u.id===Number(p[0])));
+    if(sql.startsWith('INSERT INTO notification_email_deliveries')){if(!state.emailDeliveries.some(e=>e.key===p[3]))state.emailDeliveries.push({key:p[3]});return result([]);}
     throw Error(`Unhandled assignment fixture SQL: ${sql}`);
   };
   pool.query.mockImplementation(query);

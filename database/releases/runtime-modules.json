@@ -1,0 +1,183 @@
+{
+  "controllers/auditRegistryController.js#ensureAuditRegistryTable": [
+    "audit_registry_entries"
+  ],
+  "controllers/requests/assignRequestController.js#runRequestedItemAssignmentEnsure": [
+    "requested_items"
+  ],
+  "controllers/requests/createRequestController.js#ensureContractsPhaseTwoForRequests": [
+    "contract_items"
+  ],
+  "controllers/supplierEvaluationsController.js#ensureSupplierEvaluationsTable": [
+    "supplier_evaluations"
+  ],
+  "controllers/supplierSrmController.js#ensureTables": [
+    "supplier_scorecards",
+    "supplier_issues",
+    "supplier_compliance_artifacts"
+  ],
+  "controllers/suppliersController.js#ensureSupplierContactsTable": [
+    "supplier_contacts"
+  ],
+  "controllers/suppliersController.js#ensureSuppliersTable": [
+    "suppliers"
+  ],
+  "controllers/utils/approvalRouteVersioning.js#ensureApprovalRouteVersioning": [
+    "approval_route_versions",
+    "approval_route_rules"
+  ],
+  "controllers/warehouseSupplyTemplatesController.js#ensureDepartmentIdColumn": [
+    "warehouse_supply_templates"
+  ],
+  "utils/attachmentsColumnSupport.js#ensureAttachmentsColumn": [
+    "attachments"
+  ],
+  "utils/capabilityPolicyService.js#ensureTable": [
+    "route_capability_policies"
+  ],
+  "utils/ensureApprovalReminderColumn.js#ensureApprovalReminderColumn": [
+    "approvals"
+  ],
+  "utils/ensureDepartmentItemFollowUpNotesTable.js#ensureDepartmentItemFollowUpNotesTable": [
+    "department_item_follow_up_notes"
+  ],
+  "utils/ensureFinanceCoreTables.js#ensureFinanceCoreTables": [
+    "finance_chart_of_accounts",
+    "finance_cost_centers",
+    "budget_envelopes",
+    "commitment_ledger",
+    "journal_entries",
+    "journal_entry_lines",
+    "gl_postings",
+    "gl_posting_lines"
+  ],
+  "utils/ensureHistoricalRequestSchema.js#ensureHistoricalRequestSchema": [
+    "requests",
+    "requested_items",
+    "warehouse_supply_items"
+  ],
+  "utils/ensureItemMasterTables.js#ensureItemMasterTables": [
+    "item_categories",
+    "item_uom",
+    "item_manufacturers",
+    "item_brands",
+    "item_master",
+    "item_variants",
+    "item_conversion",
+    "stock_items",
+    "item_master_items",
+    "item_master_documents"
+  ],
+  "utils/ensureItemRecallsTable.js#ensureItemRecallsTable": [
+    "item_recalls"
+  ],
+  "utils/ensureMaintenanceRequestSchema.js#ensureMaintenanceRequestSchema": [
+    "requests"
+  ],
+  "utils/ensureMonthlyDispensingTables.js#ensureMonthlyDispensingTables": [
+    "monthly_dispensing"
+  ],
+  "utils/ensureProcureToPayTables.js#ensureProcureToPayTables": [
+    "procurement_lifecycle_states",
+    "procurement_state_history",
+    "goods_receipts",
+    "goods_receipt_items",
+    "supplier_invoices",
+    "invoice_items",
+    "invoice_match_results",
+    "ap_vouchers",
+    "ap_voucher_lines",
+    "finance_postings",
+    "payment_records",
+    "finance_action_history",
+    "purchase_orders",
+    "purchase_order_items",
+    "ap_payables",
+    "payment_allocations",
+    "document_flow_links",
+    "non_po_receipt_approvals"
+  ],
+  "utils/ensureProjectsTable.js#ensureProjectsTable": [
+    "projects",
+    "project_department_visibility",
+    "requests"
+  ],
+  "utils/ensureRequestClientSubmissionKey.js#ensureRequestClientSubmissionKey": [
+    "requests"
+  ],
+  "utils/ensureRequestEditApprovalsTable.js#ensureRequestEditApprovalsTable": [
+    "request_edit_approvals"
+  ],
+  "utils/ensureRequestSchedulingColumns.js#ensureRequestSchedulingColumns": [
+    "requests"
+  ],
+  "utils/ensureRequestedItemApprovalColumns.js#ensureRequestedItemApprovalColumns": [
+    "requested_items"
+  ],
+  "utils/ensureRequestedItemFinancialsTable.js#ensureRequestedItemFinancialsTable": [
+    "requested_item_financials"
+  ],
+  "utils/ensureRequestedItemPoIssuanceColumn.js#ensureRequestedItemPoIssuanceColumn": [
+    "requested_items"
+  ],
+  "utils/ensureRequestedItemReceivedColumns.js#ensureRequestedItemReceivedColumns": [
+    "requested_items",
+    "requests"
+  ],
+  "utils/ensureRequestedItemUnitOfMeasureColumn.js#ensureRequestedItemUnitOfMeasureColumn": [
+    "requested_items"
+  ],
+  "utils/ensureRiskRegisterTable.js#ensureRiskRegisterTable": [
+    "risk_register"
+  ],
+  "utils/ensureTechnicalInspectionsTable.js#ensureTechnicalInspectionsTable": [
+    "technical_inspections"
+  ],
+  "utils/ensureWarehouseSupplyTables.js#ensureWarehouseSupplyTables": [
+    "warehouse_supply_items",
+    "warehouse_supplied_items"
+  ],
+  "utils/ensureWarehouseSupplyTables.js#ensureWarehouseSupplyApprovalColumns": [
+    "warehouse_supply_items"
+  ],
+  "utils/ensureWarehouseTransferTables.js#ensureWarehouseTransferTables": [
+    "warehouse_transfer_requests",
+    "warehouse_transfer_items"
+  ],
+  "utils/evaluationCriteriaSeeder.js#ensureEvaluationCriteriaTable": [
+    "evaluation_criteria"
+  ],
+  "utils/notificationService.js#ensureNotificationsTable": [
+    "notifications"
+  ],
+  "utils/permissionService.js#ensurePermissionTables": [
+    "permissions",
+    "user_permissions",
+    "role_permissions",
+    "data_scopes",
+    "user_data_scopes",
+    "role_data_scopes"
+  ],
+  "utils/uiAccessService.js#ensureTable": [
+    "ui_resource_permissions"
+  ],
+  "services/procurementEvaluationService.js#ensureTestCostSchema": [
+    "procurement_evaluation_offer_test_costs"
+  ],
+  "services/procurementEvaluationService.js#ensureResultPersistenceSchema": [
+    "procurement_evaluation_results"
+  ],
+  "middleware/writeAuditTrail.js#ensureAuditTable": [
+    "governance_audit_trail"
+  ],
+  "routes/printServiceRequests.js#ensurePrintServiceTables": [
+    "print_service_requests",
+    "print_service_settings"
+  ],
+  "routes/documentBranding.js#ensureTable": [
+    "document_branding_settings"
+  ],
+  "repositories/stockItemRequestRepository.js#ensureColumns": [
+    "stock_item_requests"
+  ]
+}

@@ -12,7 +12,8 @@ const { extractBackendSqlContract } = require("./extractBackendSqlContract");
 const root = path.resolve(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(root, p), "utf8");
 const schemaFile = "sql/manual/059_backend_contract_refresh.sql";
-const reportDir = path.join(root, "docs/database-audit/current");
+const reportDir = process.env.CI_QUALITY_REPORT_DIR ? path.resolve(process.env.CI_QUALITY_REPORT_DIR,"database-audit") : path.join(root,"docs/database-audit/current");
+fs.mkdirSync(reportDir,{recursive:true});
 const metadata = JSON.parse(
   read("docs/database-audit/current/contract-refresh.json"),
 );
@@ -125,14 +126,54 @@ async function run() {
     );
     if (process.argv.includes('--device-demos')) {
       await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await require('../integration/deviceDemoWorkspaces')(client);
+      return;
+    }
+    if (process.argv.includes('--completion') || process.argv.includes('--receipt-acceptance') || process.argv.includes('--completion-reporting') || process.argv.includes('--database-governance') || process.argv.includes('--rfid-recovery') || process.argv.includes('--event-reliability')) {
+      process.env.DATABASE_URL=disposableDatabaseUrl(url);
+      process.env.NODE_ENV='test';
+      await client.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
+      await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
+      await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
+      await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
+      await client.query(read('sql/manual/065_canonical_contract_finance.sql'));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
+      if(process.argv.includes('--database-governance') || process.argv.includes('--rfid-recovery') || process.argv.includes('--event-reliability')) {
+        await client.query(read('sql/manual/061_ui_resource_catalog_refresh.sql'));
+        await client.query(read('sql/manual/066_contract_financial_reconciliation.sql'));
+        await client.query(read('sql/manual/069_database_release_governance.sql'));
+        await require('../integration/databaseReleasePrerequisite')(client,url);
+        await client.query(read('sql/manual/070_rfid_processing_recovery.sql'));
+        await require('../integration/databaseReleasePrerequisite')(client,url,'070');
+        await client.query(read('sql/manual/071_transactional_event_reliability.sql'));
+        if(process.argv.includes('--event-reliability'))await require('../integration/eventReliability.postgres').run(client,url);
+        else if(process.argv.includes('--rfid-recovery'))await require('../integration/rfidRecovery.postgres').run(client,url);
+        else await require('../integration/databaseGovernance.postgres').run(client,url);
+        return;
+      }
+      await client.query(read('sql/manual/071_transactional_event_reliability.sql'));
+      if(process.argv.includes('--completion-reporting')) { await require('../integration/goodsReceiptAcceptance.postgres').run(client,url,{after:require('../integration/completionReporting.postgres').run}); return; }
+      if(process.argv.includes('--receipt-acceptance')) { await require('../integration/goodsReceiptAcceptance.postgres').run(client,url); return; }
+      await require('../integration/stockFulfilledRequests')(client);
+      await require('../integration/technicalWorkflow')(client);
+      await require('../integration/procurementCompletion.postgres').run(client,url);
       return;
     }
     if (process.argv.includes('--contracts') || process.argv.includes('--contract-settlement') || process.argv.includes('--request-workspace') || process.argv.includes('--contract-finance') || process.argv.includes('--contract-reconciliation')) {
       await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await client.query(read('sql/manual/060_permission_catalog_refresh.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
       await client.query(read('sql/manual/064_contract_authorization_scope.sql'));
+      await client.query(read('sql/manual/071_transactional_event_reliability.sql'));
       if(process.argv.includes('--contract-reconciliation')) {
         const baseline=require('../integration/canonicalContractFinance.postgres');
         const before=await baseline.prepareUpgrade(client);
@@ -284,6 +325,8 @@ async function run() {
     for (let pass = 1; pass <= 2; pass++) {
       try {
         await client.query(read(schemaFile));
+      await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
+      await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       } catch (error) {
         console.error(
           "Patch context:",
@@ -437,6 +480,9 @@ async function run() {
     console.log(
       "Optional exact-match UI policy alignment, retries, audit and custom policy preservation PASS",
     );
+    // Validate current backend SQL against all reviewed forward structures,
+    // after preserving the original 059 populated-upgrade assertions above.
+    for(const forward of ['064_contract_authorization_scope.sql','065_canonical_contract_finance.sql','066_contract_financial_reconciliation.sql','069_database_release_governance.sql','070_rfid_processing_recovery.sql','071_transactional_event_reliability.sql'])await client.query(read('sql/manual/'+forward));
     const after = await columns();
     const beforeKeys = new Set(
       before.map((r) => r.table_name + "." + r.column_name),
@@ -734,8 +780,9 @@ async function run() {
       JSON.stringify({
         tables: results.requiredTables,
         columns: after.length,
-        missingRelations: missingTables.length,
-        missingExistingColumns: results.missingColumns.length,
+        baselineMissingRelations: missingTables.length,
+        baselineMissingExistingColumns: results.missingColumns.length,
+        postflightFindings:0,
         plansPassed: passed.length,
         plansFailed: failures.length,
       }),
@@ -753,6 +800,6 @@ async function run() {
   }
 }
 run().catch((error) => {
-  console.error(error.message);
+  console.error(error.stack);
   process.exitCode = 1;
 });

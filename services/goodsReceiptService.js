@@ -172,6 +172,17 @@ async function createGoodsReceipt({
     for (const input of lines) {
       if(input.technical_review_requested!==undefined&&typeof input.technical_review_requested!=='boolean')throw createHttpError(400,'Technical inspection request must be true or false');
       const poLine = byId.get(Number(input.purchase_order_item_id));
+      // Required inspection defers posting, not ownership of the eventual stock.
+      // Bind the real warehouse before saving the receipt/task, including held lines.
+      if (
+        poLine.line_type === "INVENTORY" &&
+        (!Number.isSafeInteger(Number(input.warehouse_id)) || Number(input.warehouse_id) <= 0)
+      ) {
+        throw Object.assign(
+          createHttpError(400, "An inventory receipt requires warehouse_id before inspection or acceptance"),
+          { code: "RECEIPT_WAREHOUSE_REQUIRED" },
+        );
+      }
       const governed =
         poLine.line_type === "INVENTORY" ||
         Boolean(
@@ -541,6 +552,7 @@ async function applyTechnicalDisposition({
         notes: d.notes,
       },
     });
+    await notificationOutbox.enqueueNotification(tx.client,{type:'GOODS_RECEIPT_ACCEPTANCE_APPLIED',entityType:'delivery_disposition',entityId:d.history_id,idempotencyKey:`delivery-disposition:${d.history_id}:applied`,payload:{requestedItemIds:[poLine.requested_item_id],actorId:actor.id,supplierId:po.supplier_id,requestId:po.request_id,instituteId:actor.institute_id}});
     for (const a of task.assignments)
       await delivery.notify(
         tx.client,

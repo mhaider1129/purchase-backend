@@ -11,36 +11,8 @@ let maintenanceRequestSchemaEnsured = false;
  * maintenance submissions from failing with an opaque 500.
  */
 const ensureMaintenanceRequestSchema = async (client = pool) => {
-  if (maintenanceRequestSchemaEnsured || process.env.NODE_ENV === 'test') {
-    maintenanceRequestSchemaEnsured = true;
-    return;
-  }
-
-  const runner = client.query ? client : pool;
-
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS maintenance_ref_number TEXT`,
-  );
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS initiated_by_technician_id INTEGER`,
-  );
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS section_id INTEGER`,
-  );
-  await runner.query(
-    `ALTER TABLE IF EXISTS public.requests ADD COLUMN IF NOT EXISTS temporary_requester_name TEXT`,
-  );
-
-  await runner.query(
-    `CREATE INDEX IF NOT EXISTS idx_requests_initiated_by_technician_id
-       ON public.requests(initiated_by_technician_id)`,
-  );
-  await runner.query(
-    `CREATE INDEX IF NOT EXISTS idx_requests_maintenance_ref_number
-       ON public.requests(maintenance_ref_number)`,
-  );
-
-  maintenanceRequestSchemaEnsured = true;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/ensureMaintenanceRequestSchema.js#ensureMaintenanceRequestSchema", client);
 };
 
 module.exports = ensureMaintenanceRequestSchema;

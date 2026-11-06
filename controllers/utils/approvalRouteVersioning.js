@@ -6,62 +6,8 @@ const DEFAULT_MAX_AMOUNT = 999999999;
 const getRunner = client => (client && typeof client.query === 'function' ? client : pool);
 
 const ensureApprovalRouteVersioning = async client => {
-  const runner = getRunner(client);
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS approval_route_versions (
-      id SERIAL PRIMARY KEY,
-      version_label VARCHAR(120) NOT NULL,
-      change_summary TEXT,
-      is_active BOOLEAN NOT NULL DEFAULT FALSE,
-      created_by INTEGER,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS approval_route_rules (
-      id SERIAL PRIMARY KEY,
-      version_id INTEGER NOT NULL REFERENCES approval_route_versions(id) ON DELETE CASCADE,
-      request_type VARCHAR(50) NOT NULL,
-      department_type VARCHAR(50) NOT NULL,
-      approval_level INTEGER NOT NULL,
-      role VARCHAR(50) NOT NULL,
-      min_amount BIGINT DEFAULT ${DEFAULT_MIN_AMOUNT},
-      max_amount BIGINT DEFAULT ${DEFAULT_MAX_AMOUNT}
-    )
-  `);
-  await runner.query(`
-    ALTER TABLE approval_route_rules
-    ADD COLUMN IF NOT EXISTS warehouse_id INTEGER REFERENCES warehouses(id) ON DELETE SET NULL
-  `);
-
-  await runner.query(
-    'CREATE INDEX IF NOT EXISTS approval_route_rules_lookup_idx ON approval_route_rules (version_id, request_type, department_type, approval_level)'
-  );
-
-  const { rows: versions } = await runner.query('SELECT id FROM approval_route_versions ORDER BY id LIMIT 1');
-  if (versions.length > 0) {
-    return;
-  }
-
-  const baseVersionLabel = 'v1';
-  const { rows: insertedVersion } = await runner.query(
-    `INSERT INTO approval_route_versions (version_label, change_summary, is_active)
-     VALUES ($1, $2, TRUE)
-     RETURNING id`,
-    [baseVersionLabel, 'Initial baseline imported from approval_routes'],
-  );
-
-  const baselineVersionId = insertedVersion[0].id;
-  await runner.query(
-    `INSERT INTO approval_route_rules
-      (version_id, request_type, department_type, approval_level, role, min_amount, max_amount, warehouse_id)
-     SELECT $1, request_type, department_type, approval_level, role,
-            COALESCE(min_amount, $2), COALESCE(max_amount, $3), NULL
-       FROM approval_routes`,
-    [baselineVersionId, DEFAULT_MIN_AMOUNT, DEFAULT_MAX_AMOUNT],
-  );
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../../utils/runtimeSchemaContract").assertModuleContract("controllers/utils/approvalRouteVersioning.js#ensureApprovalRouteVersioning", client);
 };
 
 const getActiveVersion = async client => {

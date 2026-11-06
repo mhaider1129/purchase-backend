@@ -1,3 +1,4 @@
+const reporting=require('../services/procurementReportingService');
 // ✅ All purchase request-related routes
 const express = require('express');
 const router = express.Router();
@@ -81,6 +82,7 @@ router.get('/procurement-users', getProcurementUsers); // For SCM dropdown
 router.patch('/:id/central-supply-status', updateCentralSupplyChainStatus);
 router.post('/:id/scm-rejection', require('../controllers/requests/scmRequestInterventionController').reject);
 router.post('/:id/request-hod-approval', requestHodApproval); // Insert additional HOD approval step
+router.get('/:id/completion', authenticateUser, async(req,res,next)=>{try{res.json(await require('../services/procurementCompletionService').get(req.params.id,req.user));}catch(e){next(e);}});
 router.patch('/:id/mark-completed', authenticateUser, markRequestAsCompleted);
 router.patch('/:id/mark-received', authenticateUser, markRequestAsReceived);
 router.patch('/:id/report-receipt-issue', authenticateUser, reportReceiptIssue);
@@ -306,24 +308,36 @@ const buildFilteredQuery = (queryParams) => {
 // 📤 CSV
 router.get('/export/csv', async (req, res) => {
   try {
-    const { sql, values } = buildFilteredQuery(req.query);
-    const result = await pool.query(sql, values);
-    const parser = new Parser();
+    let result;
+    if(req.query.basis==='historical') {
+      const {sql,values}=buildFilteredQuery(req.query);
+      result=await reporting.scopedDatabase(pool,req.user,req.query).query(sql,values);
+    } else {
+      const report=await reporting.list(req.user,req.query,pool,{all:true});
+      result={rows:report.data.map(({completion,...row})=>({...row,reporting_basis:report.basis,procurement_complete:completion.procurement_complete,receiving_complete:completion.receipt_complete,fulfillment_complete:completion.fulfillment_complete,evidence_gap:completion.evidence_gap,completion_items:JSON.stringify(completion.items)}))};
+    }
+    const parser = new Parser(result.rows.length?{}:{fields:['id','request_type','completion_category','reporting_basis']});
     const csv = parser.parse(result.rows);
     res.header('Content-Type', 'text/csv; charset=utf-8');
     res.attachment('purchase_requests.csv');
     return res.send(`\uFEFF${csv}`);
   } catch (err) {
     console.error('❌ CSV export failed:', err);
-    res.status(500).json({ error: 'CSV export failed' });
+    res.status(err.statusCode||500).json({ error: err.statusCode?err.message:'CSV export failed' });
   }
 });
 
 // 📤 PDF
 router.get('/export/pdf', async (req, res) => {
   try {
-    const { sql, values } = buildFilteredQuery(req.query);
-    const result = await pool.query(sql, values);
+    let result;
+    if(req.query.basis==='historical') {
+      const {sql,values}=buildFilteredQuery(req.query);
+      result=await reporting.scopedDatabase(pool,req.user,req.query).query(sql,values);
+    } else {
+      const report=await reporting.list(req.user,req.query,pool,{all:true});
+      result={rows:report.data.map(({completion,...row})=>({...row,reporting_basis:report.basis,procurement_complete:completion.procurement_complete,receiving_complete:completion.receipt_complete,fulfillment_complete:completion.fulfillment_complete,evidence_gap:completion.evidence_gap,completion_items:JSON.stringify(completion.items)}))};
+    }
 
     const doc = new PDFDocument();
     res.setHeader('Content-Type', 'application/pdf');
@@ -334,16 +348,19 @@ router.get('/export/pdf', async (req, res) => {
     result.rows.forEach((req, idx) => {
       doc.fontSize(10).text(`ID: ${req.id}`);
       doc.text(`Type: ${req.request_type}`);
+      doc.text(`Completion basis: ${req.reporting_basis || 'historical_archive_not_fulfillment'}`);
+      if(req.completion_category)doc.text(`Completion: ${req.completion_category}`);
+      if(req.fulfillment_complete!==undefined)doc.text(`Fulfillment verified: ${req.fulfillment_complete}`);
       doc.text(`Justification: ${req.justification}`);
-      doc.text(`Assigned To: ${req.assigned_user_name || 'Not Assigned'}`);
-      doc.text(`Created At: ${new Date(req.created_at).toLocaleString()}`);
+      doc.text(`Assigned To: ${req.assigned_user_name || (req.assigned_to ? '#'+req.assigned_to : 'Not Assigned')}`);
+      doc.text(`Created At: ${req.reporting_basis ? new Date(req.created_at).toISOString() : new Date(req.created_at).toLocaleString()}`);
       doc.moveDown();
     });
 
     doc.end();
   } catch (err) {
     console.error('❌ PDF export failed:', err);
-    res.status(500).json({ error: 'PDF export failed' });
+    res.status(err.statusCode||500).json({ error: err.statusCode?err.message:'PDF export failed' });
   }
 });
 

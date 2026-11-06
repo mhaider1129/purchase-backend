@@ -277,34 +277,8 @@ const statements = [
 ];
 
 async function ensureProcureToPayTables(client = null) {
-  if (client) {
-    for (const statement of statements) {
-      await client.query(statement);
-    }
-    return;
-  }
-
-  if (ensured && !client) {
-    return;
-  }
-
-  if (ensureInFlight) {
-    await ensureInFlight;
-    return;
-  }
-
-  ensureInFlight = (async () => {
-    for (const statement of statements) {
-      await pool.query(statement);
-    }
-    ensured = true;
-  })();
-
-  try {
-    await ensureInFlight;
-  } finally {
-    ensureInFlight = null;
-  }
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/ensureProcureToPayTables.js#ensureProcureToPayTables", client);
 }
 
 module.exports = { ensureProcureToPayTables, procureToPayStatements: statements };

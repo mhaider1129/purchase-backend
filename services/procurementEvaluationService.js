@@ -38,10 +38,8 @@ const FILLED_TEST_COST_SQL = `(
 )`;
 
 const ensureTestCostSchema = async () => {
-  await pool.query(`
-    ALTER TABLE IF EXISTS procurement_evaluation_offer_test_costs
-      ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(14,2)
-  `);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("services/procurementEvaluationService.js#ensureTestCostSchema", pool);
 };
 
 const offerHasFilledTestCost = async (caseId, offerId) => {
@@ -401,36 +399,8 @@ const calculateCriteriaScores = async (caseId, calculatedRows) => {
 
 
 const ensureResultPersistenceSchema = async () => {
-  await pool.query(`
-    ALTER TABLE IF EXISTS procurement_evaluation_results
-      ADD COLUMN IF NOT EXISTS pricing_model VARCHAR(50),
-      ADD COLUMN IF NOT EXISTS initial_cost NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS annual_fixed_cost NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS annual_variable_test_cost NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS annual_commitment_adjustment NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS total_annual_cost NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS tco_period_cost NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS risk_adjusted_tco NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS average_cost_per_reported_test NUMERIC(14,4) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS total_expected_reported_tests NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS cost_score NUMERIC(8,4) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS technical_score NUMERIC(8,4) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS supplier_score NUMERIC(8,4) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS risk_score NUMERIC(8,4) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS final_weighted_score NUMERIC(8,4) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS commitment_volume_shortfall BOOLEAN DEFAULT false,
-      ADD COLUMN IF NOT EXISTS shortfall_tests NUMERIC(14,2) DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS commitment_warning TEXT,
-      ADD COLUMN IF NOT EXISTS rank INTEGER,
-      ADD COLUMN IF NOT EXISTS compliance_passed BOOLEAN DEFAULT true,
-      ADD COLUMN IF NOT EXISTS knockout_failed BOOLEAN DEFAULT false,
-      ADD COLUMN IF NOT EXISTS scoring_breakdown JSONB DEFAULT '{}'::jsonb,
-      ADD COLUMN IF NOT EXISTS recommendation_reason TEXT
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_procurement_evaluation_results_case_rank
-      ON procurement_evaluation_results (evaluation_case_id, rank)
-  `);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("services/procurementEvaluationService.js#ensureResultPersistenceSchema", pool);
 };
 
 const calculateAllOfferResults = async caseId => {

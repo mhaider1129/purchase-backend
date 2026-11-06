@@ -219,6 +219,7 @@ const buildEmailPayload = (to, subject, message, options = {}) => {
     bcc,
     replyTo = EMAIL_REPLY_TO,
     headers,
+    messageId,
     attachments,
     documentation,
     html,
@@ -245,6 +246,7 @@ const buildEmailPayload = (to, subject, message, options = {}) => {
     bcc: normalizedBcc.length > 0 ? normalizedBcc : undefined,
     replyTo: replyTo ? String(replyTo).trim() : undefined,
     headers,
+    messageId,
   };
 
   if (messageText) payload.text = messageText + footer.text;

@@ -1,3 +1,4 @@
+const reporting=require('../../services/procurementReportingService');
 const {stockItemSql,effectiveRequestStatusSql,completedRequestSql}=require('../../services/requestFulfillmentSql');
 const {activeDaysSql,activeSecondsSql}=require('../../services/approvalTimingSql');
 const { IDENTITY_FIELDS } = require('../../services/procurementItemIdentityService');
@@ -429,9 +430,10 @@ const getMyRequests = async (req, res, next) => {
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const result = await pool.query(
+    const result = await reporting.scopedDatabase(pool,req.user).query(
       `SELECT
         r.id,
+        ${reporting.recordSql('r')} AS completion,
         r.request_type,
         r.justification,
         r.estimated_cost,
@@ -662,7 +664,8 @@ const getAllRequests = async (req, res, next) => {
   const safeLimit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10;
   const offset = (safePage - 1) * safeLimit;
   const params = [];
-  let whereClauses = [];
+  let whereClauses;
+  try {whereClauses=[reporting.scope(req.user,{},params).sql];}catch(e){return res.status(e.statusCode||500).json({message:e.message});}
   const activeUrgentSort = `CASE
     WHEN r.is_urgent = TRUE
       AND COALESCE(NULLIF(LOWER(TRIM(${effectiveRequestStatusSql('r')})), ''), 'pending') NOT IN ('completed', 'rejected', 'received', 'cancelled', 'available in stock')
@@ -861,10 +864,6 @@ const getAllRequests = async (req, res, next) => {
     whereClauses.push('r.sent_to_central_supply_at IS NULL');
   }
 
-  if (Number.isInteger(req.user?.institute_id)) {
-    params.push(req.user.institute_id);
-    whereClauses.push(`r.institute_id = $${params.length}`);
-  }
 
   if (sort === 'assigned') {
     orderBy = `${activeUrgentSort}, r.assigned_to NULLS LAST, r.created_at DESC`;
@@ -877,7 +876,7 @@ const getAllRequests = async (req, res, next) => {
     const result = await pool.query(
       `
       SELECT
-        r.*, ${effectiveRequestStatusSql('r')} AS status, r.status AS stored_status,
+        r.*, ${reporting.recordSql('r')} AS completion, ${effectiveRequestStatusSql('r')} AS status, r.status AS stored_status,
         p.name AS project_name,
         d.name AS department_name,
         s.name AS section_name,
@@ -1013,8 +1012,8 @@ const getAssignedRequests = async (req, res) => {
     }
 
     const userId = req.query?.procurement_user_id ? overrideAssigneeId : req.user.id;
-    const result = await pool.query(
-      `SELECT r.*, ${effectiveRequestStatusSql('r')} AS status, r.status AS stored_status, p.name AS project_name,
+    const result = await reporting.scopedDatabase(pool,req.user).query(
+      `SELECT r.*, ${reporting.recordSql('r')} AS completion, ${effectiveRequestStatusSql('r')} AS status, r.status AS stored_status, p.name AS project_name,
               d.name AS department_name,
               COALESCE(NULLIF(TRIM(r.temporary_requester_name), ''), u.name) AS requester_name,
               CASE

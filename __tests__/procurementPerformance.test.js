@@ -16,13 +16,15 @@ describe('case/activity governance',()=>{
  test('real evidence consumer is idempotent across two cases and projection never regresses',async()=>{
   const stored=new Map();const status=new Map([[1,'READY_FOR_SOURCING'],[2,'READY_FOR_SOURCING']]);
   const order=['READY_FOR_SOURCING','SOURCING','COMMERCIAL_EVALUATION','AWARDED','PO_PROCESSING','SUPPLIER_FULFILLMENT','DELIVERED'];
-  const repository={findActiveCasesByRequestedItems:async ids=>ids.map((_,i)=>({id:i+1})),insertActivityIdempotent:async row=>{if(stored.has(row.idempotency_key))return null;stored.set(row.idempotency_key,row);return row;},updateCaseProjection:async(id,row)=>{if(order.indexOf(row.case_status)>=order.indexOf(status.get(id)))status.set(id,row.case_status);}};
+  let receiptComplete=false;
+  const repository={loadCaseCompletion:async()=>({approved_demand:true,terminal:false,items:[10,11].map(id=>({requested_item_id:id,receipt_complete:receiptComplete,evidence_conflict:false}))}),findActiveCasesByRequestedItems:async ids=>ids.map((id,i)=>({id:i+1,requested_item_id:id})),insertActivityIdempotent:async row=>{if(stored.has(row.idempotency_key))return null;stored.set(row.idempotency_key,row);return row;},updateCaseProjection:async(id,row)=>{if(order.indexOf(row.case_status)>=order.indexOf(status.get(id)))status.set(id,row.case_status);}};
   const send=(type,id,extra={})=>captureBusinessEvent({repository,event:{type,entityType:type.startsWith('RFX')?'rfx':'entity',entityId:id,requestedItemIds:[10,11],occurredAt:'2026-01-01',...extra}});
   expect(await send('RFX_CREATED',8)).toHaveLength(2);expect(await send('RFX_CREATED',8)).toHaveLength(0);
   expect(await send('RFX_RESPONSE_SUBMITTED',9)).toHaveLength(2);
   for(const [type,id] of [['AWARD_CREATED',10],['PO_CREATED',11],['PO_ISSUED',12]])expect(await send(type,id)).toHaveLength(2);
   expect(await send('PO_ISSUED',12)).toHaveLength(0);
   await send('GOODS_RECEIPT_POSTED',13,{purchaseOrderStatus:'PO_PARTIAL'});expect([...status.values()]).toEqual(['SUPPLIER_FULFILLMENT','SUPPLIER_FULFILLMENT']);
+  receiptComplete=true;
   await send('GOODS_RECEIPT_POSTED',14,{purchaseOrderStatus:'PO_DELIVERED'});expect([...status.values()]).toEqual(['DELIVERED','DELIVERED']);
   await send('RFX_CREATED',15);expect([...status.values()]).toEqual(['DELIVERED','DELIVERED']);expect(stored.size).toBe(16);
  });

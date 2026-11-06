@@ -12,12 +12,12 @@ const fetchRequestEmailRecipients = async (requestId, { client = pool, includeSc
   const { rows } = await client.query(
     `SELECT u.email
        FROM requests r
-       JOIN users u ON u.id IN (r.requester_id, r.assigned_to)
+       JOIN users u ON u.id IN (r.requester_id, r.assigned_to) AND u.institute_id=r.institute_id AND u.is_active=true
       WHERE r.id = $1
         AND u.email IS NOT NULL
      UNION
      SELECT u.email
-       FROM users u
+       FROM users u JOIN requests r ON r.id=$1 AND r.institute_id=u.institute_id
       WHERE $2 = TRUE
         AND u.role IN ('SCM', 'ProcurementSpecialist')
         AND u.is_active = TRUE
@@ -57,4 +57,9 @@ module.exports = {
   _private: {
     normalizeRecipients,
   },
+};
+// Critical callers use the existing business client; no external send in this path.
+module.exports.queueRequestWorkflowEmail=async({client,requestId,subject,message})=>{
+ const request=(await client.query('SELECT * FROM requests WHERE id=$1',[requestId])).rows[0];if(!request)throw new Error('Notification request not found');
+ for(const userId of new Set([request.requester_id,request.assigned_to].filter(Boolean)))await require('../services/workflowNotificationService').email(client,{requestId,userId,subject,message,operationKey:`status:${requestId}:${require('crypto').createHash('sha256').update(message).digest('hex')}`});
 };

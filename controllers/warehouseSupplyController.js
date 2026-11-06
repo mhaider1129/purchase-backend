@@ -1,3 +1,4 @@
+const reporting=require('../services/procurementReportingService');
 const pool = require('../config/db');
 const createHttpError = require('../utils/httpError');
 const ensureRequestedItemApprovalColumns = require('../utils/ensureRequestedItemApprovalColumns');
@@ -29,7 +30,7 @@ const findStockItemForSupply = async (client, { stockItemId, itemName }) => {
   if (!itemName) return null;
 
   const { rows } = await client.query(
-    `SELECT id, name FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+    `SELECT id, name, generic_item_id FROM stock_items WHERE LOWER(name) = LOWER($1) LIMIT 1`,
     [itemName],
   );
 
@@ -128,7 +129,7 @@ const recordSuppliedItems = async (req, res, next) => {
     await ensureWarehouseInventoryTables(client);
 
     const requestRes = await client.query(
-      `SELECT id, request_type, status, department_id, supply_warehouse_id
+      `SELECT id, request_type, status, department_id, institute_id, supply_warehouse_id
          FROM requests WHERE id = $1 FOR UPDATE`,
       [requestId]
     );
@@ -139,6 +140,7 @@ const recordSuppliedItems = async (req, res, next) => {
     }
 
     const request = requestRes.rows[0];
+    if (String(request.institute_id)!==String(req.user.institute_id)) throw createHttpError(403,'Warehouse request is outside the actor institute');
     if (request.request_type !== 'Warehouse Supply') {
       await client.query('ROLLBACK');
       return next(createHttpError(400, 'Supplies can only be recorded for warehouse supply requests'));
@@ -160,7 +162,7 @@ const recordSuppliedItems = async (req, res, next) => {
     }
 
     const itemsRes = await client.query(
-      `SELECT id, item_name, quantity
+      `SELECT id, item_name, quantity, requested_item_id, approval_status
        FROM warehouse_supply_items
        WHERE request_id = $1`,
       [requestId],
@@ -190,6 +192,7 @@ const recordSuppliedItems = async (req, res, next) => {
     }, {});
 
     const inventoryMovements = [];
+    const sourceIds=[];
     if (new Set(items.map(item => String(item.item_id))).size !== items.length) {
       throw createHttpError(400, 'Each supply item may appear only once per save');
     }
@@ -208,13 +211,22 @@ const recordSuppliedItems = async (req, res, next) => {
         return next(createHttpError(404, `Item with id ${itemId} is not part of this request`));
       }
 
+      if (String(requestedItem.approval_status||'').toLowerCase()==='rejected') throw createHttpError(409,'Rejected warehouse demand cannot be supplied');
+      if (requestedItem.requested_item_id) {
+        const original=await client.query(`SELECT ri.generic_item_id FROM requested_items ri JOIN requests r ON r.id=ri.request_id
+          WHERE ri.id=$1 AND r.institute_id=$2 AND r.department_id=$3 FOR SHARE OF ri,r`,[requestedItem.requested_item_id,request.institute_id,request.department_id]);
+        if(!original.rowCount)throw createHttpError(409,'Warehouse source demand has inconsistent institute or department ownership');
+        requestedItem.source_generic_item_id=original.rows[0].generic_item_id;
+      }
+
       const parsedQuantity = Number(suppliedQuantity);
-      if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+      if (!Number.isSafeInteger(parsedQuantity) || parsedQuantity <= 0) {
         await client.query('ROLLBACK');
-        return next(createHttpError(400, 'Supplied quantity must be a positive number'));
+        return next(createHttpError(400, 'This warehouse supply document requires a positive whole-unit quantity'));
       }
 
       const alreadySupplied = suppliedMap[itemId] || 0;
+      if (item.expected_supplied_quantity === undefined) throw createHttpError(400,'Reload the supply form: expected_supplied_quantity is required for safe retries');
       if (item.expected_supplied_quantity !== undefined) {
         const expected = Number(item.expected_supplied_quantity);
         if (!Number.isFinite(expected) || expected < 0) throw createHttpError(400, 'Expected supplied quantity must be a nonnegative number');
@@ -242,6 +254,8 @@ const recordSuppliedItems = async (req, res, next) => {
         stockItemId,
         itemName: requestedItem.item_name,
       });
+
+      if (requestedItem.source_generic_item_id && String(stockItem?.generic_item_id)!==String(requestedItem.source_generic_item_id)) throw createHttpError(409,'Stock identity does not match the approved source demand');
 
       const blockingRecall = await findActiveRecallBlocker(client, {
         stockItemId: stockItem?.id ?? null,
@@ -279,6 +293,7 @@ const recordSuppliedItems = async (req, res, next) => {
         [requestId, itemId, parsedQuantity, userId, balance?.batch_id ?? batchId, balance?.lot_number ?? lotNumber, balance?.expiry_date ?? expiryDate]
       );
 
+      sourceIds.push(supplyRecord.rows[0].id);
       suppliedMap[itemId] = newTotal;
 
       if (stockItem) {
@@ -305,28 +320,13 @@ const recordSuppliedItems = async (req, res, next) => {
       }
     }
 
-    const fulfillmentRes = await client.query(
-      `SELECT wsi.id, wsi.quantity, COALESCE(SUM(wsup.supplied_quantity), 0) AS supplied
-       FROM warehouse_supply_items wsi
-       LEFT JOIN warehouse_supplied_items wsup
-         ON wsup.item_id = wsi.id AND wsup.request_id = wsi.request_id
-       WHERE wsi.request_id = $1
-       GROUP BY wsi.id, wsi.quantity`,
-      [requestId],
-    );
-
-    const allFulfilled = fulfillmentRes.rows.every(
-      (row) => Number(row.supplied) >= Number(row.quantity),
-    );
-
-    let newStatus = request.status;
-    if (allFulfilled && request.status !== 'Completed') {
-      await client.query(
-        `UPDATE requests SET status = 'Completed', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [requestId],
-      );
-      newStatus = 'Completed';
+    const completion=await require('../services/procurementCompletionService').project(client,{id:Number(requestId),institute_id:request.institute_id});
+    let newStatus=request.status;
+    if(completion.can_complete && String(request.status).toLowerCase()!=='completed') {
+      const result=await require('../services/procurementCompletionService').complete(requestId,req.user,client);newStatus=result.after;
     }
+
+    await require('../services/notificationOutboxService').enqueueNotification(client,{type:'WAREHOUSE_FULFILLMENT_APPLIED',entityType:'warehouse_supply_execution',entityId:sourceIds.join('-'),idempotencyKey:`warehouse-fulfillment:${requestId}:${sourceIds.join('-')}`,payload:{sourceSupplyIds:sourceIds,requestedItemIds:[...new Set(items.map(i=>supplyItemsById[i.item_id]?.requested_item_id).filter(Boolean))],actorId:userId,requestId:Number(requestId),instituteId:request.institute_id}});
 
     const suppliedSummary = items
       .map(({ item_id: itemId, supplied_quantity: qty }) => {
@@ -395,7 +395,7 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
     }
 
     const result = await pool.query(
-      `SELECT r.id, r.justification, r.status, r.created_at,
+      `SELECT r.id, ${reporting.recordSql('r')} AS completion, r.justification, r.status, r.created_at,
               d.name AS department_name,
               s.name AS section_name,
               w.name AS warehouse_name,
@@ -407,8 +407,9 @@ const getWarehouseSupplyRequests = async (req, res, next) => {
        WHERE r.request_type = 'Warehouse Supply'
          AND r.status IN ('Approved', 'Completed')
          AND r.supply_warehouse_id = $1
+         AND r.institute_id=$2 AND d.institute_id=r.institute_id AND w.institute_id=r.institute_id
        ORDER BY r.created_at DESC`,
-      [warehouseId]
+      [warehouseId,req.user.institute_id]
     );
     const requests = result.rows;
 
@@ -480,7 +481,7 @@ const closeWarehouseSupplyRequest = async (req, res, next) => {
     await client.query('BEGIN');
 
     const requestRes = await client.query(
-      `SELECT id, request_type, status, supply_warehouse_id
+      `SELECT id, request_type, status, department_id, institute_id, supply_warehouse_id
          FROM requests
         WHERE id = $1
         FOR UPDATE`,
@@ -494,6 +495,7 @@ const closeWarehouseSupplyRequest = async (req, res, next) => {
 
     const request = requestRes.rows[0];
 
+    if (String(request.institute_id)!==String(req.user.institute_id)) throw createHttpError(403,'Warehouse request is outside the actor institute');
     if (request.request_type !== 'Warehouse Supply') {
       await client.query('ROLLBACK');
       return next(createHttpError(400, 'Only warehouse supply requests can be closed here'));
@@ -514,19 +516,7 @@ const closeWarehouseSupplyRequest = async (req, res, next) => {
       return next(createHttpError(400, 'Only approved warehouse supply requests can be closed'));
     }
 
-    await client.query(
-      `UPDATE requests
-          SET status = 'Completed',
-              updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1`,
-      [requestId],
-    );
-
-    await client.query(
-      `INSERT INTO request_logs (request_id, action, actor_id, comments)
-       VALUES ($1, 'Warehouse request closed', $2, $3)`,
-      [requestId, req.user.id, 'Warehouse closed request without requiring full fulfillment'],
-    );
+    await require('../services/procurementCompletionService').complete(requestId,req.user,client);
 
     await client.query('COMMIT');
 

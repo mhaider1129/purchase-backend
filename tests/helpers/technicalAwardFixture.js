@@ -18,6 +18,13 @@ function fixture(pool, repositoryFactory) {
     if (/^(CREATE|ALTER)\b/.test(sql)) return rows([]); // existing initializers, never executed on a DB
     if (sql.includes("to_regclass('public.contracts')")) return rows([{present:null}]);
     if (sql.startsWith('SELECT id FROM rfx_responses WHERE rfx_id=')) return rows(state.response?[{id:state.response.id}]:[]);
+    if(sql.startsWith('SELECT * FROM preprocurement_technical_reviews WHERE id='))return rows(state.review?[state.review]:[]);
+    if(sql.startsWith('SELECT institute_id FROM users WHERE id='))return rows([{institute_id:state.request.institute_id}]);
+    if(sql.startsWith('SELECT * FROM requests WHERE id='))return rows([state.request]);
+    if(sql.startsWith('SELECT * FROM purchase_orders WHERE id='))return rows(state.po?[state.po]:[]);
+    if(sql.startsWith('SELECT * FROM procurement_awards WHERE id='))return rows(state.awards.filter(a=>Number(a.id)===Number(p[0])));
+    if(sql.startsWith('SELECT request_id FROM requested_items'))return rows([{request_id:state.item.request_id}]);
+    if(sql.startsWith('SELECT DISTINCT r.institute_id'))return rows([{institute_id:state.request.institute_id}]);
     if (sql.startsWith('SELECT * FROM rfx_events')) return rows(Number(p[0])===state.event.id?[state.event]:[]);
     if (sql.startsWith('SELECT * FROM rfx_responses')) return rows(state.response&&Number(p[0])===state.response.id?[state.response]:[]);
     if (sql.startsWith('SELECT * FROM rfx_response_items WHERE id=')) return rows(state.quote&&Number(p[0])===state.quote.id?[state.quote]:[]);

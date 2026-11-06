@@ -24,12 +24,14 @@ function createRequestLifecycleService(dependencies = {}) {
       if (!request) throw new RequestLifecycleError('Request not found', 'REQUEST_NOT_FOUND', 404);
       if (input.expectedStatus && request.status !== input.expectedStatus) throw new RequestLifecycleError('Request was changed by another operation', 'STALE_TRANSITION');
       await policy({ actor: input.actor, request, permission: input.permission });
+      let completionEvidence;
+      if (['Completed','Received','Closed'].includes(input.toStatus)) completionEvidence=await (dependencies.completionGuard || require('./procurementCompletionService').assertLifecycleCompletion)(client,request,input);
       const validation = transitions.validate({ entityType: ENTITY_TYPES.REQUEST, currentState: request.status, nextState: input.toStatus, actor: input.actor?.id, reason: input.reason, allowIdempotent: input.allowIdempotent });
       if (validation.idempotent) return { requestId: request.id, before: request.status, after: request.status, changed: false, idempotent: true, idempotencyKey: input.idempotencyKey };
-      const result = await client.query('UPDATE requests SET status=$1, updated_at=NOW() WHERE id=$2 AND status=$3 RETURNING *', [validation.to, request.id, request.status]);
+      const result = await client.query(`UPDATE requests SET status=$1::text, completed_at=CASE WHEN $1::text='Completed' AND NOT $4::boolean THEN COALESCE(completed_at,NOW()) ELSE completed_at END, updated_at=NOW() WHERE id=$2 AND status=$3 RETURNING *`, [validation.to, request.id, request.status, input.metadata?.receiptIssue === true]);
       if (result.rowCount !== 1) throw new RequestLifecycleError('Concurrent request transition detected', 'CONCURRENT_TRANSITION');
       const correlationId = input.correlationId || input.idempotencyKey || null;
-      await audit({ entityType: 'request', entityId: request.id, action: `request.${validation.to.toLowerCase().replace(/ /g, '_')}`, actorUserId: input.actor?.id, instituteId: request.institute_id, requestId: request.id, correlationId, beforeData: { status: request.status }, afterData: { status: validation.to }, reason: input.reason, metadata: input.metadata || {}, client });
+      await audit({ entityType: 'request', entityId: request.id, action: `request.${validation.to.toLowerCase().replace(/ /g, '_')}`, actorUserId: input.actor?.id, instituteId: request.institute_id, requestId: request.id, correlationId, beforeData: { status: request.status }, afterData: { status: validation.to }, reason: input.reason, metadata: {...(input.metadata || {}),...(completionEvidence ? {completionEvidence} : {})}, client });
       const eventKey = input.idempotencyKey
         ? `request:${request.id}:transition:${request.status}:${validation.to}:${input.idempotencyKey}`
         : `request:${request.id}:transition:${request.status}:${validation.to}:${result.rows[0].lifecycle_version ?? Date.now()}`;

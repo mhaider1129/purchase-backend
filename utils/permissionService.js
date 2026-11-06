@@ -127,6 +127,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
 };
 
 const CORE_PERMISSION_DEFINITIONS = [
+  {code:'operations.events.view',name:'View scoped event reliability',description:'Read institute-scoped audit/outbox reconciliation and delivery diagnostics; grants no business mutation or recipient authority.'},
   {code:'finance.budget.manage',name:'Manage financial budgets',description:'Configure budget envelopes within the actor institute; no posting, payment or cross-institute authority.'},
   { code: 'planning.view', name: 'View procurement planning', description: 'Read plans and advisory forecasts within authorized institute, department and warehouse scopes.' },
   { code: 'planning.manage', name: 'Prepare procurement plans', description: 'Upload plans, add plan items and links, and maintain planning defaults in authorized scopes; no approval or procurement authority.' },
@@ -277,57 +278,8 @@ const getDefaultPermissionsForRole = (role) => {
 };
 
 const ensurePermissionTables = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS permissions (
-      id SERIAL PRIMARY KEY,
-      code TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      description TEXT
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_permissions (
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-      PRIMARY KEY (user_id, permission_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS role_permissions (
-      role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-      permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-      PRIMARY KEY (role_id, permission_id)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS data_scopes (
-      id SERIAL PRIMARY KEY,
-      code TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      description TEXT
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_data_scopes (
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      data_scope_id INTEGER NOT NULL REFERENCES data_scopes(id) ON DELETE CASCADE,
-      scope_value TEXT NOT NULL,
-      PRIMARY KEY (user_id, data_scope_id, scope_value)
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS role_data_scopes (
-      role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-      data_scope_id INTEGER NOT NULL REFERENCES data_scopes(id) ON DELETE CASCADE,
-      scope_value TEXT NOT NULL,
-      PRIMARY KEY (role_id, data_scope_id, scope_value)
-    )
-  `);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/permissionService.js#ensurePermissionTables", pool);
 };
 
 const logMissingPermissionDefinitions = async (definitions = []) => {
@@ -368,40 +320,8 @@ const syncPermissionCatalog = async () => {
 };
 
 const ensurePermissionDefinitions = async (definitions = []) => {
-  if (!Array.isArray(definitions) || definitions.length === 0) {
-    return;
-  }
-
-  await ensurePermissionTables();
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    for (const def of definitions) {
-      const code = typeof def?.code === 'string' ? def.code.trim().toLowerCase() : '';
-      const name = typeof def?.name === 'string' ? def.name.trim() : '';
-      const description = typeof def?.description === 'string' ? def.description.trim() : null;
-
-      if (!code || !name) {
-        continue;
-      }
-
-      await client.query(
-        `INSERT INTO permissions (code, name, description)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (code) DO NOTHING`,
-        [code, name, description]
-      );
-    }
-
-    await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Failed to ensure permission definitions:', error);
-  } finally {
-    client.release();
-  }
+  // AUD-010: reference definitions are installed only by reviewed manual SQL.
+  await ensurePermissionTables(); const codes=definitions.map(d=>d.code).filter(Boolean); const {rows}=await pool.query('SELECT code FROM permissions WHERE code=ANY($1::text[])',[codes]); if(rows.length!==new Set(codes).size)throw Object.assign(new Error('Required permission definitions are missing; review the manual catalog release'),{code:'DATABASE_PERMISSION_CATALOG_MISSING',statusCode:503});
 };
 
 const getAllPermissionCodes = async (database = pool) => {

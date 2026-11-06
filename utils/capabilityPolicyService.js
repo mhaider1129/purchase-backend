@@ -2,15 +2,8 @@ const pool = require('../config/db');
 const { CAPABILITY_MATRIX, WRITE_METHODS, normalizePath } = require('../config/capabilityMatrix');
 
 const ensureTable = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS route_capability_policies (
-      route_prefix TEXT PRIMARY KEY,
-      module TEXT NOT NULL,
-      resource TEXT NOT NULL,
-      permissions TEXT[] NOT NULL DEFAULT '{}',
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("./runtimeSchemaContract").assertModuleContract("utils/capabilityPolicyService.js#ensureTable", pool);
 };
 
 const normalizePermissionList = (permissions) => {
@@ -32,16 +25,8 @@ const normalizePermissionList = (permissions) => {
 };
 
 const syncCapabilityPolicies = async () => {
-  await ensureTable();
-  for (const entry of CAPABILITY_MATRIX) {
-    const permissions = normalizePermissionList(entry.permissions);
-    await pool.query(
-      `INSERT INTO route_capability_policies (route_prefix, module, resource, permissions)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (route_prefix) DO NOTHING`,
-      [entry.routePrefix, entry.module, entry.resource, permissions]
-    );
-  }
+  // AUD-010: reference definitions are installed only by reviewed manual SQL.
+  await ensureTable(); return true;
 };
 
 const listCapabilityPolicies = async () => {

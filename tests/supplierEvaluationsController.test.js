@@ -89,11 +89,6 @@ describe('supplierEvaluationsController', () => {
     const next = jest.fn();
 
     pool.query
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure table
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure supplier name index
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure supplier id index
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure extended columns
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // ensure constraints
       .mockResolvedValueOnce({ rows: [{ id: 8, name: 'Globex' }], rowCount: 1 }) // supplier lookup
       .mockResolvedValueOnce({ rows: [{ latest_date: null }], rowCount: 1 }) // cadence check
       .mockResolvedValueOnce({
@@ -126,7 +121,7 @@ describe('supplierEvaluationsController', () => {
 
     await createSupplierEvaluation(req, res, next);
 
-    expect(pool.query).toHaveBeenCalledTimes(8);
+    expect(pool.query).toHaveBeenCalledTimes(3);
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({

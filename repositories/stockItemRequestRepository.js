@@ -1,6 +1,7 @@
 const ensureColumns = async (connection) => {
-  await connection.query(
-    "ALTER TABLE stock_item_requests ADD COLUMN IF NOT EXISTS review_notes TEXT",
+  return require("../utils/runtimeSchemaContract").assertModuleContract(
+    "repositories/stockItemRequestRepository.js#ensureColumns",
+    connection,
   );
 };
 
@@ -12,7 +13,10 @@ const findForUpdate = async (client, id) => {
   return result.rows[0] || null;
 };
 
-const updateStatus = async (client, { id, status, reviewerId, reviewNotes }) => {
+const updateStatus = async (
+  client,
+  { id, status, reviewerId, reviewNotes },
+) => {
   const result = await client.query(
     `UPDATE stock_item_requests
         SET status = $1, approved_by = $2, review_notes = $3
@@ -37,11 +41,17 @@ const writeItemMasterAudit = (
   client.query(
     `INSERT INTO item_master_audit_events(entity_type,entity_id,action,actor_id,reason,new_values)
      VALUES('stock_item',$1,$2,$3,$4,$5)`,
-    [stockItemId, action, actorId, reason, {
-      stock_item_request_id: requestId,
-      identity_source: "approved_exception",
-      reused_existing: action === "legacy_creation_reused",
-    }],
+    [
+      stockItemId,
+      action,
+      actorId,
+      reason,
+      {
+        stock_item_request_id: requestId,
+        identity_source: "approved_exception",
+        reused_existing: action === "legacy_creation_reused",
+      },
+    ],
   );
 
 module.exports = {

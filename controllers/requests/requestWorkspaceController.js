@@ -513,9 +513,11 @@ const getFullRequestDetails = async (req, res, next) => {
       getAuditLogs(requestId,req.user),
     ]);
 
+    const completion=await require('../../services/procurementCompletionService').get(requestId,req.user);
     const summary = buildRequestSummary(request, approvals, items);
     res.json({
       request: summary,
+      completion,
       items,
       approvals,
       procurement_events: procurementEvents,
@@ -524,7 +526,7 @@ const getFullRequestDetails = async (req, res, next) => {
       communication_notes: communicationNotes,
       audit_logs: auditLogs,
       timeline: buildTimeline(request, approvals, procurementEvents, linkedRecords, attachments, communicationNotes, auditLogs),
-      available_actions: buildAvailableActions(req.user, request, approvals, items),
+      available_actions: [...buildAvailableActions(req.user, request, approvals, items),...(String(request.requester_id)===String(req.user.id) && completion.approved_demand && !completion.terminal ? ['acknowledge_verified_receipt'] : [])],
     });
   } catch (err) {
     console.error('❌ Failed to fetch full request details:', err);

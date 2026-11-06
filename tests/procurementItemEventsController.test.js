@@ -182,7 +182,7 @@ describe('procurement item events', () => {
         purchased_quantity: 100,
         procurement_status: 'purchased',
       }),
-      request_procurement_status: 'completed',
+      request_procurement_status: 'Partially Procured',
     }));
   });
 

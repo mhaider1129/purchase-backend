@@ -56,10 +56,11 @@ const requestStatusTransitions = Object.freeze({
   [R.RETURNED]: [R.SUBMITTED, R.CANCELLED],
   // Late cancellation is deliberately prohibited until a compensation coordinator
   // can reverse procurement, purchase orders, receipts, and inventory commitments.
+  [R.AVAILABLE_IN_STOCK]: [R.RECEIVED, R.COMPLETED],
   [R.APPROVED]: [R.IN_PROGRESS, R.RECEIVED, R.COMPLETED],
   [R.IN_PROGRESS]: [R.RECEIVED, R.COMPLETED],
   [R.RECEIVED]: [R.COMPLETED, R.CLOSED],
-  [R.COMPLETED]: [R.CLOSED],
+  [R.COMPLETED]: [R.RECEIVED, R.CLOSED],
 });
 
 const createRequestTransitionService = () => new StatusTransitionService().register(ENTITY_TYPES.REQUEST, {

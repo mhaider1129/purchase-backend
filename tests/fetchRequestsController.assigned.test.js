@@ -40,7 +40,7 @@ describe('fetchRequestsController.getAssignedRequests', () => {
     const req = {
       query: {},
       user: {
-        id: 7,
+        id: 7,institute_id:1,
         hasPermission: jest.fn(() => false),
       },
     };
@@ -51,7 +51,7 @@ describe('fetchRequestsController.getAssignedRequests', () => {
     expect(pool.query).toHaveBeenNthCalledWith(
       1,
       expect.stringContaining('d.name AS department_name'),
-      [7],
+      [7,[1],7],
     );
     expect(pool.query.mock.calls[0][0]).toEqual(expect.stringContaining('LEFT JOIN departments d ON r.department_id = d.id'));
     expect(res.status).toHaveBeenCalledWith(200);

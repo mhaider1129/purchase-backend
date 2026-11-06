@@ -2,7 +2,7 @@ const { buildWhereClause, groupRows } = require('../controllers/departmentReques
 
 describe('departmentRequestedItemsController helpers', () => {
   test('SCM can build an unrestricted open-items filter', () => {
-    const result = buildWhereClause({ department_id: '4', section_id: '8' }, { role: 'SCM' });
+    const result = buildWhereClause({ department_id: '4', section_id: '8' }, { id:1,institute_id:1,permissions:['requests.view-all'],role: 'SCM' });
 
     expect(result.forbidden).toBeUndefined();
     expect(result.whereSql).toContain('r.department_id');
@@ -12,14 +12,14 @@ describe('departmentRequestedItemsController helpers', () => {
   });
 
   test('HOD scope is limited to their department', () => {
-    const result = buildWhereClause({}, { role: 'HOD', department_id: 12 });
+    const result = buildWhereClause({}, { id:1,institute_id:1,permissions:['requests.view'],role: 'HOD', department_id: 12 });
 
     expect(result.whereSql).toContain('r.department_id = $1');
     expect(result.values[0]).toBe(12);
   });
 
   test('Requester scope is limited to their department and section', () => {
-    const result = buildWhereClause({}, { role: 'Requester', department_id: 12, section_id: 3 });
+    const result = buildWhereClause({}, { id:1,institute_id:1,permissions:['requests.view'],role: 'Requester', department_id: 12, section_id: 3 });
 
     expect(result.whereSql).toContain('r.department_id = $1');
     expect(result.whereSql).toContain('r.section_id = $2');
@@ -28,7 +28,7 @@ describe('departmentRequestedItemsController helpers', () => {
 
   test('Requester scope supports multiple assigned sections', () => {
     const result = buildWhereClause({}, {
-      role: 'Requester',
+      id:1,institute_id:1,permissions:['requests.view'],role: 'Requester',
       department_id: 12,
       section_id: 3,
       assigned_section_ids: [3, 4, 5],

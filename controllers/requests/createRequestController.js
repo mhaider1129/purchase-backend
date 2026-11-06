@@ -1,6 +1,4 @@
 const pool = require("../../config/db");
-const { sendEmail } = require("../../utils/emailService");
-const { createNotifications } = require("../../utils/notificationService");
 const createHttpError = require("../../utils/httpError");
 const { fetchApprovalRoutes } = require("../utils/approvalRoutes");
 const {
@@ -63,9 +61,8 @@ const parseOptionalPositiveInteger = (value, fieldName) => {
 
 
 const ensureContractsPhaseTwoForRequests = async () => {
-  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS item_id INTEGER`);
-  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS requested_quantity NUMERIC(14,2)`);
-  await pool.query(`ALTER TABLE contract_items ADD COLUMN IF NOT EXISTS delivered_quantity NUMERIC(14,2) NOT NULL DEFAULT 0`);
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../../utils/runtimeSchemaContract").assertModuleContract("controllers/requests/createRequestController.js#ensureContractsPhaseTwoForRequests", pool);
 };
 
 const assignApprover = async (
@@ -1055,7 +1052,7 @@ const createRequest = async (req, res, next) => {
     }
 
     const { rows: pendingApprovals } = await client.query(
-      `SELECT a.approval_level,
+      `SELECT a.id AS approval_id,a.approval_level,
               a.approver_id,
               u.name AS approver_name,
               u.role AS approver_role,
@@ -1111,69 +1108,21 @@ const createRequest = async (req, res, next) => {
       });
     }
 
-    await client.query("COMMIT");
-
-    if (duplicateFound) {
-      try {
-        const { rows } = await pool.query(
-          `SELECT email FROM users WHERE role IN ('ProcurementSpecialist', 'SCM') AND is_active = true`,
-        );
-        for (const row of rows) {
-          if (row.email) {
-            await sendEmail(
-              row.email,
-              "Duplicate Purchase Request Warning",
-              `Request ID ${request.id} may duplicate a submission from this month in department ${department_id}.`,
-            );
-          }
-        }
-      } catch (notifyErr) {
-        console.error("❌ Failed to send duplicate warning emails:", notifyErr);
-      }
+    const nextApproval=pendingApprovals[0]||null;
+    if(!scheduledFor)for(const approver of pendingApprovals){
+     await require('../../services/workflowNotificationService').notice(client,{requestId:request.id,userId:approver.approver_id,title:'Purchase Request Awaiting Approval',message:`The ${request_type} request with ID ${request.id} is ready for your approval.`,link:`/requests/${request.id}`,metadata:{action:'approval_required',requestType:request_type},approvalId:approver.approval_id,email:true,operationKey:`request-created:${request.id}:approval:${approver.approval_id}`});
     }
-
-    const nextApproval = pendingApprovals[0] || null;
-    const approversToNotify = scheduledFor
-      ? []
-      : pendingApprovals.filter((approval) => approval?.approver_id);
-
-    if (approversToNotify.length > 0) {
-      const message = `The ${request_type} request with ID ${request.id} is ready for your approval.`;
-      try {
-        await createNotifications(
-          approversToNotify.map((approval) => ({
-            userId: approval.approver_id,
-            title: 'Purchase Request Awaiting Approval',
-            message,
-            link: `/requests/${request.id}`,
-            metadata: {
-              requestId: request.id,
-              requestType: request_type,
-              action: 'approval_required',
-            },
-          })),
-        );
-      } catch (notifyErr) {
-        console.error('⚠️ Failed to create notification for next approvers:', notifyErr);
-      }
-
-      const uniqueApproverEmails = [...new Set(
-        approversToNotify.map((approval) => approval.approver_email).filter(Boolean),
-      )];
-
-      for (const approverEmail of uniqueApproverEmails) {
-        try {
-          await sendEmail(
-            approverEmail,
-            'New Purchase Request Awaiting Approval',
-            `${message}
-Please log in to the system to take action.`,
-          );
-        } catch (emailErr) {
-          console.error('⚠️ Failed to email one of the next approvers:', emailErr);
-        }
-      }
+    await require('../../services/auditService').writeAuditEvent({client,entityType:'request',entityId:request.id,requestId:request.id,instituteId:request.institute_id,actorUserId:req.user.id,action:'REQUEST_CREATED',beforeData:null,afterData:{request_type,status:initialStatus,requester_id:request.requester_id,department_id:request.department_id},operationKey:`request-created:${request.id}`});
+    // Duplicate warnings are optional; required approval events above are not.
+    if(duplicateFound){
+     await client.query('SAVEPOINT optional_duplicate_notice');
+     try{
+      const recipients=(await client.query("SELECT id FROM users WHERE institute_id=$1 AND is_active=true AND role IN ('ProcurementSpecialist','SCM')",[request.institute_id])).rows;
+      for(const user of recipients)await require('../../services/workflowNotificationService').notice(client,{requestId:request.id,userId:user.id,title:'Duplicate Purchase Request Warning',message:`Request ${request.id} may duplicate a recent submission.`,metadata:{action:'possible_duplicate'},operationKey:`duplicate-warning:${request.id}`,email:true});
+      await client.query('RELEASE SAVEPOINT optional_duplicate_notice');
+     }catch(error){await client.query('ROLLBACK TO SAVEPOINT optional_duplicate_notice');console.warn('Optional duplicate warning enqueue failed',{code:error.code||'OPTIONAL_NOTIFICATION_FAILED'});}
     }
+    await client.query('COMMIT');
 
     res.status(201).json({
       message: "✅ Request created successfully with approval routing",

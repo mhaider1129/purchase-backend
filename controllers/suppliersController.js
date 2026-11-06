@@ -55,46 +55,8 @@ let supplierContactsEnsured = false;
 let supplierContactsEnsuringPromise = null;
 
 const ensureSupplierContactsTable = async () => {
-  if (supplierContactsEnsured) return;
-
-  if (!supplierContactsEnsuringPromise) {
-    supplierContactsEnsuringPromise = (async () => {
-      try {
-        await ensureSuppliersTable();
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS supplier_contacts (
-            id SERIAL PRIMARY KEY,
-            supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-            name TEXT NOT NULL,
-            phone_number TEXT,
-            email TEXT,
-            position TEXT,
-            responsibility TEXT,
-            notes TEXT,
-            is_primary BOOLEAN NOT NULL DEFAULT FALSE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS phone_number TEXT`);
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS email TEXT`);
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS position TEXT`);
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS responsibility TEXT`);
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS notes TEXT`);
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-        await pool.query(`ALTER TABLE supplier_contacts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS supplier_contacts_supplier_id_idx ON supplier_contacts (supplier_id)`);
-        await pool.query(`CREATE INDEX IF NOT EXISTS supplier_contacts_name_ci_idx ON supplier_contacts (supplier_id, LOWER(name))`);
-        supplierContactsEnsured = true;
-      } finally {
-        supplierContactsEnsuringPromise = null;
-      }
-    })();
-  }
-
-  await supplierContactsEnsuringPromise;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("controllers/suppliersController.js#ensureSupplierContactsTable", pool);
 };
 
 const normalizeSupplierContactPayload = (body = {}, { partial = false } = {}) => {
@@ -250,99 +212,8 @@ let suppliersEnsured = false;
 let ensuringPromise = null;
 
 const ensureSuppliersTable = async () => {
-  if (suppliersEnsured) {
-    return;
-  }
-
-  if (!ensuringPromise) {
-    ensuringPromise = (async () => {
-      try {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS suppliers (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            contact_email TEXT,
-            contact_phone TEXT,
-            supplier_type TEXT,
-            tax_number TEXT,
-            bank_info JSONB,
-            currency TEXT,
-            payment_terms TEXT,
-            lead_time_days INTEGER,
-            credit_limit NUMERIC(18,2),
-            status TEXT,
-            country TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_email TEXT`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS contact_phone TEXT`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_type TEXT`);
-        await pool.query(`ALTER TABLE suppliers ALTER COLUMN supplier_type SET DEFAULT 'Local Trader'`);
-        await pool.query(`ALTER TABLE suppliers ALTER COLUMN supplier_type DROP NOT NULL`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tax_number TEXT`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS bank_info JSONB`);
-
-        const bankInfoType = await getColumnType('public', 'suppliers', 'bank_info');
-        if (bankInfoType && bankInfoType !== 'jsonb') {
-          await pool.query(`
-            ALTER TABLE suppliers
-            ALTER COLUMN bank_info TYPE JSONB
-            USING CASE
-              WHEN bank_info IS NULL OR btrim(bank_info::text) = '' THEN NULL
-              ELSE to_jsonb(bank_info::text)
-            END
-          `);
-        }
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS currency TEXT`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS lead_time_days INTEGER`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(18,2)`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS status TEXT`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS country TEXT`);
-
-        await pool.query(`
-          ALTER TABLE suppliers
-            ALTER COLUMN contact_email DROP NOT NULL,
-            ALTER COLUMN contact_phone DROP NOT NULL,
-            ALTER COLUMN tax_number DROP NOT NULL,
-            ALTER COLUMN bank_info DROP NOT NULL,
-            ALTER COLUMN currency DROP NOT NULL,
-            ALTER COLUMN payment_terms DROP NOT NULL,
-            ALTER COLUMN lead_time_days DROP NOT NULL,
-            ALTER COLUMN credit_limit DROP NOT NULL,
-            ALTER COLUMN status DROP NOT NULL,
-            ALTER COLUMN country DROP NOT NULL
-        `);
-
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_manufacturer BOOLEAN DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_authorized_agent BOOLEAN DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_authorized_distributor BOOLEAN DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_sub_distributor BOOLEAN DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_service_provider BOOLEAN DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_contractor BOOLEAN DEFAULT FALSE`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS regulatory_risk_level VARCHAR DEFAULT 'medium'`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS supplier_category VARCHAR`);
-        await pool.query(`ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS notes TEXT`);
-
-        await pool.query(`
-          CREATE INDEX IF NOT EXISTS suppliers_name_ci_lookup_idx
-            ON suppliers (LOWER(name))
-        `);
-
-        suppliersEnsured = true;
-      } finally {
-        ensuringPromise = null;
-      }
-    })();
-  }
-
-  await ensuringPromise;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("controllers/suppliersController.js#ensureSuppliersTable", pool);
 };
 
 const resetSuppliersTableCacheForTests = () => {

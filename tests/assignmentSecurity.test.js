@@ -291,12 +291,12 @@ test("worker delivery is idempotent and rechecks current recipient eligibility",
   await f.automatic((c) => deliverInApp(c, event));
   await f.automatic((c) => deliverInApp(c, event));
   expect(f.state.notifications).toHaveLength(1);
-  expect(sendEmail).toHaveBeenCalledTimes(1);
+  expect(sendEmail).not.toHaveBeenCalled(); expect(f.state.emailDeliveries).toHaveLength(1);
   await manual(11);
   const next = JSON.parse(JSON.stringify(f.state.outbox[1]));
   f.state.users.find((u) => u.id === 11).is_active = false;
   await f.automatic((c) => deliverInApp(c, next));
-  expect(sendEmail).toHaveBeenCalledTimes(1);
+  expect(sendEmail).not.toHaveBeenCalled(); expect(f.state.emailDeliveries).toHaveLength(1);
 });
 test("existing cases follow the buyer with unchanged workload weights and no case creation", async () => {
   await manual();

@@ -39,6 +39,7 @@ before(async () => {
   const existing = await one("SELECT COUNT(*)::int count FROM information_schema.tables WHERE table_schema='public'");
   assert.equal(existing.count, 0, 'Runner must supply a new empty database; existing schemas are never reset');
   await pool.query(fs.readFileSync(path.join(__dirname, 'fixtures/p2p.sql'), 'utf8'));
+  await pool.query(fs.readFileSync(path.join(__dirname,'../sql/manual/071_transactional_event_reliability.sql'),'utf8'));
 });
 after(async () => { await pool.end(); await defaultPool.end(); });
 
@@ -1085,4 +1086,23 @@ test('AUD-004 report-triggered result calculation rolls back if its audit fails'
   await pool.query("CREATE FUNCTION aud004_report_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='procurement_evaluation.report_generated' THEN RAISE EXCEPTION 'AUD004 report audit failure'; END IF; RETURN NEW; END $$");
   await pool.query('CREATE TRIGGER aud004_report BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION aud004_report_audit()');
   try{assert.equal((await evalApi().get(`/evaluations/${c.evaluation.id}/recommendation`)).status,500);assert.equal((await one('SELECT count(*)::int n FROM procurement_evaluation_results WHERE evaluation_case_id=$1',[c.evaluation.id])).n,0);}finally{await pool.query('DROP TRIGGER aud004_report ON audit_logs');await pool.query('DROP FUNCTION aud004_report_audit()');}
+});
+
+// AUD-014: real canonical commands, real failing PostgreSQL audit INSERTs.
+async function auditFault(action,work){
+ await pool.query(`CREATE FUNCTION aud014_fail_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='${action}' THEN RAISE EXCEPTION 'AUD014_AUDIT_INSERT_FAILED'; END IF; RETURN NEW; END $$; CREATE TRIGGER aud014_fail_insert BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION aud014_fail_insert()`);
+ try{await work();}finally{await pool.query('DROP TRIGGER aud014_fail_insert ON audit_logs; DROP FUNCTION aud014_fail_insert()');}
+}
+test('AUD-014 payment audit INSERT failure rolls back settlement, allocation and event',async()=>{
+ const c=await postedCase(),before=await snapshot();
+ const balances=await pool.query('SELECT id,open_balance,payable_status FROM ap_payables ORDER BY id');
+ await auditFault('PAYMENT_COMPLETED',()=>assert.rejects(postPayment(paymentArgs(c,c.payable,'100')),/AUD014_AUDIT_INSERT_FAILED/));
+ assert.deepEqual(await snapshot(),before);assert.deepEqual((await pool.query('SELECT id,open_balance,payable_status FROM ap_payables ORDER BY id')).rows,balances.rows);
+ assert.equal(Number((await one('SELECT count(*) n FROM payment_records WHERE supplier_invoice_id=$1',[c.inv.id])).n),0);
+});
+test('AUD-014 PO issuance audit INSERT failure rolls back issue, budget commitment and event',async()=>{
+ const c=await createCase();await poService.submitPurchaseOrder({repository,purchaseOrderId:c.po.id,actor:c.actor});await poService.approvePurchaseOrder({repository,purchaseOrderId:c.po.id,actor:{...c.actor,id:2}});
+ const before=await snapshot();
+ await auditFault('PO_ISSUED',()=>assert.rejects(poService.releasePurchaseOrder({repository,purchaseOrderId:c.po.id,actor:c.actor}),/AUD014_AUDIT_INSERT_FAILED/));
+ assert.deepEqual(await snapshot(),before);assert.equal((await one('SELECT status FROM purchase_orders WHERE id=$1',[c.po.id])).status,'PO_APPROVED');
 });

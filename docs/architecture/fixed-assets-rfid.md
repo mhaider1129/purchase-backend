@@ -39,3 +39,7 @@ Corrections are explicit canonical workflow handoffs. Wrong location offers the 
 Migration 030 is manual and forward-only. It owns the session allocator, sessions, immutable expected snapshot, normalized observations, discoveries, findings, and append-only resolution history. It preflights SQL 017 dependencies, no-ops only for a complete compatible installation, and rejects partial/drifted states. Repository contents label migrations 018–030 pending, so actual deployment status must be confirmed by the operator before manual execution.
 
 Vendor SDKs, trigger integrations, fixed-reader automated inventory, proximity locating, and automatic relocation/custody/missing writeback remain intentionally outside this boundary.
+
+## Crash recovery (Task 7B)
+
+See [the current recovery and manual rollout contract](../rfid-crash-recovery-7b.md). SQL 070 adds fenced processing leases, bounded backoff, immutable finalized attempt history and operator visibility. Recovery preserves canonical observation-only semantics and never performs stock, movement or physical-inventory writeback. Historical deployment claims in the earlier migration notes above remain unverified; Task 7A/7B release evidence is the authority for a current candidate.

@@ -6,29 +6,8 @@ const SENSITIVE_KEYS = ['password', 'token', 'secret', 'authorization', 'apiKey'
 let auditTableReadyPromise;
 
 const ensureAuditTable = async () => {
-  if (!auditTableReadyPromise) {
-    auditTableReadyPromise = pool.query(`
-      CREATE TABLE IF NOT EXISTS governance_audit_trail (
-        id BIGSERIAL PRIMARY KEY,
-        actor_id INTEGER,
-        actor_role TEXT,
-        request_path TEXT NOT NULL,
-        method TEXT NOT NULL,
-        status_code INTEGER NOT NULL,
-        module TEXT NOT NULL,
-        resource TEXT NOT NULL,
-        action TEXT NOT NULL,
-        required_permissions TEXT[] NOT NULL DEFAULT '{}',
-        request_id TEXT,
-        ip_address TEXT,
-        user_agent TEXT,
-        payload JSONB,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-  }
-
-  return auditTableReadyPromise;
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("middleware/writeAuditTrail.js#ensureAuditTable", pool);
 };
 
 const redactPayload = (value) => {
@@ -105,7 +84,9 @@ const writeAuditTrail = (req, res, next) => {
         ]
       );
     } catch (error) {
-      console.warn('⚠️ Failed to persist governance audit trail entry:', error.message || error);
+      // This post-response trail is supplementary HTTP telemetry. Canonical
+      // business audit writers participate in the mutation transaction.
+      console.warn('HTTP_AUDIT_TELEMETRY_FAILED', {correlationId:req.id||null,code:/^[A-Z0-9_]{1,64}$/.test(error.code||'')?error.code:'PERSISTENCE_FAILURE'});
     }
   });
 

@@ -1,3 +1,5 @@
+jest.mock('../services/workflowNotificationService',()=>({notice:jest.fn().mockResolvedValue({event:{id:1}}),email:jest.fn().mockResolvedValue([{event:{id:1}}])}));
+jest.mock('../services/auditService',()=>({writeAuditEvent:jest.fn().mockResolvedValue({id:1})}));
 'use strict';
 jest.mock('../utils/emailService', () => ({ sendEmail: jest.fn(), buildApprovalActionLinks: jest.fn(() => ({ approveUrl: 'a', rejectUrl: 'r' })) }));
 jest.mock('../controllers/requests/createRequestController', () => ({ assignApprover: jest.fn() }));
@@ -27,7 +29,7 @@ test('parallel approvals wait without activation or downstream effects', async (
 test('a completed normal level activates every member of the next level once', async () => {
   const next = [{ id: 11, approver_id: 6, approval_level: 3 }, { id: 12, approver_id: 7, approval_level: 3 }];
   const notifications = []; const result = await continueApprovalWorkflowAfterLevel({ client: clientFor({ next }), request, approval, actorId: 5, enqueueNotification: x => notifications.push(x) });
-  expect(result).toMatchObject({ state: 'NEXT_LEVEL_ACTIVE', nextApprovals: next }); expect(notifications).toHaveLength(2);
+  expect(result).toMatchObject({ state: 'NEXT_LEVEL_ACTIVE', nextApprovals: next }); expect(require('../services/workflowNotificationService').notice).toHaveBeenCalledTimes(2);
 });
 test('retry with next level already active creates no notification or assignment', async () => {
   const notify = jest.fn(); const result = await continueApprovalWorkflowAfterLevel({ client: clientFor({ incomplete: true }), request, approval, actorId: 5, enqueueNotification: notify });
@@ -35,7 +37,7 @@ test('retry with next level already active creates no notification or assignment
 });
 test('final approval transition performs final side effects exactly once', async () => {
   const notify = jest.fn(); const result = await continueApprovalWorkflowAfterLevel({ client: clientFor(), request: { ...request }, approval, actorId: 5, enqueueNotification: notify });
-  expect(result).toMatchObject({ state: 'FINAL_APPROVED', changed: true }); expect(applyAutoAssignmentForApprovedRequest).toHaveBeenCalledTimes(1); expect(notify).toHaveBeenCalledTimes(1);
+  expect(result).toMatchObject({ state: 'FINAL_APPROVED', changed: true }); expect(applyAutoAssignmentForApprovedRequest).toHaveBeenCalledTimes(1); expect(require('../services/workflowNotificationService').notice).toHaveBeenCalledTimes(1);
 });
 test('retry after final approval has no duplicate downstream effects', async () => {
   const client = clientFor({ transition: false }); const notify = jest.fn(); const result = await continueApprovalWorkflowAfterLevel({ client, request, approval, actorId: 5, enqueueNotification: notify });

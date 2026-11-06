@@ -10,71 +10,9 @@ const ensureTables = (() => {
   let ensuring = null;
 
   return async () => {
-    if (ensured) return;
-    if (!ensuring) {
-      ensuring = (async () => {
-        await ensureSuppliersTable();
-
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS supplier_scorecards (
-            id SERIAL PRIMARY KEY,
-            supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-            contract_id INTEGER REFERENCES contracts(id) ON DELETE SET NULL,
-            request_id INTEGER,
-            period_start DATE,
-            period_end DATE,
-            otif_score NUMERIC(5, 2) NOT NULL,
-            quality_defects INTEGER DEFAULT 0,
-            lead_time_variance NUMERIC(8, 2),
-            notes TEXT,
-            created_by INTEGER,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS supplier_issues (
-            id SERIAL PRIMARY KEY,
-            supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-            contract_id INTEGER REFERENCES contracts(id) ON DELETE SET NULL,
-            request_id INTEGER,
-            description TEXT NOT NULL,
-            severity TEXT DEFAULT 'medium',
-            status TEXT NOT NULL DEFAULT 'open',
-            capa_required BOOLEAN DEFAULT FALSE,
-            capa_plan TEXT,
-            due_date DATE,
-            resolved_at TIMESTAMPTZ,
-            created_by INTEGER,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS supplier_compliance_artifacts (
-            id SERIAL PRIMARY KEY,
-            supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-            artifact_type TEXT NOT NULL,
-            name TEXT NOT NULL,
-            document_url TEXT,
-            expiry_date DATE,
-            status TEXT NOT NULL DEFAULT 'active',
-            blocked BOOLEAN NOT NULL DEFAULT FALSE,
-            created_by INTEGER,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          )
-        `);
-
-        ensured = true;
-        ensuring = null;
-      })();
-    }
-
-    await ensuring;
-  };
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("controllers/supplierSrmController.js#ensureTables", pool);
+};
 })();
 
 const parseNumericScore = (value, fieldName) => {

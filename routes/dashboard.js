@@ -15,4 +15,13 @@ router.get('/department-request-costs', authenticateUser, getDepartmentMonthlyRe
 router.get('/lifecycle', authenticateUser, getLifecycleAnalytics);
 router.get('/workload', authenticateUser, getWorkloadAnalysis);
 
+
+const reporting=require('../services/procurementReportingService');
+router.get('/completion',authenticateUser,async(req,res,next)=>{
+  try{const data=await reporting.list(req.user,req.query);res.json(data);}catch(e){next(e);}
+});
+router.get('/completion-summary',authenticateUser,async(req,res,next)=>{
+  try{res.json(await reporting.summary(req.user,req.query));}catch(e){next(e);}
+});
+
 module.exports = router;

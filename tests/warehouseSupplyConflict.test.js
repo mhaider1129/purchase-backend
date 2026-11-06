@@ -10,17 +10,20 @@ const {recordSuppliedItems} = require('../controllers/warehouseSupplyController'
 const {getWarehouseItems} = require('../controllers/warehouseInventoryController');
 const actor={id:7,institute_id:1,warehouse_id:3,permissions:['warehouse.manage-supply'],hasPermission:p=>p==='warehouse.manage-supply'};
 function fixture() {
-  let state={ supplied:[], movements:[], allocations:[], audit:[], logs:[], status:'Approved', balances:[
+  let state={ outbox:[], supplied:[], movements:[], allocations:[], audit:[], logs:[], status:'Approved', balances:[
     {id:80,warehouse_id:3,stock_item_id:11,batch_id:500,batch_number:'BATCH-A',lot_number:'LOT-A',serial_number:null,expiry_date:'2028-01-01',stock_status:'AVAILABLE',quantity:20,reserved_quantity:2},
     {id:81,warehouse_id:3,stock_item_id:11,batch_id:501,batch_number:'BATCH-B',lot_number:'LOT-B',serial_number:null,expiry_date:'2028-02-01',stock_status:'AVAILABLE',quantity:20,reserved_quantity:0},
   ]};
   let snapshot,seq=100;
   const rows=value=>({rows:value,rowCount:value.length});
   const client={release:jest.fn(),query:jest.fn(async (sql,p=[])=>{
+    if(sql.includes('to_regprocedure'))return rows([{ready:true}]);
+    if(sql.includes('canonical_procurement_completion'))return rows([{completion:{can_complete:false}}]);
+    if(sql.includes('INSERT INTO notification_outbox')){state.outbox.push({entityId:p[2],key:p[5]});return rows([{id:++seq}]);}
     if(sql==='BEGIN'){snapshot=structuredClone(state);return rows([]);}
     if(sql==='ROLLBACK'){state=snapshot;return rows([]);}
     if(sql==='COMMIT')return rows([]);
-    if(sql.includes('FROM requests WHERE id')) return rows([{id:1343,request_type:'Warehouse Supply',status:state.status,department_id:9,supply_warehouse_id:3}]);
+    if(sql.includes('FROM requests WHERE id')) return rows([{id:1343,institute_id:1,request_type:'Warehouse Supply',status:state.status,department_id:9,supply_warehouse_id:3}]);
     if(sql.includes('FROM warehouse_supply_items') && !sql.includes('LEFT JOIN')) return rows([{id:44,item_name:'Gauze',quantity:30}]);
     if(sql.includes('FROM warehouse_supplied_items') && sql.includes('GROUP BY'))return rows([{item_id:44,total_supplied:state.supplied.reduce((s,i)=>s+i.quantity,0)}]);
     if(sql.includes('FROM stock_items'))return rows([{id:11,name:'Gauze',unit:'Piece'}]);
@@ -48,7 +51,7 @@ function fixture() {
   db.connect.mockResolvedValue(client);
   f.save=async (item={},user=actor)=>{
     const res={status:jest.fn().mockReturnThis(),json:jest.fn()},next=jest.fn();
-    await recordSuppliedItems({params:{requestId:'1343'},body:{items:[{item_id:44,supplied_quantity:5,warehouse_stock_level_id:80,...item}]},user},res,next);
+    await recordSuppliedItems({params:{requestId:'1343'},body:{items:[{item_id:44,supplied_quantity:5,warehouse_stock_level_id:80,expected_supplied_quantity:0,...item}]},user},res,next);
     return {res,error:next.mock.calls[0]?.[0]};
   };
   return f;
@@ -69,6 +72,7 @@ test('equal-quantity installments from different lots post independently',async(
   expect((await f.save({warehouse_stock_level_id:81,expected_supplied_quantity:5})).error).toBeUndefined();
   expect(f.state.movements).toHaveLength(2);expect(new Set(f.state.movements.map(m=>m.idempotency_key)).size).toBe(2);
   expect(f.state.balances.map(b=>b.quantity)).toEqual([15,15]);
+  expect(new Set(f.state.outbox.map(e=>e.entityId)).size).toBe(2);expect(new Set(f.state.outbox.map(e=>e.key)).size).toBe(2);
 });
 test('equal-quantity installments from the same lot both decrement stock',async()=>{
   const f=fixture();await f.save({expected_supplied_quantity:0});await f.save({expected_supplied_quantity:5});
@@ -109,7 +113,7 @@ test('recall block and approval/warehouse/permission checks remain enforced',asy
   expect((await f.save({}, {...actor,hasPermission:()=>false})).error.statusCode).toBe(403);expect(f.state.movements).toHaveLength(0);
 });
 test('warehouse item lookup exposes canonical balance identity and unreserved availability',async()=>{
-  db.query.mockResolvedValue({rows:[]});const res={json:jest.fn()};await getWarehouseItems({params:{warehouseId:'3'}},res,jest.fn());
+  db.query.mockResolvedValue({rows:[]}).mockResolvedValueOnce({rows:[{id:3,institute_id:1}]});const res={json:jest.fn()},next=jest.fn();await getWarehouseItems({params:{warehouseId:'3'},user:{...actor,permissions:['warehouse.view-supply'],hasPermission:p=>p==='warehouse.view-supply'}},res,next);expect(next).not.toHaveBeenCalled();
   const sql=db.query.mock.calls.at(-1)[0];expect(sql).toContain('wsl.id AS warehouse_stock_level_id');expect(sql).toContain('wsl.batch_number');expect(sql).toContain('wsl.reserved_quantity');expect(sql).toContain('AS available_quantity');
 });
 

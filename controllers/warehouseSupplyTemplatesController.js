@@ -5,35 +5,8 @@ let departmentColumnChecked = false;
 let departmentColumnAvailable = false;
 
 const ensureDepartmentIdColumn = async () => {
-  if (departmentColumnChecked) {
-    return departmentColumnAvailable;
-  }
-
-  try {
-    const columnResult = await pool.query(
-      `SELECT 1
-         FROM information_schema.columns
-        WHERE table_name = 'warehouse_supply_templates'
-          AND column_name = 'department_id'
-        LIMIT 1`
-    );
-
-    if (columnResult.rowCount === 0) {
-      await pool.query(
-        `ALTER TABLE warehouse_supply_templates
-           ADD COLUMN IF NOT EXISTS department_id INT REFERENCES departments(id)`
-      );
-    }
-
-    departmentColumnAvailable = true;
-    departmentColumnChecked = true;
-    return true;
-  } catch (err) {
-    console.error('❌ Failed to ensure department_id column on warehouse_supply_templates:', err);
-    departmentColumnChecked = true;
-    departmentColumnAvailable = false;
-    throw createHttpError(500, 'Failed to prepare warehouse supply templates table');
-  }
+  // AUD-010: schema is owned by the reviewed manual release, not this request.
+  return require("../utils/runtimeSchemaContract").assertModuleContract("controllers/warehouseSupplyTemplatesController.js#ensureDepartmentIdColumn", pool);
 };
 
 const normalizeItems = (items) => {

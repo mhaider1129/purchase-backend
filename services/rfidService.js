@@ -1,52 +1,810 @@
-const crypto = require('crypto');
-const FixedAssetRepository = require('../repositories/fixedAssetRepository');
-const { normalizeEpc, values } = require('../domain/rfidConstants');
-const { writeAuditEvent } = require('./auditService');
-const error=(statusCode,message,code)=>Object.assign(new Error(message),{statusCode,code});
-const ctx=user=>({instituteId:user.institute_id,userId:user.id});
-const locationInInstitute=async(tx,id,instituteId)=>!id||Boolean((await tx.query('SELECT id FROM asset_locations WHERE id=$1 AND institute_id=$2',[id,instituteId])).rowCount);
+const crypto = require("crypto");
+const FixedAssetRepository = require("../repositories/fixedAssetRepository");
+const { normalizeEpc, values } = require("../domain/rfidConstants");
+const { writeAuditEvent } = require("./auditService");
+const error = (statusCode, message, code) =>
+  Object.assign(new Error(message), { statusCode, code });
+const ctx = (user) => ({ instituteId: user.institute_id, userId: user.id });
+const locationInInstitute = async (tx, id, instituteId) =>
+  !id ||
+  Boolean(
+    (
+      await tx.query(
+        "SELECT id FROM asset_locations WHERE id=$1 AND institute_id=$2",
+        [id, instituteId],
+      )
+    ).rowCount,
+  );
 class RfidService {
- constructor(repo=new FixedAssetRepository(),audit=writeAuditEvent){this.repo=repo;this.audit=audit;}
- async tags(assetId,c){if(!await this.repo.asset(assetId,c.instituteId))throw error(404,'Asset not found');return(await this.repo.query('SELECT * FROM asset_tags WHERE asset_id=$1 AND institute_id=$2 ORDER BY created_at DESC',[assetId,c.instituteId])).rows;}
- async lookup(epc,c){const normalized=normalizeEpc(epc);const r=await this.repo.query("SELECT a.*,t.id asset_tag_id,t.tag_status FROM asset_tags t JOIN assets a ON a.id=t.asset_id AND a.institute_id=t.institute_id WHERE t.institute_id=$1 AND t.epc=$2 AND t.tag_status='ACTIVE'",[c.instituteId,normalized]);if(!r.rowCount)throw error(404,'Active tag not found');return r.rows[0];}
- async assign(assetId,input,c){const epc=input.epc?normalizeEpc(input.epc):null;if(!values.tagType.includes(input.tagType))throw error(400,'Invalid tag type');return this.repo.transaction(async tx=>{const asset=await tx.asset(assetId,c.instituteId,true);if(!asset)throw error(404,'Asset not found');if(asset.operational_status==='DISPOSED'&&(input.tagStatus||'ACTIVE')==='ACTIVE')throw error(409,'Disposed assets cannot receive an active tag');const r=await tx.query(`INSERT INTO asset_tags(institute_id,asset_id,tag_type,epc,tid,qr_value,tag_status,is_primary,installed_at,installed_by,notes) VALUES($1,$2,$3,$4,$5,$6,$7::text,$8,CASE WHEN $7='ACTIVE' THEN now() END,$9,$10) RETURNING *`,[c.instituteId,assetId,input.tagType,epc,input.tid||null,input.qrValue||null,input.tagStatus||'ACTIVE',input.isPrimary!==false,c.userId,input.notes||null]);await this.audit({entityType:'ASSET_TAG',entityId:r.rows[0].id,action:'RFID_TAG_ASSIGNED',actorUserId:c.userId,instituteId:c.instituteId,afterData:r.rows[0],client:tx.db});return r.rows[0];});}
- async status(tagId,status,c,reason){if(!['DAMAGED','LOST','RETIRED'].includes(status))throw error(400,'Invalid tag lifecycle action');return this.repo.transaction(async tx=>{const before=(await tx.query('SELECT * FROM asset_tags WHERE id=$1 AND institute_id=$2 FOR UPDATE',[tagId,c.instituteId])).rows[0];if(!before)throw error(404,'Tag not found');const row=(await tx.query("UPDATE asset_tags SET tag_status=$1::text,is_primary=false,retired_at=CASE WHEN $1='RETIRED' THEN now() ELSE retired_at END,retired_by=CASE WHEN $1='RETIRED' THEN $2 ELSE retired_by END,replacement_reason=COALESCE($3,replacement_reason),updated_at=now() WHERE id=$4 RETURNING *",[status,c.userId,reason||null,tagId])).rows[0];await this.audit({entityType:'ASSET_TAG',entityId:tagId,action:`RFID_TAG_${status}`,actorUserId:c.userId,instituteId:c.instituteId,beforeData:before,afterData:row,client:tx.db});return row;});}
- async replace(tagId,input,c){return this.repo.transaction(async tx=>{const old=(await tx.query('SELECT t.*,a.operational_status FROM asset_tags t JOIN assets a ON a.id=t.asset_id AND a.institute_id=t.institute_id WHERE t.id=$1 AND t.institute_id=$2 FOR UPDATE OF t,a',[tagId,c.instituteId])).rows[0];if(!old)throw error(404,'Tag not found');if(old.operational_status==='DISPOSED')throw error(409,'Disposed assets cannot receive an active tag');await tx.query("UPDATE asset_tags SET tag_status='REPLACED',is_primary=false,retired_at=now(),retired_by=$1,replacement_reason=$2,updated_at=now() WHERE id=$3",[c.userId,input.reason||'Replacement',tagId]);const epc=normalizeEpc(input.epc);const row=(await tx.query("INSERT INTO asset_tags(institute_id,asset_id,tag_type,epc,tid,tag_status,is_primary,installed_at,installed_by,notes) VALUES($1,$2,$3,$4,$5,'ACTIVE',true,now(),$6,$7) RETURNING *",[c.instituteId,old.asset_id,input.tagType||old.tag_type,epc,input.tid||null,c.userId,input.notes||null])).rows[0];await this.audit({entityType:'ASSET_TAG',entityId:row.id,action:'RFID_TAG_REPLACED',actorUserId:c.userId,instituteId:c.instituteId,beforeData:old,afterData:row,client:tx.db});return row;});}
- async list(resource,query,c){
-  const resources={
-   events:{from:'rfid_business_events r',select:'r.*',scope:'r.institute_id',order:'r.first_seen_at'},
-   reads:{from:'rfid_read_events r',select:'r.*',scope:'r.institute_id',order:'r.read_timestamp'},
-   readers:{from:'rfid_readers r',select:'r.*',scope:'r.institute_id',order:'r.created_at'},
-   antennas:{from:'rfid_antennas r',select:'r.*',scope:'r.institute_id',order:'r.created_at'},
-   portals:{from:'rfid_portals r',select:'r.*',scope:'r.institute_id',order:'r.created_at'},
-   tags:{from:'asset_tags r',select:'r.*',scope:'r.institute_id',order:'r.created_at'},
-   exceptions:{from:'asset_exceptions r',select:'r.*',scope:'r.institute_id',order:'r.detected_at'},
-   mapping:{from:'rfid_portal_antennas r JOIN rfid_portals p ON p.id=r.portal_id JOIN rfid_antennas a ON a.id=r.antenna_id',select:'r.*,p.code portal_code,p.name portal_name,a.name antenna_name,a.reader_id,a.antenna_port',scope:'p.institute_id',order:'p.code,r.sort_order,r.antenna_id'},
-  };
-  const selected=resources[resource];if(!selected)throw error(400,'Invalid RFID resource');
-  const limit=Math.min(100,Math.max(1,parseInt(query.limit,10)||25)),page=Math.max(1,parseInt(query.page,10)||1),clauses=[`${selected.scope}=$1`],params=[c.instituteId];
-  const filters={eventType:'event_type',epc:'epc',reader:'reader_id',portal:'portal_id',direction:'direction',authorizationStatus:'authorization_status',status:'status',asset:'asset_id'};
-  for(const[k,col]of Object.entries(filters))if(query[k]){params.push(query[k]);clauses.push(`r.${col}=$${params.length}`);}
-  const where=clauses.join(' AND '),count=(await this.repo.query(`SELECT count(*)::int total FROM ${selected.from} WHERE ${where}`,[...params])).rows[0]?.total||0;
-  params.push(limit,(page-1)*limit);
-  const rows=(await this.repo.query(`SELECT ${selected.select} FROM ${selected.from} WHERE ${where} ORDER BY ${selected.order} DESC LIMIT $${params.length-1} OFFSET $${params.length}`,params)).rows;
-  return{data:rows,pagination:{page,limit,total:count,pages:Math.ceil(count/limit)}};
- }
- async dashboard(c){const r=await this.repo.query(`SELECT count(*) FILTER(WHERE is_active)::int total_active,count(*) FILTER(WHERE asset_class='CAPITAL' AND is_active)::int capital,count(*) FILTER(WHERE asset_class='CONTROLLED' AND is_active)::int controlled,count(*) FILTER(WHERE operational_status='UNDER_MAINTENANCE')::int under_maintenance,count(*) FILTER(WHERE operational_status='MISSING')::int missing,count(*) FILTER(WHERE EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=assets.id AND t.tag_status='ACTIVE'))::int tagged FROM assets WHERE institute_id=$1`,[c.instituteId]);const grouped=async(column,join,label)=> (await this.repo.query(`SELECT ${label} label,count(*)::int value FROM assets a ${join} WHERE a.institute_id=$1 GROUP BY ${column},${label} ORDER BY value DESC`,[c.instituteId])).rows;const [categories,departments,locations,operational,reconciliation,movements,exceptions]=(await Promise.all([grouped('c.id','LEFT JOIN asset_categories c ON c.id=a.asset_category_id',"coalesce(c.name,'Unassigned')"),grouped('d.id','LEFT JOIN departments d ON d.id=a.responsible_department_id',"coalesce(d.name,'Unassigned')"),grouped('l.id','LEFT JOIN asset_locations l ON l.id=a.current_location_id',"coalesce(l.name,'Unassigned')"),grouped('a.operational_status','', 'a.operational_status'),grouped('a.reconciliation_status','', 'a.reconciliation_status'),this.repo.query('SELECT m.*,a.asset_number FROM asset_movements m JOIN assets a ON a.id=m.asset_id WHERE m.institute_id=$1 ORDER BY m.requested_at DESC LIMIT 10',[c.instituteId]),this.repo.query("SELECT e.*,a.asset_number FROM asset_exceptions e LEFT JOIN assets a ON a.id=e.asset_id WHERE e.institute_id=$1 AND e.status<>'RESOLVED' ORDER BY e.detected_at DESC LIMIT 10",[c.instituteId])])).map(x=>x.rows||x);const summary=r.rows[0];return{...summary,untagged:summary.total_active-summary.tagged,exceptions:exceptions.length,by_category:categories,by_department:departments,by_location:locations,operational_status_mix:operational,reconciliation_status_mix:reconciliation,recent_movements:movements,recent_exceptions:exceptions};}
- async createInfrastructure(type,input,c){return this.repo.transaction(async tx=>{let r,action;for(const id of [input.locationId,input.fromLocationId,input.toLocationId])if(!await locationInInstitute(tx,id,c.instituteId))throw error(400,'Invalid or foreign location');if(type==='readers'){if(!values.readerType.includes(input.readerType))throw error(400,'Invalid reader type');r=await tx.query(`INSERT INTO rfid_readers(institute_id,code,name,reader_type,manufacturer,model,serial_number,device_identifier,firmware_version,ip_address,location_id,status,configuration,is_active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,[c.instituteId,input.code,input.name,input.readerType,input.manufacturer||null,input.model||null,input.serialNumber||null,input.deviceIdentifier,input.firmwareVersion||null,input.ipAddress||null,input.locationId||null,input.status||'OFFLINE',input.configuration||{},input.isActive!==false]);action='RFID_READER_CREATED';}else if(type==='portals'){r=await tx.query(`INSERT INTO rfid_portals(institute_id,code,name,location_id,portal_type,from_location_id,to_location_id,enabled,configuration) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,[c.instituteId,input.code,input.name,input.locationId||null,input.portalType,input.fromLocationId||null,input.toLocationId||null,input.enabled!==false,input.configuration||{}]);action='RFID_PORTAL_CREATED';}else if(type==='antennas'){const reader=(await tx.query('SELECT id FROM rfid_readers WHERE id=$1 AND institute_id=$2',[input.readerId,c.instituteId])).rows[0];if(!reader)throw error(400,'Invalid or foreign reader');r=await tx.query('INSERT INTO rfid_antennas(institute_id,reader_id,antenna_port,name,location_id,antenna_type,enabled,configuration) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',[c.instituteId,input.readerId,input.antennaPort,input.name,input.locationId||null,input.antennaType||null,input.enabled!==false,input.configuration||{}]);action='RFID_ANTENNA_CREATED';}else throw error(400,'Invalid infrastructure resource');await this.audit({entityType:type.toUpperCase(),entityId:r.rows[0].id,action,actorUserId:c.userId,instituteId:c.instituteId,afterData:r.rows[0],client:tx.db});return r.rows[0];});}
- async portalAntennas(portalId,c){return(await this.repo.query('SELECT pa.*,a.name antenna_name,a.reader_id FROM rfid_portal_antennas pa JOIN rfid_portals p ON p.id=pa.portal_id JOIN rfid_antennas a ON a.id=pa.antenna_id WHERE pa.portal_id=$1 AND p.institute_id=$2 ORDER BY pa.sort_order,a.id',[portalId,c.instituteId])).rows;}
- async assignPortalAntenna(portalId,input,c){return this.repo.transaction(async tx=>{const refs=(await tx.query('SELECT p.id portal_id,p.enabled,a.id antenna_id FROM rfid_portals p CROSS JOIN rfid_antennas a WHERE p.id=$1 AND a.id=$2 AND p.institute_id=$3 AND a.institute_id=$3',[portalId,input.antennaId,c.instituteId])).rows[0];if(!refs)throw error(400,'Invalid or foreign portal/antenna');if(refs.enabled&&(await tx.query('SELECT 1 FROM rfid_portal_antennas pa JOIN rfid_portals p ON p.id=pa.portal_id WHERE pa.antenna_id=$1 AND pa.portal_id<>$2 AND p.enabled',[input.antennaId,portalId])).rowCount)throw error(409,'Antenna already belongs to an enabled portal','RFID_CONFIGURATION');const row=(await tx.query(`INSERT INTO rfid_portal_antennas(portal_id,antenna_id,direction_role,sort_order,sequence_group) VALUES($1,$2,$3,$4,$5) ON CONFLICT(portal_id,antenna_id) DO UPDATE SET direction_role=excluded.direction_role,sort_order=excluded.sort_order,sequence_group=excluded.sequence_group RETURNING *`,[portalId,input.antennaId,input.directionRole||'UNKNOWN',input.sortOrder||0,input.sequenceGroup||null])).rows[0];await this.audit({entityType:'RFID_PORTAL_ANTENNA',entityId:`${portalId}:${input.antennaId}`,action:'RFID_PORTAL_ANTENNA_ASSIGNED',actorUserId:c.userId,instituteId:c.instituteId,afterData:row,client:tx.db});return row;});}
- async removePortalAntenna(portalId,antennaId,c){return this.repo.transaction(async tx=>{const row=(await tx.query('DELETE FROM rfid_portal_antennas pa USING rfid_portals p WHERE pa.portal_id=p.id AND pa.portal_id=$1 AND pa.antenna_id=$2 AND p.institute_id=$3 RETURNING pa.*',[portalId,antennaId,c.instituteId])).rows[0];if(!row)throw error(404,'Portal antenna mapping not found');await this.audit({entityType:'RFID_PORTAL_ANTENNA',entityId:`${portalId}:${antennaId}`,action:'RFID_PORTAL_ANTENNA_REMOVED',actorUserId:c.userId,instituteId:c.instituteId,beforeData:row,client:tx.db});return row;});}
- async exceptionAction(id,action,notes,c){if(!['ACKNOWLEDGED','RESOLVED'].includes(action))throw error(400,'Invalid action');if(action==='RESOLVED'&&!String(notes||'').trim())throw error(400,'Resolution notes are required');return this.repo.transaction(async tx=>{const before=(await tx.query('SELECT * FROM asset_exceptions WHERE id=$1 AND institute_id=$2 FOR UPDATE',[id,c.instituteId])).rows[0];if(!before)throw error(404,'Exception not found');if(before.status===action)return before;if(before.status==='RESOLVED'||(action==='ACKNOWLEDGED'&&before.status!=='OPEN'))throw error(409,`Cannot transition ${before.status} to ${action}`);let result;if(action==='ACKNOWLEDGED')result=await tx.query("UPDATE asset_exceptions SET status='ACKNOWLEDGED',acknowledged_by=$1,acknowledged_at=now() WHERE id=$2 AND institute_id=$3 RETURNING *",[c.userId,id,c.instituteId]);else result=await tx.query("UPDATE asset_exceptions SET status='RESOLVED',resolved_by=$1,resolved_at=now(),resolution_notes=$2 WHERE id=$3 AND institute_id=$4 RETURNING *",[c.userId,notes.trim(),id,c.instituteId]);const row=result.rows[0];await this.audit({entityType:'ASSET_EXCEPTION',entityId:id,action:`RFID_EXCEPTION_${action}`,actorUserId:c.userId,instituteId:c.instituteId,beforeData:before,afterData:row,client:tx.db});return row;});}
- async listClients(c){return(await this.repo.query('SELECT id,client_identifier,scopes,enabled,last_used_at,created_at FROM rfid_integration_clients WHERE institute_id=$1 ORDER BY created_at DESC',[c.instituteId])).rows;}
- async createClient(input,c){return this.repo.transaction(async tx=>{const secret=crypto.randomBytes(32).toString('base64url'),hash=RfidIngestionService.hash(secret);const row=(await tx.query('INSERT INTO rfid_integration_clients(institute_id,client_identifier,credential_hash,scopes,enabled) VALUES($1,$2,$3,$4,true) RETURNING id,client_identifier,scopes,enabled,last_used_at,created_at',[c.instituteId,input.clientIdentifier,hash,input.scopes||['rfid:ingest']])).rows[0];await this.audit({entityType:'RFID_INTEGRATION_CLIENT',entityId:row.id,action:'RFID_CLIENT_CREATED',actorUserId:c.userId,instituteId:c.instituteId,afterData:row,client:tx.db});return{...row,secret};});}
- async rotateClient(id,c){return this.repo.transaction(async tx=>{const secret=crypto.randomBytes(32).toString('base64url'),hash=RfidIngestionService.hash(secret);const row=(await tx.query('UPDATE rfid_integration_clients SET credential_hash=$1 WHERE id=$2 AND institute_id=$3 RETURNING id,client_identifier,scopes,enabled,last_used_at,created_at',[hash,id,c.instituteId])).rows[0];if(!row)throw error(404,'Integration client not found');await this.audit({entityType:'RFID_INTEGRATION_CLIENT',entityId:id,action:'RFID_CLIENT_CREDENTIAL_ROTATED',actorUserId:c.userId,instituteId:c.instituteId,afterData:row,client:tx.db});return{...row,secret};});}
- async disableClient(id,c){return this.repo.transaction(async tx=>{const row=(await tx.query('UPDATE rfid_integration_clients SET enabled=false WHERE id=$1 AND institute_id=$2 RETURNING id,client_identifier,scopes,enabled,last_used_at,created_at',[id,c.instituteId])).rows[0];if(!row)throw error(404,'Integration client not found');await this.audit({entityType:'RFID_INTEGRATION_CLIENT',entityId:id,action:'RFID_CLIENT_DISABLED',actorUserId:c.userId,instituteId:c.instituteId,afterData:row,client:tx.db});return row;});}
+  constructor(repo = new FixedAssetRepository(), audit = writeAuditEvent) {
+    this.repo = repo;
+    this.audit = audit;
+  }
+  async tags(assetId, c) {
+    if (!(await this.repo.asset(assetId, c.instituteId)))
+      throw error(404, "Asset not found");
+    return (
+      await this.repo.query(
+        "SELECT * FROM asset_tags WHERE asset_id=$1 AND institute_id=$2 ORDER BY created_at DESC",
+        [assetId, c.instituteId],
+      )
+    ).rows;
+  }
+  async lookup(epc, c) {
+    const normalized = normalizeEpc(epc);
+    const r = await this.repo.query(
+      "SELECT a.*,t.id asset_tag_id,t.tag_status FROM asset_tags t JOIN assets a ON a.id=t.asset_id AND a.institute_id=t.institute_id WHERE t.institute_id=$1 AND t.epc=$2 AND t.tag_status='ACTIVE'",
+      [c.instituteId, normalized],
+    );
+    if (!r.rowCount) throw error(404, "Active tag not found");
+    return r.rows[0];
+  }
+  async assign(assetId, input, c) {
+    const epc = input.epc ? normalizeEpc(input.epc) : null;
+    if (!values.tagType.includes(input.tagType))
+      throw error(400, "Invalid tag type");
+    return this.repo.transaction(async (tx) => {
+      const asset = await tx.asset(assetId, c.instituteId, true);
+      if (!asset) throw error(404, "Asset not found");
+      if (
+        asset.operational_status === "DISPOSED" &&
+        (input.tagStatus || "ACTIVE") === "ACTIVE"
+      )
+        throw error(409, "Disposed assets cannot receive an active tag");
+      const r = await tx.query(
+        `INSERT INTO asset_tags(institute_id,asset_id,tag_type,epc,tid,qr_value,tag_status,is_primary,installed_at,installed_by,notes) VALUES($1,$2,$3,$4,$5,$6,$7::text,$8,CASE WHEN $7='ACTIVE' THEN now() END,$9,$10) RETURNING *`,
+        [
+          c.instituteId,
+          assetId,
+          input.tagType,
+          epc,
+          input.tid || null,
+          input.qrValue || null,
+          input.tagStatus || "ACTIVE",
+          input.isPrimary !== false,
+          c.userId,
+          input.notes || null,
+        ],
+      );
+      await this.audit({
+        entityType: "ASSET_TAG",
+        entityId: r.rows[0].id,
+        action: "RFID_TAG_ASSIGNED",
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        afterData: r.rows[0],
+        client: tx.db,
+      });
+      return r.rows[0];
+    });
+  }
+  async status(tagId, status, c, reason) {
+    if (!["DAMAGED", "LOST", "RETIRED"].includes(status))
+      throw error(400, "Invalid tag lifecycle action");
+    return this.repo.transaction(async (tx) => {
+      const before = (
+        await tx.query(
+          "SELECT * FROM asset_tags WHERE id=$1 AND institute_id=$2 FOR UPDATE",
+          [tagId, c.instituteId],
+        )
+      ).rows[0];
+      if (!before) throw error(404, "Tag not found");
+      const row = (
+        await tx.query(
+          "UPDATE asset_tags SET tag_status=$1::text,is_primary=false,retired_at=CASE WHEN $1='RETIRED' THEN now() ELSE retired_at END,retired_by=CASE WHEN $1='RETIRED' THEN $2 ELSE retired_by END,replacement_reason=COALESCE($3,replacement_reason),updated_at=now() WHERE id=$4 RETURNING *",
+          [status, c.userId, reason || null, tagId],
+        )
+      ).rows[0];
+      await this.audit({
+        entityType: "ASSET_TAG",
+        entityId: tagId,
+        action: `RFID_TAG_${status}`,
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        beforeData: before,
+        afterData: row,
+        client: tx.db,
+      });
+      return row;
+    });
+  }
+  async replace(tagId, input, c) {
+    return this.repo.transaction(async (tx) => {
+      const old = (
+        await tx.query(
+          "SELECT t.*,a.operational_status FROM asset_tags t JOIN assets a ON a.id=t.asset_id AND a.institute_id=t.institute_id WHERE t.id=$1 AND t.institute_id=$2 FOR UPDATE OF t,a",
+          [tagId, c.instituteId],
+        )
+      ).rows[0];
+      if (!old) throw error(404, "Tag not found");
+      if (old.operational_status === "DISPOSED")
+        throw error(409, "Disposed assets cannot receive an active tag");
+      await tx.query(
+        "UPDATE asset_tags SET tag_status='REPLACED',is_primary=false,retired_at=now(),retired_by=$1,replacement_reason=$2,updated_at=now() WHERE id=$3",
+        [c.userId, input.reason || "Replacement", tagId],
+      );
+      const epc = normalizeEpc(input.epc);
+      const row = (
+        await tx.query(
+          "INSERT INTO asset_tags(institute_id,asset_id,tag_type,epc,tid,tag_status,is_primary,installed_at,installed_by,notes) VALUES($1,$2,$3,$4,$5,'ACTIVE',true,now(),$6,$7) RETURNING *",
+          [
+            c.instituteId,
+            old.asset_id,
+            input.tagType || old.tag_type,
+            epc,
+            input.tid || null,
+            c.userId,
+            input.notes || null,
+          ],
+        )
+      ).rows[0];
+      await this.audit({
+        entityType: "ASSET_TAG",
+        entityId: row.id,
+        action: "RFID_TAG_REPLACED",
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        beforeData: old,
+        afterData: row,
+        client: tx.db,
+      });
+      return row;
+    });
+  }
+  async list(resource, query, c) {
+    const resources = {
+      events: {
+        from: "rfid_business_events r",
+        select: "r.*",
+        scope: "r.institute_id",
+        order: "r.first_seen_at",
+      },
+      reads: {
+        from: "rfid_read_events r",
+        select:
+          "r.id,r.institute_id,r.integration_client_id,r.epc,r.tid,r.asset_id,r.asset_tag_id,r.reader_id,r.antenna_id,r.portal_id,r.rssi,r.read_timestamp,r.source_type,r.external_event_id,r.raw_payload,r.processing_status,r.processing_attempts,r.processed_at,r.business_event_id",
+        scope: "r.institute_id",
+        order: "r.read_timestamp",
+      },
+      readers: {
+        from: "rfid_readers r",
+        select: "r.*",
+        scope: "r.institute_id",
+        order: "r.created_at",
+      },
+      antennas: {
+        from: "rfid_antennas r",
+        select: "r.*",
+        scope: "r.institute_id",
+        order: "r.created_at",
+      },
+      portals: {
+        from: "rfid_portals r",
+        select: "r.*",
+        scope: "r.institute_id",
+        order: "r.created_at",
+      },
+      tags: {
+        from: "asset_tags r",
+        select: "r.*",
+        scope: "r.institute_id",
+        order: "r.created_at",
+      },
+      exceptions: {
+        from: "asset_exceptions r",
+        select: "r.*",
+        scope: "r.institute_id",
+        order: "r.detected_at",
+      },
+      mapping: {
+        from: "rfid_portal_antennas r JOIN rfid_portals p ON p.id=r.portal_id JOIN rfid_antennas a ON a.id=r.antenna_id",
+        select:
+          "r.*,p.code portal_code,p.name portal_name,a.name antenna_name,a.reader_id,a.antenna_port",
+        scope: "p.institute_id",
+        order: "p.code,r.sort_order,r.antenna_id",
+      },
+    };
+    const selected = resources[resource];
+    if (!selected) throw error(400, "Invalid RFID resource");
+    const limit = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 25)),
+      page = Math.max(1, parseInt(query.page, 10) || 1),
+      clauses = [`${selected.scope}=$1`],
+      params = [c.instituteId];
+    const filters = {
+      eventType: "event_type",
+      epc: "epc",
+      reader: "reader_id",
+      portal: "portal_id",
+      direction: "direction",
+      authorizationStatus: "authorization_status",
+      status: "status",
+      asset: "asset_id",
+    };
+    for (const [k, col] of Object.entries(filters))
+      if (query[k]) {
+        params.push(query[k]);
+        clauses.push(`r.${col}=$${params.length}`);
+      }
+    const where = clauses.join(" AND "),
+      count =
+        (
+          await this.repo.query(
+            `SELECT count(*)::int total FROM ${selected.from} WHERE ${where}`,
+            [...params],
+          )
+        ).rows[0]?.total || 0;
+    params.push(limit, (page - 1) * limit);
+    const rows = (
+      await this.repo.query(
+        `SELECT ${selected.select} FROM ${selected.from} WHERE ${where} ORDER BY ${selected.order} DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params,
+      )
+    ).rows;
+    return {
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        total: count,
+        pages: Math.ceil(count / limit),
+      },
+    };
+  }
+  async dashboard(c) {
+    const r = await this.repo.query(
+      `SELECT count(*) FILTER(WHERE is_active)::int total_active,count(*) FILTER(WHERE asset_class='CAPITAL' AND is_active)::int capital,count(*) FILTER(WHERE asset_class='CONTROLLED' AND is_active)::int controlled,count(*) FILTER(WHERE operational_status='UNDER_MAINTENANCE')::int under_maintenance,count(*) FILTER(WHERE operational_status='MISSING')::int missing,count(*) FILTER(WHERE EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=assets.id AND t.tag_status='ACTIVE'))::int tagged FROM assets WHERE institute_id=$1`,
+      [c.instituteId],
+    );
+    const grouped = async (column, join, label) =>
+      (
+        await this.repo.query(
+          `SELECT ${label} label,count(*)::int value FROM assets a ${join} WHERE a.institute_id=$1 GROUP BY ${column},${label} ORDER BY value DESC`,
+          [c.instituteId],
+        )
+      ).rows;
+    const [
+      categories,
+      departments,
+      locations,
+      operational,
+      reconciliation,
+      movements,
+      exceptions,
+    ] = (
+      await Promise.all([
+        grouped(
+          "c.id",
+          "LEFT JOIN asset_categories c ON c.id=a.asset_category_id",
+          "coalesce(c.name,'Unassigned')",
+        ),
+        grouped(
+          "d.id",
+          "LEFT JOIN departments d ON d.id=a.responsible_department_id",
+          "coalesce(d.name,'Unassigned')",
+        ),
+        grouped(
+          "l.id",
+          "LEFT JOIN asset_locations l ON l.id=a.current_location_id",
+          "coalesce(l.name,'Unassigned')",
+        ),
+        grouped("a.operational_status", "", "a.operational_status"),
+        grouped("a.reconciliation_status", "", "a.reconciliation_status"),
+        this.repo.query(
+          "SELECT m.*,a.asset_number FROM asset_movements m JOIN assets a ON a.id=m.asset_id WHERE m.institute_id=$1 ORDER BY m.requested_at DESC LIMIT 10",
+          [c.instituteId],
+        ),
+        this.repo.query(
+          "SELECT e.*,a.asset_number FROM asset_exceptions e LEFT JOIN assets a ON a.id=e.asset_id WHERE e.institute_id=$1 AND e.status<>'RESOLVED' ORDER BY e.detected_at DESC LIMIT 10",
+          [c.instituteId],
+        ),
+      ])
+    ).map((x) => x.rows || x);
+    const summary = r.rows[0];
+    return {
+      ...summary,
+      untagged: summary.total_active - summary.tagged,
+      exceptions: exceptions.length,
+      by_category: categories,
+      by_department: departments,
+      by_location: locations,
+      operational_status_mix: operational,
+      reconciliation_status_mix: reconciliation,
+      recent_movements: movements,
+      recent_exceptions: exceptions,
+    };
+  }
+  async createInfrastructure(type, input, c) {
+    return this.repo.transaction(async (tx) => {
+      let r, action;
+      for (const id of [
+        input.locationId,
+        input.fromLocationId,
+        input.toLocationId,
+      ])
+        if (!(await locationInInstitute(tx, id, c.instituteId)))
+          throw error(400, "Invalid or foreign location");
+      if (type === "readers") {
+        if (!values.readerType.includes(input.readerType))
+          throw error(400, "Invalid reader type");
+        r = await tx.query(
+          `INSERT INTO rfid_readers(institute_id,code,name,reader_type,manufacturer,model,serial_number,device_identifier,firmware_version,ip_address,location_id,status,configuration,is_active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+          [
+            c.instituteId,
+            input.code,
+            input.name,
+            input.readerType,
+            input.manufacturer || null,
+            input.model || null,
+            input.serialNumber || null,
+            input.deviceIdentifier,
+            input.firmwareVersion || null,
+            input.ipAddress || null,
+            input.locationId || null,
+            input.status || "OFFLINE",
+            input.configuration || {},
+            input.isActive !== false,
+          ],
+        );
+        action = "RFID_READER_CREATED";
+      } else if (type === "portals") {
+        r = await tx.query(
+          `INSERT INTO rfid_portals(institute_id,code,name,location_id,portal_type,from_location_id,to_location_id,enabled,configuration) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [
+            c.instituteId,
+            input.code,
+            input.name,
+            input.locationId || null,
+            input.portalType,
+            input.fromLocationId || null,
+            input.toLocationId || null,
+            input.enabled !== false,
+            input.configuration || {},
+          ],
+        );
+        action = "RFID_PORTAL_CREATED";
+      } else if (type === "antennas") {
+        const reader = (
+          await tx.query(
+            "SELECT id FROM rfid_readers WHERE id=$1 AND institute_id=$2",
+            [input.readerId, c.instituteId],
+          )
+        ).rows[0];
+        if (!reader) throw error(400, "Invalid or foreign reader");
+        r = await tx.query(
+          "INSERT INTO rfid_antennas(institute_id,reader_id,antenna_port,name,location_id,antenna_type,enabled,configuration) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
+          [
+            c.instituteId,
+            input.readerId,
+            input.antennaPort,
+            input.name,
+            input.locationId || null,
+            input.antennaType || null,
+            input.enabled !== false,
+            input.configuration || {},
+          ],
+        );
+        action = "RFID_ANTENNA_CREATED";
+      } else throw error(400, "Invalid infrastructure resource");
+      await this.audit({
+        entityType: type.toUpperCase(),
+        entityId: r.rows[0].id,
+        action,
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        afterData: r.rows[0],
+        client: tx.db,
+      });
+      return r.rows[0];
+    });
+  }
+  async portalAntennas(portalId, c) {
+    return (
+      await this.repo.query(
+        "SELECT pa.*,a.name antenna_name,a.reader_id FROM rfid_portal_antennas pa JOIN rfid_portals p ON p.id=pa.portal_id JOIN rfid_antennas a ON a.id=pa.antenna_id WHERE pa.portal_id=$1 AND p.institute_id=$2 ORDER BY pa.sort_order,a.id",
+        [portalId, c.instituteId],
+      )
+    ).rows;
+  }
+  async assignPortalAntenna(portalId, input, c) {
+    return this.repo.transaction(async (tx) => {
+      const refs = (
+        await tx.query(
+          "SELECT p.id portal_id,p.enabled,a.id antenna_id FROM rfid_portals p CROSS JOIN rfid_antennas a WHERE p.id=$1 AND a.id=$2 AND p.institute_id=$3 AND a.institute_id=$3",
+          [portalId, input.antennaId, c.instituteId],
+        )
+      ).rows[0];
+      if (!refs) throw error(400, "Invalid or foreign portal/antenna");
+      if (
+        refs.enabled &&
+        (
+          await tx.query(
+            "SELECT 1 FROM rfid_portal_antennas pa JOIN rfid_portals p ON p.id=pa.portal_id WHERE pa.antenna_id=$1 AND pa.portal_id<>$2 AND p.enabled",
+            [input.antennaId, portalId],
+          )
+        ).rowCount
+      )
+        throw error(
+          409,
+          "Antenna already belongs to an enabled portal",
+          "RFID_CONFIGURATION",
+        );
+      const row = (
+        await tx.query(
+          `INSERT INTO rfid_portal_antennas(portal_id,antenna_id,direction_role,sort_order,sequence_group) VALUES($1,$2,$3,$4,$5) ON CONFLICT(portal_id,antenna_id) DO UPDATE SET direction_role=excluded.direction_role,sort_order=excluded.sort_order,sequence_group=excluded.sequence_group RETURNING *`,
+          [
+            portalId,
+            input.antennaId,
+            input.directionRole || "UNKNOWN",
+            input.sortOrder || 0,
+            input.sequenceGroup || null,
+          ],
+        )
+      ).rows[0];
+      await this.audit({
+        entityType: "RFID_PORTAL_ANTENNA",
+        entityId: `${portalId}:${input.antennaId}`,
+        action: "RFID_PORTAL_ANTENNA_ASSIGNED",
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        afterData: row,
+        client: tx.db,
+      });
+      return row;
+    });
+  }
+  async removePortalAntenna(portalId, antennaId, c) {
+    return this.repo.transaction(async (tx) => {
+      const row = (
+        await tx.query(
+          "DELETE FROM rfid_portal_antennas pa USING rfid_portals p WHERE pa.portal_id=p.id AND pa.portal_id=$1 AND pa.antenna_id=$2 AND p.institute_id=$3 RETURNING pa.*",
+          [portalId, antennaId, c.instituteId],
+        )
+      ).rows[0];
+      if (!row) throw error(404, "Portal antenna mapping not found");
+      await this.audit({
+        entityType: "RFID_PORTAL_ANTENNA",
+        entityId: `${portalId}:${antennaId}`,
+        action: "RFID_PORTAL_ANTENNA_REMOVED",
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        beforeData: row,
+        client: tx.db,
+      });
+      return row;
+    });
+  }
+  async exceptionAction(id, action, notes, c) {
+    if (!["ACKNOWLEDGED", "RESOLVED"].includes(action))
+      throw error(400, "Invalid action");
+    if (action === "RESOLVED" && !String(notes || "").trim())
+      throw error(400, "Resolution notes are required");
+    return this.repo.transaction(async (tx) => {
+      const before = (
+        await tx.query(
+          "SELECT * FROM asset_exceptions WHERE id=$1 AND institute_id=$2 FOR UPDATE",
+          [id, c.instituteId],
+        )
+      ).rows[0];
+      if (!before) throw error(404, "Exception not found");
+      if (before.status === action) return before;
+      if (
+        before.status === "RESOLVED" ||
+        (action === "ACKNOWLEDGED" && before.status !== "OPEN")
+      )
+        throw error(409, `Cannot transition ${before.status} to ${action}`);
+      let result;
+      if (action === "ACKNOWLEDGED")
+        result = await tx.query(
+          "UPDATE asset_exceptions SET status='ACKNOWLEDGED',acknowledged_by=$1,acknowledged_at=now() WHERE id=$2 AND institute_id=$3 RETURNING *",
+          [c.userId, id, c.instituteId],
+        );
+      else
+        result = await tx.query(
+          "UPDATE asset_exceptions SET status='RESOLVED',resolved_by=$1,resolved_at=now(),resolution_notes=$2 WHERE id=$3 AND institute_id=$4 RETURNING *",
+          [c.userId, notes.trim(), id, c.instituteId],
+        );
+      const row = result.rows[0];
+      await this.audit({
+        entityType: "ASSET_EXCEPTION",
+        entityId: id,
+        action: `RFID_EXCEPTION_${action}`,
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        beforeData: before,
+        afterData: row,
+        client: tx.db,
+      });
+      return row;
+    });
+  }
+  async listClients(c) {
+    return (
+      await this.repo.query(
+        "SELECT id,client_identifier,scopes,enabled,last_used_at,created_at FROM rfid_integration_clients WHERE institute_id=$1 ORDER BY created_at DESC",
+        [c.instituteId],
+      )
+    ).rows;
+  }
+  async createClient(input, c) {
+    return this.repo.transaction(async (tx) => {
+      const secret = crypto.randomBytes(32).toString("base64url"),
+        hash = RfidIngestionService.hash(secret);
+      const row = (
+        await tx.query(
+          "INSERT INTO rfid_integration_clients(institute_id,client_identifier,credential_hash,scopes,enabled) VALUES($1,$2,$3,$4,true) RETURNING id,client_identifier,scopes,enabled,last_used_at,created_at",
+          [
+            c.instituteId,
+            input.clientIdentifier,
+            hash,
+            input.scopes || ["rfid:ingest"],
+          ],
+        )
+      ).rows[0];
+      await this.audit({
+        entityType: "RFID_INTEGRATION_CLIENT",
+        entityId: row.id,
+        action: "RFID_CLIENT_CREATED",
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        afterData: row,
+        client: tx.db,
+      });
+      return { ...row, secret };
+    });
+  }
+  async rotateClient(id, c) {
+    return this.repo.transaction(async (tx) => {
+      const secret = crypto.randomBytes(32).toString("base64url"),
+        hash = RfidIngestionService.hash(secret);
+      const row = (
+        await tx.query(
+          "UPDATE rfid_integration_clients SET credential_hash=$1 WHERE id=$2 AND institute_id=$3 RETURNING id,client_identifier,scopes,enabled,last_used_at,created_at",
+          [hash, id, c.instituteId],
+        )
+      ).rows[0];
+      if (!row) throw error(404, "Integration client not found");
+      await this.audit({
+        entityType: "RFID_INTEGRATION_CLIENT",
+        entityId: id,
+        action: "RFID_CLIENT_CREDENTIAL_ROTATED",
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        afterData: row,
+        client: tx.db,
+      });
+      return { ...row, secret };
+    });
+  }
+  async disableClient(id, c) {
+    return this.repo.transaction(async (tx) => {
+      const row = (
+        await tx.query(
+          "UPDATE rfid_integration_clients SET enabled=false WHERE id=$1 AND institute_id=$2 RETURNING id,client_identifier,scopes,enabled,last_used_at,created_at",
+          [id, c.instituteId],
+        )
+      ).rows[0];
+      if (!row) throw error(404, "Integration client not found");
+      await this.audit({
+        entityType: "RFID_INTEGRATION_CLIENT",
+        entityId: id,
+        action: "RFID_CLIENT_DISABLED",
+        actorUserId: c.userId,
+        instituteId: c.instituteId,
+        afterData: row,
+        client: tx.db,
+      });
+      return row;
+    });
+  }
 }
 class RfidIngestionService {
- constructor(repo=new FixedAssetRepository()){this.repo=repo;}
- static hash(secret){const pepper=process.env.RFID_CREDENTIAL_PEPPER;if(!pepper||pepper.length<32)throw error(503,'RFID credential verifier is not configured','RFID_CREDENTIAL_CONFIG');return crypto.createHmac('sha256',pepper).update(secret).digest('hex');}
- async authenticate(header){const match=/^RFID ([A-Za-z0-9._-]+):([^\s]+)$/.exec(header||'');if(!match)throw error(401,'Malformed RFID service credential');const r=await this.repo.query("SELECT id,institute_id,scopes,credential_hash FROM rfid_integration_clients WHERE client_identifier=$1 AND enabled=true",[match[1]]);const supplied=RfidIngestionService.hash(match[2]);const valid=r.rowCount&&crypto.timingSafeEqual(Buffer.from(r.rows[0].credential_hash,'hex'),Buffer.from(supplied,'hex'));if(!valid||!r.rows[0].scopes.includes('rfid:ingest'))throw error(401,'Invalid or disabled RFID service credential');return r.rows[0];}
- async ingest(items,client){if(!Array.isArray(items)||!items.length||items.length>500)throw error(400,'Batch must contain 1-500 observations');return this.repo.transaction(async tx=>{const accepted=[];for(const input of items){const epc=normalizeEpc(input.epc),timestamp=new Date(input.timestamp);if(typeof input.timestamp!=='string'||!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(input.timestamp)||Number.isNaN(timestamp.getTime()))throw error(400,'Valid timestamp with timezone is required');if(input.rawPayload!=null&&Buffer.byteLength(JSON.stringify(input.rawPayload),'utf8')>16384)throw error(413,'rawPayload exceeds 16 KiB');if(input.rssi!=null&&(input.rssi < -120||input.rssi>0))throw error(400,'RSSI must be between -120 and 0');const reader=(await tx.query('SELECT * FROM rfid_readers WHERE institute_id=$1 AND code=$2 AND is_active=true',[client.institute_id,input.readerCode])).rows[0];if(!reader)throw error(400,'Active reader not found in client institute');let antenna=null,portal=null;if(input.antennaPort!=null){antenna=(await tx.query('SELECT * FROM rfid_antennas WHERE institute_id=$1 AND reader_id=$2 AND antenna_port=$3 AND enabled=true',[client.institute_id,reader.id,input.antennaPort])).rows[0];if(!antenna)throw error(400,'Enabled antenna does not belong to reader');const portals=(await tx.query('SELECT p.* FROM rfid_portal_antennas pa JOIN rfid_portals p ON p.id=pa.portal_id WHERE pa.antenna_id=$1 AND p.institute_id=$2 AND p.enabled=true ORDER BY p.id',[antenna.id,client.institute_id])).rows;if(portals.length>1)throw error(409,'Antenna belongs to multiple enabled portals','RFID_CONFIGURATION');portal=portals[0]||null;}const tag=(await tx.query("SELECT id,asset_id FROM asset_tags WHERE institute_id=$1 AND epc=$2 AND tag_status='ACTIVE'",[client.institute_id,epc])).rows[0]||null;const r=await tx.query(`INSERT INTO rfid_read_events(institute_id,integration_client_id,epc,tid,asset_tag_id,asset_id,reader_id,antenna_id,portal_id,rssi,read_timestamp,source_type,external_event_id,raw_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(integration_client_id,external_event_id) WHERE external_event_id IS NOT NULL DO NOTHING RETURNING *`,[client.institute_id,client.id,epc,input.tid||null,tag?.id||null,tag?.asset_id||null,reader.id,antenna?.id||null,portal?.id||null,input.rssi??null,timestamp,input.sourceType||reader.reader_type,input.externalEventId||null,input.rawPayload||null]);if(r.rowCount)accepted.push(r.rows[0]);}await tx.query('UPDATE rfid_integration_clients SET last_used_at=now() WHERE id=$1',[client.id]);return{accepted:accepted.length,duplicates:items.length-accepted.length,events:accepted};});}
+  constructor(repo = new FixedAssetRepository()) {
+    this.repo = repo;
+  }
+  static hash(secret) {
+    const pepper = process.env.RFID_CREDENTIAL_PEPPER;
+    if (!pepper || pepper.length < 32)
+      throw error(
+        503,
+        "RFID credential verifier is not configured",
+        "RFID_CREDENTIAL_CONFIG",
+      );
+    return crypto.createHmac("sha256", pepper).update(secret).digest("hex");
+  }
+  async authenticate(header) {
+    const match = /^RFID ([A-Za-z0-9._-]+):([^\s]+)$/.exec(header || "");
+    if (!match) throw error(401, "Malformed RFID service credential");
+    const r = await this.repo.query(
+      "SELECT id,institute_id,scopes,credential_hash FROM rfid_integration_clients WHERE client_identifier=$1 AND enabled=true",
+      [match[1]],
+    );
+    const supplied = RfidIngestionService.hash(match[2]);
+    const valid =
+      r.rowCount &&
+      crypto.timingSafeEqual(
+        Buffer.from(r.rows[0].credential_hash, "hex"),
+        Buffer.from(supplied, "hex"),
+      );
+    if (!valid || !r.rows[0].scopes.includes("rfid:ingest"))
+      throw error(401, "Invalid or disabled RFID service credential");
+    return r.rows[0];
+  }
+  async ingest(items, client) {
+    if (!Array.isArray(items) || !items.length || items.length > 500)
+      throw error(400, "Batch must contain 1-500 observations");
+    const normalized = items.map((input) => {
+      const epc = normalizeEpc(input.epc),
+        timestamp = new Date(input.timestamp);
+      if (
+        typeof input.timestamp !== "string" ||
+        !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(input.timestamp) ||
+        Number.isNaN(timestamp.getTime())
+      )
+        throw error(400, "Valid timestamp with timezone is required");
+      if (
+        input.rawPayload != null &&
+        Buffer.byteLength(JSON.stringify(input.rawPayload), "utf8") > 16384
+      )
+        throw error(413, "rawPayload exceeds 16 KiB");
+      if (
+        input.rssi != null &&
+        (!Number.isFinite(Number(input.rssi)) ||
+          input.rssi < -120 ||
+          input.rssi > 0)
+      )
+        throw error(400, "RSSI must be between -120 and 0");
+      if (
+        input.externalEventId != null &&
+        (typeof input.externalEventId !== "string" ||
+          !input.externalEventId.trim() ||
+          input.externalEventId.length > 200)
+      )
+        throw error(400, "Invalid external event identity");
+      for (const key of [
+        "warehouseId",
+        "warehouse_id",
+        "sessionId",
+        "inventorySessionId",
+        "assetId",
+        "asset_id",
+        "instituteId",
+        "institute_id",
+      ])
+        if (input[key] != null)
+          throw error(
+            400,
+            "RFID uploads cannot select stock, warehouse, count session, asset or institute authority",
+            "RFID_CONTEXT_NOT_SUPPORTED",
+          );
+      return { ...input, epc, timestamp };
+    });
+    return this.repo.transaction(async (tx) => {
+      if (
+        !(
+          await tx.query(
+            "SELECT id FROM rfid_integration_clients WHERE id=$1 AND institute_id=$2 AND enabled AND 'rfid:ingest'=ANY(scopes) FOR SHARE",
+            [client.id, client.institute_id],
+          )
+        ).rowCount
+      )
+        throw error(
+          403,
+          "RFID source authority changed",
+          "RFID_SOURCE_AUTHORITY_CHANGED",
+        );
+      const accepted = [];
+      for (const input of normalized) {
+        const reader = (
+          await tx.query(
+            "SELECT * FROM rfid_readers WHERE institute_id=$1 AND code=$2 AND is_active=true FOR SHARE",
+            [client.institute_id, input.readerCode],
+          )
+        ).rows[0];
+        if (!reader)
+          throw error(400, "Active reader not found in client institute");
+        let antenna = null,
+          portal = null;
+        if (input.antennaPort != null) {
+          antenna = (
+            await tx.query(
+              "SELECT * FROM rfid_antennas WHERE institute_id=$1 AND reader_id=$2 AND antenna_port=$3 AND enabled=true FOR SHARE",
+              [client.institute_id, reader.id, input.antennaPort],
+            )
+          ).rows[0];
+          if (!antenna)
+            throw error(400, "Enabled antenna does not belong to reader");
+          const portals = (
+            await tx.query(
+              "SELECT p.* FROM rfid_portal_antennas pa JOIN rfid_portals p ON p.id=pa.portal_id WHERE pa.antenna_id=$1 AND p.institute_id=$2 AND p.enabled=true ORDER BY p.id FOR SHARE OF p,pa",
+              [antenna.id, client.institute_id],
+            )
+          ).rows;
+          if (portals.length > 1)
+            throw error(
+              409,
+              "Antenna belongs to multiple enabled portals",
+              "RFID_CONFIGURATION",
+            );
+          portal = portals[0] || null;
+        }
+        const tag =
+          (
+            await tx.query(
+              "SELECT t.id,t.asset_id FROM asset_tags t JOIN assets a ON a.id=t.asset_id AND a.institute_id=t.institute_id WHERE t.institute_id=$1 AND t.epc=$2 AND t.tag_status='ACTIVE' FOR SHARE OF t,a",
+              [client.institute_id, input.epc],
+            )
+          ).rows[0] || null;
+        const read = {
+          institute_id: client.institute_id,
+          integration_client_id: client.id,
+          epc: input.epc,
+          tid: input.tid || null,
+          asset_tag_id: tag?.id || null,
+          asset_id: tag?.asset_id || null,
+          reader_id: reader.id,
+          antenna_id: antenna?.id || null,
+          portal_id: portal?.id || null,
+          rssi: input.rssi ?? null,
+          read_timestamp: input.timestamp,
+          source_type: input.sourceType || reader.reader_type,
+          external_event_id: input.externalEventId || null,
+        };
+        await require("./rfidProcessingPolicy").source(tx, read);
+        const fingerprint = require("../domain/rfidObservationIdentity")(read);
+        const r = await tx.query(
+          `INSERT INTO rfid_read_events(institute_id,integration_client_id,epc,tid,asset_tag_id,asset_id,reader_id,antenna_id,portal_id,rssi,read_timestamp,source_type,external_event_id,raw_payload,source_fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT DO NOTHING RETURNING *`,
+          [
+            read.institute_id,
+            client.id,
+            read.epc,
+            read.tid,
+            read.asset_tag_id,
+            read.asset_id,
+            reader.id,
+            read.antenna_id,
+            read.portal_id,
+            read.rssi,
+            read.read_timestamp,
+            read.source_type,
+            input.externalEventId || null,
+            input.rawPayload || null,
+            fingerprint,
+          ],
+        );
+        if (r.rowCount) accepted.push(r.rows[0]);
+        else {
+          const existing = (
+            await tx.query(
+              "SELECT * FROM rfid_read_events WHERE integration_client_id=$1 AND (external_event_id=$2 OR source_fingerprint=$3)",
+              [client.id, input.externalEventId || null, fingerprint],
+            )
+          ).rows;
+          if (
+            !existing.length ||
+            existing.some(
+              (row) =>
+                (row.source_fingerprint ||
+                  require("../domain/rfidObservationIdentity")(row)) !==
+                fingerprint,
+            )
+          )
+            throw error(
+              409,
+              "RFID source identity conflicts with another observation",
+              "RFID_EVENT_IDENTITY_CONFLICT",
+            );
+        }
+      }
+      await tx.query(
+        "UPDATE rfid_integration_clients SET last_used_at=now() WHERE id=$1",
+        [client.id],
+      );
+      return {
+        accepted: accepted.length,
+        duplicates: items.length - accepted.length,
+        events: accepted,
+      };
+    });
+  }
 }
-module.exports={RfidService,RfidIngestionService,ctx};
+module.exports = { RfidService, RfidIngestionService, ctx };

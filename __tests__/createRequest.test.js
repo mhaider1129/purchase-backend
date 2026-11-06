@@ -1,3 +1,5 @@
+jest.mock('../services/workflowNotificationService',()=>({notice:jest.fn().mockResolvedValue({event:{id:1}}),email:jest.fn().mockResolvedValue([{event:{id:1}}])}));
+jest.mock('../services/auditService',()=>({writeAuditEvent:jest.fn().mockResolvedValue({id:1})}));
 jest.mock('../config/db', () => ({ query: jest.fn(), connect: jest.fn() }));
 jest.mock('../utils/emailService', () => ({ sendEmail: jest.fn() }));
 jest.mock('../utils/notificationService', () => ({ createNotifications: jest.fn() }));

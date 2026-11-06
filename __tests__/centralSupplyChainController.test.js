@@ -1,111 +1,154 @@
-jest.mock('../config/db', () => ({ connect: jest.fn() }));
-jest.mock('../utils/ensureCentralSupplyChainTrackingColumns', () => jest.fn());
-jest.mock('../services/auditService', () => ({ writeAuditEvent: jest.fn() }));
-
-const pool = require('../config/db');
-const validateSchema = require('../utils/ensureCentralSupplyChainTrackingColumns');
-const auditService = require('../services/auditService');
-const { updateCentralSupplyChainStatus } = require('../controllers/requests/centralSupplyChainController');
-
-const request = (overrides = {}) => ({ params: { id: '42' }, body: { sent: true },
-  user: { id: 7, institute_id: 3, hasPermission: jest.fn(() => true) }, ...overrides });
-
-const harness = ({ sent = true, instituteId = 3 } = {}) => {
-  const before = { id: 42, institute_id: instituteId, sent_to_central_supply_at: null, sent_to_central_supply_by: null };
-  const after = { ...before, sent_to_central_supply_at: sent ? '2026-08-21T10:00:00.000Z' : null, sent_to_central_supply_by: sent ? 7 : null };
-  const client = { release: jest.fn(), query: jest.fn().mockResolvedValue({})
-    .mockResolvedValueOnce({})
-    .mockResolvedValueOnce({ rowCount: 1, rows: [before] })
-    .mockResolvedValueOnce({ rowCount: 1, rows: [after] }) };
+jest.mock("../config/db", () => ({ connect: jest.fn() }));
+jest.mock("../utils/ensureCentralSupplyChainTrackingColumns", () => jest.fn());
+jest.mock("../services/auditService", () => ({ writeAuditEvent: jest.fn() }));
+jest.mock("../services/p2pAuthorization", () => ({ loadActor: jest.fn() }));
+const pool = require("../config/db"),
+  auth = require("../services/p2pAuthorization"),
+  audit = require("../services/auditService");
+const {
+  updateCentralSupplyChainStatus: update,
+} = require("../controllers/requests/centralSupplyChainController");
+function harness({ wasSent = false, sent = true, found = true } = {}) {
+  const before = {
+    id: 42,
+    institute_id: 3,
+    sent_to_central_supply_at: wasSent ? "2026-11-06T00:00:00Z" : null,
+    sent_to_central_supply_by: wasSent ? 7 : null,
+  };
+  const after = {
+    ...before,
+    sent_to_central_supply_at: sent ? "2026-11-06T01:00:00Z" : null,
+    sent_to_central_supply_by: sent ? 7 : null,
+  };
+  const client = {
+    release: jest.fn(),
+    query: jest.fn(async (sql) => {
+      if (String(sql).includes("SELECT id, institute_id"))
+        return { rowCount: found ? 1 : 0, rows: found ? [before] : [] };
+      if (String(sql).includes("UPDATE public.requests"))
+        return { rowCount: 1, rows: [after] };
+      return {};
+    }),
+  };
   pool.connect.mockResolvedValue(client);
-  return { client, before, after };
-};
-
-describe('Central Supply Chain status', () => {
-  beforeEach(() => { jest.clearAllMocks(); validateSchema.mockResolvedValue(); auditService.writeAuditEvent.mockResolvedValue({}); });
-
-  test.each([[true], [false]])('sets sent=%s with authenticated actor and atomic audit', async (sent) => {
-    const h = harness({ sent });
-    const req = request({ body: { sent } });
-    const res = { json: jest.fn() }; const next = jest.fn();
-    await updateCentralSupplyChainStatus(req, res, next);
-    expect(h.client.query).toHaveBeenNthCalledWith(3, expect.stringContaining('UPDATE public.requests'), [sent, 7, 42]);
-    expect(auditService.writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
-      client: h.client, actorUserId: 7, requestId: 42, beforeData: expect.objectContaining({ sent: false }),
-      afterData: expect.objectContaining({ sent, sent_to_central_supply_by: sent ? 7 : null }),
-    }));
-    expect(h.client.query).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT INTO public.request_logs'),
-      [42, 'Central Supply Chain status changed', 7, sent ? 'Marked as sent to Central Supply Chain' : 'Marked as not sent to Central Supply Chain'],
+  const req = {
+    params: { id: "42" },
+    body: { sent },
+    user: { id: 7, institute_id: 999 },
+  };
+  const res = { json: jest.fn() },
+    next = jest.fn();
+  return {
+    before,
+    after,
+    client,
+    req,
+    res,
+    next,
+    run: () => update(req, res, next),
+  };
+}
+beforeEach(() => {
+  jest.clearAllMocks();
+  auth.loadActor.mockResolvedValue({ id: 7, institute_id: 3 });
+  audit.writeAuditEvent.mockResolvedValue({});
+});
+test.each([
+  [false, true],
+  [true, false],
+])("atomic transition %s to %s", async (wasSent, sent) => {
+  const h = harness({ wasSent, sent });
+  await h.run();
+  expect(h.next).not.toHaveBeenCalled();
+  expect(h.client.query).toHaveBeenCalledWith(
+    expect.stringContaining("institute_id = $2"),
+    [42, 3],
+  );
+  expect(auth.loadActor).toHaveBeenCalledWith(
+    h.client,
+    h.req.user,
+    "requests.manage",
+  );
+  expect(audit.writeAuditEvent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      client: h.client,
+      instituteId: 3,
+      actorUserId: 7,
+      beforeData: expect.objectContaining({ sent: wasSent }),
+      afterData: expect.objectContaining({ sent }),
+    }),
+  );
+  expect(h.client.query).toHaveBeenLastCalledWith("COMMIT");
+  expect(h.res.json).toHaveBeenCalledWith(h.after);
+});
+test.each([false, true])(
+  "duplicate sent=%s is a stable no-op",
+  async (sent) => {
+    const h = harness({ wasSent: sent, sent });
+    await h.run();
+    expect(audit.writeAuditEvent).not.toHaveBeenCalled();
+    expect(
+      h.client.query.mock.calls.some(([q]) => /^\s*UPDATE\b/i.test(q)),
+    ).toBe(false);
+    expect(h.res.json).toHaveBeenCalledWith(h.before);
+  },
+);
+test("foreign records remain not found", async () => {
+  const h = harness({ found: false });
+  await h.run();
+  expect(h.next).toHaveBeenCalledWith(
+    expect.objectContaining({ statusCode: 404 }),
+  );
+  expect(audit.writeAuditEvent).not.toHaveBeenCalled();
+});
+test.each(["unauthorized", "inactive", "null institute"])(
+  "fresh authorization rejects %s",
+  async () => {
+    const h = harness();
+    auth.loadActor.mockRejectedValue(
+      Object.assign(new Error("denied"), { statusCode: 403 }),
     );
-    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
-    expect(res.json).toHaveBeenCalledWith(h.after);
-  });
-
-  test('keeps institute scope in the locked lookup', async () => {
-    const h = harness(); const res = { json: jest.fn() }; const next = jest.fn();
-    await updateCentralSupplyChainStatus(request(), res, next);
-    expect(h.client.query).toHaveBeenNthCalledWith(2, expect.stringContaining('institute_id = $2'), [42, 3]);
-  });
-
-  test('never sends DDL through the controller database client', async () => {
-    const h = harness();
-    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, jest.fn());
-    expect(h.client.query.mock.calls.map(([sql]) => sql).join('\n')).not.toMatch(/\b(?:ALTER|CREATE|DROP)\b/i);
-  });
-
-  test.each(['42P01', '42703', '23502', '22P02'])('keeps the request log and status when audit_logs has database error %s', async (code) => {
-    const h = harness();
-    auditService.writeAuditEvent.mockRejectedValueOnce(Object.assign(new Error('legacy audit schema'), { code }));
-
-    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, jest.fn());
-
-    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK TO SAVEPOINT central_supply_audit');
-    expect(h.client.query).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT INTO public.request_logs'),
-      [42, 'Central Supply Chain status changed', 7, 'Marked as sent to Central Supply Chain'],
+    await h.run();
+    expect(h.client.query).toHaveBeenLastCalledWith("ROLLBACK");
+    expect(h.next).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 403 }),
     );
-    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
-  });
-
-  test('keeps the status when a legacy request_logs schema rejects its audit write', async () => {
+    expect(h.res.json).not.toHaveBeenCalled();
+  },
+);
+test.each(["42P01", "42703", "23502", "22P02", "AUDIT_ERROR"])(
+  "required audit failure %s rolls back",
+  async (code) => {
     const h = harness();
-    h.client.query.mockImplementation(async (sql) => {
-      if (String(sql).includes('INSERT INTO public.request_logs')) {
-        throw Object.assign(new Error('legacy request log schema'), { code: '42703' });
-      }
-      return {};
-    });
-
-    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, jest.fn());
-
-    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK TO SAVEPOINT central_supply_request_log');
-    expect(auditService.writeAuditEvent).toHaveBeenCalled();
-    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
+    audit.writeAuditEvent.mockRejectedValue(
+      Object.assign(new Error("failed"), { code }),
+    );
+    await h.run();
+    expect(h.client.query).toHaveBeenLastCalledWith("ROLLBACK");
+    expect(h.res.json).not.toHaveBeenCalled();
+  },
+);
+test("legacy request log failure is isolated after mandatory audit", async () => {
+  const h = harness();
+  const query = h.client.query.getMockImplementation();
+  h.client.query.mockImplementation(async (...args) => {
+    if (args[0].includes("INSERT INTO public.request_logs"))
+      throw new Error("legacy schema");
+    return query(...args);
   });
-
-  test('keeps the status when the audit service throws a non-database error', async () => {
-    const h = harness(); const next = jest.fn();
-    auditService.writeAuditEvent.mockRejectedValueOnce(new TypeError('bad audit event'));
-
-    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, next);
-
-    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK TO SAVEPOINT central_supply_audit');
-    expect(h.client.query).toHaveBeenLastCalledWith('COMMIT');
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test('fails the status update when an optional write cannot restore its savepoint', async () => {
-    const h = harness(); const next = jest.fn();
-    auditService.writeAuditEvent.mockRejectedValueOnce(new TypeError('bad audit event'));
-    h.client.query.mockImplementation(async (sql) => {
-      if (sql === 'ROLLBACK TO SAVEPOINT central_supply_audit') throw new Error('connection lost');
-      return {};
-    });
-
-    await updateCentralSupplyChainStatus(request(), { json: jest.fn() }, next);
-
-    expect(h.client.query).toHaveBeenCalledWith('ROLLBACK');
-    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 500 }));
-  });
+  await h.run();
+  expect(audit.writeAuditEvent).toHaveBeenCalled();
+  expect(h.client.query).toHaveBeenCalledWith(
+    "ROLLBACK TO SAVEPOINT central_supply_request_log",
+  );
+  expect(h.client.query).toHaveBeenLastCalledWith("COMMIT");
+});
+test("malformed command never connects", async () => {
+  const h = harness();
+  h.req.body.sent = "true";
+  await h.run();
+  expect(pool.connect).not.toHaveBeenCalled();
+  expect(h.next).toHaveBeenCalledWith(
+    expect.objectContaining({ statusCode: 400 }),
+  );
 });

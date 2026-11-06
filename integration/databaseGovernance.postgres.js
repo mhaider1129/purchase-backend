@@ -14,7 +14,7 @@ const {
   selectMigrations,
   validateOrder,
 } = require("../scripts/lib/databaseRelease/planner");
-const version = "hospital-erp-2026-11-7c";
+const version = "hospital-erp-2026-11-scop1";
 async function run(client, url) {
   const ownerUrl = require("./disposableDatabase").disposableDatabaseUrl(url);
   process.env.DATABASE_URL = ownerUrl;
@@ -23,7 +23,7 @@ async function run(client, url) {
   if (process.argv.includes("--capture-database-contract")) {
     const contract = {
       version,
-      baseline_ref: "d6fc982f",
+      baseline_ref: "2d27e3f2",
       catalog: await catalog.snapshot(client),
     };
     fs.writeFileSync(
@@ -137,7 +137,7 @@ async function run(client, url) {
     assert.equal(
       (
         await one(
-          "SELECT count(*)::int n FROM database_release_migrations WHERE migration_id LIKE '071_%'",
+          "SELECT count(*)::int n FROM database_release_migrations WHERE migration_id LIKE '072_%'",
         )
       ).n,
       0,
@@ -145,7 +145,7 @@ async function run(client, url) {
   });
   // Simulate permissive hosted defaults on a precreated governance namespace.
   await client.query(
-    "GRANT ALL ON public.notification_email_deliveries TO authenticated; GRANT TRUNCATE ON public.notification_email_deliveries TO purchase_backend",
+    "GRANT ALL ON public.scop_allocation_evidence TO authenticated; GRANT TRUNCATE ON public.scop_allocation_evidence TO purchase_backend",
   );
   await client.query(plan());
   await test("transactional manual bundle records actual forward execution and current attestation", async () => {
@@ -154,12 +154,12 @@ async function run(client, url) {
     assert.equal(
       r.receipts.filter((row) => row.execution_environment === "disposable")
         .length,
-      3,
+      4,
     );
     assert.equal(
       (
         await one(
-          "SELECT has_table_privilege('authenticated','public.rfid_processing_attempts','INSERT') allowed",
+          "SELECT has_table_privilege('authenticated','public.scop_allocation_evidence','INSERT') allowed",
         )
       ).allowed,
       false,
@@ -167,15 +167,15 @@ async function run(client, url) {
     assert.equal(
       (
         await one(
-          "SELECT has_table_privilege('purchase_backend','public.rfid_processing_attempts','TRUNCATE') allowed",
+          "SELECT has_table_privilege('purchase_backend','public.scop_allocation_evidence','TRUNCATE') allowed",
         )
       ).allowed,
       false,
     );
     assert.equal(
-      r.receipts.find((row) => row.migration_id.startsWith("071_"))
+      r.receipts.find((row) => row.migration_id.startsWith("072_"))
         .migration_id,
-      "071_transactional_event_reliability",
+      "072_scop_operational_foundation",
     );
     assert.equal(
       (
@@ -217,7 +217,7 @@ async function run(client, url) {
     assert.equal(
       (
         await one(
-          "SELECT count(*)::int n FROM database_release_migrations WHERE execution_environment='staging' AND migration_id LIKE '071_%'",
+          "SELECT count(*)::int n FROM database_release_migrations WHERE execution_environment='staging' AND migration_id LIKE '072_%'",
         )
       ).n,
       0,
@@ -245,6 +245,25 @@ async function run(client, url) {
       /FROZEN_REPLAY_DISABLED/,
     );
   });
+  await test("SCOP append-only grants reject excess writes", () =>
+    probe(
+      "GRANT DELETE ON public.scop_allocation_commands TO purchase_backend",
+      (f) =>
+        f.reason === "unreviewed_operational_privilege" &&
+        f.object === "scop_allocation_commands",
+    ));
+  await test("SCOP reference grants reject accidental mutation authority", () =>
+    probe(
+      "GRANT UPDATE ON public.scop_request_purposes TO purchase_backend",
+      (f) => f.reason === "unreviewed_operational_privilege",
+    ));
+  await test("SCOP required append grant cannot disappear", () =>
+    probe(
+      "REVOKE INSERT ON public.scop_allocation_evidence FROM purchase_backend",
+      (f) =>
+        f.reason === "required_business_DML_missing" &&
+        f.object === "scop_allocation_evidence",
+    ));
   await test("missing required table is not database-ready", () =>
     probe(
       "DROP TABLE public.database_release_attestations",
@@ -519,7 +538,12 @@ async function run(client, url) {
           "utf8",
         ),
       );
-      assert.equal(Object.keys(modules).length, 44);
+      assert.equal(Object.keys(modules).length, 45);
+      assert(
+        modules["services/scopFoundationService.js#schema"].includes(
+          "scop_allocation_evidence",
+        ),
+      );
       for (const key of Object.keys(modules))
         await require("../utils/runtimeSchemaContract").assertModuleContract(
           key,

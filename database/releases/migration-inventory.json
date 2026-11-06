@@ -2,7 +2,7 @@
   "application_sources": [
     {
       "path": "app.js",
-      "sha256": "eec2e695e62eb7cad93880d18275b01f3f50beaf578f7cf3396baf5252a5d222"
+      "sha256": "204b4f10cd161f2f254fbbbeab0a4d100946727262800e67d38b17f343b5a079"
     },
     {
       "path": "config/capabilityMatrix.js",
@@ -194,7 +194,7 @@
     },
     {
       "path": "controllers/requests/centralSupplyChainController.js",
-      "sha256": "1af0e189c1937515adb9256227918dd112d2745b02c60629d9dd87d2decdde56"
+      "sha256": "ac8c49ceb18e68169b51ccf2cc93d6857b16cdc6a17f51070302444e16eae3ad"
     },
     {
       "path": "controllers/requests/createRequestController.js",
@@ -385,8 +385,12 @@
       "sha256": "cda60fc07abe9c16a9e1b88fd0decf2ed069746160eac5fbee116e7b739458f4"
     },
     {
+      "path": "database/releases/prerequisites/071-schema-contract.json",
+      "sha256": "33a163a7a33406bc461dbe5e4202d22450e9d388b76e77d758e917cc4393c479"
+    },
+    {
       "path": "database/releases/runtime-modules.json",
-      "sha256": "60195ad7787c6cd374c019ce69491d7b767fc7859e7dbd9fa469b621c8d63d57"
+      "sha256": "423cf41a1014795d8745900ee85c301d37839ccac6677cda03eba063210bba7d"
     },
     {
       "path": "domain/fixedAssetConstants.js",
@@ -522,7 +526,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "038d46bf0c097eb13c78f569875eee0667bcaa75c35439753178e193098cc3e0"
+      "sha256": "62fbda34baa744645344b4228214d45ad01db0950874d38c41f82330da3fcd5e"
     },
     {
       "path": "policies/approvalPolicy.js",
@@ -539,6 +543,10 @@
     {
       "path": "policies/requestPolicy.js",
       "sha256": "e04e7ae3fcf514c58ae75322bd8125724515a7a71325ab9711feba953f74b54e"
+    },
+    {
+      "path": "policies/scopFoundationPolicy.js",
+      "sha256": "724b82d5a7ebd5b1063c2397fd8f9928b1c155ba7dd94bfef9ac562580f237a3"
     },
     {
       "path": "repositories/approvalPolicyRepository.js",
@@ -805,6 +813,10 @@
       "sha256": "083dacda1f858dcd96580490943da35232ff4520e35c0a8f6607d802a80febc1"
     },
     {
+      "path": "routes/scopFoundation.js",
+      "sha256": "c6640297130fc06996f412f8205673d6331933e3ffe4311940f6956d10cb33c2"
+    },
+    {
       "path": "routes/spareParts.js",
       "sha256": "60765137256576e6a816fbdb1ab3686db9123475cb30e2a1d328e6f805fd4c16"
     },
@@ -882,7 +894,7 @@
     },
     {
       "path": "scripts/lib/databaseRelease/inventory.js",
-      "sha256": "4033b2bb953199123cf2ec32c17048cee00a12c5fd03d3b15c9e019a1d148a0e"
+      "sha256": "0fb88c79b587a5bc4e0f22c842e0440e5da0a356318611a99d90e518e9826a4a"
     },
     {
       "path": "scripts/lib/databaseRelease/planner.js",
@@ -994,7 +1006,7 @@
     },
     {
       "path": "services/databaseReleaseService.js",
-      "sha256": "fa898c72ec986a1b0cfa807c986866491199fc44e12ec57f57e73144450f8372"
+      "sha256": "80149b68c227e15e30e7195ebc0ceaa5ddda2461ced7919a405ab78c8761f076"
     },
     {
       "path": "services/deliveryInspectionService.js",
@@ -1409,6 +1421,14 @@
       "sha256": "27407023de2aaede85cd8928f46c1618308f95b2431b070ee4189c601755d98d"
     },
     {
+      "path": "services/scopAllocationEvidence.js",
+      "sha256": "871fbdcca27b15cfea9090aedff294339b118a9a3eac75cc13819e3c48af0860"
+    },
+    {
+      "path": "services/scopFoundationService.js",
+      "sha256": "b9a3842bf61cda3de70633bf23926150588666d387f9233244cc055685e2406d"
+    },
+    {
       "path": "services/sourcingReadinessService.js",
       "sha256": "01f5ac4c49ae4d6d255e7e410ae504615da5c1128e808c0539f9cbd020a58687"
     },
@@ -1682,7 +1702,7 @@
     },
     {
       "path": "utils/permissionService.js",
-      "sha256": "5ebf182470c8a2fa825318bd686b0cc68e42e0c289a6ddd5e7d583da8d0fd9e6"
+      "sha256": "491f5dbf79f8c1cfc037d5923db2fa04642efe3e731236204c3b5e1d7f28ff73"
     },
     {
       "path": "utils/recalculateAvailableQuantity.js",
@@ -1753,8 +1773,8 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "8ac7e30e0afd065d73aaa136c9faf69a3780361627ba9f1a62c7310f2a806126",
-  "highest_manual_number": 71,
+  "application_manifest_sha256": "15b319bba0581fa4d20919b99037d2eee076e4bb7aef278473938a6758c9cdcb",
+  "highest_manual_number": 72,
   "artifacts": [
     {
       "path": "sql/20260313_procure_to_pay_document_flow.sql",
@@ -2568,7 +2588,7 @@
     {
       "path": "sql/manual/071_transactional_event_reliability.sql",
       "id": "071",
-      "classification": "active_forward_migration",
+      "classification": "frozen_historical_migration",
       "sha256": "ab4ee222691aab9945ecd7318215a99a55dec06fb025c70477f11ce98eb56021",
       "bytes": 5313,
       "execution_evidence": "UNVERIFIED",
@@ -2579,6 +2599,21 @@
         "070_rfid_processing_recovery"
       ],
       "preflight_contract": "database/releases/prerequisites/070-schema-contract.json"
+    },
+    {
+      "path": "sql/manual/072_scop_operational_foundation.sql",
+      "id": "072",
+      "classification": "active_forward_migration",
+      "sha256": "d48f3ea3b55ee2a0128c57ecac9529d0e668c62cc19146abb2bf7e287d1c2664",
+      "bytes": 14071,
+      "execution_evidence": "UNVERIFIED",
+      "ddl_statements": 28,
+      "header": "-- MANUAL DATABASE MIGRATION REQUIRED. Additive SCOP Phase 1; no historical enrollment/backfill.\n-- Prerequisites: reviewed canonical 059/064-071 contracts and governed 071 execution receipt.\n-- Apply the generated governed bundle manually, not the frozen migration collection.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';",
+      "governed_receipt_required": true,
+      "depends_on": [
+        "071_transactional_event_reliability"
+      ],
+      "preflight_contract": "database/releases/prerequisites/071-schema-contract.json"
     },
     {
       "path": "sql/migrations/20260312_procure_to_pay.sql",
@@ -2831,7 +2866,7 @@
       "path": "scripts/testBackendContractRefresh.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 5,
-      "sha256": "0dfa42085a2d32bea600122a1e4ec49d4ac888b1dd943f184af2cb18e4eca50c"
+      "sha256": "28d8348a0ed91b905d4501d5526bdfcb5a96438fe59442926e72b3c614bcb1e9"
     },
     {
       "path": "scripts/testBackendSchemaReconciliation.js",
@@ -2873,7 +2908,7 @@
       "path": "integration/databaseGovernance.postgres.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 8,
-      "sha256": "fda5cb2fc03041792dc090ce07880a747ff332e93b999c0486055a424de62f59"
+      "sha256": "3d6fad1aff81bacc6b9898201a2354ae453c9125c985e4955ad54c336ef72717"
     },
     {
       "path": "integration/deviceDemoWorkspaces.js",
@@ -2904,6 +2939,12 @@
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 15,
       "sha256": "bfcd54d1ba74cf14e30e34a5eb6d14c1598968f21cb8d8c9d53f384acf8d4e80"
+    },
+    {
+      "path": "integration/scopFoundation.postgres.js",
+      "classification": "test_fixture_or_verification",
+      "ddl_occurrences": 2,
+      "sha256": "1b3f03fad8dbe7f484bfc5c27ab5dc9eb62c27493484628d7a83dafe93f12946"
     },
     {
       "path": "integration/surgicalConsignments.js",

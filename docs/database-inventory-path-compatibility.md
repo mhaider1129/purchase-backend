@@ -1,5 +1,7 @@
 # Database inventory path compatibility
 
+The prior lock blocker described below is now resolved by the explicitly authorized [R3 source-attestation update](database-release-source-attestation-r3.md). The old failure counts document the pre-authorization state.
+
 Branch: `recovery/wici-database-20261107` in the standalone `purchase-backend` repository. No changes to the monorepo recovery branch are part of this fix.
 
 ## Fix
@@ -10,7 +12,7 @@ Reviewed adjacent code: planner/service `path.basename()` receives canonical for
 
 Regression tests exercise both slash styles through actual discovery, compare complete SQL metadata/hashes against the unchanged lock, check native absolute file reads and runtime-source classification, and ensure a current in-memory planner fixture keeps 073 manual. The fixture is a unit-test input, never a replacement for the locked release manifest. The real frozen-checksum tests remain enabled.
 
-## An unavoidable source-attestation blocker
+## Initial source-attestation blocker (at c23211a3)
 
 The unchanged locked manifest includes `scripts/lib/databaseRelease/inventory.js` in `application_sources`. Its recorded SHA-256 is:
 
@@ -46,4 +48,4 @@ Focused command:
 npm test -- --runInBand --forceExit databaseReleaseGovernance.test.js wiciRecoveryProfiles.test.js runtimeDatabaseIdentity.test.js prepareRuntimeIdentity.test.js databaseReleaseVisibility.test.js
 ```
 
-No production connection, migration execution, credential change, merge or deployment is involved. This is not a release-ready branch until the source-attestation blocker is resolved through an explicitly approved release update.
+No production connection, migration execution, credential change, merge or deployment is involved. The initial portability commit was not release-ready until its source-attestation blocker was resolved. See the R3 report for the authorized resolution and current verification results.

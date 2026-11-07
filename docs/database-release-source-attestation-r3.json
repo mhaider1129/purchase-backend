@@ -1,0 +1,559 @@
+{
+  "oldSource": "4a2280fecdf229e5c5174dea1aba5bb375ef07d197a92c934241e99446eb8288",
+  "newSource": "454d1f48729674b327c7af3c81fdb4d9b3b9250dc38a2c5c22955c795ea3ff81",
+  "oldAggregate": "902f0e5a5581d5f6aa39b3bc319c829a97947756be90ecc5b6603e5ea19c364c",
+  "newAggregate": "be47c2822a3ad320a947f92e313db75613b03595c0fc3a9762cae6b5b802416e",
+  "oldBundle": "a35baa9ebc045a7b89cbec9c330119ad45f75114def2fc932a55d33ceeb50b1b",
+  "newBundle": "a12c41eed5573ab97b2013c69352ce4db57891e59a3c556a36ff0d05fd706cd4",
+  "oldRelease": "wici-recovery-2026-11-07-r2",
+  "newRelease": "wici-recovery-2026-11-07-r3",
+  "aggregateReplacements": 2,
+  "releaseReplacements": 3,
+  "preservedSQL": [
+    {
+      "path": "sql/20260313_procure_to_pay_document_flow.sql",
+      "classification": "unused_or_uncertain",
+      "sha256": "ca5700d6931008d1bd70d0fe24fa90536ed8e0ad9f469ae9954c48b755ca4bd5"
+    },
+    {
+      "path": "sql/20260907_expand_custody_form.sql",
+      "classification": "unused_or_uncertain",
+      "sha256": "8c707dc771e9ffd163409ef91ce8a145934798018018bf64a9f6fec35005e666"
+    },
+    {
+      "path": "sql/UI_resource_permissions.sql",
+      "classification": "export_snapshot",
+      "sha256": "214fd411f12ab326c27f0bf7de5c04d55b55c44c7259ee5f7812489fbe1385bf"
+    },
+    {
+      "path": "sql/View_Supabase_SQL.sql",
+      "classification": "export_snapshot",
+      "sha256": "39dd3bd59f59fd009b3f9f5132f5a33276f2551495d6a5c0cbaeab900bd6f262"
+    },
+    {
+      "path": "sql/approval_route_rules.sql",
+      "classification": "unused_or_uncertain",
+      "sha256": "ae202d7576a17b827debef29c3044e8c4a1dac705f91c0d82972302e773538db"
+    },
+    {
+      "path": "sql/approval_routes.sql",
+      "classification": "unused_or_uncertain",
+      "sha256": "28eae1f9a306b5ebd3909d639d9b02b50abcec27639263a436bb3e3074bc2570"
+    },
+    {
+      "path": "sql/development/20261005_01_requested_item_identity.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "f90daa1382420c61c71e19567e98ce67602ebad24b9d16dd9b4d2c4c0803b0cf"
+    },
+    {
+      "path": "sql/development/20261005_02_employee_tasks.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "1314baff116dd49970f0e090ee91c57950b49d16114e0c5e818058c28ccd3fde"
+    },
+    {
+      "path": "sql/development/20261005_03_procurement_identity_policy.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "a0069a36d693077b4794f3f11c2a43f97634ec9f5b7aeb02f483c628ae642ada"
+    },
+    {
+      "path": "sql/manual/003_request_reclassification_and_uom.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "55433b07c579e8f924502f0d7b6d526874e70e3cb8ec0bb98d6bbf89ecc06fd4"
+    },
+    {
+      "path": "sql/manual/004_inventory_transaction_engine.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "152f4d89921bc1d2570cf4c184e3d62bdf192f2bd1fda5665952832e107f979c"
+    },
+    {
+      "path": "sql/manual/005_inventory_operations.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "a05f13a4269ac282bfab9088d3b6c184939158df0541117290db84d269ea4ecd"
+    },
+    {
+      "path": "sql/manual/006_connected_procure_to_pay.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "cc2c6ea0608b8fd450c4d15bfe949e6fbfde8ce9276e40a904d22966ead2621e"
+    },
+    {
+      "path": "sql/manual/007_phase5a_item_master_diagnostics.sql",
+      "classification": "read_only_verification",
+      "sha256": "36e77b382e6f7ae96f59f5409bc8570ed979ef2e0b6a855ba23aaf78e1ffb867"
+    },
+    {
+      "path": "sql/manual/008_phase5a1_reference_master_baseline.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "4be182050bb50dfd1bb69859a0cb3ea005474bf963aa496971b50dbe4d886730"
+    },
+    {
+      "path": "sql/manual/009_phase5a2_uom_authority.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "8daf2eb3ac6a07b591991c77ecedf90da9fb25bd4d9a2f56a2d336d40e9ca004"
+    },
+    {
+      "path": "sql/manual/010_supply_chain_performance_foundation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "2df51f0da700b7f301428bcb5378cbf0f40609544e55db947a4eb7ea749c4938"
+    },
+    {
+      "path": "sql/manual/011_central_supply_tracking.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "4df59a7f714f030cee5d5f87249e36a018a008f749d284d8218628a01ac3bc82"
+    },
+    {
+      "path": "sql/manual/012_procurement_priority_foundation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "e34c3e3eaf6afcafc696e6fe2f1511d1eaf173fa4dd9d6c176079d0c8a917263"
+    },
+    {
+      "path": "sql/manual/013_approved_spare_parts_foundation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "fd847808a97cedc5cbc7be5d69a8cac266b44d4b1488bb8ec9c12d30519abd41"
+    },
+    {
+      "path": "sql/manual/014_organization_hierarchy.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "2a92caa566fb8f75565ccb8ee59b0283b492cfa008cfc36f2e508cc42c46f315"
+    },
+    {
+      "path": "sql/manual/015_approval_policy_engine_foundation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "fc579e8590b397597f54ca3888af726693f334653497953423cd3c467327ff9c"
+    },
+    {
+      "path": "sql/manual/016_organization_hierarchy_cutover_readiness.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "b022c4655ad8c3cd277a0668cc89e0da5df3a61c387f810c40ab8cb5848ec89d"
+    },
+    {
+      "path": "sql/manual/017_fixed_assets_rfid_core.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "366f6c861f8aff0d6a196b454c92b521a09cd6e03e5751f0dcec0617ac80c637"
+    },
+    {
+      "path": "sql/manual/018_fixed_assets_rfid_post_deployment_hardening.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "c7067a322284b31737d2bf7f24585360318e62a62c79030f2b4ee224052114ae"
+    },
+    {
+      "path": "sql/manual/019_asset_equipment_integration.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "44018d3fab2cc93dcd2b0b500ab9f59caba1c7b1ef44faef99ec58bfa3d706e4"
+    },
+    {
+      "path": "sql/manual/020_asset_equipment_canonical_identity.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "2f1583db32503a69a79f08a0c330249d841ee119561d5615922dd157b824d5a5"
+    },
+    {
+      "path": "sql/manual/021_contract_equipment_coverage.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "04dd241384ee9abc39aed9912b6ca0b504e2a6e000df19678ce20a869f1f91a1"
+    },
+    {
+      "path": "sql/manual/022_contract_item_master_identity.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "4d100b05953e088b47d99f9b1cf8ec93e06bc2713636765118e562a652602db9"
+    },
+    {
+      "path": "sql/manual/023_spare_part_stock_item_integration.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "50aae039af66e6fee152726b5789587f152c0b1c7da76763347e5852365d7e9e"
+    },
+    {
+      "path": "sql/manual/024_maintenance_work_orders.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "83c71f9b1f5d2e4c01c70c68580bf687ec3e05ecacfcdc4f9ca27bbb5d6a80c3"
+    },
+    {
+      "path": "sql/manual/025_maintenance_inventory_execution.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "b1487b3684f2524f62595a2c126e7b60488ab419c98011453730c0dd0bf81da4"
+    },
+    {
+      "path": "sql/manual/026_rfid_portal_enable_scope_index.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "7b7d617a22c720393963632923db4faf0aa653c0056114ff5c276861ff157835"
+    },
+    {
+      "path": "sql/manual/027_rfid_configuration_mutation_guards.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "d33667001f7c5a4ffeb725d2f4e2e2fda4914c014ed956fbe76a0efb7d27c990"
+    },
+    {
+      "path": "sql/manual/028_asset_movement_operational_hardening.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "32c68c1e55aa693468e45143c225240f7e2a449e32358cdfacbeb442c7ca275c"
+    },
+    {
+      "path": "sql/manual/029_fixed_asset_deployment_valuation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "e4404c8d7ce8da972021ffb62ce1954293955f1b5eaeb89a1df9cf1ef7efda8a"
+    },
+    {
+      "path": "sql/manual/030_fixed_asset_physical_inventory.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "5097d4d2409da762b8700aec9dbc3aa3391665936f49edff490873080612dc28"
+    },
+    {
+      "path": "sql/manual/031_p2p_batch1_authority_hardening.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "fdf46fde5330306e416fc19223ed103d74877bad861ddf72ff9aeaaa6715ad88"
+    },
+    {
+      "path": "sql/manual/032_approval_engine_operationalization_phase1.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "bcfd4c7579f0a5ecc4cbe23b1c2d4ce951e75617dc78b13a19f6637d7faa670e"
+    },
+    {
+      "path": "sql/manual/033_ai_intelligence_foundation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "0b8a19af3ffe596542212e6835166f523f782f2d20b0b6044a7b9e394c0d7f0f"
+    },
+    {
+      "path": "sql/manual/034_ai_provider_audit_metadata.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "47aadecbcde6323fb33b1e3fe036c74465162c2d32c6b3dd145d4cde413a1998"
+    },
+    {
+      "path": "sql/manual/035_backend_schema_reconciliation.sql",
+      "classification": "superseded_migration",
+      "sha256": "f72c614776469e71dbbb67268565a2a26cd1e30b56d18cd3af26605fbd2561e0"
+    },
+    {
+      "path": "sql/manual/035_backend_schema_reconciliation_verify.sql",
+      "classification": "read_only_verification",
+      "sha256": "ab9dd92177e5a3c69c4be31ce129e582301ddb78f5f273b4d5861d7bf81c8743"
+    },
+    {
+      "path": "sql/manual/036_permission_catalog_reconciliation.sql",
+      "classification": "superseded_migration",
+      "sha256": "c7a702ccbd9f864519bd3873f3db51ff3bc79510adcc158c09be47e3fcb9de50"
+    },
+    {
+      "path": "sql/manual/037_ui_resource_reconciliation.sql",
+      "classification": "superseded_migration",
+      "sha256": "aad7b75ee0097bfd209ef2dd83ee6a5e4a1c3827c0a1c8af22fb4db926b6b667"
+    },
+    {
+      "path": "sql/manual/038_evaluation_result_timestamp_compatibility.sql",
+      "classification": "superseded_migration",
+      "sha256": "18f913bc11d8f918f6c163d3e7b85dfd0cc43657bf24dd22fbe6a5221e054adb"
+    },
+    {
+      "path": "sql/manual/039_evaluation_offer_model_compatibility.sql",
+      "classification": "superseded_migration",
+      "sha256": "f943fd26afffd9809a3257ac861b19d4ae2819274bf074f62d5edb3c3981b4d7"
+    },
+    {
+      "path": "sql/manual/040_evaluation_cost_quantity_compatibility.sql",
+      "classification": "superseded_migration",
+      "sha256": "3545463a2062a76c7d608373e675af050bd70a7333796db2169a7f888dc62ae8"
+    },
+    {
+      "path": "sql/manual/041_evaluation_criteria_timestamp_compatibility.sql",
+      "classification": "superseded_migration",
+      "sha256": "037f8b6dd3191efcd1ba3bd26a8fba96f11c66206d1e60dc5a3af962898c1da9"
+    },
+    {
+      "path": "sql/manual/042_evaluation_stability_metadata_compatibility.sql",
+      "classification": "superseded_migration",
+      "sha256": "ccf3f42f4738f17458f7cb1e60f23e014cb179b70c4e50c6aabe9c2d68545f9e"
+    },
+    {
+      "path": "sql/manual/043_evaluation_alternative_metadata_compatibility.sql",
+      "classification": "superseded_migration",
+      "sha256": "00155cb4c6183dde904cfcc06d8666275ce56f99369e8885b332f6d3cc088325"
+    },
+    {
+      "path": "sql/manual/044_item_master_reference_starter_data.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "c11899b74f1af2b22052003b23ee7a190fc153efbd83f2f9594b199679bcdd97"
+    },
+    {
+      "path": "sql/manual/045_approval_activation_timestamps.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "3c2360acb387bf0fc1148562fcbc69eaf73baf146eeeaa591921432b76aae69d"
+    },
+    {
+      "path": "sql/manual/046_maintenance_approval_reporting_policy.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "74bf1428dd84b170d6c890c6a1a8bb28345203512e2adfe1c6a60b1db458e370"
+    },
+    {
+      "path": "sql/manual/047_whole_request_priorities.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "8a0790461fbc31e9115ae28b0a80bbc190941793756c0ff592399e26073f3bc6"
+    },
+    {
+      "path": "sql/manual/048_approval_hold_adjusted_timing.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "5ed2ac449e2d0bf838fa09545bb63200a87311249797b37af442ba6bd4f9aedf"
+    },
+    {
+      "path": "sql/manual/049_preprocurement_technical_reviews.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "c451deb660cf4e99f693ef88abfaf4ca8c1a67f0ff7d4e8be44b7445960d91d0"
+    },
+    {
+      "path": "sql/manual/050_device_demo_workspaces.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "98a8ba6f91d81cbbb3f688f9d209307355235f8b37548b67f6e686dc8e95969a"
+    },
+    {
+      "path": "sql/manual/051_surgical_consignment.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "b5f286aaf0f0a872a7a6f640ca2a00a68e4f608f7632cb0fa0df27d749e20271"
+    },
+    {
+      "path": "sql/manual/052_surgical_consignment_supplier_scope_compatibility.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "82b408b5832f2d120ba600bee8ed0cbc4f8369496f8cfe4d779ac460643c5409"
+    },
+    {
+      "path": "sql/manual/053_surgical_consignment_department_routing.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "f921924cca11066748c6599682faf497f476849a1e76ebef58a8d64fc4abeed7"
+    },
+    {
+      "path": "sql/manual/054_technical_review_and_delivery_workflow.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "608c7eac5d9c20d9d93ecc3cfd64d8852f635550e7c353d3393889a1cc8c712e"
+    },
+    {
+      "path": "sql/manual/055_technical_proposal_scope_compatibility.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "08a22d8ab4032e8813e49c5cbfe4f1cf9b19e3f5b9841f5a532c7e0bfea5906e"
+    },
+    {
+      "path": "sql/manual/056_planning_authorization_scope.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "166fab004da70fbe64f0b096946a0063add9176ccd4947ae036792b7ba62e9a5"
+    },
+    {
+      "path": "sql/manual/057_autoassignment_authorization_scope.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "adaf82aa48a42e3d29d197dcebecb10c47aa9dc24b2797399e9ade039be7016b"
+    },
+    {
+      "path": "sql/manual/058_financial_budget_authorization.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "84f7892905ad2373a0e4cecb3371d9856bd155a94460d684f2ccfad56e70c91a"
+    },
+    {
+      "path": "sql/manual/059_backend_contract_refresh.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "f976728fe12f558c355b9b370d81a799a5f769077f548e70e19610e8bd315be4"
+    },
+    {
+      "path": "sql/manual/060_permission_catalog_refresh.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "e364f91aff72b19cd836d6d0297c57078cd8b4eb0f5d075fa6921350d5015068"
+    },
+    {
+      "path": "sql/manual/061_ui_resource_catalog_refresh.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "8e5b15a9105d658a1a011ef4e89b3539612c839db445da7c2a9670a246fb8639"
+    },
+    {
+      "path": "sql/manual/062_demand_planning_ui_policy_alignment.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "9e3e6ebe899643917a9f303a4c540fce6d6ecf2fb0da851dd414eb502d2d2bd5"
+    },
+    {
+      "path": "sql/manual/063_backend_contract_verify.sql",
+      "classification": "read_only_verification",
+      "sha256": "079f4d3e0d68ab21a136701b42aba3af5e7de8acedc3fc6a0cfdd7c659196d31"
+    },
+    {
+      "path": "sql/manual/064_contract_authorization_scope.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "d76e695d963a1e76c202dda2c1f4e3d69d27c86624e4e45fd1335f954e66c044"
+    },
+    {
+      "path": "sql/manual/065_canonical_contract_finance.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "436049f4d16929532aaa03e8d16db7ced311aac517f08993a850f3ecfad2e189"
+    },
+    {
+      "path": "sql/manual/066_contract_financial_reconciliation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "800a06f7119887b113422bc5a3f9d680a4b36e5ff42e568e003535ee4a3124a0"
+    },
+    {
+      "path": "sql/manual/067_canonical_procurement_completion.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "cef759d4793a11ef3e45299c966d22461462928a30276741885b4b9420c523dc"
+    },
+    {
+      "path": "sql/manual/068_goods_receipt_acceptance_integration.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "53bd846349d9aae4941c1e1c5f86392a4405cd5a860867fb3695d9733b1b81c4"
+    },
+    {
+      "path": "sql/manual/069_database_release_governance.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "4a60c71b7565085e187a0fb44d946108d857cc0f8bd32868e805916ea8c2ec5a"
+    },
+    {
+      "path": "sql/manual/070_rfid_processing_recovery.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "acef7ca703623adbacedd4a27c53042f310d120052d598c7b8113496210af41a"
+    },
+    {
+      "path": "sql/manual/071_transactional_event_reliability.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "ab4ee222691aab9945ecd7318215a99a55dec06fb025c70477f11ce98eb56021"
+    },
+    {
+      "path": "sql/manual/072_scop_operational_foundation.sql",
+      "classification": "active_forward_migration",
+      "sha256": "0696d96493d00ab49283f770ca50ddf7ab0312bfb1d7482400ddc099904a6ff6"
+    },
+    {
+      "path": "sql/manual/073_wici_observed_schema_recovery.sql",
+      "classification": "manual_recovery_migration",
+      "sha256": "58122f8c2449dd50d37eaa229d9d622faf7be4e34d56848c999aec5a38285ca2"
+    },
+    {
+      "path": "sql/migrations/20260312_procure_to_pay.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "164b519c4e7c00c79239025c94899d9e3e32301a971231b992a1c02c6db58233"
+    },
+    {
+      "path": "sql/migrations/20260516_audit_registry_permissions.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "f0d24eb7ac4aa23f871e0f40a61a6fcfee050a6bc62d9a7736aa8e5dfc98c3d3"
+    },
+    {
+      "path": "sql/migrations/20260608_procurement_item_events.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "81171c4b10b2ad9715e85b15ce8fb3da3d22c0beba11c607b185046b99ae1ee9"
+    },
+    {
+      "path": "sql/migrations/20260608_supplier_classification_principals.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "bdf09aae3b7eb9c2c7f63d745205c35f84b49fcdd683a8c4c95addd8fa991327"
+    },
+    {
+      "path": "sql/migrations/20260727_item_master_foundation.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "f2ca517b02387d24c621ae8c09b02faa244cdb2e3f628add21d59fe3772d2673"
+    },
+    {
+      "path": "sql/migrations/20260814_phase5a1_permissions.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "bd92f6952e2919608f742151b8269af9e6fa0707adb94010179989356e0f0eb8"
+    },
+    {
+      "path": "sql/migrations/20260929_document_branding.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "85c4c0e94d9fd14170f2b1c3be4b89389f05f17eb64f0daeddc4024482a10ff8"
+    },
+    {
+      "path": "sql/migrations/20261003_procurement_event_overage_decisions.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "fb5bffdf7127463e0ca92decdff78b7a341e06207bbad24e00f7c5ded47cb764"
+    },
+    {
+      "path": "sql/migrations/phase1b/01_stock_item_identity_columns.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "e989c6e3d754777b9afa60ffeca9345f3b64267f6e321c66f92e80f719140b7c"
+    },
+    {
+      "path": "sql/migrations/phase1b/02_stock_item_mapping_tables.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "9b5b745420e80cc9d9ec15905d6dffe773588d1dcfe480789bb3f5b216bd3b08"
+    },
+    {
+      "path": "sql/migrations/phase1b/03_mapping_constraints_and_indexes.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "a3d7bc6e2f71ec9055f084e52328d18f88c716a71b0f9fb714c0408db60045f7"
+    },
+    {
+      "path": "sql/migrations/phase1b/04_rls_and_permissions.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "e3cd676eae48e8f82db65d6121de8dd3f21733984e9e595a6484c2325201b8bf"
+    },
+    {
+      "path": "sql/migrations/phase1b/05_reporting_views.sql",
+      "classification": "frozen_historical_migration",
+      "sha256": "499aa4754219473d555b9c9ea73382bbaf8f16576cc5eeeb68fad88bd20306cf"
+    },
+    {
+      "path": "sql/migrations/purchase-backend/sql/migrations/20260727_item_master_foundation_verify.sql",
+      "classification": "read_only_verification",
+      "sha256": "b904e8f27d6fbe61af79db5272f5823f2de9d90480eb7b2457b9c655cd884659"
+    },
+    {
+      "path": "sql/permissions_Table.sql",
+      "classification": "export_snapshot",
+      "sha256": "7fca52fc22a6b0a7ebb0e508c578ce06ad93cf41506ebfd0aec2e1f46ac448bf"
+    },
+    {
+      "path": "sql/reports/aud001_phase5a_reconciliation.sql",
+      "classification": "unused_or_uncertain",
+      "sha256": "639dea56e07e51d829dbcfeb14c809a7564f16cd3f420dbc80479318a1da1958"
+    },
+    {
+      "path": "sql/stock_item_requests.sql",
+      "classification": "unused_or_uncertain",
+      "sha256": "962ce726363143a33eac50ca49a55bd67fce0c16a291bf79e0aeac2d0dae235d"
+    },
+    {
+      "path": "sql/verification/031_p2p_batch1_supplier_backfill.sql",
+      "classification": "read_only_verification",
+      "sha256": "822c81de6bf318111aee4a7d7ea69d42e75500ff6421b8b326d9e6d1a6197d25"
+    },
+    {
+      "path": "sql/verification/20261005_development_stock_catalog_provenance.sql",
+      "classification": "read_only_verification",
+      "sha256": "8777f4fef06e0081490bfdf25c82f0668c61187d3d51b45f7370c0ee3e98b111"
+    },
+    {
+      "path": "sql/verification/phase1b_post_migration.sql",
+      "classification": "read_only_verification",
+      "sha256": "0b9180c24b6eee8aaabde5838b7b39f855226930be9dd58f414a588147bd43f8"
+    },
+    {
+      "path": "sql/verification/phase1b_pre_migration.sql",
+      "classification": "read_only_verification",
+      "sha256": "f250c222219ff192920f63ad92c9263128cf1967ac383575580fdc35d85f00a4"
+    },
+    {
+      "path": "sql/warehouses.sql",
+      "classification": "unused_or_uncertain",
+      "sha256": "50a5889bab7aab873077ec74078a905495a2d325f3158d6dd83b42958626fe62"
+    },
+    {
+      "path": "integration/fixtures/p2p.sql",
+      "classification": "test_fixture",
+      "sha256": "e27f37738855618516c5dd73196420d0e25dd9d9f93aaac4d7e33f78e18dbdc2"
+    }
+  ],
+  "bundleDifference": "EXACTLY_SOURCE_DIGEST_AND_RELEASE_REFERENCE_SUBSTITUTIONS",
+  "verificationFindings": [],
+  "status": "OFFLINE_SOURCE_ATTESTATION_UPDATE_NO_DATABASE_EXECUTION",
+  "highest_manual_number": 73,
+  "sourceFilesVerified": 449,
+  "defaultPlan": [
+    "072"
+  ],
+  "migration073": {
+    "classification": "manual_recovery_migration",
+    "sha256": "58122f8c2449dd50d37eaa229d9d622faf7be4e34d56848c999aec5a38285ca2"
+  },
+  "tests": {
+    "command": "npm test -- --runInBand --forceExit databaseReleaseGovernance.test.js wiciRecoveryProfiles.test.js runtimeDatabaseIdentity.test.js prepareRuntimeIdentity.test.js databaseReleaseVisibility.test.js",
+    "local": {
+      "suitesPassed": 5,
+      "suitesFailed": 0,
+      "testsPassed": 50,
+      "testsFailed": 0,
+      "testsSkipped": 0,
+      "testsTodo": 0
+    },
+    "ciWorkflow": ".github/workflows/recovery-path-compatibility.yml",
+    "nativeResults": "Published in CI artifacts for the committed revision; see completion report."
+  }
+}

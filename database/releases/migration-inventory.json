@@ -906,7 +906,7 @@
     },
     {
       "path": "scripts/lib/databaseRelease/inventory.js",
-      "sha256": "4a2280fecdf229e5c5174dea1aba5bb375ef07d197a92c934241e99446eb8288"
+      "sha256": "454d1f48729674b327c7af3c81fdb4d9b3b9250dc38a2c5c22955c795ea3ff81"
     },
     {
       "path": "scripts/lib/databaseRelease/planner.js",
@@ -1797,7 +1797,7 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "902f0e5a5581d5f6aa39b3bc319c829a97947756be90ecc5b6603e5ea19c364c",
+  "application_manifest_sha256": "be47c2822a3ad320a947f92e313db75613b03595c0fc3a9762cae6b5b802416e",
   "highest_manual_number": 73,
   "artifacts": [
     {
@@ -2801,7 +2801,7 @@
       "path": "sql/operator-recovery/wici-production-recovery.sql",
       "id": null,
       "classification": "generated_operator_bundle",
-      "sha256": "a35baa9ebc045a7b89cbec9c330119ad45f75114def2fc932a55d33ceeb50b1b",
+      "sha256": "a12c41eed5573ab97b2013c69352ce4db57891e59a3c556a36ff0d05fd706cd4",
       "bytes": 4052541,
       "execution_evidence": "UNVERIFIED",
       "ddl_statements": 1210,

@@ -720,6 +720,9 @@ const createRequest = async (req, res, next) => {
   try {
     await ensureRequestSchedulingColumns();
     await client.query("BEGIN");
+    if (req.guidedSubmission) {
+      await require("../../services/guidedRequestService").verifyForCommit(client, req.guidedSubmission, req.user);
+    }
 
     if (projectId !== null) {
       const projectCheck = await client.query(
@@ -1051,6 +1054,9 @@ const createRequest = async (req, res, next) => {
       );
     }
 
+    if (req.guidedSubmission) {
+      await require("../../services/guidedRequestService").assertResolvedRoute(client, request.id);
+    }
     const { rows: pendingApprovals } = await client.query(
       `SELECT a.id AS approval_id,a.approval_level,
               a.approver_id,

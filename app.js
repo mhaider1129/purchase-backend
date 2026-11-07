@@ -381,6 +381,7 @@ app.use('/api/rfid', rfidIngestionRoutes);
 const protectedApiRoutes = [
   { path: '/files', router: filesRoutes },
   { path: '/requests', router: requestsRoutes },
+  { path: '/scop', router: require('./routes/scopFoundation') },
   { path: '/maintenance-approval-reporting-policy', router: maintenanceApprovalReportingPolicyRoutes },
   { path: '/requested-items', router: requestedItemsRoutes },
   { path: '/approvals', router: approvalsRoutes },

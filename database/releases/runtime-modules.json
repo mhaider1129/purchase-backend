@@ -179,5 +179,13 @@
   ],
   "repositories/stockItemRequestRepository.js#ensureColumns": [
     "stock_item_requests"
+  ],
+  "services/scopFoundationService.js#schema": [
+    "scop_request_purposes",
+    "scop_fulfillment_policies",
+    "scop_requirement_profiles",
+    "scop_fulfillment_allocations",
+    "scop_allocation_evidence",
+    "scop_allocation_commands"
   ]
 }

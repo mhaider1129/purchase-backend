@@ -96,7 +96,7 @@ async function runtimeAuthority(db, role = null) {
         reason: "SELECT_missing",
       });
     const writes = await db.query(
-      `SELECT c.relname name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname NOT IN ('database_release_migrations','database_release_attestations') AND NOT (has_table_privilege($1,c.oid,'INSERT') AND has_table_privilege($1,c.oid,'UPDATE') AND has_table_privilege($1,c.oid,'DELETE'))`,
+      `SELECT c.relname name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname NOT IN ('database_release_migrations','database_release_attestations','scop_request_purposes','scop_fulfillment_policies','scop_requirement_profiles','scop_fulfillment_allocations','scop_allocation_evidence','scop_allocation_commands') AND NOT (has_table_privilege($1,c.oid,'INSERT') AND has_table_privilege($1,c.oid,'UPDATE') AND has_table_privilege($1,c.oid,'DELETE'))`,
       [name],
     );
     for (const row of writes.rows)
@@ -105,6 +105,29 @@ async function runtimeAuthority(db, role = null) {
         object: row.name,
         reason: "required_business_DML_missing",
       });
+    // SCOP reference/history tables have an explicit least-privilege contract.
+    // Presence/shape is certified by the catalog; this checks both missing and excess DML.
+    const operationalPrivileges = await db.query(
+      `WITH policy(name,allowed) AS (VALUES
+      ('scop_request_purposes',ARRAY['SELECT']),('scop_fulfillment_policies',ARRAY['SELECT']),
+      ('scop_requirement_profiles',ARRAY['SELECT','INSERT']),('scop_allocation_evidence',ARRAY['SELECT','INSERT']),
+      ('scop_allocation_commands',ARRAY['SELECT','INSERT']),('scop_fulfillment_allocations',ARRAY['SELECT','INSERT','UPDATE'])
+    ) SELECT p.name,privilege,privilege=ANY(p.allowed) AS required,
+      has_table_privilege($1,c.oid,privilege) AS observed
+    FROM policy p JOIN pg_class c ON c.relname=p.name JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='public'
+    CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) privilege`,
+      [name],
+    );
+    for (const row of operationalPrivileges.rows)
+      if (row.required !== row.observed)
+        findings.push({
+          group: "runtime_privilege",
+          object: row.name,
+          reason: row.required
+            ? "required_business_DML_missing"
+            : "unreviewed_operational_privilege",
+          privilege: row.privilege,
+        });
     const routines = await db.query(
       `SELECT p.proname name FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind='f' AND NOT has_function_privilege($1,p.oid,'EXECUTE')`,
       [name],
@@ -196,7 +219,9 @@ async function verify(
         reason: "explicit_release_and_environment_required",
       });
     for (const entry of inventory.artifacts.filter(
-      (r) => r.classification === "active_forward_migration" || r.governed_receipt_required,
+      (r) =>
+        r.classification === "active_forward_migration" ||
+        r.governed_receipt_required,
     )) {
       const id = path.basename(entry.path, ".sql");
       const applied = receipts.find(

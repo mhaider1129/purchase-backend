@@ -96,7 +96,13 @@ function inventory() {
       entry.preflight_contract =
         "database/releases/prerequisites/069-schema-contract.json";
     }
+    if (entry.id === "072") {
+      entry.governed_receipt_required = true;
+      entry.depends_on = ["071_transactional_event_reliability"];
+      entry.preflight_contract = "database/releases/prerequisites/071-schema-contract.json";
+    }
     if (entry.id === "071") {
+      entry.classification = "frozen_historical_migration";
       entry.governed_receipt_required = true;
       entry.depends_on = ["070_rfid_processing_recovery"];
       entry.preflight_contract =

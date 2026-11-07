@@ -29,6 +29,136 @@ const referenceRelations = {
   reference_accounts: "finance_chart_of_accounts",
   evaluation_criteria_codes: "evaluation_criteria",
 };
+// Evidence is deliberately outside the legacy snapshot/fingerprint. Existing
+// receipts must never be made valid by silently changing their catalog scope.
+const routineFrom = `FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+ LEFT JOIN pg_depend d ON d.classid='pg_proc'::regclass AND d.objid=p.oid
+   AND d.refclassid='pg_extension'::regclass AND d.deptype='e'
+ LEFT JOIN pg_extension e ON e.oid=d.refobjid`;
+const routineWhere = `WHERE p.prokind IN ('f','p')
+ AND n.nspname NOT IN ('pg_catalog','information_schema')
+ AND (n.nspname IN ('public','extensions') OR e.oid IS NOT NULL)`;
+async function routineEvidence(db) {
+  const server = (
+    await db.query(
+      "SELECT current_setting('server_version_num')::int version_num,current_setting('server_version') version,ARRAY(SELECT rolname FROM pg_roles WHERE rolname IN ('anon','authenticated','purchase_backend') ORDER BY rolname) release_roles_present",
+    )
+  ).rows[0];
+  const extensions = (
+    await db.query(
+      "SELECT e.extname name,e.extversion version,n.nspname schema_name FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace ORDER BY 1",
+    )
+  ).rows;
+  const functions = (
+    await db.query(`SELECT n.nspname schema_name,p.proname name,
+    pg_get_function_identity_arguments(p.oid) arguments,pg_get_function_result(p.oid) result,
+    p.prosecdef security_definer,p.provolatile::text volatility,
+    md5(pg_get_functiondef(p.oid)) definition_md5,e.extname extension_name,e.extversion extension_version
+    ${routineFrom} ${routineWhere} ORDER BY 1,2,3`)
+  ).rows;
+  const browserGrants = (
+    await db.query(`SELECT n.nspname schema_name,p.proname name,
+    pg_get_function_identity_arguments(p.oid) arguments,r.rolname role,
+    has_function_privilege(r.oid,p.oid,'EXECUTE') can_execute,
+    has_schema_privilege(r.oid,n.oid,'USAGE') schema_usage,
+    e.extname extension_name,e.extversion extension_version
+    ${routineFrom} CROSS JOIN pg_roles r ${routineWhere}
+    AND p.prokind='f' AND r.rolname IN ('anon','authenticated') ORDER BY 1,2,3,4`)
+  ).rows;
+  return { server, extensions, functions, browserGrants };
+}
+// Candidate-only rendering comparison for extension-owned signatures whose
+// type namespace becomes explicit after relocation/search-path changes. This
+// never changes compare(), fingerprints, or the blocking missing finding.
+function routineCandidateKey(group, row) {
+  if (!row.extension_name || !/^[a-z_][a-z0-9_]*$/.test(row.schema_name))
+    return key(group, row);
+  return key(group, {
+    ...row,
+    arguments: row.arguments.replace(
+      new RegExp("\\b" + row.schema_name + "\\.", "g"),
+      "",
+    ),
+  });
+}
+function explainRoutineFindings(findings, evidence) {
+  const result = findings.map((finding) => {
+    if (!["functions", "browser_function_grants"].includes(finding.group))
+      return finding;
+    const rows =
+      finding.group === "functions"
+        ? evidence.functions
+        : evidence.browserGrants;
+    const counterparts =
+      finding.reason === "missing"
+        ? rows.filter(
+            (r) =>
+              r.schema_name !== "public" &&
+              (key(finding.group, r) === finding.object ||
+                routineCandidateKey(finding.group, r) === finding.object),
+          )
+        : [];
+    const publicRow = rows.find(
+      (r) =>
+        r.schema_name === "public" && key(finding.group, r) === finding.object,
+    );
+    if (counterparts.length || publicRow?.extension_name)
+      return {
+        ...finding,
+        category: counterparts.some((r) => !r.extension_name)
+          ? "application_routine_review"
+          : "extension_environment_review",
+        expected_schema: "public",
+        routine_evidence: counterparts.length ? counterparts : [publicRow],
+        disposition: "BLOCKING_REVIEW_REQUIRED_NO_AUTOMATIC_EQUIVALENCE",
+      };
+    return finding;
+  });
+  for (const row of evidence.functions.filter(
+    (r) => r.schema_name !== "public" && r.security_definer,
+  ))
+    result.push({
+      group: "functions",
+      object: `${row.schema_name}.${key("functions", row)}`,
+      reason: "unreviewed_security_definer",
+      category: row.extension_name
+        ? "extension_security_review"
+        : "application_security",
+      routine_evidence: [row],
+    });
+  for (const row of evidence.browserGrants.filter(
+    (r) =>
+      r.schema_name !== "public" &&
+      r.can_execute &&
+      (!r.extension_name || r.schema_usage),
+  )) {
+    if (
+      result.some(
+        (f) =>
+          f.group === "browser_function_grants" &&
+          f.routine_evidence?.some(
+            (r) =>
+              r.schema_name === row.schema_name &&
+              key("browser_function_grants", r) ===
+                key("browser_function_grants", row),
+          ),
+      )
+    )
+      continue;
+    result.push({
+      group: "browser_function_grants",
+      object: `${row.schema_name}.${key("browser_function_grants", row)}`,
+      reason: row.extension_name
+        ? "extension_browser_grant_requires_review"
+        : "unreviewed_security_object",
+      category: row.extension_name
+        ? "extension_security_review"
+        : "application_security",
+      routine_evidence: [row],
+    });
+  }
+  return result;
+}
 async function visibility(db) {
   const rows = (
     await db.query(
@@ -168,6 +298,8 @@ async function fingerprint(db, actual) {
 module.exports = {
   queries,
   businessQueries,
+  routineEvidence,
+  explainRoutineFindings,
   visibility,
   snapshot,
   key,

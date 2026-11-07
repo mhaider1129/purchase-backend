@@ -1,0 +1,25 @@
+{
+  "source": [
+    {
+      "path": "scripts/lib/databaseRelease/catalog.js",
+      "old": "22fda268a90332626a90edf572e54e440e0f960247e7fbd14d4c7ea5a700a1f7",
+      "new": "4c10f142e064f77ee3975ebd056d22e8732871902bb9a005e8e92350f837c907"
+    },
+    {
+      "path": "services/databaseReleaseService.js",
+      "old": "744abf62922e5ea7d2416dae3495375ed018e66f44893a44b259176ac4f070c5",
+      "new": "ae68ba61087b3b762c7e53f19abd8953d63d28f765a61b8f64d8d7ca40fed1ea"
+    }
+  ],
+  "oldAggregate": "be47c2822a3ad320a947f92e313db75613b03595c0fc3a9762cae6b5b802416e",
+  "newAggregate": "4eb9d6fc858a7888a4efac8c94094acce6ea4c9837770994614a1ff90c67d23e",
+  "oldBundle": "a12c41eed5573ab97b2013c69352ce4db57891e59a3c556a36ff0d05fd706cd4",
+  "newBundle": "1946de1fefa062c8b6fd9403ec3bf8ea88287460ae891d1394ca42b30966abf1",
+  "bundleOnlySourceAndReleaseBindings": true,
+  "preservedSQL": 104,
+  "legacySnapshotQueriesUnchanged": true,
+  "contractSHA": "9b3efde7cb01433a91453a1d6b94a187fc1c3b221432b370be18c4464ff9efe6",
+  "kind": "OFFLINE_VERIFIER_SOURCE_BINDING_NOT_DATABASE_EXECUTION",
+  "referenceContractAndProfilesRegenerated": false,
+  "applicationReleaseRef": "wici-recovery-2026-11-08-r4"
+}

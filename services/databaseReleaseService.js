@@ -7,15 +7,24 @@ const {
   verifyFiles,
 } = require("../scripts/lib/databaseRelease/inventory");
 const directory = path.join(__dirname, "../database/releases");
-const CONTRACT_VERSION = "hospital-erp-2026-11-7c";
+function checkedContract(contract) {
+  if (typeof contract.version !== "string" || !contract.version.trim())
+    throw Object.assign(
+      new Error("A declared database contract version is required"),
+      { code: "INVALID_DATABASE_CONTRACT_VERSION" },
+    );
+  return contract;
+}
 function loadContract() {
   const profile = process.env.DB_RELEASE_SCHEMA_PROFILE;
   if (profile && profile !== "canonical")
-    return require("../scripts/lib/databaseRelease/profiles").loadProfile(
-      profile,
+    return checkedContract(
+      require("../scripts/lib/databaseRelease/profiles").loadProfile(profile),
     );
-  return JSON.parse(
-    fs.readFileSync(path.join(directory, "schema-contract.json"), "utf8"),
+  return checkedContract(
+    JSON.parse(
+      fs.readFileSync(path.join(directory, "schema-contract.json"), "utf8"),
+    ),
   );
 }
 function loadInventory() {
@@ -202,6 +211,7 @@ async function verify(
     requireEvidence = true,
   } = {},
 ) {
+  checkedContract(contract);
   const fileErrors = verifyFiles(inventory),
     visibility = await catalog.visibility(db),
     actual = await catalog.snapshot(db, visibility),
@@ -210,10 +220,14 @@ async function verify(
         ([group]) => !visibility.unobservableGroups.includes(group),
       ),
     ),
+    routineContext = await catalog.routineEvidence(db),
     findings = [
       ...fileErrors,
       ...visibility.findings,
-      ...catalog.compare(observableExpected, actual),
+      ...catalog.explainRoutineFindings(
+        catalog.compare(observableExpected, actual),
+        routineContext,
+      ),
     ];
   const authority = await runtimeAuthority(db, role);
   findings.push(...authority.findings);
@@ -355,6 +369,7 @@ async function verify(
     findings,
     runtime: authority,
     catalog_visibility: visibility,
+    routine_context: routineContext,
     receipt_visibility: receiptsObservable
       ? "OBSERVABLE"
       : "UNVERIFIED_INSUFFICIENT_VISIBILITY",
@@ -409,7 +424,9 @@ async function startWhenReady(db, options, onReady) {
 
 module.exports = {
   startWhenReady,
-  CONTRACT_VERSION,
+  get CONTRACT_VERSION() {
+    return loadContract().version;
+  },
   loadContract,
   loadInventory,
   existingLedgers,

@@ -902,7 +902,7 @@
     },
     {
       "path": "scripts/lib/databaseRelease/catalog.js",
-      "sha256": "22fda268a90332626a90edf572e54e440e0f960247e7fbd14d4c7ea5a700a1f7"
+      "sha256": "4c10f142e064f77ee3975ebd056d22e8732871902bb9a005e8e92350f837c907"
     },
     {
       "path": "scripts/lib/databaseRelease/inventory.js",
@@ -1022,7 +1022,7 @@
     },
     {
       "path": "services/databaseReleaseService.js",
-      "sha256": "744abf62922e5ea7d2416dae3495375ed018e66f44893a44b259176ac4f070c5"
+      "sha256": "ae68ba61087b3b762c7e53f19abd8953d63d28f765a61b8f64d8d7ca40fed1ea"
     },
     {
       "path": "services/deliveryInspectionService.js",
@@ -1797,7 +1797,7 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "be47c2822a3ad320a947f92e313db75613b03595c0fc3a9762cae6b5b802416e",
+  "application_manifest_sha256": "4eb9d6fc858a7888a4efac8c94094acce6ea4c9837770994614a1ff90c67d23e",
   "highest_manual_number": 73,
   "artifacts": [
     {
@@ -2801,7 +2801,7 @@
       "path": "sql/operator-recovery/wici-production-recovery.sql",
       "id": null,
       "classification": "generated_operator_bundle",
-      "sha256": "a12c41eed5573ab97b2013c69352ce4db57891e59a3c556a36ff0d05fd706cd4",
+      "sha256": "1946de1fefa062c8b6fd9403ec3bf8ea88287460ae891d1394ca42b30966abf1",
       "bytes": 4052541,
       "execution_evidence": "UNVERIFIED",
       "ddl_statements": 1210,

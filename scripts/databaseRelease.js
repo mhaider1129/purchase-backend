@@ -14,6 +14,20 @@ function args(values) {
   }
   return result;
 }
+function verificationConnection(options) {
+  const mode = options["connection-mode"] || "diagnostic";
+  if (!["diagnostic", "runtime"].includes(mode))
+    throw Error("CONNECTION_MODE_MUST_BE_DIAGNOSTIC_OR_RUNTIME");
+  if (mode === "runtime" && options["backend-role"])
+    throw Error("RUNTIME_ROLE_OVERRIDE_NOT_ALLOWED");
+  return {
+    mode,
+    Client:
+      mode === "runtime"
+        ? require("../utils/runtimeDatabaseIdentity").clientClass()
+        : require("pg").Client,
+  };
+}
 async function main(options = args(process.argv.slice(2))) {
   if (options.command === "new") {
     if (!/^[a-z][a-z0-9_]+$/.test(options.name || ""))
@@ -45,7 +59,11 @@ async function main(options = args(process.argv.slice(2))) {
   const manifest = service.loadInventory(),
     contract = service.loadContract();
   if (options.command === "plan") {
-    const entries = selectMigrations(manifest, options.migration?.split(","));
+    const entries = selectMigrations(
+      manifest,
+      options.migration?.split(","),
+      contract.profile,
+    );
     const report = {
       mode: "OFFLINE_DRY_RUN_NO_DATABASE_CONNECTION",
       contract: contract.version,
@@ -85,8 +103,8 @@ async function main(options = args(process.argv.slice(2))) {
     throw new Error(
       "Explicit --environment, --release and DB_RELEASE_READONLY_URL are required",
     );
-  const { Client } = require("pg");
-  const db = new Client({
+  const connection = verificationConnection(options);
+  const db = new connection.Client({
     connectionString: process.env.DB_RELEASE_READONLY_URL,
     application_name: "purchase-tracker-read-only-release-verifier",
   });
@@ -96,12 +114,22 @@ async function main(options = args(process.argv.slice(2))) {
       "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
     await db.query("SET LOCAL statement_timeout='60s'");
+    await db.query("SET LOCAL search_path=public,extensions,pg_catalog");
     const report = await service.verify(db, {
       releaseRef: options.release,
       environment: options.environment,
       role: options["backend-role"],
     });
     report.external_ledgers = await service.existingLedgers(db);
+    report.verification_mode = connection.mode;
+    if (connection.mode !== "runtime") {
+      report.findings.push({
+        group: "verification",
+        reason: "diagnostic_connection_is_not_runtime_acceptance",
+      });
+      report.status = "BLOCKED";
+      report.restart_eligible = false;
+    }
     await db.query("ROLLBACK");
     console.log(JSON.stringify(report, null, 2));
     if (report.status !== "DATABASE_READY") process.exitCode = 1;
@@ -123,4 +151,4 @@ if (require.main === module)
     );
     process.exitCode = 1;
   });
-module.exports = { main, args };
+module.exports = { main, args, verificationConnection };

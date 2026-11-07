@@ -25,17 +25,21 @@ function inventory() {
       const verification = /verify|verification|diagnostic|(?:^|\/)007_/i.test(
         name,
       );
-      const kind = verification
-        ? "read_only_verification"
-        : /View_Supabase|permissions_Table|UI_resource_permissions/i.test(name)
-          ? "export_snapshot"
-          : number
-            ? Number(number) >= 69
-              ? "active_forward_migration"
-              : "frozen_historical_migration"
-            : /migration|development/i.test(name)
-              ? "frozen_historical_migration"
-              : "unused_or_uncertain";
+      const kind = name.startsWith("sql/operator-recovery/")
+        ? "generated_operator_bundle"
+        : verification
+          ? "read_only_verification"
+          : /View_Supabase|permissions_Table|UI_resource_permissions/i.test(
+                name,
+              )
+            ? "export_snapshot"
+            : number
+              ? Number(number) >= 69
+                ? "active_forward_migration"
+                : "frozen_historical_migration"
+              : /migration|development/i.test(name)
+                ? "frozen_historical_migration"
+                : "unused_or_uncertain";
       return {
         path: name,
         id: number || null,
@@ -85,6 +89,13 @@ function inventory() {
       entry.note =
         "Overlapping responsibility is consolidated; never replay or infer historical execution.";
     }
+    if (entry.id === "073") {
+      entry.classification = "manual_recovery_migration";
+      entry.profile = "wici-2026-11";
+      entry.observes_prior_controls = ["069", "070", "071", "072"];
+      entry.note =
+        "Records a new observed-controls baseline now; never claims historical executions occurred.";
+    }
     if (entry.id === "069") {
       entry.classification = "frozen_historical_migration";
       entry.governed_receipt_required = true;
@@ -99,7 +110,8 @@ function inventory() {
     if (entry.id === "072") {
       entry.governed_receipt_required = true;
       entry.depends_on = ["071_transactional_event_reliability"];
-      entry.preflight_contract = "database/releases/prerequisites/071-schema-contract.json";
+      entry.preflight_contract =
+        "database/releases/prerequisites/071-schema-contract.json";
     }
     if (entry.id === "071") {
       entry.classification = "frozen_historical_migration";
@@ -154,6 +166,9 @@ function inventory() {
     "package-lock.json",
     "scripts/databaseRelease.js",
     "database/releases/runtime-modules.json",
+    ...files(path.join(root, "database/releases/profiles")).map((f) =>
+      path.relative(root, f),
+    ),
     ...files(path.join(root, "database/releases/prerequisites")).map((f) =>
       path.relative(root, f),
     ),

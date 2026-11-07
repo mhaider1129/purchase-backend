@@ -76,7 +76,7 @@ test("query guard rejects callback and promise queries without invoking the driv
 test("locked inventory discovers the actual highest migration and records unverified history", () => {
   const manifest = loadInventory(),
     current = inventory();
-  expect(current.highest_manual_number).toBe(72);
+  expect(current.highest_manual_number).toBe(73);
   expect(verifyFiles(manifest)).toEqual([]);
   expect(
     current.artifacts.some((e) => e.classification === "test_fixture"),

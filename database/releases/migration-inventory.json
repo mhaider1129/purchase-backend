@@ -10,7 +10,7 @@
     },
     {
       "path": "config/db.js",
-      "sha256": "186bb68b41ca54824601f1186cab781d53b495102d3d9690584809f1b06e3657"
+      "sha256": "cb4b401f6eec6a48b9bdd849254dfb896354c1dfc39f68c8e2011e111a7f145b"
     },
     {
       "path": "config/environment.js",
@@ -389,6 +389,14 @@
       "sha256": "33a163a7a33406bc461dbe5e4202d22450e9d388b76e77d758e917cc4393c479"
     },
     {
+      "path": "database/releases/profiles/wici-observed.json",
+      "sha256": "5aedf710d6694e93d0b71da365ffc4b266730d2ddf66f37819327bb13d1514fd"
+    },
+    {
+      "path": "database/releases/profiles/wici-target.json",
+      "sha256": "43a5456473dc5616b632b50a46c928ea031a5df4e299559f4e2cc1f1dab2e879"
+    },
+    {
       "path": "database/releases/runtime-modules.json",
       "sha256": "423cf41a1014795d8745900ee85c301d37839ccac6677cda03eba063210bba7d"
     },
@@ -526,7 +534,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "46a4c1a0de12e0c14480fd80102d914e86de079856814159d80864ef6f841c17"
+      "sha256": "d8d62a3498c34868d431b7583bd3c54987b5a503740a0ba979f08ffc85ed5abe"
     },
     {
       "path": "policies/approvalPolicy.js",
@@ -890,19 +898,23 @@
     },
     {
       "path": "scripts/databaseRelease.js",
-      "sha256": "dc5de1ff8f4ac3cf920289ff77d97c227b69b7dcb0e2aec35c2b672d504191df"
+      "sha256": "b04b9f195e5485fb48716756b9ab184c477f1d7982dad54896f37ea884d6d425"
     },
     {
       "path": "scripts/lib/databaseRelease/catalog.js",
-      "sha256": "94aac80f075dda86fae9528b882e94c0bb7bb87e8dcadaf640705f8af516fd24"
+      "sha256": "22fda268a90332626a90edf572e54e440e0f960247e7fbd14d4c7ea5a700a1f7"
     },
     {
       "path": "scripts/lib/databaseRelease/inventory.js",
-      "sha256": "0fb88c79b587a5bc4e0f22c842e0440e5da0a356318611a99d90e518e9826a4a"
+      "sha256": "4a2280fecdf229e5c5174dea1aba5bb375ef07d197a92c934241e99446eb8288"
     },
     {
       "path": "scripts/lib/databaseRelease/planner.js",
-      "sha256": "a7fd7f224ec833ec289c34e4602b01833853669d431750a66105dec8ecedb954"
+      "sha256": "3d184ec6b6b46ad331c28ddc72eb4aa7355ac4b9b75d117246fbb6672f2dcfb7"
+    },
+    {
+      "path": "scripts/lib/databaseRelease/profiles.js",
+      "sha256": "d684e0a9a3fcac9c1f7a6068fde9d93a7d47d108a5b916dd09fd2e2d005523d6"
     },
     {
       "path": "scripts/lib/databaseRelease/sqlStatements.js",
@@ -1010,7 +1022,7 @@
     },
     {
       "path": "services/databaseReleaseService.js",
-      "sha256": "80149b68c227e15e30e7195ebc0ceaa5ddda2461ced7919a405ab78c8761f076"
+      "sha256": "744abf62922e5ea7d2416dae3495375ed018e66f44893a44b259176ac4f070c5"
     },
     {
       "path": "services/deliveryInspectionService.js",
@@ -1725,6 +1737,10 @@
       "sha256": "2deccff3b3bd189b921da8fdb923c03887d74aae9d7f6e34037b24561a61c1e3"
     },
     {
+      "path": "utils/runtimeDatabaseIdentity.js",
+      "sha256": "97985213f68fc602088ca5a1289b4e427f74d1c2f49096f0f198d7f86d1c8d89"
+    },
+    {
       "path": "utils/runtimeSchemaContract.js",
       "sha256": "7f749d822f96aec3c26fd6692facc08a79aaf1c9f528b9b5b7839c8cea675d4a"
     },
@@ -1781,8 +1797,8 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "c4fd82cae77212e8def2e2163ce89f0dab4c2695b450e2d52df6db736ec40c3c",
-  "highest_manual_number": 72,
+  "application_manifest_sha256": "902f0e5a5581d5f6aa39b3bc319c829a97947756be90ecc5b6603e5ea19c364c",
+  "highest_manual_number": 73,
   "artifacts": [
     {
       "path": "sql/20260313_procure_to_pay_document_flow.sql",
@@ -2624,6 +2640,24 @@
       "preflight_contract": "database/releases/prerequisites/071-schema-contract.json"
     },
     {
+      "path": "sql/manual/073_wici_observed_schema_recovery.sql",
+      "id": "073",
+      "classification": "manual_recovery_migration",
+      "sha256": "58122f8c2449dd50d37eaa229d9d622faf7be4e34d56848c999aec5a38285ca2",
+      "bytes": 30368,
+      "execution_evidence": "UNVERIFIED",
+      "ddl_statements": 69,
+      "header": "-- MANUAL DATABASE MIGRATION REQUIRED. Recovery only: DB_RELEASE_SCHEMA_PROFILE=wici-2026-11.\n-- Execute only the generated, checksum-bound bundle after backup and Development review.\n-- A new observed-controls baseline, not fabricated receipts for SQL 069-072.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';",
+      "profile": "wici-2026-11",
+      "observes_prior_controls": [
+        "069",
+        "070",
+        "071",
+        "072"
+      ],
+      "note": "Records a new observed-controls baseline now; never claims historical executions occurred."
+    },
+    {
       "path": "sql/migrations/20260312_procure_to_pay.sql",
       "id": null,
       "classification": "frozen_historical_migration",
@@ -2764,6 +2798,16 @@
       "header": "-- Run before migration. Each query must return one row with the expected key type.\nSELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN\n ('users','requests','requested_items','stock_items','suppliers','contracts','inventory_transactions',\n  'purchase_order_items','goods_receipt_items','warehouse_stock_levels','item_categories','item_uom','item_manufacturers');\nSELECT table_name,column_name,data_type FROM information_schema.columns\n WHERE table_schema='public' AND column_name='id' AND table_name IN"
     },
     {
+      "path": "sql/operator-recovery/wici-production-recovery.sql",
+      "id": null,
+      "classification": "generated_operator_bundle",
+      "sha256": "a35baa9ebc045a7b89cbec9c330119ad45f75114def2fc932a55d33ceeb50b1b",
+      "bytes": 4052541,
+      "execution_evidence": "UNVERIFIED",
+      "ddl_statements": 1210,
+      "header": "-- Generated offline. Review checksum, actor, environment and release before manual SQL Editor execution.\n-- Historical migrations remain UNVERIFIED. This bundle never replays a frozen file.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';\nSET LOCAL search_path = public, extensions, pg_catalog;"
+    },
+    {
       "path": "sql/permissions_Table.sql",
       "id": null,
       "classification": "export_snapshot",
@@ -2874,7 +2918,7 @@
       "path": "scripts/testBackendContractRefresh.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 5,
-      "sha256": "6dd7147aebc3358a7a430a950e9bc73f5d64672837f1bf716c2d267e9ba490c4"
+      "sha256": "5cf4bef9605c422b0301729438e8bdfaf3a3749ebf6b00693733e60c7ea02e4a"
     },
     {
       "path": "scripts/testBackendSchemaReconciliation.js",
@@ -2971,6 +3015,18 @@
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 1,
       "sha256": "2052266234dad26b8fdfd7e96195a56482623c618b5df7c2337321317b104bfd"
+    },
+    {
+      "path": "integration/wiciObservedFixture.js",
+      "classification": "test_fixture_or_verification",
+      "ddl_occurrences": 5,
+      "sha256": "b4c2ca252dae2f1495b701cdfc3799050aabdf6de76c48a3f5aa721f75e7f74c"
+    },
+    {
+      "path": "integration/wiciRecovery.postgres.js",
+      "classification": "test_fixture_or_verification",
+      "ddl_occurrences": 4,
+      "sha256": "9202bd473e46cdefd45cf2ccf8fdb78a8de05933bed840c9be2feb45d72f28a2"
     }
   ],
   "note": "Repository existence is not execution evidence. Superseded definitions and optional policy/data patches are not a replay order."

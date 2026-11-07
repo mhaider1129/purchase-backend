@@ -1,0 +1,2 @@
+# Preserve checksum-bound source and SQL bytes in the standalone backend export.
+* text=auto eol=lf

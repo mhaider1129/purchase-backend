@@ -11,6 +11,7 @@ if (!dbUrl) {
 }
 
 const pool = new Pool({
+  Client: require("../utils/runtimeDatabaseIdentity").clientClass(),
   connectionString: dbUrl,
   ssl: isProduction ? { rejectUnauthorized: false } : false, // Disable SSL locally
   keepAlive: true,

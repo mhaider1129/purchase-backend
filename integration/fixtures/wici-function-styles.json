@@ -1,0 +1,112 @@
+{
+  "style": {
+    "approval_active_elapsed_seconds(target_request_id bigint, period_start timestamp with time zone, period_end timestamp with time zone)": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "approval_route_snapshot_guard()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "approval_route_snapshot_validate()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "canonical_procurement_completion(p_request_id integer, p_institute_id integer, p_item_id integer)": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "canonical_receipt_inventory_quantity(p_receipt_item_id bigint, p_institute_id integer, p_stock_status text, p_source_movement_id bigint)": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "canonical_supply_quantity(p_item_id integer, p_institute_id integer)": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "enforce_rfid_antenna_scope_update()": {
+      "crlf": true,
+      "marker_comment": true
+    },
+    "enforce_rfid_portal_antenna_scope()": {
+      "crlf": true,
+      "marker_comment": true
+    },
+    "enforce_rfid_portal_enable_scope()": {
+      "crlf": true,
+      "marker_comment": true
+    },
+    "enforce_rfid_reader_scope_update()": {
+      "crlf": true,
+      "marker_comment": true
+    },
+    "guard_canonical_contract_po_source()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "guard_canonical_invoice_contract_source()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "guard_contract_canonical_commitment()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "guard_event_reliability_cutover()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "guard_rfid_attempt_history()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "next_maintenance_work_order_number(p_institute_id integer)": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "preserve_database_release_evidence()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "preserve_receipt_status_link()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "prevent_inventory_allocation_mutation()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "prevent_posted_inventory_mutation()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "record_approval_activation_time()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "validate_organization_position_user()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "validate_organization_unit()": {
+      "crlf": true,
+      "marker_comment": false
+    },
+    "validate_stock_mapping_target()": {
+      "crlf": true,
+      "marker_comment": false
+    }
+  },
+  "extra_functions": [
+    {
+      "name": "approve_stock_item_request",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION public.approve_stock_item_request()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\r\nBEGIN\r\n  IF NEW.status = 'Approved' AND OLD.status IS DISTINCT FROM 'Approved' THEN\r\n    UPDATE public.stock_items\r\n    SET quantity = COALESCE(quantity, 0) + COALESCE(NEW.quantity, 0)\r\n    WHERE id = NEW.stock_item_id;\r\n  END IF;\r\n  RETURN NEW;\r\nEND;\r\n$function$\n"
+    },
+    {
+      "name": "set_user_registration_requests_updated_at",
+      "arguments": "",
+      "definition": "CREATE OR REPLACE FUNCTION public.set_user_registration_requests_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\r\nBEGIN\r\n  NEW.updated_at := NOW();\r\n  RETURN NEW;\r\nEND;\r\n$function$\n"
+    }
+  ]
+}

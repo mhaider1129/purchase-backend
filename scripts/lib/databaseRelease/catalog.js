@@ -22,26 +22,57 @@ const businessQueries = {
   reference_accounts:
     "SELECT code FROM public.finance_chart_of_accounts WHERE code IN ('5000-PROC-EXP','2100-AP-ACCRUAL') ORDER BY code",
 };
-async function snapshot(db) {
+const referenceRelations = {
+  permissions: "permissions",
+  ui_resources: "ui_resource_permissions",
+  route_policies: "route_capability_policies",
+  reference_accounts: "finance_chart_of_accounts",
+  evaluation_criteria_codes: "evaluation_criteria",
+};
+async function visibility(db) {
+  const rows = (
+    await db.query(
+      `SELECT c.relname relation,
+      has_table_privilege(current_user,c.oid,'SELECT') can_select,
+      pg_catalog.row_security_active(c.oid) rls_active
+     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname='public' AND c.relname=ANY($1::text[])`,
+      [
+        [
+          ...Object.values(referenceRelations),
+          "database_release_migrations",
+          "database_release_attestations",
+        ],
+      ],
+    )
+  ).rows;
+  const hidden = rows.filter((r) => !r.can_select || r.rls_active);
+  const unreadableRelations = hidden.map((r) => r.relation);
+  return {
+    complete: hidden.length === 0,
+    unreadableRelations,
+    unobservableGroups: Object.entries(referenceRelations)
+      .filter(([, relation]) => unreadableRelations.includes(relation))
+      .map(([group]) => group),
+    findings: hidden.map((r) => ({
+      group: "catalog_visibility",
+      object: r.relation,
+      reason: !r.can_select
+        ? "SELECT_missing"
+        : "row_security_may_hide_reference_or_release_evidence",
+    })),
+  };
+}
+async function snapshot(db, { unobservableGroups = [] } = {}) {
   const result = {};
   for (const [k, sql] of Object.entries(queries))
     result[k] = (await db.query(sql)).rows;
   const present = new Set(result.relations.map((r) => r.name));
-  result.permissions = present.has("permissions")
-    ? (await db.query(businessQueries.permissions)).rows
-    : [];
-  result.ui_resources = present.has("ui_resource_permissions")
-    ? (await db.query(businessQueries.ui_resources)).rows
-    : [];
-  result.route_policies = present.has("route_capability_policies")
-    ? (await db.query(businessQueries.route_policies)).rows
-    : [];
-  result.reference_accounts = present.has("finance_chart_of_accounts")
-    ? (await db.query(businessQueries.reference_accounts)).rows
-    : [];
-  result.evaluation_criteria_codes = present.has("evaluation_criteria")
-    ? (await db.query(businessQueries.evaluation_criteria_codes)).rows
-    : [];
+  for (const [group, relation] of Object.entries(referenceRelations))
+    result[group] =
+      present.has(relation) && !unobservableGroups.includes(group)
+        ? (await db.query(businessQueries[group])).rows
+        : [];
   return result;
 }
 const key = (group, row) =>
@@ -137,6 +168,7 @@ async function fingerprint(db, actual) {
 module.exports = {
   queries,
   businessQueries,
+  visibility,
   snapshot,
   key,
   compare,

@@ -131,7 +131,7 @@ async function run() {
       await require('../integration/deviceDemoWorkspaces')(client);
       return;
     }
-    if (process.argv.includes('--completion') || process.argv.includes('--receipt-acceptance') || process.argv.includes('--completion-reporting') || process.argv.includes('--database-governance') || process.argv.includes('--rfid-recovery') || process.argv.includes('--event-reliability') || process.argv.includes('--scop-foundation')) {
+    if (process.argv.includes('--completion') || process.argv.includes('--receipt-acceptance') || process.argv.includes('--completion-reporting') || process.argv.includes('--database-governance') || process.argv.includes('--rfid-recovery') || process.argv.includes('--event-reliability') || process.argv.includes('--scop-foundation') || process.argv.includes('--guided-requests')) {
       process.env.DATABASE_URL=disposableDatabaseUrl(url);
       process.env.NODE_ENV='test';
       await client.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role BYPASSRLS; END IF; END $$");
@@ -145,7 +145,7 @@ async function run() {
       await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
       await client.query(read('sql/manual/067_canonical_procurement_completion.sql'));
       await client.query(read('sql/manual/068_goods_receipt_acceptance_integration.sql'));
-      if(process.argv.includes('--database-governance') || process.argv.includes('--rfid-recovery') || process.argv.includes('--event-reliability') || process.argv.includes('--scop-foundation')) {
+      if(process.argv.includes('--database-governance') || process.argv.includes('--rfid-recovery') || process.argv.includes('--event-reliability') || process.argv.includes('--scop-foundation') || process.argv.includes('--guided-requests')) {
         await client.query(read('sql/manual/061_ui_resource_catalog_refresh.sql'));
         await client.query(read('sql/manual/066_contract_financial_reconciliation.sql'));
         await client.query(read('sql/manual/069_database_release_governance.sql'));
@@ -155,6 +155,7 @@ async function run() {
         await client.query(read('sql/manual/071_transactional_event_reliability.sql'));
         await require('../integration/databaseReleasePrerequisite')(client,url,'071');
         await client.query(read('sql/manual/072_scop_operational_foundation.sql'));
+        if(process.argv.includes('--guided-requests')) { await require('../integration/guidedRequests.postgres').run(client,url); return; }
         if(process.argv.includes('--scop-foundation')){ await require('../integration/scopFoundation.postgres').capture(client); await require('../integration/goodsReceiptAcceptance.postgres').run(client,url,{after:context=>require('../integration/scopFoundation.postgres').run(client,url,context)}); return; }
         if(process.argv.includes('--event-reliability'))await require('../integration/eventReliability.postgres').run(client,url);
         else if(process.argv.includes('--rfid-recovery'))await require('../integration/rfidRecovery.postgres').run(client,url);

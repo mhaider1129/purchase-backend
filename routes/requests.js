@@ -66,6 +66,7 @@ const pool = require('../config/db');
 // 📦 Core Request Operations
 // ==========================
 
+router.use('/guided', require('./guidedRequests'));
 router.post('/', upload.any(), createRequest); // Create new request with optional attachments
 router.post('/historical', insertHistoricalRequest); // Record approved paper requests for KPIs
 router.get('/', getAllRequests); // Admin/SCM view all

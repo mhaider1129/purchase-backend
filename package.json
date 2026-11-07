@@ -38,7 +38,8 @@
     "test:database-governance-postgres": "node scripts/testBackendContractRefresh.js --database-governance",
     "test:rfid-recovery-postgres": "node scripts/testBackendContractRefresh.js --rfid-recovery",
     "test:event-reliability-postgres": "node scripts/testBackendContractRefresh.js --event-reliability",
-    "test:scop-foundation-postgres": "node scripts/testBackendContractRefresh.js --scop-foundation"
+    "test:scop-foundation-postgres": "node scripts/testBackendContractRefresh.js --scop-foundation",
+    "test:guided-requests-postgres": "node scripts/testBackendContractRefresh.js --guided-requests"
   },
   "keywords": [
     "purchase",

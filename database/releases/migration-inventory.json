@@ -198,7 +198,7 @@
     },
     {
       "path": "controllers/requests/createRequestController.js",
-      "sha256": "0ed3dae67bbf66a75ddade4b412b65d91f8511dafc9a7ec56ab5e25e4bf29ee0"
+      "sha256": "eec48bec2410f3d6d382289ec615624f3ab485e945f40175d903f5c07b025e7e"
     },
     {
       "path": "controllers/requests/directPurchaseCommunicationController.js",
@@ -526,7 +526,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "62fbda34baa744645344b4228214d45ad01db0950874d38c41f82330da3fcd5e"
+      "sha256": "46a4c1a0de12e0c14480fd80102d914e86de079856814159d80864ef6f841c17"
     },
     {
       "path": "policies/approvalPolicy.js",
@@ -717,6 +717,10 @@
       "sha256": "1a00b530120a4a184fcf3bbf52cf293f50035c8770f1ff5c9f0bdaa14be28581"
     },
     {
+      "path": "routes/guidedRequests.js",
+      "sha256": "3b5bacea98c52b3ddd48cacb75b65c7682640dbcf0911bffd3184633536e0f5d"
+    },
+    {
       "path": "routes/itemMaster.js",
       "sha256": "f898a47a02346d6b837d3a5f9842180daa32e429697f154a1362f12a1e055d5f"
     },
@@ -790,7 +794,7 @@
     },
     {
       "path": "routes/requests.js",
-      "sha256": "b14b64e925598a3b2c644384231ecad14d0a8ace41ab6baefc798f2a5a48f823"
+      "sha256": "99ff6ebc6b443688261e95a024fc97e1169a1ba343db854a2bf5500e32262e2c"
     },
     {
       "path": "routes/rfid.js",
@@ -1063,6 +1067,10 @@
     {
       "path": "services/goodsReceiptService.js",
       "sha256": "f9804872ced102c5a18c524dd3efe4296826313170a75ebd380f91793414d604"
+    },
+    {
+      "path": "services/guidedRequestService.js",
+      "sha256": "6c417bf425021bbce1847ae29a6f281598d85f2d969abbf8f72e52f9b1a577fe"
     },
     {
       "path": "services/inventoryAdjustmentService.js",
@@ -1773,7 +1781,7 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "6cf8c5f1917a7b9e66c4ed119d39c87eab2af4c53ca155cb653a2f5d93a5df35",
+  "application_manifest_sha256": "c4fd82cae77212e8def2e2163ce89f0dab4c2695b450e2d52df6db736ec40c3c",
   "highest_manual_number": 72,
   "artifacts": [
     {
@@ -2866,7 +2874,7 @@
       "path": "scripts/testBackendContractRefresh.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 5,
-      "sha256": "28d8348a0ed91b905d4501d5526bdfcb5a96438fe59442926e72b3c614bcb1e9"
+      "sha256": "6dd7147aebc3358a7a430a950e9bc73f5d64672837f1bf716c2d267e9ba490c4"
     },
     {
       "path": "scripts/testBackendSchemaReconciliation.js",
@@ -2921,6 +2929,12 @@
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 1,
       "sha256": "6564b4bfa737e9b902165079177e4e1764b805f70222ce7555bdeb493b2d733b"
+    },
+    {
+      "path": "integration/guidedRequests.postgres.js",
+      "classification": "test_fixture_or_verification",
+      "ddl_occurrences": 1,
+      "sha256": "eb3cb3eb374b62bba6d62418781a1f88f96e0e322dfc05dc731c7333ec1a3bf4"
     },
     {
       "path": "integration/legacyContractSettlement.postgres.js",

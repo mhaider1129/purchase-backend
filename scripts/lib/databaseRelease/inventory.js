@@ -4,6 +4,10 @@ const fs = require("fs"),
   crypto = require("crypto");
 const root = path.resolve(__dirname, "../../..");
 const hash = (s) => crypto.createHash("sha256").update(s).digest("hex");
+// Inventory keys are repository-relative POSIX paths on every host. Keep the
+// native absolute paths returned by files() for filesystem reads.
+const repositoryRelative = (file) =>
+  path.relative(root, file).replace(/\\/g, "/");
 function files(dir) {
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -20,7 +24,7 @@ function inventory() {
     .filter((f) => f.endsWith(".sql"))
     .map((f) => {
       const content = fs.readFileSync(f, "utf8"),
-        name = path.relative(root, f),
+        name = repositoryRelative(f),
         number = /sql\/manual\/(\d+)_/.exec(name)?.[1];
       const verification = /verify|verification|diagnostic|(?:^|\/)007_/i.test(
         name,
@@ -59,7 +63,7 @@ function inventory() {
     ...files(path.join(root, "integration/fixtures"))
       .filter((f) => f.endsWith(".sql"))
       .map((f) => ({
-        path: path.relative(root, f),
+        path: repositoryRelative(f),
         id: null,
         classification: "test_fixture",
         sha256: hash(fs.readFileSync(f)),
@@ -144,15 +148,16 @@ function inventory() {
     .flatMap((d) => files(path.join(root, d)))
     .filter((f) => f.endsWith(".js"))
     .map((f) => {
-      const c = fs.readFileSync(f, "utf8");
+      const c = fs.readFileSync(f, "utf8"),
+        name = repositoryRelative(f);
       const matches = [
         ...c.matchAll(
           /\b(CREATE\s+(?:TABLE|UNIQUE\s+INDEX|INDEX|(?:OR\s+REPLACE\s+)?FUNCTION)|ALTER\s+TABLE|DROP\s+INDEX)\b/gi,
         ),
       ];
       return {
-        path: path.relative(root, f),
-        classification: /^(scripts|integration)\//.test(path.relative(root, f))
+        path: name,
+        classification: /^(scripts|integration)\//.test(name)
           ? "test_fixture_or_verification"
           : "runtime_compatibility_initialization",
         ddl_occurrences: matches.length,
@@ -167,14 +172,14 @@ function inventory() {
     "scripts/databaseRelease.js",
     "database/releases/runtime-modules.json",
     ...files(path.join(root, "database/releases/profiles")).map((f) =>
-      path.relative(root, f),
+      repositoryRelative(f),
     ),
     ...files(path.join(root, "database/releases/prerequisites")).map((f) =>
-      path.relative(root, f),
+      repositoryRelative(f),
     ),
     ...files(path.join(root, "scripts/lib/databaseRelease"))
       .filter((f) => f.endsWith(".js"))
-      .map((f) => path.relative(root, f)),
+      .map((f) => repositoryRelative(f)),
     ...[
       "jobs",
       "constants",
@@ -193,7 +198,7 @@ function inventory() {
     ].flatMap((d) =>
       files(path.join(root, d))
         .filter((f) => /\.(js|json)$/.test(f))
-        .map((f) => path.relative(root, f)),
+        .map((f) => repositoryRelative(f)),
     ),
   ]
     .sort()

@@ -151,3 +151,99 @@ test("a rewritten source lock cannot retain an old release digest", () => {
     reason: "MANIFEST_DIGEST_MISMATCH",
   });
 });
+
+// Simulate each host's path.relative() representation while keeping actual
+// filesystem paths native. These fixtures do not rewrite the locked manifest.
+const inventoryWithSeparators = (separator, run) => {
+  const relative = path.relative;
+  const spy = jest
+    .spyOn(path, "relative")
+    .mockImplementation((from, to) =>
+      relative(from, to).replace(/[\\/]/g, separator),
+    );
+  try {
+    return run();
+  } finally {
+    spy.mockRestore();
+  }
+};
+test.each(["/", "\\"])(
+  "repository paths use POSIX keys for %s relative separators",
+  (separator) => {
+    const locked = loadInventory();
+    const read = jest.spyOn(fs, "readFileSync");
+    let discovered, reads;
+    try {
+      discovered = inventoryWithSeparators(separator, () => inventory());
+      reads = read.mock.calls.map(([file]) => file);
+    } finally {
+      read.mockRestore();
+    }
+    expect(discovered.highest_manual_number).toBe(73);
+    const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    expect([...discovered.artifacts].sort(byPath)).toEqual(
+      [...locked.artifacts].sort(byPath),
+    );
+    expect(discovered.application_sources.map((r) => r.path)).toEqual(
+      locked.application_sources.map((r) => r.path),
+    );
+    for (const row of [
+      ...discovered.artifacts,
+      ...discovered.application_sources,
+      ...discovered.runtime_sources,
+    ])
+      expect(row.path).not.toContain("\\");
+    expect(
+      discovered.runtime_sources
+        .filter(
+          (r) =>
+            r.path.startsWith("scripts/") || r.path.startsWith("integration/"),
+        )
+        .every((r) => r.classification === "test_fixture_or_verification"),
+    ).toBe(true);
+    expect(
+      reads.every((file) => typeof file === "string" && path.isAbsolute(file)),
+    ).toBe(true);
+  },
+);
+test("Windows discovery adds no path-related failures to the unchanged locked manifest", () => {
+  const locked = loadInventory();
+  const posix = inventoryWithSeparators("/", () => verifyFiles(locked));
+  const windows = inventoryWithSeparators("\\", () => verifyFiles(locked));
+  expect(windows).toEqual(posix);
+  expect(
+    windows.some((r) => r.reason === "UNREGISTERED_RELEASE_ARTIFACT"),
+  ).toBe(false);
+  // Source-byte attestation is still enforced, including this edited tool.
+  const changed = structuredClone(locked);
+  changed.artifacts.find((r) => r.id === "071").sha256 = "0".repeat(64);
+  expect(inventoryWithSeparators("\\", () => verifyFiles(changed))).toEqual(
+    expect.arrayContaining([
+      {
+        file: "sql/manual/071_transactional_event_reliability.sql",
+        reason: "CHECKSUM_MISMATCH",
+      },
+    ]),
+  );
+});
+test.each(["/", "\\"])(
+  "a current test fixture verifies and keeps 073 manual with %s paths",
+  (separator) => {
+    inventoryWithSeparators(separator, () => {
+      // A fresh in-memory fixture tests planner logic independently of the
+      // production lock. It is never written over migration-inventory.json.
+      const fixture = inventory();
+      expect(verifyFiles(fixture)).toEqual([]);
+      expect(fixture.artifacts.find((r) => r.id === "073").classification).toBe(
+        "manual_recovery_migration",
+      );
+      expect(selectMigrations(fixture).map((r) => r.id)).toEqual(["072"]);
+      expect(() =>
+        selectMigrations(fixture, ["073_wici_observed_schema_recovery"]),
+      ).toThrow("FROZEN_REPLAY_DISABLED");
+      expect(
+        selectMigrations(fixture, undefined, "wici-2026-11").map((r) => r.id),
+      ).toEqual(["073"]);
+    });
+  },
+);

@@ -4,6 +4,8 @@ const fs = require("fs"),
   crypto = require("crypto");
 const root = path.resolve(__dirname, "../../..");
 const hash = (s) => crypto.createHash("sha256").update(s).digest("hex");
+// Manifest identities use POSIX separators; filesystem paths remain native.
+const repositoryPath = (file) => path.relative(root, file).replace(/\\/g, "/");
 function files(dir) {
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -20,22 +22,26 @@ function inventory() {
     .filter((f) => f.endsWith(".sql"))
     .map((f) => {
       const content = fs.readFileSync(f, "utf8"),
-        name = path.relative(root, f),
+        name = repositoryPath(f),
         number = /sql\/manual\/(\d+)_/.exec(name)?.[1];
       const verification = /verify|verification|diagnostic|(?:^|\/)007_/i.test(
         name,
       );
-      const kind = verification
-        ? "read_only_verification"
-        : /View_Supabase|permissions_Table|UI_resource_permissions/i.test(name)
-          ? "export_snapshot"
-          : number
-            ? Number(number) >= 69
-              ? "active_forward_migration"
-              : "frozen_historical_migration"
-            : /migration|development/i.test(name)
-              ? "frozen_historical_migration"
-              : "unused_or_uncertain";
+      const kind = name.startsWith("sql/operator-recovery/")
+        ? "generated_operator_bundle"
+        : verification
+          ? "read_only_verification"
+          : /View_Supabase|permissions_Table|UI_resource_permissions/i.test(
+                name,
+              )
+            ? "export_snapshot"
+            : number
+              ? Number(number) >= 69
+                ? "active_forward_migration"
+                : "frozen_historical_migration"
+              : /migration|development/i.test(name)
+                ? "frozen_historical_migration"
+                : "unused_or_uncertain";
       return {
         path: name,
         id: number || null,
@@ -55,7 +61,7 @@ function inventory() {
     ...files(path.join(root, "integration/fixtures"))
       .filter((f) => f.endsWith(".sql"))
       .map((f) => ({
-        path: path.relative(root, f),
+        path: repositoryPath(f),
         id: null,
         classification: "test_fixture",
         sha256: hash(fs.readFileSync(f)),
@@ -85,6 +91,13 @@ function inventory() {
       entry.note =
         "Overlapping responsibility is consolidated; never replay or infer historical execution.";
     }
+    if (entry.id === "073") {
+      entry.classification = "manual_recovery_migration";
+      entry.profile = "wici-2026-11";
+      entry.observes_prior_controls = ["069", "070", "071", "072"];
+      entry.note =
+        "Records a new observed-controls baseline now; never claims historical executions occurred.";
+    }
     if (entry.id === "069") {
       entry.classification = "frozen_historical_migration";
       entry.governed_receipt_required = true;
@@ -99,7 +112,8 @@ function inventory() {
     if (entry.id === "072") {
       entry.governed_receipt_required = true;
       entry.depends_on = ["071_transactional_event_reliability"];
-      entry.preflight_contract = "database/releases/prerequisites/071-schema-contract.json";
+      entry.preflight_contract =
+        "database/releases/prerequisites/071-schema-contract.json";
     }
     if (entry.id === "071") {
       entry.classification = "frozen_historical_migration";
@@ -139,8 +153,8 @@ function inventory() {
         ),
       ];
       return {
-        path: path.relative(root, f),
-        classification: /^(scripts|integration)\//.test(path.relative(root, f))
+        path: repositoryPath(f),
+        classification: /^(scripts|integration)\//.test(repositoryPath(f))
           ? "test_fixture_or_verification"
           : "runtime_compatibility_initialization",
         ddl_occurrences: matches.length,
@@ -154,12 +168,15 @@ function inventory() {
     "package-lock.json",
     "scripts/databaseRelease.js",
     "database/releases/runtime-modules.json",
+    ...files(path.join(root, "database/releases/profiles")).map((f) =>
+      repositoryPath(f),
+    ),
     ...files(path.join(root, "database/releases/prerequisites")).map((f) =>
-      path.relative(root, f),
+      repositoryPath(f),
     ),
     ...files(path.join(root, "scripts/lib/databaseRelease"))
       .filter((f) => f.endsWith(".js"))
-      .map((f) => path.relative(root, f)),
+      .map((f) => repositoryPath(f)),
     ...[
       "jobs",
       "constants",
@@ -178,7 +195,7 @@ function inventory() {
     ].flatMap((d) =>
       files(path.join(root, d))
         .filter((f) => /\.(js|json)$/.test(f))
-        .map((f) => path.relative(root, f)),
+        .map((f) => repositoryPath(f)),
     ),
   ]
     .sort()

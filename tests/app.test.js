@@ -56,6 +56,30 @@ describe('Express app', () => {
     expect(body.requestId).toEqual(expect.any(String));
     expect(headers['x-request-id']).toBe(body.requestId);
   });
+  it('serves deployment identity through the actual same-origin API route without opening protected auth', async () => {
+    const beforeRelease = process.env.APP_RELEASE_REF;
+    const beforeWorkers = process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED;
+    try {
+      process.env.APP_RELEASE_REF = 'a'.repeat(40);
+      process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED = 'false';
+      const response = await makeRequest(baseUrl, '/api/health');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(expect.objectContaining({ release: 'a'.repeat(40), workers: false }));
+      expect((await makeRequest(baseUrl, '/api/auth/me')).status).toBe(401);
+    } finally {
+      if (beforeRelease === undefined) delete process.env.APP_RELEASE_REF; else process.env.APP_RELEASE_REF = beforeRelease;
+      if (beforeWorkers === undefined) delete process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED; else process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED = beforeWorkers;
+    }
+  });
+  it('rejects invalid worker configuration before attempting startup', async () => {
+    const before = process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED;
+    try {
+      process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED = 'invalid';
+      await expect(app.startServer()).rejects.toMatchObject({ code: 'INVALID_WORKER_CONFIGURATION' });
+    } finally {
+      if (before === undefined) delete process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED; else process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED = before;
+    }
+  });
 
   it('uses incoming x-request-id header when provided', async () => {
     const requestId = 'starter-pack-request-id';

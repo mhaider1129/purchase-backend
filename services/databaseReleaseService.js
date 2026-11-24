@@ -9,6 +9,11 @@ const {
 const directory = path.join(__dirname, "../database/releases");
 const CONTRACT_VERSION = "hospital-erp-2026-11-7c";
 function loadContract() {
+  const profile = process.env.DB_RELEASE_SCHEMA_PROFILE;
+  if (profile && profile !== "canonical")
+    return require("../scripts/lib/databaseRelease/profiles").loadProfile(
+      profile,
+    );
   return JSON.parse(
     fs.readFileSync(path.join(directory, "schema-contract.json"), "utf8"),
   );
@@ -198,18 +203,48 @@ async function verify(
   } = {},
 ) {
   const fileErrors = verifyFiles(inventory),
-    actual = await catalog.snapshot(db),
-    findings = [...fileErrors, ...catalog.compare(contract.catalog, actual)];
+    visibility = await catalog.visibility(db),
+    actual = await catalog.snapshot(db, visibility),
+    observableExpected = Object.fromEntries(
+      Object.entries(contract.catalog).filter(
+        ([group]) => !visibility.unobservableGroups.includes(group),
+      ),
+    ),
+    findings = [
+      ...fileErrors,
+      ...visibility.findings.filter(
+        (f) =>
+          requireEvidence ||
+          ![
+            "database_release_migrations",
+            "database_release_attestations",
+          ].includes(f.object),
+      ),
+      ...catalog.compare(observableExpected, actual),
+    ];
   const authority = await runtimeAuthority(db, role);
   findings.push(...authority.findings);
-  const observed = await catalog.fingerprint(db, actual),
+  const observed = visibility.complete
+      ? await catalog.fingerprint(db, actual)
+      : null,
     contractDigest = hash(JSON.stringify(contract));
   let receipts = [],
-    attestation = null;
-  if (actual.relations.some((r) => r.name === "database_release_migrations"))
+    attestation = null,
+    observedBaseline = null;
+  const receiptsObservable = !visibility.unreadableRelations.includes(
+    "database_release_migrations",
+  );
+  const attestationObservable = !visibility.unreadableRelations.includes(
+    "database_release_attestations",
+  );
+  if (
+    requireEvidence &&
+    receiptsObservable &&
+    actual.relations.some((r) => r.name === "database_release_migrations")
+  )
     receipts = (
       await db.query(
-        "SELECT migration_id,filename,content_sha256,execution_environment,execution_status,application_release_ref FROM public.database_release_migrations ORDER BY id",
+        "SELECT migration_id,filename,content_sha256,execution_environment,execution_status,application_release_ref,evidence FROM public.database_release_migrations ORDER BY id",
       )
     ).rows;
   if (requireEvidence) {
@@ -218,11 +253,39 @@ async function verify(
         group: "release",
         reason: "explicit_release_and_environment_required",
       });
+    const baselineId = contract.observed_baseline_migration;
+    const baselineEntry =
+      baselineId &&
+      inventory.artifacts.find(
+        (r) => r.id === baselineId && r.profile === contract.profile,
+      );
+    const baseline =
+      baselineEntry &&
+      receipts.find(
+        (r) =>
+          r.migration_id === path.basename(baselineEntry.path, ".sql") &&
+          r.execution_environment === environment &&
+          r.execution_status === "APPLIED" &&
+          r.content_sha256 === baselineEntry.sha256 &&
+          r.filename === baselineEntry.path &&
+          r.evidence?.source === "REVIEWED_TRANSACTIONAL_FORWARD_BUNDLE" &&
+          r.evidence?.observed_baseline_profile === contract.profile,
+      );
+    if (baseline)
+      observedBaseline = {
+        migration: baseline.migration_id,
+        profile: contract.profile,
+        historical_execution: "UNVERIFIED",
+        observed_prior_controls: baselineEntry.observes_prior_controls,
+      };
     for (const entry of inventory.artifacts.filter(
       (r) =>
         r.classification === "active_forward_migration" ||
-        r.governed_receipt_required,
+        r.governed_receipt_required ||
+        r.id === baselineId,
     )) {
+      // Hidden ledger rows are unknown evidence, never proof of missing execution.
+      if (!receiptsObservable) continue;
       const id = path.basename(entry.path, ".sql");
       const applied = receipts.find(
         (r) =>
@@ -230,6 +293,12 @@ async function verify(
           r.execution_environment === environment &&
           r.execution_status === "APPLIED",
       );
+      if (
+        !applied &&
+        baseline &&
+        baselineEntry.observes_prior_controls?.includes(entry.id)
+      )
+        continue;
       if (!applied)
         findings.push({
           group: "ledger",
@@ -250,6 +319,8 @@ async function verify(
       actual.relations.some(
         (r) => r.name === "database_release_attestations",
       ) &&
+      observed &&
+      attestationObservable &&
       releaseRef &&
       environment
     )
@@ -270,10 +341,14 @@ async function verify(
     if (!attestation)
       findings.push({
         group: "attestation",
-        reason: "current_schema_and_release_not_attested",
+        reason:
+          !observed || !attestationObservable
+            ? "attestation_unverifiable_with_incomplete_visibility"
+            : "current_schema_and_release_not_attested",
       });
   }
   return {
+    restart_eligible: !findings.length && requireEvidence && !role,
     status: findings.length
       ? "BLOCKED"
       : requireEvidence
@@ -287,10 +362,15 @@ async function verify(
     observed_schema_sha256: observed,
     findings,
     runtime: authority,
+    catalog_visibility: visibility,
+    receipt_visibility: receiptsObservable
+      ? "OBSERVABLE"
+      : "UNVERIFIED_INSUFFICIENT_VISIBILITY",
     receipts,
     historical_migrations:
       "UNVERIFIED_UNLESS_SUPPORTED_BY_SEPARATE_TRUSTWORTHY_EVIDENCE",
     attestation,
+    observed_baseline: observedBaseline,
   };
 }
 async function assertReady(db, options) {
@@ -308,6 +388,26 @@ async function assertReady(db, options) {
     );
   return report;
 }
+// Routine application deployment needs live compatibility, not a new operator
+// certification for every source commit. The explicit release verifier above
+// remains available for migration/audit certification and is unchanged.
+async function assertRuntimeCompatible(db, options) {
+  const report = await verify(db, { ...options, requireEvidence: false });
+  if (report.status !== "SCHEMA_VERIFIED_UNATTESTED")
+    throw Object.assign(
+      new Error(
+        "Runtime database compatibility or security check failed; deployment must retain the previous service",
+      ),
+      {
+        code: "DATABASE_RELEASE_INCOMPATIBLE",
+        statusCode: 503,
+        findings: report.findings,
+      },
+    );
+  report.startup_eligible = true;
+  report.readiness_mode = "AUTOMATIC_RUNTIME_COMPATIBILITY";
+  return report;
+}
 async function startWhenReady(db, options, onReady) {
   if (options?.role)
     throw Object.assign(new Error("Runtime role override is not permitted"), {
@@ -323,7 +423,7 @@ async function startWhenReady(db, options, onReady) {
       await client.query(
         "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
-    report = await assertReady(client, options);
+    report = await assertRuntimeCompatible(client, options);
     if (borrowed) await client.query("COMMIT");
   } catch (error) {
     if (borrowed) await client.query("ROLLBACK");
@@ -336,6 +436,7 @@ async function startWhenReady(db, options, onReady) {
 }
 
 module.exports = {
+  assertRuntimeCompatible,
   startWhenReady,
   CONTRACT_VERSION,
   loadContract,

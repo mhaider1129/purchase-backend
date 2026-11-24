@@ -67,14 +67,14 @@ Commands run from `purchase-backend`:
 npm run db:inventory
 npm run db:plan
 npm run db:plan -- --environment development --actor finance-platform-owner --release <immutable-reviewed-release> --output /tmp/review-069.sql
-npm run db:verify -- --environment development --release <same-reviewed-release>
+npm run db:verify -- --connection-mode runtime --environment development --release <same-reviewed-release>
 ```
 
 `db:plan` is offline and never reads a database URL. Review-only SQL output requires explicit actor, environment and release. It validates checksums, rejects frozen files, checks declared ordering, and supports one reviewed transactional forward step at a time. Current 069 has actual baseline-contract prerequisites, including functions from 067/068; those are structural requirements, not claims that particular historical scripts ran. A future release must update the versioned contract, dependency metadata and its preflight deliberately; this tool does not guess a new migration’s prerequisites.
 
 The generated bundle uses one BEGIN/COMMIT, a shared transaction advisory try-lock, 3-second lock timeout, 5-minute statement timeout, baseline preflight, migration payload, exact postflight and atomic receipt/attestation. Repeat execution with the same hash is a verified no-op for receipt rows. A changed hash, invalid order, missing prerequisite, malformed transaction boundary or unsupported concurrent-index operation blocks execution. No destructive down migration exists.
 
-`db:verify` requires a dedicated operator-provided **DB_RELEASE_READONLY_URL**, plus environment/release flags. It never falls back to the application DATABASE_URL and runs REPEATABLE READ READ ONLY. Do not put URLs/passwords in CLI arguments, tickets or logs. A report is DATABASE_READY only when actual schema/security, runtime authority, locked files, successful receipt and current attestation all agree. Schema-only diagnostics are SCHEMA_VERIFIED_UNATTESTED, never ready. Startup additionally requires APP_RELEASE_REF and DB_RELEASE_ENVIRONMENT; missing settings fail closed.
+`db:verify` defaults to diagnostic mode, which never authorizes restart and never assumes the configured runtime role. Explicit `--connection-mode runtime` is required for actual application acceptance; `--backend-role` is allowed only for diagnostic target-role assessment. RLS-filtered reference/evidence reads are insufficient visibility, not proof of absent records. `db:verify` requires a dedicated operator-provided **DB_RELEASE_READONLY_URL**, plus environment/release flags. It never falls back to the application DATABASE_URL and runs REPEATABLE READ READ ONLY. Do not put URLs/passwords in CLI arguments, tickets or logs. A report is DATABASE_READY only when actual schema/security, runtime authority, locked files, successful receipt and current attestation all agree. Schema-only diagnostics are SCHEMA_VERIFIED_UNATTESTED, never ready. Startup additionally requires APP_RELEASE_REF and DB_RELEASE_ENVIRONMENT; missing settings fail closed.
 
 ## Manual Development rollout
 

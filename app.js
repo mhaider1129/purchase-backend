@@ -470,8 +470,11 @@ app.use('/api', apiRouter);
 // =========================
 // 🛠️ Utility Routes
 // =========================
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: '✅ OK', timestamp: new Date(), requestId: req.requestId });
+app.get(['/health', '/api/health'], (req, res) => {
+  res.status(200).json({ status: '✅ OK', timestamp: new Date(), requestId: req.requestId,
+    release: process.env.APP_RELEASE_REF || null,
+    workers: process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED !== 'false',
+  });
 });
 
 app.get('/metrics', metricsHandler);
@@ -497,6 +500,10 @@ const startServer = async (
   port = process.env.PORT || 5000,
   host = process.env.HOST || getLANIP(),
 ) => {
+  if (process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED !== undefined &&
+      !['true', 'false'].includes(process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED)) {
+    throw Object.assign(new Error('RUNTIME_BACKGROUND_WORKERS_ENABLED must be true or false'), { code: 'INVALID_WORKER_CONFIGURATION' });
+  }
   const pool = require('./config/db');
   return require('./services/databaseReleaseService').startWhenReady(
     pool,
@@ -510,9 +517,10 @@ const startServer = async (
       await syncCapabilityPolicies();
       const server = app.listen(port, host, async () => {
         log('info', 'server_started', { host, port });
-        const rfidWorker = require('./jobs/rfidWorker').startRfidWorker({
+        const workersEnabled = process.env.RUNTIME_BACKGROUND_WORKERS_ENABLED !== 'false';
+        const rfidWorker = workersEnabled ? require('./jobs/rfidWorker').startRfidWorker({
           log,
-        });
+        }) : { stop: async () => {} };
         const scheduledTimers = [];
         let stopping = false;
         const shutdown = async () => {
@@ -538,6 +546,7 @@ const startServer = async (
           rfidWorker.stop();
         });
         try {
+          if (!workersEnabled) return;
           await reassignPendingApprovals();
           log('info', 'pending_approvals_reassigned_on_startup');
           await remindPendingApprovals();

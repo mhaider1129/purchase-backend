@@ -1,0 +1,2128 @@
+{
+  "base_contract_sha256": "e31f9432c24cd845178a34592a971222c2b3a22c6c0753fbb769fbf762b6d26e",
+  "base_stage": "observed",
+  "profile": "wici-2026-11",
+  "version": "hospital-erp-2026-11-wici-recovery1",
+  "observed_baseline_migration": "073",
+  "changes": {
+    "relations": {
+      "remove": [],
+      "put": [
+        {
+          "name": "contract_financial_reviews",
+          "kind": "r",
+          "rls": true,
+          "force_rls": false
+        },
+        {
+          "name": "scop_allocation_commands",
+          "kind": "r",
+          "rls": true,
+          "force_rls": false
+        },
+        {
+          "name": "scop_allocation_evidence",
+          "kind": "r",
+          "rls": true,
+          "force_rls": false
+        },
+        {
+          "name": "scop_fulfillment_allocations",
+          "kind": "r",
+          "rls": true,
+          "force_rls": false
+        },
+        {
+          "name": "scop_fulfillment_policies",
+          "kind": "r",
+          "rls": true,
+          "force_rls": false
+        },
+        {
+          "name": "scop_request_purposes",
+          "kind": "r",
+          "rls": true,
+          "force_rls": false
+        },
+        {
+          "name": "scop_requirement_profiles",
+          "kind": "r",
+          "rls": true,
+          "force_rls": false
+        }
+      ]
+    },
+    "columns": {
+      "remove": [],
+      "put": [
+        {
+          "relation": "contract_financial_reviews",
+          "name": "canonical_ids",
+          "type": "bigint[]",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "'{}'::bigint[]"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "command_fingerprint",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "command_key",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "decision",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "evidence_snapshot",
+          "type": "jsonb",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "id",
+          "type": "bigint",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "nextval('contract_financial_reviews_id_seq'::regclass)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "institute_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "notes",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "record_type",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "reviewed_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "clock_timestamp()"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "reviewer_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "revision",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "source_fingerprint",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "source_id",
+          "type": "bigint",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "supporting_evidence",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "goods_receipt_items",
+          "name": "damaged_quantity",
+          "type": "numeric",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": "0"
+        },
+        {
+          "relation": "goods_receipt_items",
+          "name": "ordered_quantity",
+          "type": "numeric",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "goods_receipt_items",
+          "name": "received_quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "goods_receipt_items",
+          "name": "short_quantity",
+          "type": "numeric",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": "0"
+        },
+        {
+          "relation": "goods_receipt_items",
+          "name": "technical_accepted_quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "0"
+        },
+        {
+          "relation": "goods_receipt_items",
+          "name": "technical_rejected_quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "0"
+        },
+        {
+          "relation": "invoice_items",
+          "name": "quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "item_conversion",
+          "name": "conversion_factor",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "purchase_order_items",
+          "name": "invoiced_quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "0"
+        },
+        {
+          "relation": "purchase_order_items",
+          "name": "quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "purchase_order_items",
+          "name": "received_quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "0"
+        },
+        {
+          "relation": "requested_items",
+          "name": "receipt_issue_quantity",
+          "type": "numeric",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "requested_items",
+          "name": "received_quantity",
+          "type": "numeric",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "0"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "actor_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "command_key",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "CURRENT_TIMESTAMP"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "fingerprint",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "institute_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "request_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "response",
+          "type": "jsonb",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "allocation_id",
+          "type": "bigint",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "CURRENT_TIMESTAMP"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "created_by",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "id",
+          "type": "bigint",
+          "not_null": true,
+          "identity": "a",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "po_line_id",
+          "type": "bigint",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "receipt_line_id",
+          "type": "bigint",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "supply_line_id",
+          "type": "integer",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "contract_id",
+          "type": "integer",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "CURRENT_TIMESTAMP"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "created_by",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "evidence_note",
+          "type": "text",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "id",
+          "type": "bigint",
+          "not_null": true,
+          "identity": "a",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "parent_allocation_id",
+          "type": "bigint",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "profile_id",
+          "type": "bigint",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "quantity",
+          "type": "numeric(24,6)",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "reason",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "responsible_user_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "revision",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "1"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "source_kind",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "'ACTIVE'::text"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "transfer_id",
+          "type": "integer",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "transfer_line_id",
+          "type": "integer",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "CURRENT_TIMESTAMP"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "warehouse_id",
+          "type": "integer",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "name": "code",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "name": "is_active",
+          "type": "boolean",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "true"
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "name": "label",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "name": "requires_local_override",
+          "type": "boolean",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "false"
+        },
+        {
+          "relation": "scop_request_purposes",
+          "name": "code",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_request_purposes",
+          "name": "is_active",
+          "type": "boolean",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "true"
+        },
+        {
+          "relation": "scop_request_purposes",
+          "name": "label",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "approval_snapshot",
+          "type": "jsonb",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "approved_quantity",
+          "type": "numeric(24,6)",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "category_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": "CURRENT_TIMESTAMP"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "created_by",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "id",
+          "type": "bigint",
+          "not_null": true,
+          "identity": "a",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "institute_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "policy_code",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "purpose_code",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "request_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "requested_item_id",
+          "type": "integer",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "requesting_function_id",
+          "type": "integer",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "uom",
+          "type": "text",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "warehouse_supply_item_id",
+          "type": "integer",
+          "not_null": false,
+          "identity": "",
+          "generated": "",
+          "default_expression": null
+        }
+      ]
+    },
+    "constraints": {
+      "remove": [],
+      "put": [
+        {
+          "relation": "audit_registry_entries",
+          "name": "audit_registry_entries_request_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE RESTRICT"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_command_fingerprint_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (command_fingerprint ~ '^[a-f0-9]{64}$'::text)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_command_key_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (length(command_key) >= 8 AND length(command_key) <= 200)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_contract_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (contract_id) REFERENCES contracts(id)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_decision_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (decision = ANY (ARRAY['CONFIRMED_MATCH'::text, 'REJECTED_PROPOSAL'::text, 'CONFLICTING'::text, 'NEEDS_INVESTIGATION'::text]))"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_institute_id_command_key_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (institute_id, command_key)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_institute_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (institute_id) REFERENCES institutes(id)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_institute_id_record_type_source__key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (institute_id, record_type, source_id, revision)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_notes_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (length(TRIM(BOTH FROM notes)) >= 1 AND length(TRIM(BOTH FROM notes)) <= 4000)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_pkey",
+          "type": "p",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_record_type_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (record_type = ANY (ARRAY['legacy_invoice'::text, 'legacy_payment'::text]))"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_reviewer_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (reviewer_id) REFERENCES users(id)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_revision_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (revision > 0)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_source_fingerprint_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (source_fingerprint ~ '^[a-f0-9]{64}$'::text)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_source_id_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (source_id > 0)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_supporting_evidence_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (length(TRIM(BOTH FROM supporting_evidence)) >= 1 AND length(TRIM(BOTH FROM supporting_evidence)) <= 8000)"
+        },
+        {
+          "relation": "contract_payments",
+          "name": "contract_payments_contract_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE RESTRICT"
+        },
+        {
+          "relation": "journal_entries",
+          "name": "journal_entries_journal_reference_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (journal_reference)"
+        },
+        {
+          "relation": "journal_entries",
+          "name": "journal_entries_request_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE RESTRICT"
+        },
+        {
+          "relation": "journal_entry_lines",
+          "name": "journal_entry_lines_journal_entry_id_line_no_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (journal_entry_id, line_no)"
+        },
+        {
+          "relation": "notification_outbox",
+          "name": "notification_outbox_recipient_user_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE RESTRICT"
+        },
+        {
+          "relation": "notification_outbox",
+          "name": "wici_recovery_retry_count_nonnegative",
+          "type": "c",
+          "validated": false,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (retry_count >= 0) NOT VALID"
+        },
+        {
+          "relation": "procurement_value_events",
+          "name": "wici_recovery_cost_avoidance_evidence",
+          "type": "c",
+          "validated": false,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (value_type <> 'COST_AVOIDANCE'::text OR verified_value >= 0::numeric AND verified_by IS NOT NULL AND verified_at IS NOT NULL AND notes IS NOT NULL AND length(btrim(notes)) > 0) NOT VALID"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "scop_allocation_commands_actor_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (actor_id) REFERENCES users(id)"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "scop_allocation_commands_command_key_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (length(command_key) >= 1 AND length(command_key) <= 120)"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "scop_allocation_commands_institute_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (institute_id) REFERENCES institutes(id)"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "scop_allocation_commands_pkey",
+          "type": "p",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "PRIMARY KEY (institute_id, command_key)"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "scop_allocation_commands_request_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (request_id) REFERENCES requests(id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_allocation_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (allocation_id) REFERENCES scop_fulfillment_allocations(id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (num_nonnulls(po_line_id, receipt_line_id, supply_line_id) = 1)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_created_by_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (created_by) REFERENCES users(id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_pkey",
+          "type": "p",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_po_line_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (po_line_id) REFERENCES purchase_order_items(id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_po_line_id_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (po_line_id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_receipt_line_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (receipt_line_id) REFERENCES goods_receipt_items(id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_receipt_line_id_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (receipt_line_id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_supply_line_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (supply_line_id) REFERENCES warehouse_supplied_items(id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_supply_line_id_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (supply_line_id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK ((source_kind = ANY (ARRAY['WAREHOUSE_STOCK'::text, 'TRANSFER'::text])) = (warehouse_id IS NOT NULL))"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_check1",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK ((source_kind = 'CONTRACT'::text) = (contract_id IS NOT NULL))"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_check2",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK ((source_kind = 'TRANSFER'::text) = (transfer_id IS NOT NULL))"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_check3",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK ((source_kind = 'TRANSFER'::text) = (transfer_line_id IS NOT NULL))"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_contract_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (contract_id) REFERENCES contracts(id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_created_by_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (created_by) REFERENCES users(id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_parent_allocation_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (parent_allocation_id) REFERENCES scop_fulfillment_allocations(id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_pkey",
+          "type": "p",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_profile_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (profile_id) REFERENCES scop_requirement_profiles(id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_quantity_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (quantity > 0::numeric)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_reason_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (length(TRIM(BOTH FROM reason)) > 0)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_responsible_user_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (responsible_user_id) REFERENCES users(id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_revision_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (revision > 0)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_source_kind_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (source_kind = ANY (ARRAY['WAREHOUSE_STOCK'::text, 'CENTRAL_SUPPLY'::text, 'LOCAL_PROCUREMENT'::text, 'CONTRACT'::text, 'TRANSFER'::text]))"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_status_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (status = ANY (ARRAY['ACTIVE'::text, 'CANCELLED'::text, 'SPLIT'::text, 'CLOSED'::text]))"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_transfer_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (transfer_id) REFERENCES warehouse_transfer_requests(id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_transfer_line_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (transfer_line_id) REFERENCES warehouse_transfer_items(id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_warehouse_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)"
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "name": "scop_fulfillment_policies_pkey",
+          "type": "p",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "PRIMARY KEY (code)"
+        },
+        {
+          "relation": "scop_request_purposes",
+          "name": "scop_request_purposes_pkey",
+          "type": "p",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "PRIMARY KEY (code)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_approval_snapshot_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (jsonb_typeof(approval_snapshot) = 'object'::text)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_approved_quantity_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (approved_quantity > 0::numeric)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_category_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (category_id) REFERENCES item_categories(id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_check",
+          "type": "c",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "CHECK (num_nonnulls(requested_item_id, warehouse_supply_item_id) = 1)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_created_by_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (created_by) REFERENCES users(id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_institute_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (institute_id) REFERENCES institutes(id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_pkey",
+          "type": "p",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_policy_code_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (policy_code) REFERENCES scop_fulfillment_policies(code)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_purpose_code_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (purpose_code) REFERENCES scop_request_purposes(code)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_request_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (request_id) REFERENCES requests(id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_requested_item_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (requested_item_id) REFERENCES requested_items(id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_requested_item_id_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (requested_item_id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_requesting_function_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (requesting_function_id) REFERENCES departments(id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_warehouse_supply_item_id_fkey",
+          "type": "f",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "FOREIGN KEY (warehouse_supply_item_id) REFERENCES warehouse_supply_items(id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_warehouse_supply_item_id_key",
+          "type": "u",
+          "validated": true,
+          "deferrable": false,
+          "deferred": false,
+          "definition": "UNIQUE (warehouse_supply_item_id)"
+        }
+      ]
+    },
+    "indexes": {
+      "remove": [],
+      "put": [
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_institute_id_command_key_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX contract_financial_reviews_institute_id_command_key_key ON contract_financial_reviews USING btree (institute_id, command_key)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_institute_id_record_type_source__key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX contract_financial_reviews_institute_id_record_type_source__key ON contract_financial_reviews USING btree (institute_id, record_type, source_id, revision)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_pkey",
+          "unique_index": true,
+          "primary_index": true,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX contract_financial_reviews_pkey ON contract_financial_reviews USING btree (id)"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_worklist_idx",
+          "unique_index": false,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE INDEX contract_financial_reviews_worklist_idx ON contract_financial_reviews USING btree (institute_id, contract_id, record_type, source_id, revision DESC)"
+        },
+        {
+          "relation": "journal_entries",
+          "name": "journal_entries_journal_reference_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX journal_entries_journal_reference_key ON journal_entries USING btree (journal_reference)"
+        },
+        {
+          "relation": "journal_entry_lines",
+          "name": "journal_entry_lines_journal_entry_id_line_no_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX journal_entry_lines_journal_entry_id_line_no_key ON journal_entry_lines USING btree (journal_entry_id, line_no)"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "scop_allocation_commands_pkey",
+          "unique_index": true,
+          "primary_index": true,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_allocation_commands_pkey ON scop_allocation_commands USING btree (institute_id, command_key)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_pkey",
+          "unique_index": true,
+          "primary_index": true,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_allocation_evidence_pkey ON scop_allocation_evidence USING btree (id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_po_line_id_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_allocation_evidence_po_line_id_key ON scop_allocation_evidence USING btree (po_line_id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_receipt_line_id_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_allocation_evidence_receipt_line_id_key ON scop_allocation_evidence USING btree (receipt_line_id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_allocation_evidence_supply_line_id_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_allocation_evidence_supply_line_id_key ON scop_allocation_evidence USING btree (supply_line_id)"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_evidence_allocation_idx",
+          "unique_index": false,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE INDEX scop_evidence_allocation_idx ON scop_allocation_evidence USING btree (allocation_id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_allocations_profile_idx",
+          "unique_index": false,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE INDEX scop_allocations_profile_idx ON scop_fulfillment_allocations USING btree (profile_id, id)"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_fulfillment_allocations_pkey",
+          "unique_index": true,
+          "primary_index": true,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_fulfillment_allocations_pkey ON scop_fulfillment_allocations USING btree (id)"
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "name": "scop_fulfillment_policies_pkey",
+          "unique_index": true,
+          "primary_index": true,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_fulfillment_policies_pkey ON scop_fulfillment_policies USING btree (code)"
+        },
+        {
+          "relation": "scop_request_purposes",
+          "name": "scop_request_purposes_pkey",
+          "unique_index": true,
+          "primary_index": true,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_request_purposes_pkey ON scop_request_purposes USING btree (code)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_profiles_request_idx",
+          "unique_index": false,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE INDEX scop_profiles_request_idx ON scop_requirement_profiles USING btree (request_id, institute_id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_pkey",
+          "unique_index": true,
+          "primary_index": true,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_requirement_profiles_pkey ON scop_requirement_profiles USING btree (id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_requested_item_id_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_requirement_profiles_requested_item_id_key ON scop_requirement_profiles USING btree (requested_item_id)"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_requirement_profiles_warehouse_supply_item_id_key",
+          "unique_index": true,
+          "primary_index": false,
+          "valid": true,
+          "ready": true,
+          "immediate": true,
+          "nulls_not_distinct": false,
+          "definition": "CREATE UNIQUE INDEX scop_requirement_profiles_warehouse_supply_item_id_key ON scop_requirement_profiles USING btree (warehouse_supply_item_id)"
+        }
+      ]
+    },
+    "functions": {
+      "remove": [],
+      "put": [
+        {
+          "name": "canonical_supply_line_quantity",
+          "arguments": "p_supplied_line_id integer, p_institute_id integer",
+          "result": "numeric",
+          "security_definer": false,
+          "volatility": "s",
+          "config": [
+            "search_path=pg_catalog, public"
+          ],
+          "definition_md5": "001a47db116d4a5b2b3704e3342734b4"
+        },
+        {
+          "name": "preserve_contract_financial_reviews",
+          "arguments": "",
+          "result": "trigger",
+          "security_definer": false,
+          "volatility": "v",
+          "config": [
+            "search_path=pg_catalog, public"
+          ],
+          "definition_md5": "e4dd6607bb77b6c0c7b64109778ce9e7"
+        },
+        {
+          "name": "scop_guard_allocation",
+          "arguments": "",
+          "result": "trigger",
+          "security_definer": false,
+          "volatility": "v",
+          "config": [
+            "search_path=pg_catalog, public"
+          ],
+          "definition_md5": "822854bae5e7b5085c1eaa0d7a3e2f19"
+        },
+        {
+          "name": "scop_guard_profile",
+          "arguments": "",
+          "result": "trigger",
+          "security_definer": false,
+          "volatility": "v",
+          "config": [
+            "search_path=pg_catalog, public"
+          ],
+          "definition_md5": "4d86b8a85987d8c0e76870bfeabc1e69"
+        },
+        {
+          "name": "scop_preserve_evidence",
+          "arguments": "",
+          "result": "trigger",
+          "security_definer": false,
+          "volatility": "v",
+          "config": [
+            "search_path=pg_catalog, public"
+          ],
+          "definition_md5": "d03a03bd0fa857283f6f49bd4d2335f0"
+        },
+        {
+          "name": "wici_journal_identifier_aliases",
+          "arguments": "",
+          "result": "trigger",
+          "security_definer": false,
+          "volatility": "v",
+          "config": [
+            "search_path=public, pg_catalog"
+          ],
+          "definition_md5": "3db180e2c397091da507bb563411c15f"
+        },
+        {
+          "name": "wici_journal_line_identifier_aliases",
+          "arguments": "",
+          "result": "trigger",
+          "security_definer": false,
+          "volatility": "v",
+          "config": [
+            "search_path=public, pg_catalog"
+          ],
+          "definition_md5": "f8da6c39c47224b64419a855049cccbb"
+        }
+      ]
+    },
+    "triggers": {
+      "remove": [],
+      "put": [
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_append_only",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER contract_financial_reviews_append_only BEFORE DELETE OR UPDATE ON contract_financial_reviews FOR EACH ROW EXECUTE FUNCTION preserve_contract_financial_reviews()"
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "name": "contract_financial_reviews_no_truncate",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER contract_financial_reviews_no_truncate BEFORE TRUNCATE ON contract_financial_reviews FOR EACH STATEMENT EXECUTE FUNCTION preserve_contract_financial_reviews()"
+        },
+        {
+          "relation": "journal_entries",
+          "name": "wici_journal_identifiers",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER wici_journal_identifiers BEFORE INSERT ON journal_entries FOR EACH ROW EXECUTE FUNCTION wici_journal_identifier_aliases()"
+        },
+        {
+          "relation": "journal_entry_lines",
+          "name": "wici_journal_line_identifiers",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER wici_journal_line_identifiers BEFORE INSERT ON journal_entry_lines FOR EACH ROW EXECUTE FUNCTION wici_journal_line_identifier_aliases()"
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "name": "scop_commands_immutable",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER scop_commands_immutable BEFORE DELETE OR UPDATE ON scop_allocation_commands FOR EACH ROW EXECUTE FUNCTION scop_preserve_evidence()"
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "name": "scop_evidence_immutable",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER scop_evidence_immutable BEFORE DELETE OR UPDATE ON scop_allocation_evidence FOR EACH ROW EXECUTE FUNCTION scop_preserve_evidence()"
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "name": "scop_allocation_guard",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER scop_allocation_guard BEFORE INSERT OR DELETE OR UPDATE ON scop_fulfillment_allocations FOR EACH ROW EXECUTE FUNCTION scop_guard_allocation()"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_profile_guard",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER scop_profile_guard BEFORE INSERT ON scop_requirement_profiles FOR EACH ROW EXECUTE FUNCTION scop_guard_profile()"
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "name": "scop_profiles_immutable",
+          "enabled": "O",
+          "definition": "CREATE TRIGGER scop_profiles_immutable BEFORE DELETE OR UPDATE ON scop_requirement_profiles FOR EACH ROW EXECUTE FUNCTION scop_preserve_evidence()"
+        },
+        {
+          "relation": "stock_item_requests",
+          "name": "trg_approve_stock_item_request",
+          "enabled": "D",
+          "definition": "CREATE TRIGGER trg_approve_stock_item_request AFTER UPDATE ON stock_item_requests FOR EACH ROW EXECUTE FUNCTION approve_stock_item_request()"
+        }
+      ]
+    },
+    "browser_table_grants": {
+      "remove": [],
+      "put": [
+        {
+          "relation": "audit_log",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "audit_log",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "contract_financial_reviews",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "item_attribute_templates",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "item_uom_conversions",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "item_uom_conversions",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "phase2_approval_active_repairs",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "phase2_approval_active_repairs",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_allocation_commands",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_allocation_evidence",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_fulfillment_allocations",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_fulfillment_policies",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_request_purposes",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_request_purposes",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "scop_requirement_profiles",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "workflow_idempotency_keys",
+          "role": "anon",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        },
+        {
+          "relation": "workflow_idempotency_keys",
+          "role": "authenticated",
+          "can_select": false,
+          "can_insert": false,
+          "can_update": false,
+          "can_delete": false
+        }
+      ]
+    },
+    "browser_function_grants": {
+      "remove": [],
+      "put": [
+        {
+          "name": "canonical_supply_line_quantity",
+          "arguments": "p_supplied_line_id integer, p_institute_id integer",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "canonical_supply_line_quantity",
+          "arguments": "p_supplied_line_id integer, p_institute_id integer",
+          "role": "authenticated",
+          "can_execute": false
+        },
+        {
+          "name": "preserve_contract_financial_reviews",
+          "arguments": "",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "preserve_contract_financial_reviews",
+          "arguments": "",
+          "role": "authenticated",
+          "can_execute": false
+        },
+        {
+          "name": "scop_guard_allocation",
+          "arguments": "",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "scop_guard_allocation",
+          "arguments": "",
+          "role": "authenticated",
+          "can_execute": false
+        },
+        {
+          "name": "scop_guard_profile",
+          "arguments": "",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "scop_guard_profile",
+          "arguments": "",
+          "role": "authenticated",
+          "can_execute": false
+        },
+        {
+          "name": "scop_preserve_evidence",
+          "arguments": "",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "scop_preserve_evidence",
+          "arguments": "",
+          "role": "authenticated",
+          "can_execute": false
+        },
+        {
+          "name": "set_user_registration_requests_updated_at",
+          "arguments": "",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "set_user_registration_requests_updated_at",
+          "arguments": "",
+          "role": "authenticated",
+          "can_execute": false
+        },
+        {
+          "name": "wici_journal_identifier_aliases",
+          "arguments": "",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "wici_journal_identifier_aliases",
+          "arguments": "",
+          "role": "authenticated",
+          "can_execute": false
+        },
+        {
+          "name": "wici_journal_line_identifier_aliases",
+          "arguments": "",
+          "role": "anon",
+          "can_execute": false
+        },
+        {
+          "name": "wici_journal_line_identifier_aliases",
+          "arguments": "",
+          "role": "authenticated",
+          "can_execute": false
+        }
+      ]
+    },
+    "permissions": {
+      "remove": [],
+      "put": [
+        {
+          "code": "scop.allocations.manage"
+        },
+        {
+          "code": "scop.allocations.override-policy"
+        },
+        {
+          "code": "scop.allocations.view"
+        }
+      ]
+    }
+  }
+}

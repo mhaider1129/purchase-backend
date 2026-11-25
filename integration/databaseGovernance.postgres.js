@@ -556,7 +556,7 @@ async function run(client, url) {
       );
       assert.deepEqual(await hashRows(Object.keys(before)), before);
     });
-    await test("startup success is bound to actual role, source digest and reviewed application release", async () => {
+    await test("runtime startup checks compatibility while explicit certification requires reviewed release evidence", async () => {
       let started = false;
       await service.startWhenReady(
         backend,
@@ -566,16 +566,34 @@ async function run(client, url) {
         },
       );
       assert(started);
+      let compatibleStarted = false;
+
+      await service.startWhenReady(
+        backend,
+        { releaseRef: "unreviewed-release", environment: "disposable" },
+        (report) => {
+          assert.equal(report.startup_eligible, true);
+          assert.equal(report.status, "SCHEMA_VERIFIED_UNATTESTED");
+          assert.equal(report.attestation, null);
+          compatibleStarted = true;
+        },
+      );
+
+      assert(compatibleStarted);
+
       await assert.rejects(
         () =>
-          service.startWhenReady(
+          service.assertReady(
             backend,
             { releaseRef: "unreviewed-release", environment: "disposable" },
-            () => {
-              throw Error("must not start");
-            },
           ),
-        (e) => e.code === "DATABASE_RELEASE_INCOMPATIBLE",
+        (e) =>
+          e.code === "DATABASE_RELEASE_INCOMPATIBLE" &&
+          e.findings.some(
+            (f) =>
+              f.group === "attestation" &&
+              f.reason === "current_schema_and_release_not_attested",
+          ),
       );
       await assert.rejects(
         () => service.startWhenReady(client, { ...options }, () => {}),

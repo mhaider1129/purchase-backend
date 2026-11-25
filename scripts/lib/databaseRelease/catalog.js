@@ -111,7 +111,7 @@ function compare(expected, actual, { tables = null } = {}) {
       const found = got.get(key(group, row));
       if (!found)
         findings.push({ group, object: key(group, row), reason: "missing" });
-      else if (JSON.stringify(found) !== JSON.stringify(row)) {
+      else if (JSON.stringify(found) !== JSON.stringify(row) && !require("./reviewedAlternatives").matches(group,row,found)) {
         // JSON key order is not part of a database contract.
         const different = Object.keys(row).filter(
           (k) => JSON.stringify(found[k]) !== JSON.stringify(row[k]),

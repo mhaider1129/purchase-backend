@@ -1,13 +1,13 @@
 "use strict";
 const assert = require("node:assert/strict");
-const { build, fixtureContract } = require("./wiciObservedFixture");
+const { build } = require("./wiciObservedFixture");
 const { loadProfile } = require("../scripts/lib/databaseRelease/profiles");
 const planner = require("../scripts/lib/databaseRelease/planner");
 async function run(client, url) {
   const ownerUrl = require("./disposableDatabase").disposableDatabaseUrl(url);
   const fixture = await build(client, ownerUrl);
   const service = require("../services/databaseReleaseService");
-  const contract = fixtureContract(loadProfile("wici-2026-11"), fixture);
+  const contract = loadProfile("wici-2026-11");
   const inventory = service.loadInventory();
   const releaseRef = "wici-recovery-native";
   const options = {
@@ -31,11 +31,7 @@ async function run(client, url) {
       releaseRef,
     });
     assert(sql.includes(originalPre));
-    // Test-only equivalence for PostgreSQL's pretty-printed expression reparse.
-    // The production bundle retains the exact uploaded preflight definitions.
-    return sql.replace(originalPre, () =>
-      planner.checks(fixture.reconstructed, { preflight: true }),
-    );
+    return sql;
   }
   let passed = 0,
     pool;

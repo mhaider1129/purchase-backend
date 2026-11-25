@@ -71,6 +71,7 @@ function snapshotExpression() {
     .join(",")})`;
 }
 function checks(expected, { preflight = false } = {}) {
+  const alternatives = literal(JSON.stringify(require('./reviewedAlternatives').pairs));
   const selected = {};
   for (const [k, rows] of Object.entries(expected)) {
     if (
@@ -95,8 +96,8 @@ function checks(expected, { preflight = false } = {}) {
   return `expected := ${literal(JSON.stringify(selected))}::jsonb;
  FOR section, wanted IN SELECT key,value FROM jsonb_each(expected) LOOP
   FOR required IN SELECT value FROM jsonb_array_elements(wanted) LOOP
-   IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(actual->section,'[]')) observed(value) WHERE observed.value @> required) THEN
-    RAISE EXCEPTION 'DATABASE_CONTRACT_INVALID: % %',section,required->>'name';
+   IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(actual->section,'[]')) observed(value) WHERE observed.value @> required OR EXISTS (SELECT 1 FROM jsonb_array_elements(${alternatives}::jsonb) alt WHERE alt->>'group'=section AND alt->'expected'=required AND alt->'actual'=observed.value)) THEN
+    RAISE EXCEPTION 'DATABASE_CONTRACT_INVALID: % %',section,concat_ws('.',required->>'relation',required->>'name');
    END IF;
   END LOOP;
   IF section IN ('policies','browser_table_grants','browser_function_grants') AND NOT (COALESCE(actual->section,'[]') <@ wanted) THEN
@@ -134,7 +135,12 @@ function bundle({ inventory, contract, ids, environment, actor, releaseRef }) {
       ? `BEGIN
  ${checks(preflight.catalog, { preflight: true })}
  EXCEPTION WHEN raise_exception THEN
+ GET STACKED DIAGNOSTICS preflight_error = MESSAGE_TEXT;
+ BEGIN
  ${checks(contract.catalog, { preflight: true })}
+ EXCEPTION WHEN raise_exception THEN
+ RAISE EXCEPTION 'DATABASE_CONTRACT_INVALID: observed: %; target: %', preflight_error, SQLERRM;
+ END;
  END;`
       : checks(preflight.catalog, { preflight: true });
   if (entry.profile && entry.profile !== contract.profile)
@@ -156,7 +162,7 @@ SET LOCAL lock_timeout='3s';
 SET LOCAL statement_timeout='5min';
 ${entry.profile ? "SET LOCAL search_path = public, extensions, pg_catalog;" : ""}
 DO ${tag}
-DECLARE started timestamptz:=clock_timestamp(); actual jsonb; expected jsonb; section text; wanted jsonb; required jsonb; prior_hash text;
+DECLARE started timestamptz:=clock_timestamp(); actual jsonb; expected jsonb; section text; wanted jsonb; required jsonb; prior_hash text; preflight_error text;
 BEGIN
  IF NOT pg_try_advisory_xact_lock(hashtextextended('purchase-tracker:database-release',0)) THEN RAISE EXCEPTION 'DATABASE_RELEASE_BUSY'; END IF;
  IF NOT has_schema_privilege(current_user,'public','CREATE') THEN RAISE EXCEPTION 'DATABASE_MIGRATION_OWNER_REQUIRED'; END IF;

@@ -205,6 +205,9 @@ async function verify(
   const fileErrors = verifyFiles(inventory),
     visibility = await catalog.visibility(db),
     actual = await catalog.snapshot(db, visibility),
+    uuidVerified = contract.profile === 'wici-2026-11'
+      ? (await db.query(require('../scripts/lib/databaseRelease/reviewedAlternatives').uuidIdentitySql)).rows[0]?.valid === true
+      : false,
     observableExpected = Object.fromEntries(
       Object.entries(contract.catalog).filter(
         ([group]) => !visibility.unobservableGroups.includes(group),
@@ -220,7 +223,9 @@ async function verify(
             "database_release_attestations",
           ].includes(f.object),
       ),
-      ...catalog.compare(observableExpected, actual),
+      ...catalog.compare(observableExpected, actual, {profile: contract.profile, uuidVerified}),
+      ...(contract.profile === 'wici-2026-11' && !uuidVerified
+        ? [{group:'columns',object:'projects.id',reason:'unverified_uuid_function_identity'}] : []),
     ];
   const authority = await runtimeAuthority(db, role);
   findings.push(...authority.findings);

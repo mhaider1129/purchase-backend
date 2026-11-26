@@ -93,7 +93,7 @@ const key = (group, row) =>
                 : row.relation
                   ? `${row.relation}.${row.name}`
                   : row.name;
-function compare(expected, actual, { tables = null } = {}) {
+function compare(expected, actual, { tables = null, profile = null, uuidVerified = false } = {}) {
   const findings = [];
   for (const [group, rows] of Object.entries(expected)) {
     const got = new Map((actual[group] || []).map((r) => [key(group, r), r]));
@@ -111,7 +111,7 @@ function compare(expected, actual, { tables = null } = {}) {
       const found = got.get(key(group, row));
       if (!found)
         findings.push({ group, object: key(group, row), reason: "missing" });
-      else if (JSON.stringify(found) !== JSON.stringify(row) && !require("./reviewedAlternatives").matches(group,row,found)) {
+      else if (JSON.stringify(found) !== JSON.stringify(row) && !require("./reviewedAlternatives").matches(group,row,found,{profile,uuidVerified})) {
         // JSON key order is not part of a database contract.
         const different = Object.keys(row).filter(
           (k) => JSON.stringify(found[k]) !== JSON.stringify(row[k]),

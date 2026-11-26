@@ -1270,7 +1270,23 @@ const pairs = [
   }
 ];
 const equal = (a,b) => require("node:util").isDeepStrictEqual(a,b);
-function matches(group, expected, actual) {
+// Check the bound function, not the search-path-dependent printed expression.
+const uuidIdentitySql = `SELECT EXISTS (
+ SELECT 1 FROM pg_catalog.pg_attrdef d
+ JOIN pg_catalog.pg_attribute a ON a.attrelid=d.adrelid AND a.attnum=d.adnum
+ JOIN pg_catalog.pg_proc p ON p.oid::text=substring(d.adbin::text from '^\\{FUNCEXPR :funcid ([0-9]+) ')
+ JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+ JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+ WHERE d.adrelid=pg_catalog.to_regclass('public.projects') AND a.attname='id'
+ AND p.proname='gen_random_uuid' AND p.pronargs=0 AND p.prorettype='pg_catalog.uuid'::regtype
+ AND NOT p.prosecdef AND NOT p.proretset
+ AND ((n.nspname='pg_catalog' AND l.lanname='internal' AND p.prosrc='gen_random_uuid')
+ OR (n.nspname='extensions' AND l.lanname='c' AND p.prosrc='pg_random_uuid' AND p.probin='$libdir/pgcrypto'
+ AND EXISTS (SELECT 1 FROM pg_catalog.pg_depend dep JOIN pg_catalog.pg_extension e ON e.oid=dep.refobjid
+ WHERE dep.classid='pg_catalog.pg_proc'::regclass AND dep.objid=p.oid AND dep.refclassid='pg_catalog.pg_extension'::regclass AND dep.deptype='e' AND e.extname='pgcrypto')))
+) AS valid`;
+function matches(group, expected, actual, {profile=null, uuidVerified=false}={}) {
+  if (profile !== 'wici-2026-11' || (group === 'columns' && !uuidVerified)) return false;
   return pairs.some(p => p.group === group && equal(p.expected,expected) && equal(p.actual,actual));
 }
-module.exports = { pairs, matches };
+module.exports = { pairs, matches, uuidIdentitySql };

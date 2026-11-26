@@ -19,7 +19,7 @@ async function run(client, url) {
   };
   const originalPre = planner.checks(
     loadProfile("wici-2026-11", "observed").catalog,
-    { preflight: true },
+    { preflight: true, profile: "wici-2026-11" },
   );
   function plan() {
     const sql = planner.bundle({

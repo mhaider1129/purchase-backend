@@ -902,7 +902,7 @@
     },
     {
       "path": "scripts/lib/databaseRelease/catalog.js",
-      "sha256": "4ca1b44acdde203307c3d3289c6ec2b025ba4b775c46f9e6211de518c739532a"
+      "sha256": "bffd487d4529cd28972a5351a0d218e007b200b53f2dc776493aa523ca8a6d1c"
     },
     {
       "path": "scripts/lib/databaseRelease/inventory.js",
@@ -910,7 +910,7 @@
     },
     {
       "path": "scripts/lib/databaseRelease/planner.js",
-      "sha256": "6cbef6cae5734620f67e8e2fa23cc11a17031263ad585e0e603a4b6ef0f03f12"
+      "sha256": "f5e9151c65794e50a70d2cbf56086bdc5e5722860e31873be83f2b10216a998b"
     },
     {
       "path": "scripts/lib/databaseRelease/profiles.js",
@@ -918,7 +918,7 @@
     },
     {
       "path": "scripts/lib/databaseRelease/reviewedAlternatives.js",
-      "sha256": "c3bc0f76af497db037b30c914daccd3ed81efe87fe957f11218ec782e3e6e85d"
+      "sha256": "c9667af375480f2b7bda74fcedb3af65bcce54ac83350a0aafe1e3bd4a9e4e23"
     },
     {
       "path": "scripts/lib/databaseRelease/sqlStatements.js",
@@ -1026,7 +1026,7 @@
     },
     {
       "path": "services/databaseReleaseService.js",
-      "sha256": "109d94cd7db47c1b5860fc37c78271b948c7bf9f02e91ad4b5f5472c4071aabf"
+      "sha256": "40d55bcad09d9c7e3a209d9f3211b241b890b4fb62f17496922ecebf9f2e2135"
     },
     {
       "path": "services/deliveryInspectionService.js",
@@ -1801,7 +1801,7 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "f0b99df0f741965704c56e5cf42c6fdf2aa1236382f2c2354470a94501069bf4",
+  "application_manifest_sha256": "edda51c09a30b5dbc9f212ac63029551235a0acf78c6a42a92438da3a843f3c1",
   "highest_manual_number": 73,
   "artifacts": [
     {
@@ -2785,8 +2785,8 @@
       "path": "sql/operator-recovery/wici-production-recovery.sql",
       "id": null,
       "classification": "generated_operator_bundle",
-      "sha256": "ef1b1d9713c0c08492b9588065e39073f6e88abf91421b16024237d9d8515cdf",
-      "bytes": 4212747,
+      "sha256": "31ff17dd5095bb1a19090a11be73b8e0f1c7f2b50ca843f188536797f0a760fa",
+      "bytes": 4216083,
       "execution_evidence": "UNVERIFIED",
       "ddl_statements": 1234,
       "header": "-- Generated offline. Review checksum, actor, environment and release before manual SQL Editor execution.\n-- Historical migrations remain UNVERIFIED. This bundle never replays a frozen file.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';\nSET LOCAL search_path = public, extensions, pg_catalog;"
@@ -2922,7 +2922,7 @@
       "path": "scripts/lib/databaseRelease/reviewedAlternatives.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 14,
-      "sha256": "c3bc0f76af497db037b30c914daccd3ed81efe87fe957f11218ec782e3e6e85d"
+      "sha256": "c9667af375480f2b7bda74fcedb3af65bcce54ac83350a0aafe1e3bd4a9e4e23"
     },
     {
       "path": "scripts/testBackendContractRefresh.js",
@@ -2970,7 +2970,7 @@
       "path": "integration/databaseGovernance.postgres.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 8,
-      "sha256": "3d6fad1aff81bacc6b9898201a2354ae453c9125c985e4955ad54c336ef72717"
+      "sha256": "c7ffaaf1ed9cb5ede790a7a56b3f5a4f4ab424b2887e08c3b719147d79ac4059"
     },
     {
       "path": "integration/deviceDemoWorkspaces.js",
@@ -3030,13 +3030,13 @@
       "path": "integration/wiciObservedFixture.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 5,
-      "sha256": "b4c2ca252dae2f1495b701cdfc3799050aabdf6de76c48a3f5aa721f75e7f74c"
+      "sha256": "2c7bc34c105ad7401f1f5d06c4ce476b8b9cf4fb161ac89a028785f8ab10e33f"
     },
     {
       "path": "integration/wiciRecovery.postgres.js",
       "classification": "test_fixture_or_verification",
       "ddl_occurrences": 4,
-      "sha256": "ecf870ebbf9cf061fd3a5b79a3f0f4421e2d048e29c214570d64d081b3836fe1"
+      "sha256": "5ee0c1a1150db94d8598088354e2e34c213f877a8e12980e3d4b27c6e6d8e987"
     }
   ],
   "note": "Repository existence is not execution evidence. Superseded definitions and optional policy/data patches are not a replay order."

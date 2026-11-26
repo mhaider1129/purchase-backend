@@ -70,8 +70,10 @@ function snapshotExpression() {
     ])
     .join(",")})`;
 }
-function checks(expected, { preflight = false } = {}) {
-  const alternatives = literal(JSON.stringify(require('./reviewedAlternatives').pairs));
+function checks(expected, { preflight = false, profile = null } = {}) {
+  const reviewed = require('./reviewedAlternatives');
+  const alternatives = literal(JSON.stringify(profile === 'wici-2026-11' ? reviewed.pairs : []));
+  const uuidGuard = profile === 'wici-2026-11' ? `IF NOT (${reviewed.uuidIdentitySql.replace(/ AS valid$/, '')}) THEN RAISE EXCEPTION 'DATABASE_UUID_FUNCTION_IDENTITY_INVALID'; END IF;` : '';
   const selected = {};
   for (const [k, rows] of Object.entries(expected)) {
     if (
@@ -93,7 +95,8 @@ function checks(expected, { preflight = false } = {}) {
         )
       : rows;
   }
-  return `expected := ${literal(JSON.stringify(selected))}::jsonb;
+  return `${uuidGuard}
+ expected := ${literal(JSON.stringify(selected))}::jsonb;
  FOR section, wanted IN SELECT key,value FROM jsonb_each(expected) LOOP
   FOR required IN SELECT value FROM jsonb_array_elements(wanted) LOOP
    IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(actual->section,'[]')) observed(value) WHERE observed.value @> required OR EXISTS (SELECT 1 FROM jsonb_array_elements(${alternatives}::jsonb) alt WHERE alt->>'group'=section AND alt->'expected'=required AND alt->'actual'=observed.value)) THEN
@@ -133,16 +136,16 @@ function bundle({ inventory, contract, ids, environment, actor, releaseRef }) {
   const preflightChecks =
     entry.profile || entry.preflight_contract
       ? `BEGIN
- ${checks(preflight.catalog, { preflight: true })}
+ ${checks(preflight.catalog, { preflight: true, profile: preflight.profile })}
  EXCEPTION WHEN raise_exception THEN
  GET STACKED DIAGNOSTICS preflight_error = MESSAGE_TEXT;
  BEGIN
- ${checks(contract.catalog, { preflight: true })}
+ ${checks(contract.catalog, { preflight: true, profile: contract.profile })}
  EXCEPTION WHEN raise_exception THEN
  RAISE EXCEPTION 'DATABASE_CONTRACT_INVALID: observed: %; target: %', preflight_error, SQLERRM;
  END;
  END;`
-      : checks(preflight.catalog, { preflight: true });
+      : checks(preflight.catalog, { preflight: true, profile: preflight.profile });
   if (entry.profile && entry.profile !== contract.profile)
     throw Error("RECOVERY_PROFILE_REQUIRED");
   const dependencies = (entry.depends_on || [])
@@ -178,7 +181,7 @@ ${dependencies}
   EXECUTE ${literal(body)};
  END IF;
  actual := ${snapshotExpression()};
- ${checks(contract.catalog)}
+ ${checks(contract.catalog, { profile: contract.profile })}
  INSERT INTO public.database_release_migrations(migration_id,filename,content_sha256,execution_environment,execution_status,execution_actor,duration_ms,application_release_ref,evidence)
  VALUES(${literal(id)},${literal(entry.path)},${literal(entry.sha256)},${literal(environment)},'APPLIED',${literal(actor)},EXTRACT(epoch FROM clock_timestamp()-started)*1000,${literal(releaseRef)},jsonb_build_object('source','REVIEWED_TRANSACTIONAL_FORWARD_BUNDLE','contract_version',${literal(contract.version)}${entry.profile ? ", 'observed_baseline_profile'," + literal(entry.profile) + ", 'historical_execution','UNVERIFIED'" : ""}))
  ON CONFLICT(execution_environment,migration_id) WHERE execution_status='APPLIED' DO NOTHING;

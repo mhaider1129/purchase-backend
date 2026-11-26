@@ -180,7 +180,7 @@ async function build(client, url) {
     );
   await client.query("SET check_function_bodies=on");
   const reconstructed = await catalog.snapshot(client);
-  const findings = catalog.compare(observed, reconstructed);
+  const findings = catalog.compare(observed, reconstructed, {profile:"wici-2026-11",uuidVerified:(await client.query(require("../scripts/lib/databaseRelease/reviewedAlternatives").uuidIdentitySql)).rows[0]?.valid === true});
   // pg_get_*def is not byte-idempotent when its pretty-printed SQL is parsed
   // again (notably varchar ARRAY casts). Each expression above was executed
   // verbatim; accept only re-deparsed definitions in this disposable fixture.

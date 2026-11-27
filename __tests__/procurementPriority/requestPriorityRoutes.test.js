@@ -7,6 +7,18 @@ jest.mock('../../services/procurementPriority/departmentPriorityCoverageService'
 const router=require('../../routes/procurementPriority');
 const appFor=permissions=>{const app=express();app.use(express.json());app.use((req,_res,next)=>{req.user={id:1,institute_id:7,department_id:9,requirePermission:p=>{if(!permissions.includes(p))throw Object.assign(new Error('Forbidden'),{statusCode:403});}};next();});app.use(router);app.use((e,_req,res,_next)=>res.status(e.statusCode||500).json({message:e.message}));return app;};
 beforeEach(()=>jest.clearAllMocks());
+test('management read applies a transaction-local deadline and ignores forged institute filters',async()=>{
+ const query=jest.fn().mockResolvedValue({rows:[]});mockTransaction.mockImplementationOnce(work=>work({query}));mockRead.mockResolvedValueOnce([]);
+ const response=await supertest(appFor(['procurement-priority.manage'])).get('/requests/manage?institute_id=8');
+ expect(response.status).toBe(200);expect(query).toHaveBeenCalledWith("SET LOCAL statement_timeout='8s'");
+ expect(query).toHaveBeenNthCalledWith(1,"SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+ expect(mockRead).toHaveBeenCalledWith(expect.objectContaining({instituteId:7,scope:'institutional'}));
+});
+test('cancelled management query returns a recoverable timeout without exposing SQL',async()=>{
+ mockRead.mockRejectedValueOnce(Object.assign(new Error('private query details'),{code:'57014'}));
+ const response=await supertest(appFor(['procurement-priority.manage'])).get('/requests/manage');
+ expect(response.status).toBe(504);expect(response.body.message).toContain('took too long');expect(JSON.stringify(response.body)).not.toContain('private query');
+});
 test.each([['get','/requests/department'],['get','/requests/manage'],['put','/requests/department/order'],['put','/requests/institutional-order']])('unauthorized %s %s does not touch queues',async(method,path)=>{
  const response=await supertest(appFor([]))[method](path).send({ordered_request_ids:[208],snapshots:{}});
  expect(response.status).toBe(403);expect(mockRead).not.toHaveBeenCalled();expect(mockReorder).not.toHaveBeenCalled();

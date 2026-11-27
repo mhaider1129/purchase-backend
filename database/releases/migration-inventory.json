@@ -234,7 +234,7 @@
     },
     {
       "path": "controllers/requests/procurementItemEventsController.js",
-      "sha256": "335876c13c6d4fc9763121c17bb0fcd6ad9f76c02e4f86ed8e75230d3a5f698e"
+      "sha256": "d4f22a79a07755633224528eeef3163a6a5dadd1c47a4489a873518f3f6f3dde"
     },
     {
       "path": "controllers/requests/requestWorkspaceController.js",
@@ -534,7 +534,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "d8d62a3498c34868d431b7583bd3c54987b5a503740a0ba979f08ffc85ed5abe"
+      "sha256": "0f241402a72d7bdfe6d5b84c174ebcfb1d0309665197f9bd9927698a4b80e307"
     },
     {
       "path": "policies/approvalPolicy.js",
@@ -606,7 +606,7 @@
     },
     {
       "path": "repositories/procurementPriorityRepository.js",
-      "sha256": "6bfe69e2b2871f0240ac302c3e7dfe2b83d7f0209f53e3afccd8562538d61e45"
+      "sha256": "49bbb59c7329cfd8ab91b942c60c513cf513b32b9efd3590afcd555cb80c3133"
     },
     {
       "path": "repositories/requestPriorityRepository.js",
@@ -786,7 +786,7 @@
     },
     {
       "path": "routes/procurementPriority.js",
-      "sha256": "9be9bcc40a3c6e327fe297b4a2a4857ecba2cd211eb05955a6cf903a8d29daab"
+      "sha256": "937e378ea0fed37e19753cc6834f80b09dec790aedd60e248603b93f8102af89"
     },
     {
       "path": "routes/projects.js",
@@ -1318,7 +1318,7 @@
     },
     {
       "path": "services/procurementPriority/activePrioritySql.js",
-      "sha256": "bf2c4342ea1f4fc81decb16e153273897fb81d7ea5d45b918ee0934f071532c9"
+      "sha256": "828b2fe468eb8bf1c64abd295c8268f3678da255a5d3b62bda974790bc37c428"
     },
     {
       "path": "services/procurementPriority/constants.js",
@@ -1335,6 +1335,10 @@
     {
       "path": "services/procurementPriority/hodRankingGateService.js",
       "sha256": "4fc2c4558d5cbf29f1df24de254dbaacaf5a7ffc9c8af5b225911cc5b8abbde7"
+    },
+    {
+      "path": "services/procurementPriority/managementQueueSql.js",
+      "sha256": "fef326d79b7f8e9909683697922b540ff547dcd019d09d78094b87270421c5fe"
     },
     {
       "path": "services/procurementPriority/priorityProfileProvisioningService.js",
@@ -1390,7 +1394,7 @@
     },
     {
       "path": "services/requestFulfillmentSql.js",
-      "sha256": "d328a62c25e35c25d9fd3179b45751b82da2c280e973794a340bf83aeb74547b"
+      "sha256": "972b3a8ec11b89ee873fa359e3d99d2bed9d12a71bd6882cf17c6381166bd8ff"
     },
     {
       "path": "services/requestItemResolutionService.js",
@@ -1801,7 +1805,7 @@
       "sha256": "8671e2d6e417f189858487def2880f0eb553909d8d253ea96a05da96ec53d9f2"
     }
   ],
-  "application_manifest_sha256": "edda51c09a30b5dbc9f212ac63029551235a0acf78c6a42a92438da3a843f3c1",
+  "application_manifest_sha256": "5e5e8b8b357b2f7f16f0d3431f50c8d1beba602c315cc70388801df00b372e62",
   "highest_manual_number": 73,
   "artifacts": [
     {
@@ -2785,8 +2789,8 @@
       "path": "sql/operator-recovery/wici-production-recovery.sql",
       "id": null,
       "classification": "generated_operator_bundle",
-      "sha256": "31ff17dd5095bb1a19090a11be73b8e0f1c7f2b50ca843f188536797f0a760fa",
-      "bytes": 4216083,
+      "sha256": "e2d36085084522e6c9714e22d99907ee75a5da989a86834ba59b578d6f706b71",
+      "bytes": 4216071,
       "execution_evidence": "UNVERIFIED",
       "ddl_statements": 1234,
       "header": "-- Generated offline. Review checksum, actor, environment and release before manual SQL Editor execution.\n-- Historical migrations remain UNVERIFIED. This bundle never replays a frozen file.\nBEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='5min';\nSET LOCAL search_path = public, extensions, pg_catalog;"

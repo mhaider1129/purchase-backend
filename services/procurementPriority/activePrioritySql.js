@@ -11,6 +11,13 @@ const priorityCaseJoins = `JOIN requests r ON r.id=pc.request_id
 const activePriorityCaseSql = `pc.closed_at IS NULL AND pc.id IS NOT NULL AND r.id IS NOT NULL AND ri.id IS NOT NULL
   AND UPPER(TRIM(COALESCE(pc.case_status,''))) NOT IN (${terminal})
   AND ${requestActiveSql} AND ${itemActiveSql}`;
+// Reuse the same canonical status/item rules with a precomputed request projection.
+const activePriorityCaseFromCompletionSql = (completion) => `pc.closed_at IS NULL AND pc.id IS NOT NULL AND r.id IS NOT NULL AND ri.id IS NOT NULL
+  AND UPPER(TRIM(COALESCE(pc.case_status,''))) NOT IN (${terminal})
+  AND UPPER(TRIM(COALESCE(${effectiveRequestStatusSql('r', completion)},''))) NOT IN (${terminal})
+  AND UPPER(TRIM(COALESCE(ri.approval_status,''))) <> 'REJECTED'
+  AND UPPER(TRIM(COALESCE(ri.procurement_status,''))) NOT IN (${terminal},'PURCHASED','FULLY_PROCURED','NOT_PROCURED','UNABLE_TO_PROCURE')
+  AND NOT ${stockItemSql('ri', completion)}`;
 // A departmental queue starts only after a non-superseded approval by that
 // department's HOD. Institution-wide assessment coverage alone is not approval.
 const departmentApprovedRequestSql = `EXISTS (
@@ -48,4 +55,4 @@ const activeDepartmentRankingSql = `WITH active_cases AS (
 SELECT c.id AS procurement_case_id,p.department_rank,p.department_rank_total
 FROM active_cases c JOIN projected p ON p.request_id=c.request_id`;
 
-module.exports = { departmentApprovedRequestSql, requestActiveSql, itemActiveSql, priorityCaseJoins, activePriorityCaseSql, activeDepartmentRankingSql };
+module.exports = { departmentApprovedRequestSql, requestActiveSql, itemActiveSql, priorityCaseJoins, activePriorityCaseSql, activeDepartmentRankingSql, activePriorityCaseFromCompletionSql };

@@ -25,8 +25,15 @@ for (const scope of ['department','institutional']) {
     permit(req,scope === 'department' ? 'procurement-priority.rank-department' : 'procurement-priority.manage');
     const departmentId=scope === 'department' ? req.user.department_id : null;
     const data=await tx(async client => {
+      if (scope === 'institutional') {
+        await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+        await client.query("SET LOCAL statement_timeout='8s'");
+      }
       if (scope === 'department') await ensureApprovedDepartmentPriorityCoverage({client,instituteId:req.user.institute_id,departmentId,actorId:req.user.id});
       return requestRepo.read({client,instituteId:req.user.institute_id,departmentId,scope});
+    }).catch(error => {
+      if (scope === 'institutional' && error.code === '57014') throw Object.assign(new Error('Priority Management took too long to respond. Try again.'), { statusCode:504,code:'PRIORITY_QUEUE_TIMEOUT' });
+      throw error;
     });
     res.json({data});
   }));

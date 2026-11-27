@@ -1,6 +1,15 @@
 'use strict';
 
 const { createProcurementPriorityRepository } = require('../../repositories/procurementPriorityRepository');
+test('management completion is shared only after institute scoping and default activity rules remain identical',()=>{
+ const {managementQueueSql:sql}=require('../../services/procurementPriority/managementQueueSql');
+ expect(sql.match(/canonical_procurement_completion\(/g)).toHaveLength(1);
+ expect(sql.indexOf('p.institute_id=$1')).toBeLessThan(sql.indexOf('canonical_procurement_completion('));
+ expect(sql).toContain('request_completion AS MATERIALIZED');expect(sql).toContain('active_cases AS MATERIALIZED');
+ const {activePriorityCaseSql,activePriorityCaseFromCompletionSql}=require('../../services/procurementPriority/activePrioritySql');
+ const normalize=s=>s.replace(/\s+/g,' ').trim();
+ expect(normalize(activePriorityCaseFromCompletionSql(undefined))).toBe(normalize(activePriorityCaseSql));
+});
 
 test.each([
   ['departmentQueue', repository => repository.departmentQueue(7, 9)],

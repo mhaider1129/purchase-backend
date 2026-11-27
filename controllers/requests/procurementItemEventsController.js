@@ -175,7 +175,8 @@ const addProcurementItemEvent = async (req, res, next) => {
       procurementQuantity === null ? req.body?.event_quantity : uom.packageQuantityToBaseQuantity(procurementQuantity, unitsPerPackage),
       'event_quantity',
     );
-    unitCost = parseOptionalNonNegativeNumber(req.body?.unit_cost, 'unit_cost');
+    if (req.body?.unit_cost === undefined || req.body.unit_cost === null || String(req.body.unit_cost).trim() === '') throw createHttpError(400, 'unit_cost is required to record procurement');
+    unitCost = parseOptionalNonNegativeNumber(req.body.unit_cost, 'unit_cost');
     procurementDate = parseOptionalDate(req.body?.procurement_date);
     supplierId = req.body?.supplier_id === undefined || req.body?.supplier_id === null || req.body?.supplier_id === ''
       ? null

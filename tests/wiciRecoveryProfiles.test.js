@@ -98,12 +98,14 @@ test("fractional operational quantities widen while monetary precision stays unc
     "numeric(14,2)",
   );
 });
-test("checked-in operator SQL is reproducible from the final source-bound plan", () => {
+test("operator SQL is reproducible for its authorized source-bound release", () => {
   const {
     bundle,
     selectMigrations,
   } = require("../scripts/lib/databaseRelease/planner");
   const inventory = service.loadInventory();
+  // The owner authorized a new release reference and current-source binding.
+  // Historical release references are never rebound to changed code.
   const actual = fs.readFileSync(
     path.join(
       __dirname,
@@ -118,7 +120,7 @@ test("checked-in operator SQL is reproducible from the final source-bound plan",
       ids: ["073_wici_observed_schema_recovery"],
       environment: "production",
       actor: "WICI authorized operator",
-      releaseRef: "wici-runtime-deployment-2026-11-24-r1",
+      releaseRef: "wici-priority-queue-2026-11-27-r1",
     }),
   );
   expect(() =>

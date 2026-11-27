@@ -10,7 +10,7 @@ const IMAGE = 'postgres:16-bookworm@sha256:efedf3595f1d6f415c08568ba171029bf5405
 let container;
 const cleanup = () => {
   if (!container) return;
-  const result = spawnSync('docker', ['rm', '--force', container], { stdio: 'pipe' });
+  const result = spawnSync('docker', ['--host=unix:///var/run/docker.sock', 'rm', '--force', container], { stdio: 'pipe' });
   container = null;
   if (result.status !== 0) {
     console.error('Failed to remove the integration test container');
@@ -26,14 +26,14 @@ async function main() {
   const password = crypto.randomBytes(24).toString('hex');
   // Docker receives only these explicit POSTGRES_* variables and no mounted
   // datasets. The test process's DATABASE_URL is replaced with the local URL.
-  container = execFileSync('docker', ['run', '--detach', '--rm',
+  container = execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'run', '--detach', '--rm',
     '--label', 'purchase-tracker.p2p-integration=true',
     '--tmpfs', '/var/lib/postgresql/data:rw',
     '--publish', '127.0.0.1::5432',
     '--env', 'POSTGRES_PASSWORD', '--env', 'POSTGRES_USER=p2p_test',
     '--env', `POSTGRES_DB=${name}`, IMAGE,
   ], { encoding: 'utf8', env: { ...process.env, POSTGRES_PASSWORD: password } }).trim();
-  const address = execFileSync('docker', ['port', container, '5432/tcp'], { encoding: 'utf8' }).trim();
+  const address = execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'port', container, '5432/tcp'], { encoding: 'utf8' }).trim();
   if (!/^127\.0\.0\.1:\d+$/.test(address)) throw new Error('Test container is not bound exclusively to loopback');
   const url = disposableDatabaseUrl(`postgresql://p2p_test:${password}@${address}/${name}`);
   let ready = false;
@@ -46,8 +46,9 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 500));
   }
   if (!ready) throw new Error('Disposable PostgreSQL did not become ready');
-  console.log('Running P2P integration tests against isolated PostgreSQL 16');
-  const result = spawnSync(process.execPath, ['--test', path.resolve(__dirname, '../integration/p2p.postgres.test.js')], {
+  const priorityQueue = process.argv.includes('--priority-queue');
+  console.log('Running '+(priorityQueue?'priority queue':'P2P')+' integration tests against isolated PostgreSQL 16');
+  const result = spawnSync(process.execPath, ['--test', path.resolve(__dirname, priorityQueue?'../integration/priorityQueue.postgres.test.js':'../integration/p2p.postgres.test.js')], {
     stdio: 'inherit', env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: url, P2P_LOCAL_DATABASE_URL: url },
     timeout: 120000,
   });

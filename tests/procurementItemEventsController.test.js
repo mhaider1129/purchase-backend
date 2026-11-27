@@ -20,7 +20,7 @@ const buildResponse = () => {
 
 const buildRequest = (body = {}, user = {}) => ({
   params: { requestId: '10', itemId: '20' },
-  body,
+  body: { unit_cost: 5, ...body },
   user: {
     id: 7,
     role: 'ProcurementSpecialist',
@@ -529,4 +529,13 @@ test('stock-resolved items reject new procurement without inserting a purchase e
   expect(next).toHaveBeenCalledWith(expect.objectContaining({statusCode:409,message:expect.stringContaining('available in stock')}));
   expect(client.query.mock.calls.some(([sql])=>sql.includes('INSERT INTO public.procurement_item_events'))).toBe(false);
   expect(client.query).toHaveBeenCalledWith('ROLLBACK');
+});
+
+
+it.each([undefined, null, '', '  '])('requires an explicit unit cost before acquiring a database connection (%s)', async (cost) => {
+  const next = jest.fn();
+  pool.connect.mockClear();
+  await addProcurementItemEvent(buildRequest({ event_quantity: 1, unit_cost: cost }), buildResponse(), next);
+  expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400, message: 'unit_cost is required to record procurement' }));
+  expect(pool.connect).not.toHaveBeenCalled();
 });

@@ -137,7 +137,7 @@ function createProcurementPriorityRepository(database = pool) {
     },
     async managementQueue(instituteId, client = database) {
       const r = await client.query(
-        `SELECT ${departmentApprovedRequestSql} AS department_approved,p.procurement_case_id,p.row_version,pc.department_id,r.id AS request_id,r.status AS request_status,COALESCE(NULLIF(r.maintenance_ref_number,''),r.id::text) AS request_reference,COALESCE(NULLIF(TRIM(p.public_title),''),ri.item_name,'Requirement ' || pc.id::text) AS public_title,d.name AS department_name,dr.department_rank,p.system_score,p.system_tier,p.system_suggested_rank,p.institutional_rank,GREATEST(0,extract(day FROM now()-pc.opened_at))::int AS age,p.impact_level,p.service_risk_level,p.deadline_at,p.deadline_type,pc.case_status,g.public_title AS priority_group_name FROM procurement_priority_profiles p JOIN procurement_cases pc ON pc.id=p.procurement_case_id ${priorityCaseJoins} LEFT JOIN departments d ON d.id=pc.department_id LEFT JOIN (${activeDepartmentRankingSql}) dr ON dr.procurement_case_id=pc.id LEFT JOIN procurement_priority_group_members gm ON gm.procurement_case_id=pc.id AND gm.removed_at IS NULL LEFT JOIN procurement_priority_groups g ON g.id=gm.group_id AND g.status='ACTIVE' WHERE p.institute_id=$1 AND ${ACTIVE} ORDER BY p.institutional_rank NULLS LAST,p.system_suggested_rank NULLS LAST,p.procurement_case_id`,
+        require('../services/procurementPriority/managementQueueSql').managementQueueSql,
         [instituteId],
       );
       return r.rows;
